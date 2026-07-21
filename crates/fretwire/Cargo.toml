@@ -1,0 +1,14 @@
+[package]
+name = "fretwire"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Linux control application for the Line 6 HX Stomp — name placeholder; the working crates are published as fretwire-* (see repository)."
+readme = "README.md"
+keywords = ["hx-stomp", "line6", "guitar", "usb", "audio"]
+categories = ["hardware-support"]
+
+[lib]
+path = "src/lib.rs"

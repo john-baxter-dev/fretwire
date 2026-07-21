@@ -1,0 +1,29 @@
+# Rust build artifacts
+/target
+
+# Line 6's proprietary reference data (models / params / presets). Redistributing it is not
+# permitted, so it stays out of git — fretwire loads it at runtime from the user's own
+# `fretwire import-data` cache. Keep local copies here for development; their presence flips the
+# `have_bundled_data` build cfg so data-dependent tests run locally and skip on a clean clone.
+/crates/fretwire-data/data
+/res-extracted
+
+# Local working notes and editor/tool state (not part of the published project).
+/CLAUDE.md
+.claude/
+
+# Vendor binaries — never redistribute.
+*.exe
+*.pdb
+
+# Node / frontend build output (fretwire-tauri UI).
+node_modules/
+/crates/fretwire-tauri/dist
+
+# OS / editor cruft.
+.DS_Store
+Thumbs.db
+__pycache__/
+
+# Raw USB capture recordings — reference only, not needed to build/test
+/captures/*.pcapng

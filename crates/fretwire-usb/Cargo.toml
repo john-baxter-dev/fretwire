@@ -1,0 +1,14 @@
+[package]
+name = "fretwire-usb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "USB transport for HX devices via nusb (enumerate, claim MI_00, bulk/interrupt I/O)."
+
+[dependencies]
+fretwire-protocol = { path = "../fretwire-protocol" }
+nusb.workspace = true
+futures-lite.workspace = true
+futures-timer.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

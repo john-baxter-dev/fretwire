@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+# CI builds only the offline crates. The reference data (model/param names) is Line 6's and is
+# never in the repo, so the data-gated tests compile out here (have_bundled_data is unset) and the
+# suite runs on the in-repo capture fixtures alone. The GUI crates (fretwire-gui / fretwire-tauri)
+# are excluded to avoid pulling the winit/WebKitGTK system-dependency tree into CI.
+jobs:
+  build-test:
+    name: build & test (offline crates)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain info
+        run: rustc --version && cargo --version
+
+      - name: Build
+        run: >
+          cargo build --locked --verbose
+          -p fretwire -p fretwire-data -p fretwire-protocol
+          -p fretwire-usb -p fretwire-core -p fretwire-cli
+
+      - name: Test
+        run: >
+          cargo test --locked --verbose
+          -p fretwire -p fretwire-data -p fretwire-protocol
+          -p fretwire-usb -p fretwire-core -p fretwire-cli

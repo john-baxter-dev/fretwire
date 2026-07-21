@@ -1,0 +1,23 @@
+[package]
+name = "fretwire-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Device session API: ties fretwire-data, fretwire-protocol and fretwire-usb into an editor model."
+
+[features]
+# Embed the Line 6 reference data into the binary at build time (`Catalog::bundled`). On by
+# default. It's OFF by default (we ship no proprietary data); the catalog
+# is loaded at runtime from the user's `fretwire import-data` cache (`Catalog::load` / `from_data_dir`).
+# Enable it (`--features bundled-data`) only with a local copy of `crates/fretwire-data/data/` present, to
+# build a self-contained dev binary.
+default = []
+bundled-data = []
+
+[dependencies]
+fretwire-data = { path = "../fretwire-data" }
+fretwire-protocol = { path = "../fretwire-protocol" }
+fretwire-usb = { path = "../fretwire-usb" }
+thiserror.workspace = true
+tracing.workspace = true
+serde_json.workspace = true

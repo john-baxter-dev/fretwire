@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Core APIs the frontend needs: the event system (listen/emit) for live-follow.",
+  "windows": ["main"],
+  "permissions": ["core:default", "core:event:default"]
+}

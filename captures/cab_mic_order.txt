@@ -1,0 +1,13 @@
+SM57
+421 dynamic
+SM7
+906 dynamic
+30 dynamic
+121 ribbon
+160 ribbon
+4038 ribbon
+84 ribbon
+414 cond
+47 cond fet
+67 cond
+

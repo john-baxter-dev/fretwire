@@ -1,0 +1,16 @@
+[package]
+name = "fretwire-tauri"
+version = "0.0.0"
+edition = "2021"
+description = "fretwire GUI on a Tauri (WebKitGTK) webview"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+fretwire-core = { path = "../fretwire-core" }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

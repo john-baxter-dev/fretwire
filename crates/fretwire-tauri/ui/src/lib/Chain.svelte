@@ -1,0 +1,476 @@
+<script>
+  // The signal chain as an interactive routing grid: HTML cells (draggable blocks + empty drop
+  // targets) laid out by the device's real grid columns, with SVG wires behind. Each cell maps to
+  // exactly one slot; dropping a block onto an empty cell is a single `place_block` to that slot,
+  // and the device recomputes the split/mixer columns from where blocks land (we re-read after).
+  let { preset, selectedSlot = null, onselect, onplace, oninsert, onmovenode, onaddat } = $props();
+
+  // Block accent color by device model category (ids from fretwire-core editor::category_name) — so the
+  // chain reads at a glance: amps warm red, drives yellow, delays green, reverbs orange, etc.
+  const CAT_COLORS = {
+    1: "#d94f4f", // Amp
+    13: "#c96a4a", // Preamp
+    2: "#a8783c", // Cab
+    19: "#a8783c", // Cab (Mic+IR)
+    16: "#94693a", // IR
+    3: "#d9c53f", // Distortion
+    4: "#4f8fe0", // Dynamics
+    5: "#b04fe0", // Synth
+    6: "#4fd9c9", // Filter
+    7: "#9d6be0", // Pitch/Synth
+    8: "#e06bbf", // Modulation
+    9: "#4fc26b", // Delay
+    10: "#e08a3f", // Reverb
+    11: "#8fb83c", // Wah
+    14: "#3ca88a", // EQ
+    12: "#7a8494", // Send/Return
+    15: "#7a8494", // Looper
+    17: "#7a8494", // Volume/Pan
+  };
+  const catColor = (c) => CAT_COLORS[c] ?? "#5a6478";
+
+  // X0 leaves room left of column 1 for the input node glyph; the output glyph hangs after the
+  // last column (width padded below).
+  const STEP = 96, CW = 80, CH = 44, X0 = 48, TOP_Y = 8, BOT_Y = 84;
+  const colX = (c) => X0 + (c - 1) * STEP;
+  const midY = (y) => y + CH / 2;
+  // The x of the inter-column gap *before* column c — where the bracket wires run and the split/
+  // mixer node glyphs (and their drop zones) sit.
+  const gapX = (c) => colX(c) - (STEP - CW) / 2;
+
+  let dragSrc = $state(null);
+  let dragOver = $state(null);
+  // Which half of an occupied cell the drag is over: dropping inserts before ("l") / after ("r").
+  let dragSide = $state(null);
+  // A split/mixer node drag in flight ("split" | "mixer"), and the gap position hovered.
+  let dragNode = $state(null);
+  let nodeOver = $state(null);
+
+  const view = $derived.by(() => {
+    const allCells = preset.grid ?? [];
+    const bySlot = new Map(preset.blocks.map((b) => [b.slot, b]));
+    const split = preset.split && preset.split_pos != null && preset.mixer_pos != null;
+    // The grid carries the empty row-B cells even on a serial preset (the split/mixer node slots
+    // always exist in the device's fixed slot array). Normally we hide that row when serial — but
+    // while a drag is in flight we reveal it as drop targets: dropping a block there is how the
+    // split gets *created* (one place_block; the device activates the split and we re-read).
+    const dragging = dragSrc != null || dragNode != null;
+    const showB = split || dragSrc != null;
+    // Trim trailing empty columns: at rest, show up to one spare column past the last block (and
+    // never cut the bracket off — keep through the mixer column on a split preset). While a drag is
+    // in flight every column is a potential drop target, so reveal them all.
+    const maxAllCol = allCells.reduce((m, c) => Math.max(m, c.column), 1);
+    const lastOcc = allCells.reduce((m, c) => (c.occupied ? Math.max(m, c.column) : m), 0);
+    const maxCol = dragging
+      ? maxAllCol
+      : Math.max(1, Math.min(Math.max(lastOcc + 1, split ? preset.mixer_pos : 1), maxAllCol));
+    const cells = allCells.filter(
+      (c) => c.column <= maxCol && (showB || c.row === 0),
+    );
+
+    const items = cells.map((c) => {
+      const b = bySlot.get(c.slot);
+      const name = b ? b.user_label || b.model_name : "";
+      return {
+        slot: c.slot,
+        occupied: c.occupied,
+        x: colX(c.column),
+        y: c.row === 1 ? BOT_Y : TOP_Y,
+        name: name.length > 13 ? name.slice(0, 12) + "…" : name,
+        bypassed: b ? !!b.bypassed : false,
+        color: catColor(b?.category),
+      };
+    });
+
+    // Wires. Top spine runs from the input glyph across all top-row columns to the output glyph;
+    // the parallel bracket drops at the split column and rises at the mixer column (both drawn in
+    // the gap *before* their column, matching the routing).
+    const topRight = colX(maxCol) + CW;
+    const wires = [`M 20 ${midY(TOP_Y)} H ${topRight + 24}`];
+    // The fixed input/output nodes (slots 0 and 9) — clickable to edit gate/threshold/decay and
+    // level/pan in the param panel.
+    const io = [];
+    if (preset.input_node) io.push({ slot: preset.input_node.slot, x: 4, label: "IN" });
+    if (preset.output_node) io.push({ slot: preset.output_node.slot, x: topRight + 8, label: "OUT" });
+    // Serial preset + drag in flight: a dashed ghost of the would-be parallel path under the B row,
+    // hinting that a drop there creates the split.
+    const ghosts =
+      showB && !split
+        ? [`M ${colX(2) - (STEP - CW) / 2} ${midY(TOP_Y)} V ${midY(BOT_Y)} H ${topRight} V ${midY(TOP_Y)}`]
+        : [];
+    let nodes = [];
+    let nodeDrops = [];
+    if (split) {
+      const xSplit = gapX(preset.split_pos);
+      const xMixer = gapX(preset.mixer_pos);
+      const yT = midY(TOP_Y), yB = midY(BOT_Y);
+      wires.push(`M ${xSplit} ${yT} V ${yB} H ${xMixer} V ${yT}`);
+      // Seat the node glyphs in the vertical gap between the two rows (on the branch wire), where no
+      // cell lives — so they never overlap blocks however tight the columns are.
+      const yNode = (TOP_Y + CH + BOT_Y) / 2;
+      nodes = [
+        { kind: "split", x: xSplit, y: yNode, text: "⋔", slot: preset.split_node?.slot },
+        { kind: "mixer", x: xMixer, y: yNode, text: "⋉", slot: preset.mixer_node?.slot },
+      ];
+      // While a node drags, offer the valid gap positions as drop zones — same constraints as the
+      // backend: the bracket must keep enclosing the occupied B row, and split < mixer.
+      if (dragNode) {
+        const bCols = allCells.filter((c) => c.row === 1 && c.occupied).map((c) => c.column);
+        const [lo, hi] =
+          dragNode === "split"
+            ? [1, Math.min(bCols.length ? Math.min(...bCols) : Infinity, preset.mixer_pos - 1)]
+            : [
+                Math.max(bCols.length ? Math.max(...bCols) + 1 : 0, preset.split_pos + 1),
+                maxCol + 1,
+              ];
+        const cur = dragNode === "split" ? preset.split_pos : preset.mixer_pos;
+        for (let p = lo; p <= hi; p++) {
+          if (p !== cur) nodeDrops.push({ pos: p, x: gapX(p) });
+        }
+      }
+    }
+
+    return {
+      items,
+      wires,
+      ghosts,
+      nodes,
+      nodeDrops,
+      io,
+      split,
+      width: Math.max(colX(maxCol) + CW + 52, 560),
+      height: showB ? BOT_Y + CH + 8 : TOP_Y + CH + 8,
+    };
+  });
+
+  function onDrop(slot) {
+    if (dragSrc != null && dragSrc !== slot) onplace?.(dragSrc, slot);
+    dragSrc = null;
+    dragOver = null;
+  }
+</script>
+
+<div class="wrap">
+  <div class="inner" style="width:{view.width}px; height:{view.height}px;">
+    <svg class="wires" width={view.width} height={view.height}>
+      {#each view.wires as d}<path class="wire" {d} />{/each}
+      {#each view.ghosts as d}<path class="wire ghost" {d} />{/each}
+    </svg>
+
+    {#each view.io as n (n.slot)}
+      <button
+        class="ionode"
+        class:sel={n.slot === selectedSlot}
+        style="left:{n.x}px; top:{midY(TOP_Y) - 13}px;"
+        title="Edit {n.label === 'IN' ? 'input (gate)' : 'output (level/pan)'} settings"
+        onclick={() => onselect?.(n.slot)}
+      >{n.label}</button>
+    {/each}
+
+    {#each view.nodes as n (n.kind)}
+      <button
+        class="node"
+        class:sel={n.slot != null && n.slot === selectedSlot}
+        draggable="true"
+        style="left:{n.x - 18}px; top:{n.y - 16}px;"
+        ondragstart={(e) => {
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", n.kind);
+          e.dataTransfer.setDragImage(e.currentTarget, 18, 16);
+          // Deferred one tick — the drop zones appearing is a DOM change, and WebKit can abort a
+          // drag whose DOM mutates synchronously inside dragstart (same as the block cells).
+          setTimeout(() => (dragNode = n.kind), 0);
+        }}
+        ondragend={() => {
+          dragNode = null;
+          nodeOver = null;
+        }}
+        onclick={() => n.slot != null && onselect?.(n.slot)}
+      >{n.text}</button>
+    {/each}
+
+    <!-- Valid gap positions for the dragged split/mixer node: slim full-height zones on the
+         inter-column gaps the bracket wire can move to. -->
+    {#each view.nodeDrops as d (d.pos)}
+      <div
+        class="gapdrop"
+        class:over={nodeOver === d.pos}
+        style="left:{d.x - 9}px; height:{view.height - 8}px;"
+        role="button"
+        tabindex="-1"
+        ondragover={(e) => {
+          e.preventDefault();
+          nodeOver = d.pos;
+        }}
+        ondragleave={() => {
+          if (nodeOver === d.pos) nodeOver = null;
+        }}
+        ondrop={(e) => {
+          e.preventDefault();
+          if (dragNode) onmovenode?.(dragNode, d.pos);
+          dragNode = null;
+          nodeOver = null;
+        }}
+      ></div>
+    {/each}
+
+    {#each view.items as c (c.slot)}
+    {#if c.occupied}
+      <button
+        class="cell"
+        class:sel={c.slot === selectedSlot}
+        class:bypassed={c.bypassed}
+        class:insb={dragOver === c.slot && dragSide === "l" && dragSrc != null && dragSrc !== c.slot}
+        class:insa={dragOver === c.slot && dragSide === "r" && dragSrc != null && dragSrc !== c.slot}
+        draggable="true"
+        style="left:{c.x}px; top:{c.y}px; width:{CW}px; height:{CH}px; --cat:{c.color};"
+        ondragover={(e) => {
+          // Occupied cells accept a dragged *block* too — dropping inserts it before/after this
+          // block (by which half it's dropped on), shifting neighbors to make room.
+          if (dragSrc == null || dragSrc === c.slot) return;
+          e.preventDefault();
+          const rect = e.currentTarget.getBoundingClientRect();
+          dragOver = c.slot;
+          dragSide = e.clientX - rect.left < rect.width / 2 ? "l" : "r";
+        }}
+        ondragleave={() => {
+          if (dragOver === c.slot) {
+            dragOver = null;
+            dragSide = null;
+          }
+        }}
+        ondrop={(e) => {
+          e.preventDefault();
+          if (dragSrc != null && dragSrc !== c.slot) oninsert?.(dragSrc, c.slot, dragSide === "l");
+          dragSrc = null;
+          dragOver = null;
+          dragSide = null;
+        }}
+        ondragstart={(e) => {
+          e.dataTransfer.effectAllowed = "move";
+          // WebKitGTK won't fire `drop` without payload data, and defaults to an oversized drag
+          // ghost — set both explicitly.
+          e.dataTransfer.setData("text/plain", String(c.slot));
+          e.dataTransfer.setDragImage(e.currentTarget, CW / 2, CH / 2);
+          // Defer the state flip one tick: setting dragSrc reveals the B row (layout change), and
+          // WebKit can abort a drag whose DOM mutates synchronously inside dragstart.
+          setTimeout(() => (dragSrc = c.slot), 0);
+        }}
+        ondragend={() => {
+          dragSrc = null;
+          dragOver = null;
+        }}
+        onclick={() => onselect?.(c.slot)}
+      >
+        <span class="name">{c.name}</span>
+        <span class="slot">slot {c.slot}</span>
+      </button>
+    {:else}
+      <div
+        class="drop"
+        class:over={dragOver === c.slot}
+        class:active={dragSrc != null}
+        style="left:{c.x}px; top:{c.y}px; width:{CW}px; height:{CH}px;"
+        role="button"
+        tabindex="-1"
+        title="Add a block here"
+        onclick={() => onaddat?.(c.slot)}
+        onkeydown={(e) => e.key === "Enter" && onaddat?.(c.slot)}
+        ondragover={(e) => {
+          e.preventDefault();
+          dragOver = c.slot;
+        }}
+        ondragleave={() => {
+          if (dragOver === c.slot) dragOver = null;
+        }}
+        ondrop={(e) => {
+          e.preventDefault();
+          onDrop(c.slot);
+        }}
+      ><span class="plus">＋</span></div>
+    {/if}
+    {/each}
+  </div>
+</div>
+
+<style>
+  .wrap {
+    border: 1px solid #2a2e37;
+    border-radius: 10px;
+    background: #12141a;
+    overflow-x: auto;
+    max-width: 100%;
+  }
+  .inner {
+    position: relative;
+    transition: height 140ms ease;
+  }
+  .wires {
+    position: absolute;
+    left: 0;
+    top: 0;
+    pointer-events: none;
+  }
+  .wire {
+    stroke: #566072;
+    stroke-width: 2;
+    fill: none;
+  }
+  .wire.ghost {
+    stroke: #3a4656;
+    stroke-dasharray: 5 5;
+  }
+  .cell {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    font: inherit;
+    background: #232833;
+    /* Accent = the block's category color (--cat set inline per cell). */
+    border: 1.5px solid var(--cat, #3a4150);
+    border-radius: 8px;
+    color: #e6e8ec;
+    cursor: grab;
+    padding: 0 6px;
+  }
+  .cell:active {
+    cursor: grabbing;
+  }
+  .cell.sel {
+    border-color: #f0c245;
+    box-shadow: 0 0 0 1px #f0c245;
+  }
+  .cell.bypassed {
+    background: #191b20;
+    border-color: #3a3f49;
+    border-style: dashed;
+  }
+  .cell.bypassed .name {
+    color: #626a77;
+  }
+  /* A dragged block hovering another block: an insertion bar on the half it will land on. */
+  .cell.insb::before,
+  .cell.insa::after {
+    content: "";
+    position: absolute;
+    top: -4px;
+    bottom: -4px;
+    width: 4px;
+    border-radius: 2px;
+    background: #3f8ae0;
+    box-shadow: 0 0 6px rgba(63, 138, 224, 0.8);
+  }
+  .cell.insb::before {
+    left: -6px;
+  }
+  .cell.insa::after {
+    right: -6px;
+  }
+  .cell .name {
+    font-weight: 600;
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+  .cell .slot {
+    font-size: 11px;
+    color: #8891a0;
+  }
+  /* Empty grid slots are always faintly visible so the layout reads as a grid you drop into —
+     and clickable: like HX Edit, clicking one opens the model picker to add a block there. */
+  .drop {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1.5px dashed #2b303a;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .drop .plus {
+    color: #3a4150;
+    font-size: 15px;
+    opacity: 0;
+    transition: opacity 80ms ease;
+  }
+  .drop:hover {
+    border-color: #3a4150;
+  }
+  .drop:hover .plus {
+    opacity: 1;
+  }
+  .drop.active {
+    border-color: #3a4656;
+    background: rgba(63, 138, 224, 0.06);
+  }
+  .drop.over {
+    border-color: #3f8ae0;
+    background: rgba(63, 138, 224, 0.2);
+  }
+  .node {
+    position: absolute;
+    width: 36px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font: inherit;
+    background: #2a2333;
+    border: 1.5px solid #8a6bd9;
+    border-radius: 8px;
+    color: #e6e8ec;
+    cursor: grab;
+  }
+  .node:active {
+    cursor: grabbing;
+  }
+  /* Gap drop zones for a dragged split/mixer node: slim vertical slots on the wire gaps. */
+  .gapdrop {
+    position: absolute;
+    top: 4px;
+    width: 18px;
+    border: 1.5px dashed #6b56a8;
+    border-radius: 6px;
+    background: rgba(138, 107, 217, 0.08);
+  }
+  .gapdrop.over {
+    border-color: #8a6bd9;
+    background: rgba(138, 107, 217, 0.3);
+  }
+  .node.sel {
+    border-color: #f0c245;
+    box-shadow: 0 0 0 1px #f0c245;
+  }
+  /* Fixed input/output nodes at the ends of the signal path. */
+  .ionode {
+    position: absolute;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font: inherit;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    padding: 0 7px;
+    background: #1d2530;
+    border: 1.5px solid #566072;
+    border-radius: 13px;
+    color: #9aa3b2;
+    cursor: pointer;
+  }
+  .ionode:hover {
+    border-color: #3f8ae0;
+    color: #e6e8ec;
+  }
+  .ionode.sel {
+    border-color: #f0c245;
+    box-shadow: 0 0 0 1px #f0c245;
+    color: #e6e8ec;
+  }
+</style>

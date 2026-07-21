@@ -1,0 +1,10 @@
+[package]
+name = "fretwire-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Line 6 HX MI_00 wire protocol message types and codec."
+
+[dependencies]
+rmpv.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,58 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/fretwire",
+    "crates/fretwire-data",
+    "crates/fretwire-protocol",
+    "crates/fretwire-usb",
+    "crates/fretwire-core",
+    "crates/fretwire-cli",
+    "crates/fretwire-gui",
+    "crates/fretwire-tauri",
+]
+# fretwire-tauri (the Tauri renderer spike) is a member so it shares the lockfile, but is kept out of the
+# default set so plain `cargo build`/`cargo test` (and the 54 offline tests) don't pull the whole
+# WebKitGTK/tauri dep tree. Build/run it explicitly: `cargo run -p fretwire-tauri`.
+default-members = [
+    "crates/fretwire",
+    "crates/fretwire-data",
+    "crates/fretwire-protocol",
+    "crates/fretwire-usb",
+    "crates/fretwire-core",
+    "crates/fretwire-cli",
+    "crates/fretwire-gui",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/john-baxter-dev/fretwire"
+rust-version = "1.96"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rmpv = "1"
+anyhow = "1"
+thiserror = "2"
+# USB transport (pure-Rust libusb-free). Pinned loosely; verify latest at first build.
+nusb = "0.1"
+futures-lite = "2"
+# Cancellable timeouts for bulk transfers (nusb 0.1 has no bulk timeout).
+futures-timer = "3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# GUI (Elm-style, pure-Rust, MIT/Apache). Software renderer (tiny-skia) instead of wgpu: it
+# presents via CPU/softbuffer (wl_shm on Wayland), sidestepping the EGL/dmabuf/driver issues the
+# GPU backend hits on some Linux setups — and it's plenty fast for an editor UI.
+iced = { version = "0.13", default-features = false, features = [
+    "tiny-skia",
+    "fira-sans",
+    "auto-detect-theme",
+    "canvas",
+    "tokio",
+] }
+# Async runtime for the GUI: iced's executor is tokio, and we use `spawn_blocking` to run the
+# blocking USB session off the UI thread.
+tokio = { version = "1", default-features = false, features = ["rt"] }

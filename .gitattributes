@@ -1,0 +1,11 @@
+# Normalize text to LF in the repo (so the Linux checkout is clean); native on checkout.
+* text=auto
+
+# Binary reference data / captures — never apply line-ending conversion (would corrupt them).
+*.bin binary
+*.hlx binary
+*.pcapng binary
+*.msgpack binary
+*.png binary
+HX_ModelCatalog.bin binary
+HelixModelDefs.bin binary

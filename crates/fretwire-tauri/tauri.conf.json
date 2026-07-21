@@ -1,0 +1,26 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "fretwire",
+  "version": "0.0.0",
+  "identifier": "com.fretwire.app",
+  "build": {
+    "frontendDist": "./dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "fretwire",
+        "width": 960,
+        "height": 640,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

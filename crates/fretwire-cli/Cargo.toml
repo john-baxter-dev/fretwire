@@ -1,0 +1,27 @@
+[package]
+name = "fretwire-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Command-line driver and validator for fretwire."
+
+[[bin]]
+name = "fretwire"
+path = "src/main.rs"
+
+[features]
+# Forwarded to fretwire-core: embed the Line 6 reference data in the binary. OFF by default so the CLI
+# ships no proprietary data and loads it at runtime from `fretwire import-data`; enable
+# `--features bundled-data` (with a local `crates/fretwire-data/data/`) for a self-contained dev binary.
+#
+default = []
+bundled-data = ["fretwire-core/bundled-data"]
+
+[dependencies]
+fretwire-core = { path = "../fretwire-core", default-features = false }
+fretwire-data = { path = "../fretwire-data" }
+fretwire-usb = { path = "../fretwire-usb" }
+rmpv.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

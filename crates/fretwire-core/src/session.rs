@@ -889,7 +889,7 @@ impl Session {
             .map(|b| b.index as i64)
             .ok_or_else(|| fretwire_data::Error::Stream("no free slot to add a block".into()))?;
         self.add_block(target, model_index, paired_index)?;
-        self.read_preset()
+        self.read_preset_settled(target)
     }
 
     /// Move a structural node's signal-flow **column position** along the top row — `kind` 2 = split,
@@ -1093,6 +1093,39 @@ impl Session {
             self.transport.drain_wire(std::time::Duration::from_millis(60), 256);
         }
         Err(last_err.expect("loop runs at least once"))
+    }
+
+    /// [`Self::read_preset`] for the read-back after a **structural edit** (model swap, add block):
+    /// re-read until the block in `slot` stops changing between reads, so the caller can't catch the
+    /// device mid-apply.
+    ///
+    /// Op 40 / op 39 are ACKed as soon as the device has taken the new model *reference*, but it
+    /// rewrites that block's parameter area a moment later. A read issued straight after the ACK can
+    /// therefore decode the new model's identity against the outgoing model's values — the chain
+    /// shows the new block while the param panel still shows the one it replaced. (A second swap
+    /// appeared to "fix" it only because its read landed after the device had settled.)
+    ///
+    /// Comparing consecutive decodes of the block needs no per-model knowledge, so it holds for any
+    /// model pair. The budget is a ceiling, not a wait: a device that has already settled costs one
+    /// confirming read. If it never settles we return the latest read rather than failing — a stale
+    /// panel beats an error.
+    pub fn read_preset_settled(&mut self, slot: i64) -> crate::Result<EditorPreset> {
+        const SETTLE_WAIT: std::time::Duration = std::time::Duration::from_millis(40);
+        const SETTLE_TRIES: usize = 4;
+
+        let at = |p: &EditorPreset| p.blocks.iter().find(|b| b.slot == slot).cloned();
+        let mut prev = self.read_preset()?;
+        for attempt in 0..SETTLE_TRIES {
+            std::thread::sleep(SETTLE_WAIT);
+            let next = self.read_preset()?;
+            if at(&prev) == at(&next) {
+                return Ok(next);
+            }
+            tracing::debug!(slot, attempt, "block still settling after edit; re-reading");
+            prev = next;
+        }
+        tracing::warn!(slot, "block never settled within the read budget; returning the last read");
+        Ok(prev)
     }
 
     /// Read the current preset stream and return the raw reassembled bytes (before decoding).

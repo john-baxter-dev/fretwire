@@ -238,6 +238,15 @@ we implement):
   `Session::set_node_pos` (guards: bracket must enclose the occupied B row, split < mixer). [solid]
 - **op 78** `{98:slot, 26:0}` precedes moves/add in some captures but **not** in
   `move_simple_eq_to_parallel` — so it's an optional preamble, not required for the op to take effect.
+- **The ACK precedes the param rewrite [solid — live 2026-07-20]:** op 40 / op 39 are ACKed once the
+  device has taken the new **model reference**, but it rewrites that block's **parameter area** a
+  moment later. A read issued straight after the ACK therefore returns the new model's identity
+  carrying the *outgoing* model's param values — the decoder names them against the new model's
+  `Helix.sym` order (`editor::build_block`), so the chain shows the new block while the param panel
+  still shows the one it replaced. Read-backs after a structural edit must **settle**:
+  `Session::read_preset_settled(slot)` re-reads until the decoded block stops changing (40 ms apart,
+  4 attempts). Comparing decodes needs no per-model knowledge, so it holds for any model pair — a
+  param-count check would false-pass whenever two models declare the same number of params.
 
 Builders: `fretwire_protocol::edit::{move_block, add_block}` (byte-exact tests vs the captures);
 `Session::{move_block, add_block}`; CLI `move`/`add-block`. Split-type rides existing `swap_model`.

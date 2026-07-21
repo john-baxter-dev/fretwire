@@ -49,6 +49,18 @@ exactly what gets overwritten. **Live caveat:** op-21 has only been proven with 
 *current* preset; a foreign blob (restore) is the same mechanism but `[hypothesis]` until the first
 live restore test. Backup itself is pure reads — safe to run first.
 
+**Settled read-back after structural edits [solid — live 2026-07-20]:** a model swap updated the
+device and the chain, but the param panel kept showing the *previous* block until you clicked a
+second time. Cause: op-40/op-39 ACK once the device has taken the new **model reference**, then
+rewrite the block's **param area** a moment later — so the read-back decoded the new model's identity
+against the old model's values (`editor::build_block` names params from the new `Helix.sym` order).
+The second click only "fixed" it because its read landed after the device had settled. Fix:
+`Session::read_preset_settled(slot)` re-reads until the decoded block stops changing (40 ms apart, 4
+attempts, then return the last read rather than erroring); used by the Tauri `swap_model` /
+`add_block_at` commands (now `returning_edit`) and `Session::add_block_append`. Also fixes the undo
+timeline — `edit_commit()` snapshots `last_raw`, so a swap could previously record a **mid-apply
+blob** that undo/redo would replay. See `docs/protocol.md` "The ACK precedes the param rewrite".
+
 **Editor round (2026-07-08, offline+mock verified; live pass pending):**
 - **Live-follow bypass fix:** footswitch pushes now overlay onto the re-read preset in the GUI (the
   device's readable stream lags its own push — same reason the snapshot handler trusts the push).

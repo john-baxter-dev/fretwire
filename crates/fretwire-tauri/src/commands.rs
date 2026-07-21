@@ -302,7 +302,10 @@ pub async fn swap_model(
     model_index: i64,
     paired_index: i64,
 ) -> R<PresetDto> {
-    mutate_edit(
+    // `returning_edit` + `read_preset_settled`, not `mutate_edit`: the device ACKs the swap before it
+    // has rewritten the block's params, so a plain read-back can return the new model carrying the
+    // old model's values (see `Session::read_preset_settled`).
+    returning_edit(
         &state,
         move |s| {
             let mut label =
@@ -313,7 +316,10 @@ pub async fn swap_model(
             }
             label
         },
-        move |s| s.swap_model(slot, model_index, paired_index),
+        move |s| {
+            s.swap_model(slot, model_index, paired_index)?;
+            s.read_preset_settled(slot)
+        },
     ).await
 }
 
@@ -337,8 +343,11 @@ pub async fn add_block_at(
     model_index: i64,
     paired_index: i64,
 ) -> R<PresetDto> {
-    mutate_edit(&state, move |s| format!("Add {}", s.model_label(model_index)), move |s| {
-        s.add_block_at(slot, model_index, paired_index)
+    // Settled read-back for the same reason as `swap_model` — op 39 fills the new block's params
+    // after it ACKs.
+    returning_edit(&state, move |s| format!("Add {}", s.model_label(model_index)), move |s| {
+        s.add_block_at(slot, model_index, paired_index)?;
+        s.read_preset_settled(slot)
     })
     .await
 }

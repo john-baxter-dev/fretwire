@@ -1,7 +1,7 @@
 [package]
 name = "fretwire-tauri"
-version = "0.0.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 description = "fretwire GUI on a Tauri (WebKitGTK) webview"
 
 # The installed command (and the name the .desktop entry launches). `cargo run -p fretwire-tauri`

@@ -285,3 +285,44 @@ pub struct SplitTypeDto {
     pub symbolic_id: String,
     pub label: String,
 }
+
+/// Whether the Line 6 reference data has been imported yet — drives the GUI's first-run screen.
+/// Without it the editor still works, but blocks and parameters have numeric indices for names.
+#[derive(Serialize)]
+pub struct DataStatusDto {
+    pub present: bool,
+    /// Where the tool looks (`$FRETWIRE_DATA_DIR`, else `~/.local/share/fretwire/data`).
+    pub dir: String,
+    /// How many reference files are cached there.
+    pub files: i64,
+}
+
+impl From<fretwire_core::import::DataStatus> for DataStatusDto {
+    fn from(s: fretwire_core::import::DataStatus) -> Self {
+        DataStatusDto {
+            present: s.present,
+            dir: s.dir.display().to_string(),
+            files: s.files as i64,
+        }
+    }
+}
+
+/// The outcome of a first-run import.
+#[derive(Serialize)]
+pub struct ImportResultDto {
+    pub copied: i64,
+    pub dest: String,
+    /// Essential files the source didn't contain — the import still succeeded, but the catalog
+    /// will be incomplete. The GUI surfaces this as a warning rather than an error.
+    pub missing: Vec<String>,
+}
+
+impl From<fretwire_core::import::ImportSummary> for ImportResultDto {
+    fn from(s: fretwire_core::import::ImportSummary) -> Self {
+        ImportResultDto {
+            copied: s.copied as i64,
+            dest: s.dest.display().to_string(),
+            missing: s.missing,
+        }
+    }
+}

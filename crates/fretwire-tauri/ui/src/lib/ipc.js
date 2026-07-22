@@ -23,3 +23,18 @@ if (IS_MOCK) {
 
 export const invoke = IS_MOCK ? mock.invoke : tauriInvoke;
 export const listen = IS_MOCK ? mock.listen : tauriListen;
+
+/// Native file/folder picker, behind the same seam. Tauri routes to the dialog plugin; the mock
+/// (a plain browser, which can't read arbitrary paths) falls back to typing a path. Returns the
+/// chosen path, or null if the user cancelled.
+export async function pickPath({ directory = false, title, filters } = {}) {
+  if (IS_MOCK) {
+    const answer = window.prompt(
+      `${title ?? "Choose a path"}\n\n(The browser mock can't open a native picker — type a path.)`,
+    );
+    return answer?.trim() ? answer.trim() : null;
+  }
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const chosen = await open({ directory, multiple: false, title, filters });
+  return typeof chosen === "string" ? chosen : null;
+}

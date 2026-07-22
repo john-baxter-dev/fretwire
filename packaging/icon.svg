@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- fretwire app icon. Source of truth for crates/fretwire-tauri/icons/*.png — regenerate with
+       `packaging/gen-icons.sh`, or replace wholesale with `cargo tauri icon <your-logo.png>`.
+       Motif: three frets (the fretboard) crossed by one lit signal wire (the USB control link). -->
+  <rect width="512" height="512" rx="96" fill="#1b1e25"/>
+  <rect x="8" y="8" width="496" height="496" rx="88" fill="none" stroke="#3a4150" stroke-width="16"/>
+
+  <!-- frets -->
+  <g stroke="#6b7280" stroke-width="26" stroke-linecap="round">
+    <line x1="146" y1="112" x2="146" y2="400"/>
+    <line x1="256" y1="112" x2="256" y2="400"/>
+    <line x1="366" y1="112" x2="366" y2="400"/>
+  </g>
+
+  <!-- the wire: enters flat, steps up across the board, exits flat -->
+  <path d="M 40 300 L 146 300 L 256 212 L 366 212 L 472 212"
+        fill="none" stroke="#2b7de0" stroke-width="34"
+        stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- signal node where the wire meets the middle fret -->
+  <circle cx="256" cy="212" r="46" fill="#1b1e25"/>
+  <circle cx="256" cy="212" r="30" fill="#5aa9ff"/>
+</svg>

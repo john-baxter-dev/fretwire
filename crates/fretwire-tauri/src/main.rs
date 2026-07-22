@@ -30,6 +30,7 @@ fn main() {
     }
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(commands::AppState::default())
         .setup(|app| {
             // Keepalive heartbeat: drains the device's status channel while connected so queued
@@ -39,6 +40,8 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::data_status,
+            commands::import_data,
             commands::detect,
             commands::is_connected,
             commands::connect,

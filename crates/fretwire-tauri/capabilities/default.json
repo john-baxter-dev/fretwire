@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Core APIs the frontend needs: the event system (listen/emit) for live-follow.",
+  "description": "Core APIs the frontend needs: the event system (listen/emit) for live-follow, and the file dialog for the first-run data import.",
   "windows": ["main"],
-  "permissions": ["core:default", "core:event:default"]
+  "permissions": ["core:default", "core:event:default", "dialog:allow-open"]
 }

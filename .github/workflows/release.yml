@@ -1,0 +1,115 @@
+name: Release
+
+# Builds the installable artifacts and attaches them to a GitHub Release.
+#
+# Nothing here embeds Line 6 data — the packages ship the binaries only, and the app imports the
+# reference data from the user's own HX Edit installation on first run.
+#
+# Built on the oldest supported Ubuntu runner on purpose: glibc compatibility runs forward, not
+# back, so a binary linked against an older glibc runs on newer distros but not the reverse.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: # lets you produce artifacts without cutting a tag
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bundles:
+    name: deb / rpm / AppImage
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # WebKitGTK and a C toolchain: what the *-sys crates in the GUI's tree need to link.
+      # (Users installing the .deb don't need any of this — apt pulls the runtime libs in.)
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libwebkit2gtk-4.1-dev \
+            libfuse2 file          # libfuse2 + file: AppImage packaging
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: crates/fretwire-tauri/ui/package-lock.json
+
+      # The Rust crate embeds ./dist at compile time and dist/ isn't in git, so this must run first.
+      - name: Build the frontend
+        working-directory: crates/fretwire-tauri/ui
+        run: |
+          npm ci
+          npm run build
+
+      # The .deb/.rpm ship the CLI alongside the GUI (see bundle.linux.*.files in tauri.conf.json),
+      # so it has to exist before the bundler runs.
+      - name: Build the CLI
+        run: cargo build --release --locked -p fretwire-cli
+
+      - name: Bundle
+        working-directory: crates/fretwire-tauri
+        run: ./ui/node_modules/.bin/tauri build --bundles deb,rpm,appimage
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist
+          find target/release/bundle -type f \
+            \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) -exec cp {} dist/ \;
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-bundles
+          path: dist/*
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+
+  cli:
+    name: static CLI (musl)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+
+      # `nusb` is pure Rust with no libusb to link, so the CLI builds fully static — one binary that
+      # runs on any x86-64 distro, no matter its glibc.
+      - name: Build
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          cargo build --release --locked --target x86_64-unknown-linux-musl -p fretwire-cli
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          tar -czf dist/fretwire-cli-x86_64-linux-musl.tar.gz \
+            -C target/x86_64-unknown-linux-musl/release fretwire \
+            -C "$GITHUB_WORKSPACE" packaging/70-hxstomp.rules README.md LICENSE-MIT LICENSE-APACHE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-musl
+          path: dist/*
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true

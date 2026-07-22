@@ -9,7 +9,10 @@
 //! Mutating commands re-read the preset and return the fresh `PresetDto`, so the frontend always
 //! renders authoritative device state.
 
-use crate::dto::{CategoryDto, ModelChoiceDto, PresetDto, PresetListItem, SplitTypeDto};
+use crate::dto::{
+    CategoryDto, DataStatusDto, ImportResultDto, ModelChoiceDto, PresetDto, PresetListItem,
+    SplitTypeDto,
+};
 use fretwire_core::{EditorPreset, Session};
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, State};
@@ -145,6 +148,28 @@ where
         Ok(dto(s, &p))
     })
     .await
+}
+
+// ---- reference data (first run) ----
+
+/// Whether the Line 6 reference data has been imported. Cheap (one `stat` plus a dir listing), so
+/// the frontend calls it on startup to decide between the editor and the first-run screen.
+#[tauri::command]
+pub fn data_status() -> DataStatusDto {
+    fretwire_core::import::data_status().into()
+}
+
+/// Import the reference data from the user's own HX Edit installer or an extracted `res/` folder.
+/// Unpacking an installer shells out to `7z` and walks the tree, so it runs off the UI thread.
+#[tauri::command]
+pub async fn import_data(source: String) -> R<ImportResultDto> {
+    tauri::async_runtime::spawn_blocking(move || {
+        fretwire_core::import::import_from(std::path::Path::new(&source))
+            .map(ImportResultDto::from)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("task error: {e}"))?
 }
 
 // ---- connection ----

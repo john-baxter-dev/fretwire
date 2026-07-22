@@ -114,6 +114,18 @@ based on whether `window.__TAURI_INTERNALS__` exists); `src/mock/backend.js` imp
 in the `dto.rs` shapes (setlist + model catalog + split routing + live-follow via `window.fretwireMock`).
 See `crates/fretwire-tauri/ui/README.md`. Keep the mock in sync when adding backend commands.
 
+**First-run data import + distributable packages (2026-07-21):** the GUI no longer dead-ends on a
+fresh install. `fretwire_core::import` now owns the import mechanics (moved out of the CLI), exposed
+as the `data_status`/`import_data` Tauri commands and a `FirstRun.svelte` screen with a native file
+picker (`tauri-plugin-dialog`) — choose an HX Edit installer or an extracted `res/` folder, or skip
+and edit with numeric names. Verified live: an empty data dir shows the setup screen, a populated one
+goes straight to the editor. Packaging is wired up too — `tauri build` emits `.deb`/`.rpm`/AppImage
+(`bundle.active`, icons generated from `packaging/icon.svg`), the deb/rpm **install the udev rule**
+and ship the CLI alongside `fretwire-gui`, and `.github/workflows/release.yml` builds them plus a
+static musl CLI on a `v*` tag. An AUR `PKGBUILD` is in `packaging/`. Verified by building a real
+`.deb` and inspecting it: `Depends: libwebkit2gtk-4.1-0, libgtk-3-0`, rule at
+`/usr/lib/udev/rules.d/70-hxstomp.rules`, both binaries in `/usr/bin`.
+
 ## TL;DR
 **The protocol is essentially fully decoded, and there's a working graphical editor**
 (`fretwire-tauri`, Tauri + Svelte) on top of it — all verified live on the HX Stomp on Linux. Clean

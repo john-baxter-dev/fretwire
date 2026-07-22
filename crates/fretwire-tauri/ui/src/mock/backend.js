@@ -476,7 +476,22 @@ export function listen(event, handler) {
 // ---------------------------------------------------------------------------------------------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// First-run reference data. The mock ships its own catalog, so data is "present" by default;
+// flip it with `fretwireMock.needsData()` to exercise the import screen.
+let dataPresent = true;
+
 const HANDLERS = {
+  data_status: () => ({
+    present: dataPresent,
+    dir: "~/.local/share/fretwire/data",
+    files: dataPresent ? 21 : 0,
+  }),
+  import_data: async ({ source }) => {
+    await sleep(600); // the real one unpacks an installer — show the spinner
+    if (!source || source === "/") throw new Error(`no reference data found in ${source}`);
+    dataPresent = true;
+    return { copied: 21, dest: "~/.local/share/fretwire/data", missing: [] };
+  },
   detect: () => true,
   is_connected: () => connected,
   connect: () => {
@@ -838,6 +853,11 @@ if (typeof window !== "undefined") {
         clearHistory(); // like the heartbeat clearing on a panel preset push
       }
       emit("device-pushes", [{ kind: "Preset", index }]);
+    },
+    /** Pretend the reference data was never imported, so the first-run screen shows. */
+    needsData() {
+      dataPresent = false;
+      console.info("[fretwire] mock data cleared — reload to see the first-run import screen.");
     },
     /** Inspect the current in-memory preset. */
     state: () => current,

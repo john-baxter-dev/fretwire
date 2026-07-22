@@ -4,11 +4,19 @@ version = "0.0.0"
 edition = "2021"
 description = "fretwire GUI on a Tauri (WebKitGTK) webview"
 
+# The installed command (and the name the .desktop entry launches). `cargo run -p fretwire-tauri`
+# still works — this only renames the produced binary.
+[[bin]]
+name = "fretwire-gui"
+path = "src/main.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+# Native file/folder picker — the first-run screen needs one to locate an HX Edit installer.
+tauri-plugin-dialog = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 fretwire-core = { path = "../fretwire-core" }

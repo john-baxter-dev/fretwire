@@ -8,6 +8,7 @@
 
 pub mod backup;
 pub mod editor;
+pub mod import;
 pub mod session;
 
 pub use editor::{Catalog, EditorBlock, EditorParam, EditorPreset, ModelChoice};
@@ -30,6 +31,8 @@ pub enum Error {
     Backup(String),
     #[error("reference data: {0}")]
     MissingData(String),
+    #[error("importing reference data: {0}")]
+    Import(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

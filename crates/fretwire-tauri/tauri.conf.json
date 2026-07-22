@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "fretwire",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "identifier": "com.fretwire.app",
   "build": {
     "frontendDist": "./dist"
@@ -21,6 +21,37 @@
     }
   },
   "bundle": {
-    "active": false
+    "active": true,
+    "targets": [
+      "deb",
+      "rpm",
+      "appimage"
+    ],
+    "category": "Music",
+    "shortDescription": "Editor for the Line 6 HX Stomp",
+    "longDescription": "An independent editor for the Line 6 HX Stomp on Linux. Browse and edit presets, blocks, parameters and snapshots over the pedal's USB control interface. Ships no Line 6 data — the model catalogue is imported from your own HX Edit installation on first run.",
+    "licenseFile": "../../LICENSE-MIT",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/lib/udev/rules.d/70-hxstomp.rules": "../../packaging/70-hxstomp.rules",
+          "/usr/bin/fretwire": "../../target/release/fretwire"
+        }
+      },
+      "rpm": {
+        "files": {
+          "/usr/lib/udev/rules.d/70-hxstomp.rules": "../../packaging/70-hxstomp.rules",
+          "/usr/bin/fretwire": "../../target/release/fretwire"
+        }
+      }
+    },
+    "publisher": "John Baxter",
+    "homepage": "https://github.com/john-baxter-dev/fretwire"
   }
 }

@@ -1,0 +1,72 @@
+# Maintainer: John Baxter <john-baxter-dev@proton.me>
+#
+# Arch package for fretwire — builds from a release tag. Ships no Line 6 data: the app imports the
+# model catalogue from the user's own HX Edit installation on first run (`fretwire import-data`, or
+# the GUI's first-run screen).
+#
+# Publishing to the AUR: copy this file into the AUR repo, run `updpkgsums`, then
+# `makepkg --printsrcinfo > .SRCINFO` and push.
+
+pkgname=fretwire
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Independent editor for the Line 6 HX Stomp"
+arch=('x86_64')
+url="https://github.com/john-baxter-dev/fretwire"
+license=('MIT' 'Apache-2.0')
+depends=('webkit2gtk-4.1' 'gtk3')
+makedepends=('cargo' 'npm' 'pkgconf')
+optdepends=('p7zip: unpack an HX Edit installer during `fretwire import-data`')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked
+  # The Rust crate embeds the built frontend, which isn't in the source tree.
+  cd crates/fretwire-tauri/ui
+  npm ci
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  ( cd crates/fretwire-tauri/ui && npm run build )
+  cargo build --release --frozen -p fretwire-cli -p fretwire-tauri
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  # Offline suite only — the data-gated tests compile out without the reference data, and nothing
+  # here touches hardware.
+  cargo test --release --frozen -p fretwire-data -p fretwire-protocol -p fretwire-core -p fretwire-cli
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm0755 target/release/fretwire "$pkgdir/usr/bin/fretwire"
+  install -Dm0755 target/release/fretwire-gui "$pkgdir/usr/bin/fretwire-gui"
+
+  # Non-root access to the pedal's USB control interface. Users still need to replug after install.
+  install -Dm0644 packaging/70-hxstomp.rules "$pkgdir/usr/lib/udev/rules.d/70-hxstomp.rules"
+
+  install -Dm0644 crates/fretwire-tauri/icons/128x128.png \
+    "$pkgdir/usr/share/icons/hicolor/128x128/apps/fretwire.png"
+  install -Dm0644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+  install -Dm0644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
+
+  install -Dm0644 /dev/stdin "$pkgdir/usr/share/applications/fretwire.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=fretwire
+GenericName=HX Stomp Editor
+Comment=Edit presets on a Line 6 HX Stomp
+Exec=fretwire-gui
+Icon=fretwire
+Categories=AudioVideo;Audio;Music;
+Terminal=false
+EOF
+}

@@ -29,6 +29,14 @@ One caveat: a browser can't read arbitrary file paths, so **Restore… only work
 made in the same session** (Backup… keeps it in memory, and also downloads the JSON so you can see
 the real file shape).
 
+### The first-run import screen
+
+The app gates on whether Line 6's reference data has been imported (`data_status`). The mock reports
+it as present so you land in the editor; to work on `FirstRun.svelte`, run `fretwireMock.needsData()`
+in the console and reload. The mock's `import_data` fakes a successful import after a short delay
+(and throws if you give it `/`, so the error state is reachable). A browser can't open a native file
+picker, so `pickPath()` falls back to a prompt for a typed path.
+
 ### Simulating live device pushes
 
 To exercise live-follow (changes the UI mirrors when they originate on the hardware, e.g. a

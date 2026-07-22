@@ -8,8 +8,23 @@
   import HistoryPane from "./lib/HistoryPane.svelte";
   import Dialog from "./lib/Dialog.svelte";
   import Toast from "./lib/Toast.svelte";
+  import FirstRun from "./lib/FirstRun.svelte";
 
   const BUDGET = 100;
+
+  // First-run gating: until we've checked whether the Line 6 reference data is imported, show
+  // nothing (avoids flashing the editor then the setup screen). `null` = checking, then a status
+  // object. `dataReady` also flips true when the user chooses to skip the import.
+  let dataStatus = $state(null);
+  let dataReady = $state(false);
+  onMount(async () => {
+    try {
+      dataStatus = await invoke("data_status");
+    } catch {
+      dataStatus = { present: false, dir: "", files: 0 };
+    }
+    dataReady = dataStatus.present;
+  });
 
   let status = $state("Ready — WebKitGTK webview is painting.");
   let statusErr = $state(false);
@@ -363,6 +378,24 @@
   }
 </script>
 
+{#if dataStatus && !dataReady}
+  <FirstRun
+    status={dataStatus}
+    onready={(r) => {
+      dataStatus = { ...dataStatus, present: true, files: r.copied };
+      dataReady = true;
+      status = `Imported ${r.copied} reference file(s) — model names are available.`;
+      statusErr = false;
+    }}
+    onskip={() => {
+      dataReady = true;
+      status = "No reference data — blocks and parameters show numeric indices.";
+      statusErr = false;
+    }}
+  />
+{/if}
+
+{#if dataReady}
 <header>
   <h1>fretwire</h1>
   <span class="spacer"></span>
@@ -466,6 +499,7 @@
     <p class="hint">Click <b>Connect</b> to open a session and read the current preset from the HX Stomp.</p>
   {/if}
 </main>
+{/if}
 
 {#if saveAsDlg}
   <Dialog

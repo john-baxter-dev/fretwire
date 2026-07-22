@@ -504,152 +504,18 @@ fn print_udev_manual() {
     println!("Then unplug and replug your HX Stomp.");
 }
 
-/// Import Line 6's reference data (`.models`, `Helix.sym`, `HelixModelDefs.bin`, the catalogs, the
-/// default/empty presets) into the local data dir ([`fretwire_core::data_dir`]) from a **user-supplied**
-/// source. We ship none of this data; it goes Line6 → user → tool (the emulator "bring your own
-/// BIOS" pattern). The `source` may be either:
-///   - a **directory** — already-extracted files (e.g. the `res/` folder from an HX Edit install,
-///     or an installer you unpacked yourself). Scanned directly; needs no `7z`.
-///   - an **installer file** (NSIS `.exe`, `.msi`, macOS `.pkg`/`.dmg`) — unpacked with `7z` into a
-///     temp dir first.
-/// In both cases the wanted files are found by name wherever they sit under the source.
+/// Import Line 6's reference data into the local data dir from a **user-supplied** source (an HX
+/// Edit installer, or a directory of already-extracted files). The mechanics live in
+/// `fretwire_core::import` so the GUI's first-run screen can offer the same thing; this just prints.
 fn import_data(source: &str) -> Result<()> {
-    use std::path::{Path, PathBuf};
-    let source = Path::new(source);
-    if !source.exists() {
-        anyhow::bail!("not found: {}", source.display());
+    let summary = fretwire_core::import::import_from(std::path::Path::new(source))?;
+    println!("imported {} reference file(s) → {}", summary.copied, summary.dest.display());
+    for name in &summary.missing {
+        eprintln!("⚠  {name} missing — model names/ordering won't be available");
     }
-    let dest = fretwire_core::data_dir();
-    std::fs::create_dir_all(&dest)?;
-
-    // A directory source is scanned in place (no 7z); a file is unpacked into a temp dir we clean up.
-    let tmp = if source.is_dir() {
-        None
-    } else {
-        let t = std::env::temp_dir().join(format!("fretwire-import-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&t);
-        std::fs::create_dir_all(&t)?;
-        unpack_with_7z(source, &t)?;
-        Some(t)
-    };
-    let search_root = tmp.as_deref().unwrap_or(source);
-    let cleanup = || {
-        if let Some(t) = &tmp {
-            let _ = std::fs::remove_dir_all(t);
-        }
-    };
-
-    // Collect the wanted files anywhere under the source, de-duped by name (preferring the copy
-    // under a `res` directory if the same name appears twice).
-    let mut found: Vec<PathBuf> = Vec::new();
-    collect_wanted(search_root, &mut found);
-    let mut by_name: std::collections::BTreeMap<String, PathBuf> = std::collections::BTreeMap::new();
-    for p in found {
-        let name = p.file_name().unwrap().to_string_lossy().into_owned();
-        let in_res = p.to_string_lossy().contains("res");
-        let keep = match by_name.get(&name) {
-            Some(prev) => in_res || !prev.to_string_lossy().contains("res"),
-            None => true,
-        };
-        if keep {
-            by_name.insert(name, p);
-        }
-    }
-    if by_name.is_empty() {
-        cleanup();
-        if source.is_dir() {
-            anyhow::bail!(
-                "no reference data (Helix.sym, *.models, …) found under {} — point at an HX Edit \
-                 install's `res/` folder or an unpacked installer",
-                source.display()
-            );
-        }
-        anyhow::bail!(
-            "no reference data found — is this an HX Edit installer? (unpacked to {})",
-            search_root.display()
-        );
-    }
-
-    let mut copied = 0usize;
-    for (name, src) in &by_name {
-        std::fs::copy(src, dest.join(name))?;
-        copied += 1;
-    }
-    for need in ["Helix.sym", "HelixModelDefs.bin"] {
-        if !dest.join(need).exists() {
-            eprintln!("⚠  {need} missing — model names/ordering won't be available");
-        }
-    }
-    cleanup();
-
-    println!("imported {copied} reference file(s) → {}", dest.display());
     println!("(set $FRETWIRE_DATA_DIR to override that location)");
     println!("the tool now loads model names, DSP loads and param ranges from here at runtime.");
     Ok(())
-}
-
-/// Unpack an installer into `tmp` using `7z`/`7za`. 7z reads NSIS `.exe`, `.msi`, and macOS
-/// `.pkg`/`.dmg`. Exit code 1 (warnings) is tolerated; the wanted-files check is the real gate.
-fn unpack_with_7z(installer: &std::path::Path, tmp: &std::path::Path) -> Result<()> {
-    use std::process::{Command, Stdio};
-    let mut missing_tool = true;
-    for bin in ["7z", "7za"] {
-        let result = Command::new(bin)
-            .arg("x")
-            .arg("-y")
-            .arg(format!("-o{}", tmp.display()))
-            .arg(installer)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        match result {
-            Ok(st) if matches!(st.code(), Some(0) | Some(1)) => return Ok(()),
-            Ok(st) => anyhow::bail!("{bin} failed to extract the installer (exit {st})"),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => missing_tool &= true,
-            Err(e) => return Err(e.into()),
-        }
-    }
-    let _ = missing_tool;
-    anyhow::bail!(
-        "need `7z` on PATH to unpack the installer:\n  \
-         Arch: pacman -S p7zip   Debian/Ubuntu: apt install p7zip-full   \
-         Fedora: dnf install p7zip   macOS: brew install p7zip\n  \
-         …or extract the installer yourself (or copy the `res/` folder from an existing HX Edit \
-         install) and pass that directory: `fretwire import-data <dir>`"
-    )
-}
-
-/// Recursively collect reference-data files (by name) under `dir`.
-fn collect_wanted(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_wanted(&path, out);
-        } else if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-            if is_reference_file(name) {
-                out.push(path);
-            }
-        }
-    }
-}
-
-/// Whether `name` is a reference-data file we import. `.hlx` is restricted to the default/empty
-/// templates (not the hundreds of factory presets an installer may also carry).
-fn is_reference_file(name: &str) -> bool {
-    name.ends_with(".models")
-        || matches!(
-            name,
-            "Helix.sym"
-                | "HelixModelDefs.bin"
-                | "HelixControls.json"
-                | "HX_ModelCatalog.json"
-                | "HX_ModelCatalog.bin"
-                | "default_preset.hlx"
-                | "default_preset_hxs.hlx"
-                | "default_preset_hfx.hlx"
-                | "empty_preset.hlx"
-        )
 }
 
 /// Strip non-hex-digit characters from a string (spaces, `0x`, commas).

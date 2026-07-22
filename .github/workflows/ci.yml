@@ -18,7 +18,7 @@ jobs:
     name: build & test (offline crates)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Rust toolchain info
         run: rustc --version && cargo --version

@@ -21,7 +21,7 @@ jobs:
     name: deb / rpm / AppImage
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # WebKitGTK and a C toolchain: what the *-sys crates in the GUI's tree need to link.
       # (Users installing the .deb don't need any of this — apt pulls the runtime libs in.)
@@ -37,7 +37,7 @@ jobs:
         with:
           workspaces: ". -> target"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
@@ -66,7 +66,7 @@ jobs:
             \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) -exec cp {} dist/ \;
           ls -la dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: linux-bundles
           path: dist/*
@@ -82,7 +82,7 @@ jobs:
     name: static CLI (musl)
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-musl
@@ -102,7 +102,7 @@ jobs:
             -C target/x86_64-unknown-linux-musl/release fretwire \
             -C "$GITHUB_WORKSPACE" packaging/70-hxstomp.rules README.md LICENSE-MIT LICENSE-APACHE
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: cli-musl
           path: dist/*

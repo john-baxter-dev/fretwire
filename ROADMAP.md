@@ -307,6 +307,17 @@ libusb C dependency, clean on Linux; falls back fine for dev on Windows. Workspa
       Per release afterwards: bump `pkgver`, reset `pkgrel=1`, `updpkgsums`, regenerate `.SRCINFO`.
 - [ ] Flathub — deferred. Needs a broad `--device=all` for USB, can't install a udev rule, and the
       sandbox complicates pointing at an HX Edit installer on the host. Revisit once there are users.
+- [ ] **arm64 for the CLI** (`aarch64-unknown-linux-musl`) — a matrix entry on the existing musl job
+      in `release.yml`, ~10 lines. `fretwire-cli` has no C dependencies (`nusb` is pure Rust), so it
+      cross-compiles to a static binary cleanly. **Why:** a Raspberry Pi wired into a pedalboard doing
+      preset switching / backup / restore with no screen is the real use case; Asahi Linux on Apple
+      Silicon is a smaller second one. **Caveat:** untested — no arm64 hardware here, so label the
+      asset as such in the release notes until someone confirms it runs.
+- [ ] arm64 for the **GUI** — not planned. Feasible now that public repos get free `ubuntu-24.04-arm`
+      runners (native build, no cross-compiling WebKitGTK), but it doubles the bundle matrix for a
+      thin slice of users. Wait for someone to ask.
+- [ ] Other architectures — **deliberately not doing**: i686 (dead on the desktop), armv7 / 32-bit Pi
+      (won't run the editor usefully), RISC-V (no users). Untestable binaries are a support burden.
 
 ## Safety
 See **`docs/safety.md`**. TL;DR: captures + offline work are zero-risk; live control is low-risk

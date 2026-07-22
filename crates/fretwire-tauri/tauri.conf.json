@@ -3,7 +3,12 @@
   "productName": "fretwire",
   "identifier": "com.fretwire.app",
   "build": {
-    "frontendDist": "./dist"
+    "frontendDist": "./dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": {
+      "cwd": "ui",
+      "script": "npm run dev"
+    }
   },
   "app": {
     "withGlobalTauri": true,

@@ -3,6 +3,20 @@
 The web UI for the Tauri desktop app. It builds into `../dist`, which the Rust crate embeds at
 compile time (see `../tauri.conf.json`).
 
+## Three ways to run it
+
+| you want | command | what you get |
+|---|---|---|
+| iterate on the UI | `npm run dev` (here) | browser + mock device, hot reload, no Rust |
+| UI against the real pedal | `cargo tauri dev` (from `..`) | real backend in a real window, hot reload |
+| the shipped app | `npm run build` then `cargo build --release -p fretwire-tauri` | `dist/` embedded into the binary |
+
+`cargo tauri dev` starts this dev server itself (`beforeDevCommand` in `tauri.conf.json`) and points
+the app at `http://localhost:5173` instead of the embedded `dist/`. The port is pinned with
+`strictPort`, so if something else holds 5173 Vite fails loudly rather than moving to 5174 and
+leaving the app staring at a dead URL. It needs the Tauri CLI —
+`npm exec tauri dev`, or `cargo install tauri-cli` for the `cargo tauri` form.
+
 ## Working on the frontend without hardware (or a Rust toolchain)
 
 You don't need an HX Stomp, Rust, or Tauri to develop the UI. Run it in a plain browser against the

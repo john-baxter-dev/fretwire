@@ -7,12 +7,12 @@ members = [
     "crates/fretwire-usb",
     "crates/fretwire-core",
     "crates/fretwire-cli",
-    "crates/fretwire-gui",
     "crates/fretwire-tauri",
 ]
-# fretwire-tauri (the Tauri renderer spike) is a member so it shares the lockfile, but is kept out of the
-# default set so plain `cargo build`/`cargo test` (and the 54 offline tests) don't pull the whole
-# WebKitGTK/tauri dep tree. Build/run it explicitly: `cargo run -p fretwire-tauri`.
+# fretwire-tauri (the GUI) is a member so it shares the lockfile, but is kept out of the default set
+# so plain `cargo build`/`cargo test` (the offline suite) don't pull the whole WebKitGTK/tauri dep
+# tree — and don't require the built frontend in `crates/fretwire-tauri/dist/`. Build/run it
+# explicitly: `cargo run -p fretwire-tauri` (see the README for the `npm run build` step first).
 default-members = [
     "crates/fretwire",
     "crates/fretwire-data",
@@ -20,7 +20,6 @@ default-members = [
     "crates/fretwire-usb",
     "crates/fretwire-core",
     "crates/fretwire-cli",
-    "crates/fretwire-gui",
 ]
 
 [workspace.package]
@@ -43,16 +42,3 @@ futures-lite = "2"
 futures-timer = "3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-# GUI (Elm-style, pure-Rust, MIT/Apache). Software renderer (tiny-skia) instead of wgpu: it
-# presents via CPU/softbuffer (wl_shm on Wayland), sidestepping the EGL/dmabuf/driver issues the
-# GPU backend hits on some Linux setups — and it's plenty fast for an editor UI.
-iced = { version = "0.13", default-features = false, features = [
-    "tiny-skia",
-    "fira-sans",
-    "auto-detect-theme",
-    "canvas",
-    "tokio",
-] }
-# Async runtime for the GUI: iced's executor is tokio, and we use `spawn_blocking` to run the
-# blocking USB session off the UI thread.
-tokio = { version = "1", default-features = false, features = ["rt"] }

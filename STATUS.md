@@ -16,7 +16,8 @@ selection, param editing (sliders/enums/switches + paired cab), bypass, model sw
 greyout), add/delete, snapshots, split-type + split/mixer node editing, live-follow
 (footswitch/snapshot/preset pushes; needs the `core:event` capability), greyed bypassed blocks, and
 the **interactive routing grid** (drag blocks across a 2-row × N-col grid of slots;
-`PresetStream::grid()` + `Session::place_block`). The iced GUI (`fretwire-gui`) remains but is superseded.
+`PresetStream::grid()` + `Session::place_block`). The iced GUI (`fretwire-gui`) was **removed 2026-07-21**;
+the sections below describing it are kept as history.
 See ROADMAP for remaining follow-ups.
 
 **Routing flexibility (2026-07-06, verified live):** the grid now covers the full parallel-path
@@ -115,7 +116,7 @@ See `crates/fretwire-tauri/ui/README.md`. Keep the mock in sync when adding back
 
 ## TL;DR
 **The protocol is essentially fully decoded, and there's a working graphical editor**
-(`fretwire-gui`, iced) on top of it — all verified live on the HX Stomp on Linux. 89 offline tests, clean
+(`fretwire-tauri`, Tauri + Svelte) on top of it — all verified live on the HX Stomp on Linux. Clean
 build. The GUI does, live: **connect → see the current preset → browse/switch all 126 presets →
 signal-chain view → select a block → bypass → param sliders (main + paired cab) + enum dropdowns →
 swap model (any category, DSP-fit grey-out) → drag-to-reorder (insert into gaps) → add block →
@@ -240,7 +241,9 @@ frames; the GUI ticks it ~4×/s while connected. Also: the post-edit `cmd 0x08` 
 first so the edit's reply is the next one read. Verified live: idle-then-edit and repeated edits
 both reliable.
 
-## GUI — `fretwire-gui` (iced, software renderer)
+## GUI — `fretwire-gui` (iced, software renderer) — REMOVED 2026-07-21
+_History only: superseded by `fretwire-tauri` and deleted from the tree. Kept because the phase
+notes below record what was verified live against the device._
 A graphical editor (`fretwire`) on **iced 0.13** (tiny-skia software renderer — wgpu hit EGL/dmabuf
 issues on Linux). Working: render a preset (offline file arg **or** live), **Connect & Pull** /
 **Disconnect** (async `spawn_blocking`, no UI freeze), the keepalive heartbeat, and **live bypass
@@ -472,6 +475,6 @@ Full detail in `docs/protocol.md`, `docs/preset-format.md`.
    browse).
 
 ## Repo map
-`crates/` (fretwire-data, fretwire-protocol, fretwire-usb, fretwire-core, fretwire-cli, fretwire-gui,
+`crates/` (fretwire-data, fretwire-protocol, fretwire-usb, fretwire-core, fretwire-cli,
 fretwire-tauri) · `docs/` (protocol, preset-format, safety, next-steps) · `captures/` (pcaps + notes
 + reassembled blob) · `tools/` · `ROADMAP.md`.

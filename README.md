@@ -19,12 +19,26 @@ from your own HX Edit installation (see [below](#model-names-dsp-loads-and-param
 | `crates/fretwire-usb`      | USB transport via `nusb` |
 | `crates/fretwire-core`     | device session API |
 | `crates/fretwire-cli`      | `fretwire` command-line driver |
-| `crates/fretwire-gui`      | iced GUI (superseded by the Tauri front end) |
-| `crates/fretwire-tauri`    | Tauri (WebKitGTK) GUI |
+| `crates/fretwire-tauri`    | the graphical editor — Tauri (WebKitGTK) + Svelte |
 | `captures/`                | per-capture action notes + small preset-stream fixtures used by the tests |
 | `docs/`, `ROADMAP.md`      | protocol notes, preset format, safety, and the plan |
 
+## Quick start
+
+The whole sequence, for a working graphical editor on a real pedal:
+
+1. [Build](#build) the workspace (Rust 1.96+).
+2. [Install the udev rule](#first-time-setup-talking-to-a-real-device) and replug the pedal.
+3. [Import the reference data](#model-names-dsp-loads-and-param-ranges-optional) from your own HX
+   Edit install (optional, but you want it — it's where model and parameter names come from).
+4. [Build the frontend and run the GUI](#the-graphical-editor).
+
+No pedal, no Rust, nothing installed? The whole UI runs in a browser against a
+[mock device](#no-hardware-no-rust).
+
 ## Build
+
+Needs **Rust 1.96 or newer** (`rustup update` if your distro's toolchain is older).
 
 ```
 cargo build
@@ -35,6 +49,9 @@ cargo run -p fretwire-cli -- show-preset <stream>   # decode a reassembled devic
 
 The CLI binary is `fretwire`. `show-preset` takes a reassembled preset MessagePack stream and prints
 its blocks with resolved model ids, device param order (Mono/Stereo), and current values — offline.
+
+`cargo build` deliberately skips the GUI, so it needs no system libraries beyond a Rust toolchain —
+see [The graphical editor](#the-graphical-editor) for that.
 
 ## First-time setup (talking to a real device)
 
@@ -75,6 +92,67 @@ cargo run -p fretwire-cli -- import-data /path/to/res     # a directory: no 7z r
 
 It caches the files under `~/.local/share/fretwire/data` (`$FRETWIRE_DATA_DIR` overrides), and the
 tool loads them from there at runtime. Builds ship **no** Line 6 data.
+
+## The graphical editor
+
+`fretwire-tauri` is the editor: a WebKitGTK window over a Svelte frontend, on the same
+`fretwire-core` session the CLI uses. It's **not** part of `cargo build` — it needs system libraries
+and a built frontend, so you opt into it.
+
+**1. System libraries.** Tauri 2 needs WebKitGTK and a C toolchain:
+
+```
+# Debian / Ubuntu / Kubuntu
+sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev \
+                 libssl-dev libayatana-appindicator3-dev librsvg2-dev
+# Arch
+sudo pacman -S webkit2gtk-4.1 base-devel curl wget file openssl librsvg libappindicator-gtk3 xdotool
+# Fedora
+sudo dnf install webkit2gtk4.1-devel openssl-devel curl wget file librsvg2-devel \
+                 libappindicator-gtk3-devel && sudo dnf group install "C Development Tools and Libraries"
+```
+
+You also need **Node 20+** for the frontend build.
+
+**2. Build the frontend.** The Rust crate embeds `crates/fretwire-tauri/dist/` at compile time, and
+that directory is a build artifact — it isn't in git. Build it first, or `cargo run -p fretwire-tauri`
+will fail on a fresh clone:
+
+```
+cd crates/fretwire-tauri/ui
+npm install
+npm run build          # → ../dist
+```
+
+Re-run `npm run build` after any frontend change; the Rust side won't pick it up otherwise.
+
+**3. Run it.**
+
+```
+cargo run -p fretwire-tauri
+```
+
+Connect, browse presets, edit blocks and parameters, drag blocks around the routing grid, manage
+snapshots, save, back up and restore. It live-follows the hardware, so footswitch and panel changes
+show up in the window. (The app forces WebKitGTK's non-dmabuf compositing path on Linux by default —
+some GPU/compositor combinations hit a fatal Wayland protocol error otherwise. Set
+`WEBKIT_DISABLE_DMABUF_RENDERER` yourself to override.)
+
+### No hardware, no Rust
+
+The frontend runs standalone in a browser against an in-memory **mock device** — no pedal, no Rust
+toolchain, no Tauri, no system libraries:
+
+```
+cd crates/fretwire-tauri/ui
+npm install
+npm run dev            # → http://localhost:5173
+```
+
+When it can't find a Tauri runtime it routes every backend call to the mock, which implements the
+full command surface: a setlist, the model catalog, split routing, and simulated live pushes from
+the hardware. It's the easiest way to see what the editor actually does before installing anything.
+See `crates/fretwire-tauri/ui/README.md`.
 
 ## License
 

@@ -15,7 +15,7 @@ libusb C dependency, clean on Linux; falls back fine for dev on Windows. Workspa
 | `fretwire-usb`     | `nusb` transport: enumerate, claim MI_00, bulk/interrupt I/O |
 | `fretwire-core`    | device session API (connect, sync, param set, preset load/save, snapshots, tuner) |
 | `fretwire-cli`     | command-line validator/driver |
-| `fretwire-gui`     | GUI — **iced 0.13** (tiny-skia software renderer) |
+| `fretwire-tauri`   | GUI — **Tauri 2** (WebKitGTK) + Svelte |
 
 ## Phase 0 — Recon  ✅ (done 2026-06-21)
 - [x] Locate the device; set up USBPcap + Wireshark.

@@ -11,8 +11,8 @@ env:
 
 # CI builds only the offline crates. The reference data (model/param names) is Line 6's and is
 # never in the repo, so the data-gated tests compile out here (have_bundled_data is unset) and the
-# suite runs on the in-repo capture fixtures alone. The GUI crates (fretwire-gui / fretwire-tauri)
-# are excluded to avoid pulling the winit/WebKitGTK system-dependency tree into CI.
+# suite runs on the in-repo capture fixtures alone. The GUI (fretwire-tauri) is excluded to avoid
+# pulling the WebKitGTK system-dependency tree — and its built frontend — into CI.
 jobs:
   build-test:
     name: build & test (offline crates)

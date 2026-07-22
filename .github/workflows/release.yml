@@ -16,6 +16,11 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# Creating a Release and attaching assets needs write access to repository contents. The default
+# GITHUB_TOKEN is read-only, which fails with "Resource not accessible by integration".
+permissions:
+  contents: write
+
 jobs:
   bundles:
     name: deb / rpm / AppImage

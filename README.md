@@ -7,6 +7,8 @@ The wire protocol was recovered by **observing USB traffic to and from the devic
 preset, and control **data is not included** — fretwire reads it at runtime from a copy you import
 from your own HX Edit installation (see [The reference data](#the-reference-data)).
 
+![The fretwire editor connected to an HX Stomp: preset list, signal chain, and the parameter panel for the selected block](docs/screenshots/editor.png)
+
 > ⚠️ **No warranty. Use at your own risk — see [Disclaimer](#disclaimer).** Firmware/flash/DFU
 > operations are deliberately out of scope and never transmitted (`docs/safety.md`).
 
@@ -45,6 +47,8 @@ The AppImage can't install a udev rule (nothing outside the bundle can be writte
 Then launch it. On first run the app asks for your HX Edit installer or `res` folder so it can
 [import the model data](#the-reference-data) — that step is what turns numeric parameter indices
 into real model and parameter names.
+
+![The first-run screen, offering to import the model data from an HX Edit installer or an extracted folder](docs/screenshots/first-run.png)
 
 Want to see the interface before installing anything? The whole UI runs in a browser against a
 [mock device](#no-hardware-no-rust) — no pedal, no Rust, no packages.

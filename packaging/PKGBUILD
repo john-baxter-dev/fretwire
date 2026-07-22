@@ -4,8 +4,10 @@
 # model catalogue from the user's own HX Edit installation on first run (`fretwire import-data`, or
 # the GUI's first-run screen).
 #
-# Publishing to the AUR: copy this file into the AUR repo, run `updpkgsums`, then
-# `makepkg --printsrcinfo > .SRCINFO` and push.
+# STATUS: written but NEVER BUILT OR PUBLISHED — see ROADMAP.md "Phase 8" for the checklist.
+# Publishing to the AUR: validate with `makepkg -si` from a copy outside the repo, run `updpkgsums`
+# (the sha256 below is still SKIP), then `makepkg --printsrcinfo > .SRCINFO` and push to
+# ssh://aur@aur.archlinux.org/fretwire.git.
 
 pkgname=fretwire
 pkgver=0.1.0

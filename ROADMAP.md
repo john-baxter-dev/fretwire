@@ -287,9 +287,26 @@ libusb C dependency, clean on Linux; falls back fine for dev on Windows. Workspa
 ## Phase 8 — Publishing 
 - [x] `fretwire import-data <installer>` — extract Line 6's reference data from the user's own HX Edit
       install (verified byte-identical vs the bundled copies).
-- [ ] The data flip: `Catalog::bundled()` (`include_bytes!`) → `Catalog::from_data_dir()` + no-data
-      fallback; `git rm` the bundled data + `res-extracted/`; update tests.
-- [ ] Packaging: prebuilt binaries, udev rule, AppImage/AUR; README + license/trademark notes.
+- [x] The data flip: `Catalog::bundled()` (`include_bytes!`) → `Catalog::from_data_dir()` + no-data
+      fallback; `git rm` the bundled data + `res-extracted/`; update tests. (2026-07-18)
+- [x] First-run import in the GUI — `fretwire_core::import` + `FirstRun.svelte`, so a fresh install
+      doesn't dead-end at "run `fretwire import-data`". (2026-07-21)
+- [x] Packaging: `.deb`/`.rpm`/AppImage via `tauri build` (deb/rpm install the udev rule and ship the
+      CLI), static musl CLI, GitHub Release on a `v*` tag. README + license/trademark notes.
+      (2026-07-21)
+- [ ] **TODO — publish to the AUR.** `packaging/PKGBUILD` is written but **not published or even
+      built once**. Needs, in order:
+      1. Local validation: copy it out of the tree (`makepkg` litters `src/`/`pkg/`), `updpkgsums`
+         (needs `pacman-contrib`), then `makepkg -si`. This is the one package an Arch box can test
+         end to end — the tag tarball, `npm ci`, both binaries, `check()`, the udev rule.
+      2. Replace `sha256sums=('SKIP')` with the real hash (`updpkgsums` rewrites it). Publishing
+         with `SKIP` means a tampered tarball can't be detected.
+      3. Publish: AUR account + SSH key → `git clone ssh://aur@aur.archlinux.org/fretwire.git` →
+         copy the PKGBUILD → `makepkg --printsrcinfo > .SRCINFO` (mandatory, push is rejected
+         without it) → commit → push. Check the name is free first.
+      Per release afterwards: bump `pkgver`, reset `pkgrel=1`, `updpkgsums`, regenerate `.SRCINFO`.
+- [ ] Flathub — deferred. Needs a broad `--device=all` for USB, can't install a udev rule, and the
+      sandbox complicates pointing at an HX Edit installer on the host. Revisit once there are users.
 
 ## Safety
 See **`docs/safety.md`**. TL;DR: captures + offline work are zero-risk; live control is low-risk

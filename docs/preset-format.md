@@ -18,8 +18,8 @@ stream after a `marker/type/len` header). Key **104** is a `str`/`bin` blob = th
 | key | value | meaning (inferred) |
 |----:|-------|--------------------|
 | 7 | Map `{36: "P33", 35: 58720256, 37: "v3.71-32-g1039661"}` | device info: **36 = model code** (`P33` = HX Stomp family), 35 = version (0x03800000), 37 = firmware string |
-| 0 | Map `{21: 0, 22: Array[20]}` | **block slots** (`21` = split flag) — see below |
-| 1 | nil | ? |
+| 0 | Map `{21: split, 22: Array[20]}` | **block slots** of the first DSP (`21` = split type) — see below |
+| 1 | Map `{21: split, 22: Array[20]}` — or nil | **the second DSP's slot array**, same shape as key `0`. **nil on the HX Stomp** (one DSP), populated on the Helix Floor. [solid — 2026-07-22, Floor captures cross-checked against a `.hxb` backup] |
 | 2 | Map `{0: Array[13], 1: Array[13×Array[7]]}` | snapshot/controller matrices (13 = snapshots? all zero here) |
 | 3 | Map `{7: 0, 8: Array[5]}` | **footswitch / stomp layout** — bound blocks only; see below |
 | 4 | Array[10] (all nil) | **parameter-controller** assignments (separate from `3 → 8`; empty here) |
@@ -27,13 +27,52 @@ stream after a `marker/type/len` header). Key **104** is a `str`/`bin` blob = th
 | 6 | Map{2} | TBD |
 | 10 | Map{6} | TBD |
 
-### Block slots (`0 → 22`, Array of 20)
+### Block slots (`0 → 22`, Array of 20 — and `1 → 22` for the second DSP)
 Each slot is `{19: type, 20: content}`:
 - `type 8` + `nil` → **empty slot**.
 - `type 6` + `Map{5}` → **populated effect block** (5 params). 6 such blocks in this preset,
   matching the names seen in the stream (Bucket Brigade, Harmonic Tremolo, Tremolo, 70s Chorus,
   Dynamic Hall, …).
+- `type 7` + `Map{4}` → **a Looper block**. Same *idea* as type 6 but a **different content shape**
+  — see below. Not device-specific: it simply never appeared in the Stomp fixtures (none of them
+  contain a Looper), and turned up in the Helix Floor captures.
+  **[solid — 2026-07-22, cross-checked against a `.hxb` backup]**
 - other types (`0,1,2,3`) → structural slots (input/split/join/output).
+
+**The array is 20 slots on both devices.** The Helix Floor does not widen it — it uses a *second*
+array at preset key `1` for DSP2. So a full block enumeration must walk **both** `0 → 22` and
+`1 → 22`; reading only key `0` silently drops every DSP2 block (verified: a Floor preset whose
+Looper lives on DSP2 came back one block short until key `1` was walked).
+
+#### The wire slot number is **global** across DSPs  [solid — 2026-07-23]
+
+Edit ops address a block by key `98` = a **single** slot integer with no DSP qualifier, and that
+integer spans both arrays:
+
+```
+wire_slot = dsp * 20 + index_in_that_dsp's_array
+```
+
+so DSP1 is slots **0–19** and DSP2 is slots **20–39**. This is device-independent framing: the Stomp
+simply never exceeds 19 because its key `1` is nil.
+
+Established from a Helix Floor capture of five DSP2 blocks being edited in HX Edit (`WinCap5`,
+`FACTORY 1` `12B` "Pull Me Under"). Each `op 78 {98: n}` / `op 30 {98: n, 28: p, 119: v}` pair
+resolves under this rule to a block whose stored value for param `p` is one UI increment from the
+first value on the wire — five independent matches across five models and three different parameter
+scales, including correctly picking the branch-B one of two identical `HD2_DelaySimpleDelayMono`
+blocks (index 17, not 7). It is also consistent with every earlier capture, whose slots were all
+< 20 and all resolved to DSP1. Full working in `docs/helix-floor.md`.
+
+Independently corroborated *inside* the preset: the **footswitch layout** (`3 → 8 → … → 11 → 8`)
+numbers its targets the same way. In that Floor preset FS4/FS5 point at slots 27/28 and FS10/FS11 at
+37/38, and each entry's name matches the model found at that **global** slot — including telling the
+two identical `Simple Delay` blocks apart as 27 and 37. Two different tables, one numbering.
+
+**Consequence:** `fretwire_protocol::edit` needs no change for multi-DSP devices. The `(dsp, index)`
+pair is an internal detail of preset traversal; flatten it with the formula above before it reaches
+the wire. Implemented in `fretwire_data::stream` as `wire_slot(dsp, index)` /
+`split_wire_slot(slot)`, with `DSP_SLOT_STRIDE = 20`.
 
 The block content maps hold the per-param **values** (seen as msgpack `float32`, e.g. `ca 3f800000`
 = 1.0) — the same big-endian f32s we set via op-0x06. Mapping these slots/params to the wire
@@ -48,6 +87,18 @@ A `type 6` block content is `Map{5}`:
 - `11` = `{2: count, 3: count, 4: [values]}` — **the ordered param vector** (msgpack `float32`
   for knobs, `int`/`bool` for enums/switches), in `.models` param order.
 - `12` = a second (usually empty) param bank; `9` = flag.
+
+### Block content for `type 7` (Looper) — a different shape
+A `type 7` slot's content is `Map{4}` and does **not** follow the type-6 layout:
+- `8` = **model index** into `Helix.sym` — directly, *not* nested under `24 → 25`
+  (e.g. `153` = `HD2_LooperStereo`).
+- `10` = **`enabled` bool** — same key as type 6.
+- `7` = `{2: count, 3: count, 4: [values]}` — the ordered param vector, at key **`7`**, not `11`
+  (e.g. `[0.0, 0.0, 20.0, 20000.0]` = `HD2_Looper`'s `Playback, Overdub, lowCut, highCut`).
+- `9` = a secondary id/flag.
+
+This is the same `{8: model, 10: enabled, 7: params}` shape the **structural** nodes use inside
+their sub-maps (`15`/`17`), so type 7 reads more like a structural node than an effect block.
 
 ### Signal path (`3 → 8`, the block identities)
 `Array[5]`, one entry per path position (`nil` = empty). Each populated position is `Array[1]`
@@ -91,7 +142,11 @@ to that one capture. The path is now used only to *enrich* a block with its foot
 controller-node kind, and user label **when present** (keyed by slot via `11 → 8`).
 
 ### Split / parallel topology  [solid]
-- **`0 → 21`** is the split flag: `0` = serial, `1` = split (parallel rows).
+- **`<dsp> → 21`** is the split flag: `0` = serial, **non-zero = split, and the value is the split
+  *type***. The Stomp only ever uses `1`, so this was originally recorded as a `0`/`1` flag; the
+  Floor uses `2` and `3` for its other split types, and a DSP's two paths can differ within one
+  preset. Across the five presets we can check, `21 == 0` holds exactly when that DSP's row-B slots
+  are empty. Each DSP carries its own flag. [solid — 2026-07-23]
 - **Slot index encodes the row:** slots 0–15 = main (top) row, 16+ = the parallel (B) row.
   Proven by moving one block to path B and diffing: it relocated `0 → 22[6] → [16]`, `0 → 21`
   flipped `0 → 1`, and the pre-existing **kind-2 (split)** and **kind-3 (mixer)** nodes activated

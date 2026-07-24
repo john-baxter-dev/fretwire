@@ -117,8 +117,11 @@ impl From<&EditorParam> for ParamDto {
 
 #[derive(Serialize)]
 pub struct BlockDto {
+    /// Wire slot — global across DSPs (`dsp * 20 + index`), and the edit address.
     pub slot: i64,
-    /// 0 = main (top) row, 1 = parallel (B / bottom) row.
+    /// Which DSP holds this block (0 for every HX Stomp block).
+    pub dsp: usize,
+    /// 0 = main (top) row, 1 = parallel (B / bottom) row, **within this block's DSP**.
     pub row: u8,
     pub model_name: String,
     pub user_label: Option<String>,
@@ -144,6 +147,7 @@ impl From<&EditorBlock> for BlockDto {
     fn from(b: &EditorBlock) -> Self {
         BlockDto {
             slot: b.slot,
+            dsp: b.dsp,
             row: b.row,
             model_name: b.model_name.clone(),
             user_label: b.user_label.clone(),
@@ -167,10 +171,38 @@ impl From<&EditorBlock> for BlockDto {
 
 #[derive(Serialize)]
 pub struct GridCellDto {
+    /// Which DSP this cell belongs to (0 for every HX Stomp cell).
+    pub dsp: usize,
+    /// Wire slot — global across DSPs, and the drop-target address.
     pub slot: i64,
+    /// Row **within** this DSP: 0 = path A, 1 = path B.
     pub row: u8,
     pub column: i64,
     pub occupied: bool,
+}
+
+impl From<&fretwire_core::fretwire_data::stream::GridCell> for GridCellDto {
+    fn from(c: &fretwire_core::fretwire_data::stream::GridCell) -> Self {
+        GridCellDto { dsp: c.dsp, slot: c.slot, row: c.row, column: c.column, occupied: c.occupied }
+    }
+}
+
+/// One DSP's routing structure. A single-DSP device (HX Stomp) sends one of these; the Helix Floor
+/// sends two. The flat `split_node`/`grid`/… fields on [`PresetDto`] mirror `dsps[0]` so a UI that
+/// only knows about one DSP keeps working.
+#[derive(Serialize)]
+pub struct DspDto {
+    pub dsp: usize,
+    pub split: bool,
+    pub split_pos: Option<i64>,
+    pub mixer_pos: Option<i64>,
+    pub split_node: Option<BlockDto>,
+    pub mixer_node: Option<BlockDto>,
+    pub input_node: Option<BlockDto>,
+    pub output_node: Option<BlockDto>,
+    pub grid: Vec<GridCellDto>,
+    /// DSP load drawn by this DSP's blocks alone (each DSP has its own ~100% budget).
+    pub dsp_load: f64,
 }
 
 #[derive(Serialize)]
@@ -178,7 +210,14 @@ pub struct PresetDto {
     pub name: Option<String>,
     pub index: Option<i64>,
     pub bank: Option<i64>,
+    /// Model code stamped into the preset by the device that wrote it (e.g. `"P33"`).
     pub device_model: Option<String>,
+    /// Human name of the **connected** device, from the USB PID — stamped by the command layer
+    /// (`From` leaves it `None`, since an offline decode has no device).
+    pub device_name: Option<String>,
+    /// `false` only when the connected device's model code and the preset's disagree; `None` when
+    /// either is unknown. Stamped by the command layer.
+    pub device_matches: Option<bool>,
     pub firmware: Option<String>,
     pub split: bool,
     pub dsp_load: f64,
@@ -194,6 +233,9 @@ pub struct PresetDto {
     pub input_node: Option<BlockDto>,
     pub output_node: Option<BlockDto>,
     pub grid: Vec<GridCellDto>,
+    /// Every populated DSP, in order — one entry on the HX Stomp, two on the Helix Floor. The flat
+    /// fields above mirror `dsps[0]`; a multi-DSP UI should read this instead.
+    pub dsps: Vec<DspDto>,
     /// Undo/redo stack depths — stamped by the command layer (`From` leaves them 0), so the UI can
     /// enable/disable its history buttons.
     pub undo_depth: i64,
@@ -213,23 +255,46 @@ impl From<&EditorPreset> for PresetDto {
             index: p.current.as_ref().map(|c| c.index),
             bank: p.current.as_ref().map(|c| c.bank),
             device_model: p.device_model.clone(),
+            device_name: None,
+            device_matches: None,
             firmware: p.firmware.clone(),
-            split: p.split,
+            split: p.split(),
             dsp_load: fin(p.dsp_load),
-            split_pos: p.split_pos,
-            mixer_pos: p.mixer_pos,
+            split_pos: p.split_pos(),
+            mixer_pos: p.mixer_pos(),
             active_snapshot: p.active_snapshot,
             snapshot_names: p.snapshot_names.clone(),
             blocks: p.blocks.iter().map(BlockDto::from).collect(),
-            split_node: p.split_node.as_ref().map(BlockDto::from),
-            mixer_node: p.mixer_node.as_ref().map(BlockDto::from),
-            input_node: p.input_node.as_ref().map(BlockDto::from),
-            output_node: p.output_node.as_ref().map(BlockDto::from),
+            split_node: p.split_node().map(BlockDto::from),
+            mixer_node: p.mixer_node().map(BlockDto::from),
+            input_node: p.input_node().map(BlockDto::from),
+            output_node: p.output_node().map(BlockDto::from),
+            // Flat `grid` stays DSP 0 only, so a single-DSP UI never sees two DSPs' cells collide
+            // at the same (row, column). Multi-DSP UIs read `dsps`.
             grid: p
-                .grid
-                .iter()
-                .map(|c| GridCellDto { slot: c.slot, row: c.row, column: c.column, occupied: c.occupied })
-                .collect(),
+                .dsp(0)
+                .map(|d| d.grid.iter().map(GridCellDto::from).collect())
+                .unwrap_or_default(),
+            dsps: {
+                let loads = p.dsp_load_by_dsp();
+                p.dsps
+                    .iter()
+                    .map(|d| DspDto {
+                        dsp: d.dsp,
+                        split: d.split,
+                        split_pos: d.split_pos,
+                        mixer_pos: d.mixer_pos,
+                        split_node: d.split_node.as_ref().map(BlockDto::from),
+                        mixer_node: d.mixer_node.as_ref().map(BlockDto::from),
+                        input_node: d.input_node.as_ref().map(BlockDto::from),
+                        output_node: d.output_node.as_ref().map(BlockDto::from),
+                        grid: d.grid.iter().map(GridCellDto::from).collect(),
+                        dsp_load: fin(
+                            loads.iter().find(|(i, _)| *i == d.dsp).map_or(0.0, |(_, l)| *l),
+                        ),
+                    })
+                    .collect()
+            },
             undo_depth: 0,
             redo_depth: 0,
             history: Vec::new(),

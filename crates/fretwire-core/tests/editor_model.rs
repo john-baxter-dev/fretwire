@@ -181,16 +181,16 @@ fn reverb_params_named_with_trails() {
 fn split_preset_exposes_editable_routing_nodes() {
     let cat = catalog();
     let preset = cat.load_preset(&data("split_preset_stream.msgpack.bin")).unwrap();
-    assert!(preset.split, "fixture is a split preset");
+    assert!(preset.split(), "fixture is a split preset");
 
     // Split node resolves to a known type (Split Y) and is selectable/matchable via SPLIT_TYPES.
-    let split = preset.split_node.as_ref().expect("split node present");
+    let split = preset.split_node().expect("split node present");
     assert_eq!(split.symbolic_id.as_deref(), Some("HD2_AppDSPFlowSplitY"));
     assert!(preset.is_split_node(split.slot));
     assert!(fretwire_core::editor::SPLIT_TYPES.iter().any(|(_, s, _)| *s == "HD2_AppDSPFlowSplitY"));
 
     // Mixer node resolves to the join model, with named, *editable* A/B params (ranges injected).
-    let mixer = preset.mixer_node.as_ref().expect("mixer node present");
+    let mixer = preset.mixer_node().expect("mixer node present");
     assert!(preset.is_mixer_node(mixer.slot));
     let a_level = mixer.params.iter().find(|p| p.name == "A Level").expect("mixer has A Level");
     assert!(a_level.meta.min.is_some() && a_level.meta.max.is_some(), "A Level is an editable slider");
@@ -208,9 +208,9 @@ fn split_preset_classifies_common_vs_path_a_vs_path_b() {
     // Reverb(slot7) common-after, GSG100(slot15) path B; split_pos=5, mixer_pos=7.
     let cat = catalog();
     let p = cat.load_preset(&data("dual_amp_stream.msgpack.bin")).unwrap();
-    assert!(p.split);
-    assert_eq!(p.split_pos, Some(5));
-    assert_eq!(p.mixer_pos, Some(7));
+    assert!(p.split());
+    assert_eq!(p.split_pos(), Some(5));
+    assert_eq!(p.mixer_pos(), Some(7));
 
     let by_name = |n: &str| p.blocks.iter().find(|b| b.model_name.contains(n)).expect(n);
     let trem = by_name("Tremolo");
@@ -221,8 +221,8 @@ fn split_preset_classifies_common_vs_path_a_vs_path_b() {
     assert_eq!(gsg.row, 1, "GSG is on path B (bottom row)");
     // Top row holds common + path A; classify by slot vs split_pos/mixer_pos.
     assert_eq!(trem.row, 0);
-    assert!(trem.slot < p.split_pos.unwrap(), "Tremolo is common (pre-split)");
-    let (sp, mp) = (p.split_pos.unwrap(), p.mixer_pos.unwrap());
+    assert!(trem.slot < p.split_pos().unwrap(), "Tremolo is common (pre-split)");
+    let (sp, mp) = (p.split_pos().unwrap(), p.mixer_pos().unwrap());
     assert!(usp.slot >= sp && usp.slot < mp, "US Princess is on path A");
 }
 
@@ -233,7 +233,7 @@ fn split_preset_classifies_common_vs_path_a_vs_path_b() {
 fn io_nodes_resolve_named_params() {
     let p = catalog().load_preset(&data("preset1_stream.msgpack.bin")).unwrap();
 
-    let input = p.input_node.as_ref().expect("input node");
+    let input = p.input_node().expect("input node");
     assert_eq!(input.slot, 0);
     assert_eq!(input.model_name, "Input");
     let names: Vec<&str> = input.params.iter().map(|q| q.name.as_str()).collect();
@@ -242,7 +242,7 @@ fn io_nodes_resolve_named_params() {
     assert_eq!(input.params[1].meta.min, Some(-96.0), "threshold range from io.models");
     assert_eq!(input.params[1].meta.max, Some(0.0));
 
-    let output = p.output_node.as_ref().expect("output node");
+    let output = p.output_node().expect("output node");
     assert_eq!(output.slot, 9);
     assert_eq!(output.model_name, "Output");
     let names: Vec<&str> = output.params.iter().map(|q| q.name.as_str()).collect();

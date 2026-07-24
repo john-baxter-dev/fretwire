@@ -86,7 +86,11 @@ pub struct EditorParam {
 /// A block as the editor sees it: identity, resolved model, current state, named params.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EditorBlock {
-    /// Preset slot index — also the wire address (edit target key 98).
+    /// Which DSP holds this block. `0` for every HX Stomp block; a two-DSP device (Helix Floor)
+    /// also has `1`. Purely informational for edits — `slot` already encodes it.
+    pub dsp: usize,
+    /// Preset **wire slot** — global across DSPs (`dsp * 20 + index`), and the edit address
+    /// (target key 98). See [`fretwire_data::stream::DSP_SLOT_STRIDE`].
     pub slot: i64,
     /// Display name from the preset (`Harmonic Tremolo`).
     pub model_name: String,
@@ -167,46 +171,143 @@ pub struct EditorPreset {
     /// Active snapshot index and snapshot names (preset key `10`).
     pub active_snapshot: Option<i64>,
     pub snapshot_names: Vec<String>,
-    /// Parallel (split) topology — preset key `0 → 21`.
-    pub split: bool,
     /// Total DSP load (% of the device budget) — sum of the blocks' `dsp_load`. The HX Stomp's
     /// budget is ~100% per DSP; HX Edit greys out models that wouldn't fit the remainder.
+    ///
+    /// On a two-DSP device this sums **both** DSPs, which is not how the device budgets them —
+    /// each DSP has its own budget. Use [`EditorPreset::dsp_load_by_dsp`] for the per-DSP figure.
     pub dsp_load: f64,
     /// Identity (bank/index/name) of the preset this edit buffer was read from, when known. Set by
     /// `Session::read_preset` from the op-23 read-info reply; `None` for offline decodes (no device
     /// to ask). The `index` matches `list_presets`/`goto_preset`.
     pub current: Option<fretwire_data::stream::PresetInfo>,
+    /// One entry per **populated DSP**, in DSP order — its routing nodes and its grid. A single
+    /// entry on the HX Stomp; two on the Helix Floor. The convenience accessors below
+    /// ([`Self::split_node`] etc.) read DSP 0, which is what a one-DSP device has.
+    pub dsps: Vec<DspView>,
+}
+
+/// The routing structure of **one DSP**: its split/mixer/input/output nodes and its grid. A
+/// two-DSP device has one of these per DSP, each with its own A/B branch.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DspView {
+    /// DSP index (position in [`fretwire_data::stream::DSP_GROUP_KEYS`]).
+    pub dsp: usize,
+    /// This DSP has a parallel (split) topology — its group key `21` is non-zero.
+    pub split: bool,
     /// The parallel **split** node (kind 2) as an editable block, on split presets — its model is the
     /// split *type* ([`SPLIT_TYPES`]) and its params configure that type. `None` on serial presets.
     pub split_node: Option<EditorBlock>,
     /// The parallel **mixer/join** node (kind 3) as an editable block, on split presets — its params
     /// are the A/B level, pan, polarity and master level. `None` on serial presets.
     pub mixer_node: Option<EditorBlock>,
-    /// The fixed **input node** (slot 0): gate on/off, threshold, decay — edited with ordinary
-    /// set-value on slot 0. Always present on a well-formed preset.
+    /// The fixed **input node** (this DSP's slot 0): gate on/off, threshold, decay — edited with
+    /// ordinary set-value on its slot. Always present on a well-formed preset.
     pub input_node: Option<EditorBlock>,
-    /// The fixed **output node** (slot 9): pan, level — edited on slot 9.
+    /// The fixed **output node** (this DSP's slot 9): pan, level.
     pub output_node: Option<EditorBlock>,
     /// Signal-flow column of the split node (its holder key `13`): a top-row block at slot `< this` is
     /// common (pre-split), `≥ this` (and `< mixer_pos`) is on **path A**. `None` on serial presets.
     pub split_pos: Option<i64>,
     /// Signal-flow column of the mixer node: a top-row block at slot `≥ this` is common (post-mixer).
     pub mixer_pos: Option<i64>,
-    /// The routing grid: one cell per draggable slot (row/column/occupancy). Drives the drag-routing
-    /// UI; see [`fretwire_data::stream::PresetStream::grid`].
+    /// This DSP's routing grid: one cell per draggable slot (row/column/occupancy). Drives the
+    /// drag-routing UI; see [`fretwire_data::stream::PresetStream::dsp_grid`].
     pub grid: Vec<fretwire_data::stream::GridCell>,
 }
 
+impl DspView {
+    /// Every routing node this DSP has, in a fixed order.
+    fn nodes(&self) -> impl Iterator<Item = &EditorBlock> {
+        self.split_node
+            .iter()
+            .chain(self.mixer_node.iter())
+            .chain(self.input_node.iter())
+            .chain(self.output_node.iter())
+    }
+
+    fn nodes_mut(&mut self) -> impl Iterator<Item = &mut EditorBlock> {
+        self.split_node
+            .iter_mut()
+            .chain(self.mixer_node.iter_mut())
+            .chain(self.input_node.iter_mut())
+            .chain(self.output_node.iter_mut())
+    }
+}
+
 impl EditorPreset {
-    /// Find a block by slot, **including** the split/mixer routing nodes (which live outside
+    /// The routing view of one DSP.
+    pub fn dsp(&self, dsp: usize) -> Option<&DspView> {
+        self.dsps.iter().find(|d| d.dsp == dsp)
+    }
+
+    /// DSP 0's split node — the only one a single-DSP device has. See [`DspView::split_node`].
+    pub fn split_node(&self) -> Option<&EditorBlock> {
+        self.dsp(0).and_then(|d| d.split_node.as_ref())
+    }
+
+    /// DSP 0's mixer node. See [`DspView::mixer_node`].
+    pub fn mixer_node(&self) -> Option<&EditorBlock> {
+        self.dsp(0).and_then(|d| d.mixer_node.as_ref())
+    }
+
+    /// DSP 0's input node. See [`DspView::input_node`].
+    pub fn input_node(&self) -> Option<&EditorBlock> {
+        self.dsp(0).and_then(|d| d.input_node.as_ref())
+    }
+
+    /// DSP 0's output node. See [`DspView::output_node`].
+    pub fn output_node(&self) -> Option<&EditorBlock> {
+        self.dsp(0).and_then(|d| d.output_node.as_ref())
+    }
+
+    /// DSP 0's split-node column. See [`DspView::split_pos`].
+    pub fn split_pos(&self) -> Option<i64> {
+        self.dsp(0).and_then(|d| d.split_pos)
+    }
+
+    /// DSP 0's mixer-node column. See [`DspView::mixer_pos`].
+    pub fn mixer_pos(&self) -> Option<i64> {
+        self.dsp(0).and_then(|d| d.mixer_pos)
+    }
+
+    /// Whether **any** DSP has a parallel (split) topology.
+    pub fn split(&self) -> bool {
+        self.dsps.iter().any(|d| d.split)
+    }
+
+    /// DSP load broken down per DSP — `(dsp, load)` in DSP order. Each DSP has its own budget
+    /// (~100%), so this is the meaningful figure on a two-DSP device; [`Self::dsp_load`] is the
+    /// whole-preset sum.
+    pub fn dsp_load_by_dsp(&self) -> Vec<(usize, f64)> {
+        self.dsps
+            .iter()
+            .map(|d| {
+                let load: f64 = self
+                    .blocks
+                    .iter()
+                    .filter(|b| b.dsp == d.dsp)
+                    .filter_map(|b| b.dsp_load)
+                    .sum();
+                // An empty f64 sum is -0.0, which formats as "-0.0%" for an unused DSP.
+                (d.dsp, load + 0.0)
+            })
+            .collect()
+    }
+
+    /// Every DSP's grid cells concatenated, in DSP order. Each cell carries its own `dsp`, so a
+    /// two-DSP device's four rows are `(cell.dsp, cell.row)`. Identical to DSP 0's grid on a
+    /// single-DSP device.
+    pub fn grid(&self) -> Vec<fretwire_data::stream::GridCell> {
+        self.dsps.iter().flat_map(|d| d.grid.iter().cloned()).collect()
+    }
+
+    /// Find a block by wire slot, **including** the routing nodes of every DSP (which live outside
     /// `blocks`). Lets the param-editing UI treat a node's params the same as any block's.
     pub fn block(&self, slot: i64) -> Option<&EditorBlock> {
         self.blocks
             .iter()
-            .chain(self.split_node.iter())
-            .chain(self.mixer_node.iter())
-            .chain(self.input_node.iter())
-            .chain(self.output_node.iter())
+            .chain(self.dsps.iter().flat_map(DspView::nodes))
             .find(|b| b.slot == slot)
     }
 
@@ -214,21 +315,18 @@ impl EditorPreset {
     pub fn block_mut(&mut self, slot: i64) -> Option<&mut EditorBlock> {
         self.blocks
             .iter_mut()
-            .chain(self.split_node.iter_mut())
-            .chain(self.mixer_node.iter_mut())
-            .chain(self.input_node.iter_mut())
-            .chain(self.output_node.iter_mut())
+            .chain(self.dsps.iter_mut().flat_map(DspView::nodes_mut))
             .find(|b| b.slot == slot)
     }
 
-    /// Whether `slot` is the split routing node (selecting it offers the split-type picker).
+    /// Whether `slot` is a split routing node (selecting it offers the split-type picker).
     pub fn is_split_node(&self, slot: i64) -> bool {
-        self.split_node.as_ref().is_some_and(|n| n.slot == slot)
+        self.dsps.iter().any(|d| d.split_node.as_ref().is_some_and(|n| n.slot == slot))
     }
 
-    /// Whether `slot` is the mixer/join routing node.
+    /// Whether `slot` is a mixer/join routing node.
     pub fn is_mixer_node(&self, slot: i64) -> bool {
-        self.mixer_node.as_ref().is_some_and(|n| n.slot == slot)
+        self.dsps.iter().any(|d| d.mixer_node.as_ref().is_some_and(|n| n.slot == slot))
     }
 }
 
@@ -571,24 +669,56 @@ impl Catalog {
             .map(|b| self.build_block(b))
             .collect();
         let dsp_load = blocks.iter().filter_map(|b| b.dsp_load).sum();
-        // Split/mixer routing nodes are meaningful only on a parallel preset; expose them as
-        // editable blocks (they carry a model-ref + params like any block) for the routing panel.
-        let (split_node, mixer_node, split_pos, mixer_pos) = if ps.is_split() {
-            use fretwire_data::stream::slot_kind;
-            (
-                ps.structural_node(slot_kind::SPLIT).map(|n| self.build_block(n)),
-                ps.structural_node(slot_kind::MIXER).map(|n| self.build_block(n)),
-                ps.structural_node_pos(slot_kind::SPLIT),
-                ps.structural_node_pos(slot_kind::MIXER),
-            )
-        } else {
-            (None, None, None, None)
-        };
-        // The fixed input (slot 0) / output (slot 9) nodes: no model-ref; identity is the device
-        // symbol, params are the leading entries of its order (io.models carries the meta). Edited
-        // with the ordinary set-value op on their slot [solid — input-gate capture].
-        let input_node = self.build_io_node(&ps, 0, "HelixStomp_AppDSPFlowInput", "Input");
-        let output_node = self.build_io_node(&ps, 1, "HelixStomp_AppDSPFlowOutputMain", "Output");
+        // One view per populated DSP. On the Stomp that's a single entry; the Helix Floor has two,
+        // each with its own split/mixer/input/output nodes and its own A/B branch.
+        let dsps = ps
+            .dsps()
+            .into_iter()
+            .map(|d| {
+                use fretwire_data::stream::slot_kind;
+                let split = ps.dsp_is_split(d);
+                // Split/mixer routing nodes are meaningful only on a parallel DSP; expose them as
+                // editable blocks (they carry a model-ref + params like any block) for the routing
+                // panel.
+                let (split_node, mixer_node, split_pos, mixer_pos) = if split {
+                    (
+                        ps.dsp_structural_node(d, slot_kind::SPLIT).map(|n| self.build_block(n)),
+                        ps.dsp_structural_node(d, slot_kind::MIXER).map(|n| self.build_block(n)),
+                        ps.dsp_structural_node_pos(d, slot_kind::SPLIT),
+                        ps.dsp_structural_node_pos(d, slot_kind::MIXER),
+                    )
+                } else {
+                    (None, None, None, None)
+                };
+                // The fixed input (index 0) / output (index 9) nodes: no model-ref; identity is the
+                // device symbol, params are the leading entries of its order (io.models carries the
+                // meta). Edited with the ordinary set-value op on their slot [solid — input-gate
+                // capture].
+                DspView {
+                    dsp: d,
+                    split,
+                    split_node,
+                    mixer_node,
+                    split_pos,
+                    mixer_pos,
+                    input_node: self.build_io_node(
+                        &ps,
+                        d,
+                        0,
+                        "HelixStomp_AppDSPFlowInput",
+                        "Input",
+                    ),
+                    output_node: self.build_io_node(
+                        &ps,
+                        d,
+                        1,
+                        "HelixStomp_AppDSPFlowOutputMain",
+                        "Output",
+                    ),
+                    grid: ps.dsp_grid(d),
+                }
+            })
+            .collect();
         Ok(EditorPreset {
             device_model: ps.device_model(),
             firmware: ps.firmware(),
@@ -596,16 +726,9 @@ impl Catalog {
             assignments: ps.assignments(),
             active_snapshot: ps.snapshots().0,
             snapshot_names: ps.snapshots().1,
-            split: ps.is_split(),
             dsp_load,
             current: None, // offline decode has no device to ask; `Session::read_preset` fills this
-            split_node,
-            mixer_node,
-            split_pos,
-            mixer_pos,
-            input_node,
-            output_node,
-            grid: ps.grid(),
+            dsps,
         })
     }
 
@@ -615,6 +738,7 @@ impl Catalog {
     fn build_io_node(
         &self,
         ps: &PresetStream,
+        dsp: usize,
         kind: i64,
         sym: &str,
         display: &str,
@@ -626,7 +750,7 @@ impl Catalog {
             ("pan", "Pan"),
             ("gain", "Level"),
         ];
-        let b = ps.io_node(kind)?;
+        let b = ps.dsp_io_node(dsp, kind)?;
         let mut params = name_params(&b.params, self.symbols.params(sym), self.param_meta.get(sym));
         for p in &mut params {
             if let Some((_, d)) = DISPLAY_NAMES.iter().find(|(k, _)| *k == p.name) {
@@ -634,6 +758,7 @@ impl Catalog {
             }
         }
         Some(EditorBlock {
+            dsp: b.dsp,
             slot: b.slot,
             model_name: display.to_string(),
             user_label: None,
@@ -690,6 +815,7 @@ impl Catalog {
         };
 
         EditorBlock {
+            dsp: b.dsp,
             slot: b.slot,
             model_name,
             user_label: b.user_label,

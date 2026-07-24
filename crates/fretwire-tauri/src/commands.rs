@@ -79,6 +79,8 @@ where
 /// Build the wire DTO, stamping the session's edit-history state (which `From` can't see).
 fn dto(s: &Session, p: &EditorPreset) -> PresetDto {
     let mut d = PresetDto::from(p);
+    d.device_name = Some(s.device().name.to_string());
+    d.device_matches = s.device_matches_preset(p);
     d.undo_depth = s.undo_depth() as i64;
     d.redo_depth = s.redo_depth() as i64;
     d.history = s.history_labels();
@@ -177,7 +179,7 @@ pub async fn import_data(source: String) -> R<ImportResultDto> {
 /// USB enumeration only — does not claim the interface, safe to call anytime.
 #[tauri::command]
 pub async fn detect() -> R<bool> {
-    tauri::async_runtime::spawn_blocking(|| fretwire_core::fretwire_usb::hx_stomp_present().map_err(|e| e.to_string()))
+    tauri::async_runtime::spawn_blocking(|| fretwire_core::fretwire_usb::hx_device_present().map_err(|e| e.to_string()))
         .await
         .map_err(|e| format!("task error: {e}"))?
 }

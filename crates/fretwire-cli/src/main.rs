@@ -17,10 +17,18 @@ fn main() -> Result<()> {
     let cmd = args.next().unwrap_or_else(|| "detect".into());
     match cmd.as_str() {
         "detect" => {
-            match fretwire_usb::hx_stomp_present() {
-                Ok(true) => println!("HX Stomp: present"),
-                Ok(false) => println!("HX Stomp: not found"),
-                Err(e) => println!("HX Stomp: usb error: {e}"),
+            match fretwire_usb::present_devices() {
+                Ok(found) if found.is_empty() => println!("no HX device found"),
+                Ok(found) => {
+                    for d in found {
+                        let note = match d.support {
+                            fretwire_usb::Support::Verified => String::new(),
+                            fretwire_usb::Support::Untested => " (untested device)".into(),
+                        };
+                        println!("{}: present{note}", d.name);
+                    }
+                }
+                Err(e) => println!("usb error: {e}"),
             }
         }
         "show-preset" => {
@@ -37,8 +45,16 @@ fn main() -> Result<()> {
         }
         // ---- live device commands (need Linux + the pedal) ----
         "connect" => {
-            let _s = fretwire_core::Session::connect()?;
-            println!("connected — interface claimed and handshake completed");
+            let s = fretwire_core::Session::connect()?;
+            let d = s.device();
+            println!(
+                "connected to {} — interface claimed and handshake completed",
+                d.name
+            );
+            if let (Some(dsps), Some(snaps)) = (d.dsps, d.snapshots) {
+                println!("  {dsps} DSP(s), {snaps} snapshots per preset");
+            }
+            let _s = s;
             // `_s` drops here, which runs the clean session teardown (see `disconnect`).
         }
         "disconnect" => {
@@ -187,9 +203,10 @@ fn main() -> Result<()> {
             };
             let mut s = fretwire_core::Session::connect()?;
             let preset = s.read_preset()?;
+            // DSP 0's split node — the only one a single-DSP device has. A two-DSP device has one
+            // per DSP; retyping the second would need a `--dsp` flag.
             let slot = preset
-                .split_node
-                .as_ref()
+                .split_node()
                 .map(|n| n.slot)
                 .ok_or_else(|| anyhow::anyhow!("preset is not split — no split node to retype"))?;
             let preset = s.set_split_type(slot, index)?;
@@ -640,13 +657,17 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
         preset.device_model.as_deref().unwrap_or("?"),
         preset.firmware.as_deref().unwrap_or("?")
     );
-    let topo = if preset.split { "split (parallel)" } else { "serial" };
-    println!(
-        "{} block(s) · {topo} topology · DSP {:.1}% used ({:.1}% free)",
-        preset.blocks.len(),
-        preset.dsp_load,
-        (100.0 - preset.dsp_load).max(0.0),
-    );
+    let topo = if preset.split() { "split (parallel)" } else { "serial" };
+    // A two-DSP device budgets each DSP separately, so report them separately.
+    let load = match preset.dsp_load_by_dsp().as_slice() {
+        [(_, one)] => format!("DSP {one:.1}% used ({:.1}% free)", (100.0 - one).max(0.0)),
+        many => many
+            .iter()
+            .map(|(d, l)| format!("DSP{} {l:.1}%", d + 1))
+            .collect::<Vec<_>>()
+            .join(" · "),
+    };
+    println!("{} block(s) · {topo} topology · {load}", preset.blocks.len());
     for b in &preset.blocks {
         let label = b.user_label.as_deref().map(|l| format!(" \"{l}\"")).unwrap_or_default();
         let bypass = match b.bypassed {

@@ -19,12 +19,112 @@ pub const VID_LINE6: u16 = 0x0E41;
 pub const PID_HX_STOMP: u16 = 0x4246;
 /// USB Product ID for the HX Stomp XL (same protocol).
 pub const PID_HX_STOMP_XL: u16 = 0x4253;
+/// USB Product ID for the Helix Floor. Confirmed from a contributor's descriptor capture
+/// (fw 3.82, 2026-07-22): the vendor control interface, its bulk endpoints and their 512-byte
+/// max packet size are identical to the Stomp's.
+///
+/// The protocol on that pipe is **verified** on this device too — the handshake is byte-identical
+/// and every builder in [`edit`] reproduces the Floor's own wire bytes exactly, including edits to
+/// blocks on the second DSP (addressed by the same bare slot integer: `slot = dsp * 20 + index`).
+/// See `docs/helix-floor.md` and [`DEVICES`].
+pub const PID_HELIX_FLOOR: u16 = 0x4248;
 /// Interface number of the vendor-specific control channel.
 pub const CONTROL_INTERFACE: u8 = 0x00;
 /// Bulk OUT endpoint (host → device).
 pub const EP_OUT: u8 = 0x01;
 /// Bulk IN endpoint (device → host).
 pub const EP_IN: u8 = 0x81;
+
+/// How much of a device we've actually confirmed, as opposed to inferred from the family.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Support {
+    /// Wire traffic from this exact device has been observed and reconciled against our builders.
+    Verified,
+    /// Only the USB IDs are known. The device is in the HX family and very probably speaks the
+    /// same protocol, but nothing has been checked against real traffic from one.
+    Untested,
+}
+
+/// Static facts about one HX-family device.
+///
+/// Replaces scattered per-device constants: the fields here are exactly what differs between
+/// devices, so device-specific behaviour reads a [`Device`] rather than branching on a PID.
+/// `None` means **we don't know**, not "not applicable" — nothing here is guessed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Device {
+    /// USB Product ID (with [`VID_LINE6`]).
+    pub pid: u16,
+    /// Human name, as Line 6 markets it.
+    pub name: &'static str,
+    /// Model code the device stamps into a preset at key `7 → 36` (e.g. `"P33"`).
+    pub model_code: Option<&'static str>,
+    /// The `device` field of a preset written by this unit (e.g. `0x210006`).
+    pub preset_device_id: Option<u32>,
+    /// Populated DSPs — i.e. how many slot groups its presets use. Governs the wire slot range:
+    /// slots run `0 .. dsps * 20` (see `fretwire_data::stream::DSP_SLOT_STRIDE`).
+    pub dsps: Option<usize>,
+    /// Snapshots per preset.
+    pub snapshots: Option<usize>,
+    /// How much of the above is confirmed from real traffic.
+    pub support: Support,
+}
+
+/// Every HX device fretwire knows about.
+///
+/// The HX Stomp and Helix Floor are both [`Support::Verified`] — the handshake is byte-identical
+/// between them and every edit builder reproduces both devices' own wire bytes. The Stomp XL is
+/// listed for its PID only: we have no capture, no preset and no backup from one, so its model
+/// code, preset device id, DSP and snapshot counts are honestly unknown rather than assumed to
+/// match the Stomp's.
+pub const DEVICES: &[Device] = &[
+    Device {
+        pid: PID_HX_STOMP,
+        name: "HX Stomp",
+        model_code: Some("P33"),
+        preset_device_id: Some(0x0021_0006),
+        dsps: Some(1),
+        snapshots: Some(3),
+        support: Support::Verified,
+    },
+    Device {
+        pid: PID_HELIX_FLOOR,
+        name: "Helix Floor",
+        model_code: Some("P21"),
+        preset_device_id: Some(0x0021_0001),
+        dsps: Some(2),
+        snapshots: Some(8),
+        support: Support::Verified,
+    },
+    Device {
+        pid: PID_HX_STOMP_XL,
+        name: "HX Stomp XL",
+        model_code: None,
+        preset_device_id: None,
+        dsps: None,
+        snapshots: None,
+        support: Support::Untested,
+    },
+];
+
+impl Device {
+    /// Look a device up by USB Product ID.
+    pub fn by_pid(pid: u16) -> Option<&'static Device> {
+        DEVICES.iter().find(|d| d.pid == pid)
+    }
+
+    /// Look a device up by the model code it stamps into presets (preset key `7 → 36`). Only
+    /// matches devices whose code we actually know.
+    pub fn by_model_code(code: &str) -> Option<&'static Device> {
+        DEVICES.iter().find(|d| d.model_code == Some(code))
+    }
+
+    /// Slot groups to walk when enumerating this device's preset blocks. Falls back to `1` when
+    /// the DSP count is unknown — the conservative choice, since a preset's own key `1` being nil
+    /// is what actually decides it at parse time.
+    pub fn dsp_count(&self) -> usize {
+        self.dsps.unwrap_or(1)
+    }
+}
 
 /// Logical channels, identified by a (host `src`, device `dst`) u16 pair. `src`/`dst` swap by
 /// direction on the wire. Names from observed roles.

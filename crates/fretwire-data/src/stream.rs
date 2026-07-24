@@ -62,12 +62,15 @@ impl PresetStream {
         &mut self.preset
     }
 
-    /// Empty slot `index` in the block array (`0 → 22`): set its kind to `8` (empty) and content to
-    /// nil — the structural primitive behind **delete a block**. Returns `false` if the slot array or
-    /// index isn't present. Re-serialize with [`to_blob`] and write via op 21 to apply.
-    pub fn set_slot_empty(&mut self, index: usize) -> bool {
-        let Some(group0) = map_get_mut(&mut self.preset, 0) else { return false };
-        let Some(Value::Array(slots)) = map_get_mut(group0, 22) else { return false };
+    /// Empty the slot at **wire slot** `slot`: set its kind to `8` (empty) and content to nil — the
+    /// structural primitive behind **delete a block**. The slot number is global across DSPs
+    /// (`dsp * 20 + index`), the same address the edit ops use. Returns `false` if that slot array
+    /// or index isn't present. Re-serialize with [`to_blob`] and write via op 21 to apply.
+    pub fn set_slot_empty(&mut self, slot: usize) -> bool {
+        let (dsp, index) = split_wire_slot(slot as i64);
+        let Some(&key) = DSP_GROUP_KEYS.get(dsp) else { return false };
+        let Some(group) = map_get_mut(&mut self.preset, key) else { return false };
+        let Some(Value::Array(slots)) = map_get_mut(group, 22) else { return false };
         let Some(slot) = slots.get_mut(index) else { return false };
         set_map_key(slot, 19, Value::from(slot_kind::EMPTY));
         set_map_key(slot, 20, Value::Nil);
@@ -81,8 +84,14 @@ impl PresetStream {
     /// [`to_blob`] and write via op 21 to apply — this is how the split/join points move along the
     /// top row without touching any block.
     pub fn set_node_pos(&mut self, kind: i64, pos: i64) -> bool {
-        let Some(group0) = map_get_mut(&mut self.preset, 0) else { return false };
-        let Some(Value::Array(slots)) = map_get_mut(group0, 22) else { return false };
+        self.set_dsp_node_pos(0, kind, pos)
+    }
+
+    /// [`Self::set_node_pos`] for a specific DSP.
+    pub fn set_dsp_node_pos(&mut self, dsp: usize, kind: i64, pos: i64) -> bool {
+        let Some(&key) = DSP_GROUP_KEYS.get(dsp) else { return false };
+        let Some(group) = map_get_mut(&mut self.preset, key) else { return false };
+        let Some(Value::Array(slots)) = map_get_mut(group, 22) else { return false };
         let Some(slot) = slots
             .iter_mut()
             .find(|s| map_get(s, 19).and_then(Value::as_i64) == Some(kind))
@@ -139,9 +148,15 @@ fn push_str_header(out: &mut Vec<u8>, len: usize) {
     }
 }
 
-/// Slot kind (preset map `0 → 22 → [i] → 19`).
+/// Slot kind (preset map `<dsp> → 22 → [i] → 19`).
 pub mod slot_kind {
     pub const EFFECT: i64 = 6;
+    /// A **Looper** block. Same role as [`EFFECT`] but a different content shape — model index at
+    /// content key `8` (not `24 → 25`) and params at `7 → 4` (not `11 → 4`), like the structural
+    /// nodes. Not device-specific: no Stomp fixture happened to contain a Looper, which is why it
+    /// only surfaced in the Helix Floor captures. [solid — 2026-07-22, cross-checked against a
+    /// `.hxb` backup]
+    pub const LOOPER: i64 = 7;
     pub const EMPTY: i64 = 8;
     /// The parallel **split** node (kind 2) — fixed grid position; effect slots after it are row B.
     pub const SPLIT: i64 = 2;
@@ -149,12 +164,51 @@ pub mod slot_kind {
     pub const MIXER: i64 = 3;
 }
 
+/// Preset keys holding a DSP's slot group, in DSP order. Each is `{21: split, 22: Array[20]}`.
+///
+/// Key `1` is `nil` on the single-DSP HX Stomp and populated on the Helix Floor — the device does
+/// **not** widen the 20-slot array, it adds a second one. [solid — 2026-07-22]
+pub const DSP_GROUP_KEYS: [i64; 2] = [0, 1];
+
+/// Slots per DSP group, and therefore the stride between DSPs in the **wire slot** numbering.
+///
+/// Edit ops address a block by a single integer (target key `98`) that spans every DSP:
+/// `wire_slot = dsp * DSP_SLOT_STRIDE + index`, so DSP1 is slots 0–19 and DSP2 is 20–39. There is
+/// no DSP field in the envelope and none is needed — a DSP2 edit is byte-for-byte the same shape
+/// as a DSP1 edit.
+///
+/// [solid — 2026-07-23] Established from a Helix Floor capture of five DSP2 blocks edited in HX
+/// Edit: under this rule each `98` resolves to a block whose stored value for the swept parameter
+/// is one UI increment from the first value on the wire, across five models and three parameter
+/// scales — and it correctly distinguishes two identical `HD2_DelaySimpleDelayMono` blocks at
+/// indices 7 and 17 of the same DSP. Consistent with every earlier capture (all slots < 20, all
+/// DSP1). See `docs/helix-floor.md`.
+///
+/// Independently corroborated *inside* the preset: the footswitch layout (`3 → 8 → … → 11 → 8`)
+/// numbers its targets the same way. In that Floor preset FS4/FS5 point at slots 27/28 and
+/// FS10/FS11 at 37/38, and each layout entry's name matches the model found at that **global**
+/// slot — including telling the two identical `Simple Delay` blocks apart as 27 and 37.
+pub const DSP_SLOT_STRIDE: i64 = 20;
+
+/// Wire slot number (edit target key `98`) for `index` within `dsp`'s slot array.
+pub fn wire_slot(dsp: usize, index: usize) -> i64 {
+    dsp as i64 * DSP_SLOT_STRIDE + index as i64
+}
+
+/// Split a wire slot number back into `(dsp, index)`.
+pub fn split_wire_slot(slot: i64) -> (usize, usize) {
+    ((slot / DSP_SLOT_STRIDE) as usize, (slot % DSP_SLOT_STRIDE) as usize)
+}
+
 /// One block slot extracted from the device preset.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Block {
-    /// Position in the 20-slot array.
+    /// Which DSP's slot group this came from — the position of its preset key in
+    /// [`DSP_GROUP_KEYS`]. `0` for every HX Stomp block; the Helix Floor also has `1`.
+    pub dsp: usize,
+    /// Position **within this DSP's** 20-slot array. Use [`Block::wire_slot`] for the edit address.
     pub index: usize,
-    /// Raw slot type (`19`): 6 = effect, 8 = empty, 0/1/2/3 = structural.
+    /// Raw slot type (`19`): 6 = effect, 7 = looper, 8 = empty, 0/1/2/3 = structural.
     pub kind: i64,
     /// Block bypass state — derived from content key `20 → 10` (the `enabled` bool, true = on);
     /// `bypassed = !enabled`. Verified live by toggling a block and diffing the stream.
@@ -172,6 +226,18 @@ pub struct Block {
     /// `12 → 4` — the paired model's parameter values (e.g. the cab's mic/cut params), empty when
     /// there is no paired model.
     pub paired_params: Vec<ParamValue>,
+}
+
+impl Block {
+    /// This block's **wire slot** — the edit target (key `98`), global across DSPs.
+    pub fn wire_slot(&self) -> i64 {
+        wire_slot(self.dsp, self.index)
+    }
+
+    /// Whether this slot holds a real, addressable block (an effect or a Looper).
+    pub fn is_block(&self) -> bool {
+        self.kind == slot_kind::EFFECT || self.kind == slot_kind::LOOPER
+    }
 }
 
 /// A single parameter value from a block's param vector.
@@ -211,12 +277,33 @@ impl PresetStream {
             .map(|b| String::from_utf8_lossy(b).trim_end_matches('\0').to_string())
     }
 
-    /// Extract the block slots (preset key `0 → 22`). Empty slots are included (kind 8).
+    /// The slot array of one DSP group (`DSP_GROUP_KEYS[dsp] → 22`), if that DSP is populated.
+    fn dsp_slots(&self, dsp: usize) -> Option<&Vec<Value>> {
+        let key = *DSP_GROUP_KEYS.get(dsp)?;
+        match self.field(key).and_then(|m| map_get(m, 22)) {
+            Some(Value::Array(a)) => Some(a),
+            _ => None,
+        }
+    }
+
+    /// Which DSPs this preset populates. `[0]` on the HX Stomp (key `1` is nil), `[0, 1]` on the
+    /// Helix Floor.
+    pub fn dsps(&self) -> Vec<usize> {
+        (0..DSP_GROUP_KEYS.len()).filter(|&d| self.dsp_slots(d).is_some()).collect()
+    }
+
+    /// Extract the block slots of **every** populated DSP (`0 → 22`, and `1 → 22` on a two-DSP
+    /// device). Empty slots are included (kind 8). Each [`Block`] carries its `dsp` and its
+    /// index *within that DSP*; [`Block::wire_slot`] gives the global edit address.
+    ///
+    /// Reading only key `0` silently drops every DSP2 block, which is what we used to do.
     pub fn blocks(&self) -> Vec<Block> {
-        let slots = match self.field(0).and_then(|m| map_get(m, 22)) {
-            Some(Value::Array(a)) => a,
-            _ => return Vec::new(),
-        };
+        self.dsps().into_iter().flat_map(|dsp| self.dsp_blocks(dsp)).collect()
+    }
+
+    /// The block slots of a single DSP group.
+    pub fn dsp_blocks(&self, dsp: usize) -> Vec<Block> {
+        let Some(slots) = self.dsp_slots(dsp) else { return Vec::new() };
         slots
             .iter()
             .enumerate()
@@ -225,18 +312,14 @@ impl PresetStream {
                 let content = map_get(slot, 20);
                 let meta = content.and_then(|c| map_get(c, 24));
                 // Block enabled/bypass: content key 10 is the `enabled` bool (true = on), verified
-                // live by toggling a block and diffing the stream. `bypassed = !enabled`.
+                // live by toggling a block and diffing the stream. `bypassed = !enabled`. Same key
+                // for kind 6 and kind 7.
                 let bypassed = content
                     .and_then(|c| map_get(c, 10))
                     .and_then(Value::as_bool)
                     .map(|enabled| !enabled);
-                let model_ref = meta.and_then(|m| map_get(m, 25)).and_then(Value::as_i64);
-                // `26` = paired cab/IR index; -1 means "none".
-                let paired_ref = meta
-                    .and_then(|m| map_get(m, 26))
-                    .and_then(Value::as_i64)
-                    .filter(|&r| r >= 0);
-                // Param vectors live at `<content> → <key> → 4` (key 11 = main, 12 = paired model).
+                // Param vectors live at `<content> → <key> → 4` (key 11 = main, 12 = paired model;
+                // key 7 for a Looper).
                 let param_vec = |key: i64| -> Vec<ParamValue> {
                     content
                         .and_then(|c| map_get(c, key))
@@ -249,29 +332,63 @@ impl PresetStream {
                         })
                         .unwrap_or_default()
                 };
+                // A Looper (kind 7) stores its identity and params like a structural node rather
+                // than like an effect: model index directly at content key `8`, params at `7 → 4`.
+                // It never has a paired model.
+                let (model_ref, paired_ref, params, paired_params) = if kind == slot_kind::LOOPER {
+                    let model = content.and_then(|c| map_get(c, 8)).and_then(Value::as_i64);
+                    (model, None, param_vec(7), Vec::new())
+                } else {
+                    let model = meta.and_then(|m| map_get(m, 25)).and_then(Value::as_i64);
+                    // `26` = paired cab/IR index; -1 means "none".
+                    let paired = meta
+                        .and_then(|m| map_get(m, 26))
+                        .and_then(Value::as_i64)
+                        .filter(|&r| r >= 0);
+                    (model, paired, param_vec(11), param_vec(12))
+                };
                 Block {
+                    dsp,
                     index,
                     kind,
                     bypassed,
                     model_ref,
                     paired_ref,
-                    params: param_vec(11),
-                    paired_params: param_vec(12),
+                    params,
+                    paired_params,
                 }
             })
             .collect()
     }
 
-    /// Whether the preset uses a parallel (split) topology. Preset key `0 → 21`: `0` = single
-    /// serial path, `1` = split. Proven by diffing a serial preset against the same blocks moved
-    /// to a parallel row (the flag flipped `0 → 1`).
+    /// Whether **DSP 0** uses a parallel (split) topology. See [`Self::dsp_is_split`].
     pub fn is_split(&self) -> bool {
-        self.field(0).and_then(|m| map_get(m, 21)).and_then(Value::as_i64) == Some(1)
+        self.dsp_is_split(0)
     }
 
-    /// Just the populated effect blocks (kind 6).
+    /// Whether `dsp` uses a parallel (split) topology. Its group key `21`: `0` = single serial
+    /// path, **non-zero = split, and the value is the split type**. Proven by diffing a serial
+    /// preset against the same blocks moved to a parallel row (the flag flipped `0 → 1`).
+    ///
+    /// This used to test `== 1`, which was an HX Stomp undergeneralization — the Floor uses `2`
+    /// and `3` for its other split types. Across all five presets we can check, `21 == 0` holds
+    /// exactly when the DSP's row-B slots (11..18) are all empty: Stomp `preset1` = 0/none,
+    /// `dual_amp` = 1/one, `split_preset` = 1/one, Floor "Pull Me Under" = 2/two on DSP1 and
+    /// 3/six on DSP2. [solid — 2026-07-23]
+    ///
+    /// Per-DSP rather than preset-wide: each DSP has its own A/B branch and its own flag, and on
+    /// the Floor the two commonly differ within one preset.
+    pub fn dsp_is_split(&self, dsp: usize) -> bool {
+        let Some(&key) = DSP_GROUP_KEYS.get(dsp) else { return false };
+        !matches!(
+            self.field(key).and_then(|m| map_get(m, 21)).and_then(Value::as_i64),
+            None | Some(0)
+        )
+    }
+
+    /// Just the populated blocks — effects **and** loopers — across every DSP.
     pub fn effect_blocks(&self) -> Vec<Block> {
-        self.blocks().into_iter().filter(|b| b.kind == slot_kind::EFFECT).collect()
+        self.blocks().into_iter().filter(Block::is_block).collect()
     }
 
     /// The editor's view of every DSP block in the preset, enumerated **from the slot array**
@@ -298,25 +415,31 @@ impl PresetStream {
         // The 20-slot array is a fixed topology grid: input, row A, a split node (kind 2), row B,
         // then a mixer (kind 3). Row B = effect slots **after** the split node. [solid] — from the
         // slot dump (split at 10, row B 11-18) and the move-to-parallel capture (block → slot 12).
-        let split_idx = all.iter().find(|b| b.kind == slot_kind::SPLIT).map(|b| b.index);
-        all.into_iter()
-            .filter(|b| b.kind == slot_kind::EFFECT)
+        // Each DSP has its own split node, so this is resolved per DSP, not once for the preset.
+        let split_idx = |dsp: usize| {
+            all.iter()
+                .find(|b| b.dsp == dsp && b.kind == slot_kind::SPLIT)
+                .map(|b| b.index)
+        };
+        all.iter()
+            .filter(|b| b.is_block())
             .map(|b| {
-                let slot = b.index as i64;
+                let slot = b.wire_slot();
                 let pb = path.get(&slot);
                 LoadedBlock {
+                    dsp: b.dsp,
                     slot,
                     model_index: b.model_ref,
                     paired_index: b.paired_ref,
                     user_label: pb.and_then(|p| p.user_label.clone()),
                     bypassed: b.bypassed,
-                    params: b.params,
-                    paired_params: b.paired_params,
+                    params: b.params.clone(),
+                    paired_params: b.paired_params.clone(),
                     node_kind: pb.and_then(|p| p.node_kind),
                     // Layout position + 1 when the block is on a footswitch; 0 = not bound.
                     footswitch: pb.map_or(0, |p| p.footswitch),
-                    // Row B = a slot after the split node; row A otherwise.
-                    row: match split_idx {
+                    // Row B = a slot after this DSP's split node; row A otherwise.
+                    row: match split_idx(b.dsp) {
                         Some(s) if b.index > s => 1,
                         _ => 0,
                     },
@@ -336,10 +459,12 @@ impl PresetStream {
     /// content value that actually carries key `8`. Verified against `split_preset_stream` (split =
     /// Split Y, index 257; mixer = HD2_AppDSPFlowJoin, index 151, 6 A/B params). [solid]
     pub fn structural_node(&self, kind: i64) -> Option<LoadedBlock> {
-        let slots = match self.field(0).and_then(|m| map_get(m, 22)) {
-            Some(Value::Array(a)) => a,
-            _ => return None,
-        };
+        self.dsp_structural_node(0, kind)
+    }
+
+    /// [`Self::structural_node`] for a specific DSP. Each DSP has its own split and mixer.
+    pub fn dsp_structural_node(&self, dsp: usize, kind: i64) -> Option<LoadedBlock> {
+        let slots = self.dsp_slots(dsp)?;
         let (index, slot) = slots
             .iter()
             .enumerate()
@@ -362,7 +487,8 @@ impl PresetStream {
             })
             .unwrap_or_default();
         Some(LoadedBlock {
-            slot: index as i64,
+            dsp,
+            slot: wire_slot(dsp, index),
             model_index,
             paired_index: None,
             user_label: None,
@@ -383,13 +509,15 @@ impl PresetStream {
     /// set-value op on the node's own slot — `switch_input_gate_and_guitar_pad.pcapng` shows the
     /// input gate toggle as op 30 `{98:0, 28:0, 119:bool}`. [solid]
     pub fn io_node(&self, kind: i64) -> Option<LoadedBlock> {
+        self.dsp_io_node(0, kind)
+    }
+
+    /// [`Self::io_node`] for a specific DSP. Each DSP has its own input and output node.
+    pub fn dsp_io_node(&self, dsp: usize, kind: i64) -> Option<LoadedBlock> {
         if kind != 0 && kind != 1 {
             return None;
         }
-        let slots = match self.field(0).and_then(|m| map_get(m, 22)) {
-            Some(Value::Array(a)) => a,
-            _ => return None,
-        };
+        let slots = self.dsp_slots(dsp)?;
         let (index, slot) = slots
             .iter()
             .enumerate()
@@ -405,7 +533,8 @@ impl PresetStream {
             })
             .unwrap_or_default();
         Some(LoadedBlock {
-            slot: index as i64,
+            dsp,
+            slot: wire_slot(dsp, index),
             model_index: None,
             paired_index: None,
             user_label: None,
@@ -434,16 +563,23 @@ impl PresetStream {
     /// re-reads after each placement. Each cell maps to exactly one slot: dropping a block onto an
     /// empty cell is a single move to that slot.
     pub fn grid(&self) -> Vec<GridCell> {
-        let blocks = self.blocks();
+        self.dsps().into_iter().flat_map(|d| self.dsp_grid(d)).collect()
+    }
+
+    /// [`Self::grid`] for a single DSP. `row` is 0/1 **within that DSP** — a two-DSP device draws
+    /// four rows, which the caller composes from `cell.dsp` and `cell.row`.
+    pub fn dsp_grid(&self, dsp: usize) -> Vec<GridCell> {
+        let blocks = self.dsp_blocks(dsp);
         let split_idx = blocks.iter().find(|b| b.kind == slot_kind::SPLIT).map(|b| b.index);
         let mixer_idx = blocks.iter().find(|b| b.kind == slot_kind::MIXER).map(|b| b.index);
-        let is_cell = |k: i64| k == slot_kind::EFFECT || k == slot_kind::EMPTY;
+        let is_cell =
+            |k: i64| k == slot_kind::EFFECT || k == slot_kind::LOOPER || k == slot_kind::EMPTY;
         let mut cells = Vec::new();
         for b in &blocks {
             if b.index == 0 || !is_cell(b.kind) {
                 continue; // skip the input slot and the split/mixer nodes
             }
-            let occupied = b.kind == slot_kind::EFFECT;
+            let occupied = b.is_block();
             let (row, column) = match split_idx {
                 Some(s) if b.index > s => match mixer_idx {
                     // Row B: between the split and mixer nodes.
@@ -455,7 +591,7 @@ impl PresetStream {
                 // Top row: serial preset, or before the split node.
                 _ => (0u8, b.index as i64),
             };
-            cells.push(GridCell { slot: b.index as i64, row, column, occupied });
+            cells.push(GridCell { dsp, slot: b.wire_slot(), row, column, occupied });
         }
         cells
     }
@@ -467,10 +603,12 @@ impl PresetStream {
     /// Decoded from the "Dual Amp" preset (split `13=5`, mixer `13=7`; Tremolo@4 before, US Princess@6
     /// on A, Reverb@7 after, GSG@15 on B). [solid]
     pub fn structural_node_pos(&self, kind: i64) -> Option<i64> {
-        let slots = match self.field(0).and_then(|m| map_get(m, 22)) {
-            Some(Value::Array(a)) => a,
-            _ => return None,
-        };
+        self.dsp_structural_node_pos(0, kind)
+    }
+
+    /// [`Self::structural_node_pos`] for a specific DSP.
+    pub fn dsp_structural_node_pos(&self, dsp: usize, kind: i64) -> Option<i64> {
+        let slots = self.dsp_slots(dsp)?;
         let slot = slots.iter().find(|s| map_get(s, 19).and_then(Value::as_i64) == Some(kind))?;
         let content = map_get(slot, 20)?;
         let holder = match content {
@@ -594,7 +732,11 @@ impl PresetStream {
 /// row (0 = top, 1 = parallel B) and column, and whether a block currently occupies it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GridCell {
+    /// Which DSP this cell belongs to. A two-DSP device draws `dsp × row` rows.
+    pub dsp: usize,
+    /// Wire slot (global across DSPs) — the drop target address.
     pub slot: i64,
+    /// Row **within** this DSP: 0 = path A, 1 = path B.
     pub row: u8,
     pub column: i64,
     pub occupied: bool,
@@ -605,9 +747,11 @@ pub struct GridCell {
 /// index to a name + param order via [`crate::symbols::DeviceSymbols::by_index`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadedBlock {
-    /// Slot index (`0 → 22` position) holding this block — also the wire edit address (key 98).
+    /// Which DSP holds this block (`0` for every HX Stomp block; the Floor also has `1`).
+    pub dsp: usize,
+    /// **Wire slot** — global across DSPs (`dsp * 20 + index`), and the edit address (key 98).
     pub slot: i64,
-    /// `Helix.sym` index of the block's model (`24 → 25`).
+    /// `Helix.sym` index of the block's model (`24 → 25`, or content key `8` for a Looper).
     pub model_index: Option<i64>,
     /// `Helix.sym` index of the paired cab/IR (`24 → 26`), if any.
     pub paired_index: Option<i64>,

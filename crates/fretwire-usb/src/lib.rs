@@ -9,8 +9,13 @@
 //! (on Windows the Line 6 driver owns interface 0).
 
 use futures_lite::future::{self, block_on};
-use fretwire_protocol::{Frame, CONTROL_INTERFACE, EP_IN, EP_OUT, PID_HX_STOMP, VID_LINE6};
+pub use fretwire_protocol::{Device, Support};
+use fretwire_protocol::{Frame, CONTROL_INTERFACE, EP_IN, EP_OUT, VID_LINE6};
 use nusb::transfer::RequestBuffer;
+
+// Re-exported so callers can name what `present_devices`/`Transport::device` return without
+// depending on `fretwire-protocol` directly.
+pub use fretwire_protocol::{DEVICES, VID_LINE6 as VENDOR_ID};
 
 /// Max bytes to request on a bulk IN. Frames are ≤272 bytes (16 header + 256 payload chunk);
 /// 1024 leaves headroom.
@@ -28,7 +33,7 @@ const MAX_SKIP: usize = 64;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("no HX Stomp found on the USB bus")]
+    #[error("no HX device found on the USB bus")]
     NotFound,
     #[error("usb error: {0}")]
     Usb(#[from] nusb::Error),
@@ -44,36 +49,70 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Returns whether an HX Stomp is currently enumerated. A first, dependency-free smoke test that
-/// `nusb` can see the device before we attempt to claim its interface.
-pub fn hx_stomp_present() -> Result<bool> {
-    let found = nusb::list_devices()?
-        .any(|d| d.vendor_id() == VID_LINE6 && d.product_id() == PID_HX_STOMP);
-    Ok(found)
+/// Every known HX device currently enumerated on the bus, in [`fretwire_protocol::DEVICES`] order.
+/// A dependency-free smoke test that `nusb` can see a device before we attempt to claim it.
+pub fn present_devices() -> Result<Vec<&'static Device>> {
+    let pids: Vec<u16> = nusb::list_devices()?
+        .filter(|d| d.vendor_id() == VID_LINE6)
+        .map(|d| d.product_id())
+        .collect();
+    Ok(fretwire_protocol::DEVICES.iter().filter(|d| pids.contains(&d.pid)).collect())
 }
 
-/// A claimed bulk pipe to the HX Stomp's control interface.
+/// Returns whether any known HX device is currently enumerated.
+pub fn hx_device_present() -> Result<bool> {
+    Ok(!present_devices()?.is_empty())
+}
+
+/// A claimed bulk pipe to an HX device's control interface.
 pub struct Transport {
     iface: nusb::Interface,
+    /// Which device we opened — its DSP/snapshot counts drive the layers above.
+    device: &'static Device,
     /// Frames decoded from a prior bulk IN but not yet consumed — a single IN transfer can
     /// concatenate several frames (the handshake batches 3 in one read).
     pending: std::collections::VecDeque<Frame>,
 }
 
 impl Transport {
-    /// Find the HX Stomp, open it, and claim the control interface.
+    /// Find the first known HX device, open it, and claim the control interface.
+    ///
+    /// Devices are tried in [`fretwire_protocol::DEVICES`] order, so a [`Support::Verified`] one is
+    /// always preferred over an untested one when both are plugged in. The vendor control interface
+    /// and its bulk endpoints are identical across the family — confirmed for the Stomp and the
+    /// Floor from their descriptors — so one code path serves all of them.
     pub fn open() -> Result<Transport> {
+        let present = present_devices()?;
+        let device = present.first().copied().ok_or(Error::NotFound)?;
+        Transport::open_device(device)
+    }
+
+    /// Open one specific device.
+    pub fn open_device(device: &'static Device) -> Result<Transport> {
         let info = nusb::list_devices()?
-            .find(|d| d.vendor_id() == VID_LINE6 && d.product_id() == PID_HX_STOMP)
+            .find(|d| d.vendor_id() == VID_LINE6 && d.product_id() == device.pid)
             .ok_or(Error::NotFound)?;
-        let device = info.open()?;
+        if device.support == Support::Untested {
+            // Reading and the handshake are low-risk (worst case a power cycle — see docs/safety.md),
+            // but say so rather than pretending this device is known-good.
+            tracing::warn!(
+                "{} is untested — its protocol is assumed to match the rest of the HX family",
+                device.name
+            );
+        }
+        let dev = info.open()?;
         // On Linux nothing should hold this vendor interface, but detach defensively if it does.
-        let iface = match device.claim_interface(CONTROL_INTERFACE) {
+        let iface = match dev.claim_interface(CONTROL_INTERFACE) {
             Ok(i) => i,
-            Err(_) => device.detach_and_claim_interface(CONTROL_INTERFACE)?,
+            Err(_) => dev.detach_and_claim_interface(CONTROL_INTERFACE)?,
         };
-        tracing::info!("claimed HX Stomp control interface {CONTROL_INTERFACE}");
-        Ok(Transport { iface, pending: std::collections::VecDeque::new() })
+        tracing::info!("claimed {} control interface {CONTROL_INTERFACE}", device.name);
+        Ok(Transport { iface, device, pending: std::collections::VecDeque::new() })
+    }
+
+    /// The device this transport is connected to.
+    pub fn device(&self) -> &'static Device {
+        self.device
     }
 
     /// Send raw bytes on the bulk OUT endpoint.

@@ -851,6 +851,7 @@ dependencies = [
  "fretwire-data",
  "fretwire-protocol",
  "fretwire-usb",
+ "rmpv",
  "serde_json",
  "thiserror 2.0.18",
  "tracing",

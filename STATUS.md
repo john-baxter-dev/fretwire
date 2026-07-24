@@ -359,6 +359,109 @@ Full detail in `docs/protocol.md`, `docs/preset-format.md`.
 - **Safety**: firmware/flash/DFU = the only brick risk, out of scope. Back up before any write.
   See `docs/safety.md`.
 
+## Helix Floor — contributor captures (2026-07-22 … 07-23)
+A Reddit contributor sent USB captures + a device backup from a **Helix Floor** (fw 3.82). Full
+survey in **`docs/helix-floor.md`**. Headlines:
+- **USB is a non-issue.** PID **`0x4248`** (Stomp `0x4246`); the vendor control interface is
+  identical — iface 0, bulk IN `0x81` / OUT `0x01`, 512-byte packets. `PID_HELIX_FLOOR` and a udev
+  rule are in; **nothing matches on it yet** (`Transport::open` is still Stomp-only, deliberately).
+- **The data layer already covers the Floor.** All **355 models** and all **19,377 param keys**
+  across the backup's 363 presets resolve against our imported catalog — 0 missing. `HD2_*` is a
+  family-wide namespace, so `Helix.sym` param ordering (and thus `set_value`'s index math) carries
+  over. HX Edit's shipped `default_preset.hlx`/`empty_preset.hlx` are *already* Floor presets
+  (device `0x210001`, 8 snapshots); only `default_preset_hxs.hlx` is the Stomp (`0x210006`).
+- **Topology delta:** 2 populated DSPs (Stomp: 1), ≥14 block slots/DSP, 2 paths per DSP, 8 snapshots
+  (Stomp: 3), plus `footswitch`/`commandFS1..11`/`dt*`/`powercab*`/`variax` sections.
+- **`.hxb` backup format decoded** — `"AF6L"` header + concatenated raw zlib streams (globals JSON,
+  128 IR WAVs, a model-usage table, 8 × 128-slot setlist JSONs). Implementable as-is, and useful for
+  the Stomp too.
+- The **first** pair of captures contained zero MI_00 traffic (HX Edit wasn't running; the front
+  panel alone emits nothing on the vendor pipe — only USB-MIDI Bank-Select+PC on preset change).
+
+**Captures 3 & 4 (same day, HX Edit connected) — the blocker is cleared:**
+- **The handshake is byte-identical to the Stomp's.** All ten host→device bring-up frames from
+  `device_handshake()` appear verbatim in both captures — the exact hex asserted in
+  `tests/handshake_fidelity.rs`. **No protocol change needed to open a Floor session.**
+  ⚠ The handshake `arg` `0x21000100` *looks* like the Floor's device ID but the Stomp sends the same
+  constant — it is not a device identifier.
+- Floor **model code is `P21`** (Stomp `P33`); key `37` "firmware" is a bare build sha (`7d01f5e`).
+- **Our parser reads Floor presets unmodified** — models, params, cab pairing, DSP load, footswitch
+  bindings, and all **8 snapshots**. Verified against the same presets in the `.hxb` backup
+  (independent ground truth): they reconcile exactly, once two gaps are fixed.
+- **Two parser gaps, neither truly Floor-specific:** (1) slot **`type 7` = Looper** is skipped by
+  enumeration (model idx at key `8`, params at `7 → 4`, not the type-6 shape) — no Stomp fixture has
+  a Looper, so it never surfaced; (2) preset key **`1` is the second DSP's slot array** (same shape
+  as key `0`, `nil` on the Stomp — hence the old "nil | ?" note). The array stays **20 slots**; the
+  Floor adds a second one rather than widening it. `docs/preset-format.md` is corrected.
+- New `tools/extract-preset-stream.py` reassembles chunked read-streams; self-checked by
+  regenerating `captures/preset1_stream.msgpack.bin` byte-identically from the Stomp capture.
+- **The write path is byte-exact on the Floor too.** These captures were HX Edit-driven and contain
+  the full write path; our existing `fretwire_protocol::edit` builders reproduce the Floor's bytes
+  exactly, **9/9 ops**: `set_value` (30), `bypass` (41), `begin_structural` (78), `swap_model` (40,
+  incl. an amp+cab paired swap), `save_preset` (71, a real flash write), select-preset (20). Envelope
+  shapes are key-for-key identical to the Stomp's. **So the Floor needs no protocol change at all —
+  read or write.** Remaining work is the preset model (type 7, DSP2) and device matching.
+- Unrelated bug found in passing: legacy (non-`CabMicIr_*`) cabs mislabel their trailing param as
+  `Trails`. Affects the Stomp too.
+
+**Capture 5 (2026-07-23) — the last open question is answered; no more captures needed:**
+- **Wire slot numbers are global across DSPs: `slot = dsp * 20 + index`.** DSP1 is slots **0–19**,
+  DSP2 slots **20–39**. There is no DSP field in the envelope and none is needed — `op 30`/`41`/`78`
+  on a DSP2 block are byte-for-byte the same shape as on a DSP1 block, and no context op is involved.
+- Evidence: one HX Edit session on `FACTORY 1` `12B` "Pull Me Under" touching **five DSP2 blocks**
+  (`98` = 28, 33, 34, 37, 38). Under the rule each resolves to a block whose stored value for the
+  swept param is one UI increment from the first value on the wire — five matches across five models
+  and three parameter scales (dB, Hz, 0–1), including correctly picking the branch-B one of two
+  identical `HD2_DelaySimpleDelayMono` blocks. Consistent with all earlier captures (slots all < 20,
+  all DSP1), so nothing has to be reinterpreted.
+- **This unblocks "walk preset key `1`".** `fretwire_protocol::edit` needs no change — it already
+  takes a single slot integer, now well-defined for both DSPs. `(dsp, index)` is an internal
+  traversal detail; `EditorPreset` and the routing grid are what have to stop assuming one 20-slot
+  array.
+- The same capture is also the read side of a **parallel, dual-DSP** preset — the other gap noted
+  after captures 3 & 4. Both are now closed.
+
+**Multi-DSP support implemented (2026-07-23):**
+- `fretwire_data::stream` now walks **both** slot arrays and emits **global wire slots**
+  (`wire_slot(dsp, index) = dsp * 20 + index`). `Block`/`LoadedBlock`/`GridCell` carry `dsp`;
+  `dsp_blocks`/`dsp_grid`/`dsp_structural_node`/`dsp_io_node`/`dsp_is_split` are the per-DSP
+  accessors, and the no-argument forms now mean DSP 0.
+- **Slot `type 7` (Looper) is enumerated**, with its own content shape (model at key `8`, params at
+  `7 → 4`). This fixed the Stomp path too — a Floor serial preset went 8 → 9 blocks.
+- **`dsp_is_split` no longer tests `== 1`.** Non-zero means split and the value is the split *type*;
+  the Floor uses 2 and 3. Checked against all five presets we have: `21 == 0` exactly when that
+  DSP's row-B slots are empty.
+- `EditorPreset` gained a **`DspView` per DSP** (own split/mixer/input/output nodes, grid, load).
+  `split`/`split_node`/`input_node`/`grid`/… became accessors meaning DSP 0; `dsp_load_by_dsp()`
+  reports each DSP's own budget. `EditorBlock` carries `dsp`, and `slot` is the global wire address —
+  so **`fretwire_protocol::edit` needed no change at all**.
+- GUI DTO is additive: `PresetDto.dsps[]` plus `dsp` on every block and grid cell; the flat fields
+  still mirror DSP 0, so the Svelte UI is untouched and unaffected.
+- **Verified against the real Floor captures:** "Pull Me Under" decodes all **15** blocks across both
+  DSPs (was 7) with correct rows, per-DSP load (38.4% / 58.9%) and footswitch bindings — the FS
+  labels only resolve because enrichment now matches on global slots. Matches the `.hxb` exactly.
+- 16 new tests (10 in `fretwire-data`, 6 in `fretwire-core`) built on **synthetic** two-DSP presets,
+  since the Floor captures can't be committed. Suite: **140 passing**.
+- Still DSP-0 only: `Session`'s grid/routing *planning* methods (see the module note in
+  `session.rs`) and the Svelte routing view.
+
+**Device matching generalized (2026-07-23):**
+- `fretwire_protocol::Device` + `DEVICES` replace the loose PID constants: PID, model code, preset
+  `device` ID, DSP count, snapshot count, and a `Support` flag (`Verified` / `Untested`).
+  `Device::by_pid` / `by_model_code` for lookups.
+- **`Transport::open` is no longer Stomp-only.** It matches any device in the table, verified ones
+  first, and `Transport::device()` / `Session::device()` say which was opened.
+  `fretwire_usb::present_devices()` lists everything currently plugged in; `fretwire detect` prints
+  them by name. Opening an untested device logs a warning rather than pretending it's known-good.
+- The **HX Stomp XL** stays `Untested` with `None` for model code / device id / DSP / snapshot
+  counts — we have no capture, preset or backup from one, and its fields must not be assumed to
+  match the Stomp's just because the name is similar.
+- `Session::device_matches_preset` compares the connected device's model code against the one
+  stamped in the preset (`None` when either is unknown — not a mismatch, an unanswerable question).
+  Surfaced to the GUI as `PresetDto.device_name` / `device_matches`.
+- 8 new tests, including one asserting **every** table entry has a matching udev rule — a device
+  without one silently fails with EACCES on a normal desktop. Suite: **148 passing**.
+
 ## Prioritized next steps
 > **The path to live control is in `docs/next-steps.md`.** TL;DR: (1) **on Windows now** — capture a
 > dozen single-knob edits, decode with `fretwire decode-edit`, find out if param keys generalize (the

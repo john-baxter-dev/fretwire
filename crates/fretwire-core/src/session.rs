@@ -8,6 +8,14 @@
 //! ACKs each edit) is reconstructed from captures and **needs first-contact tuning on Linux** —
 //! those spots are marked `LIVE:`. The design keeps raw frame access ([`Session::request`]) so the
 //! sequence can be probed interactively before the convenience methods are trusted.
+//!
+//! **Single-DSP scope.** The grid/routing methods here (`add_block_at`, `place_block`,
+//! `insert_block`, `reorder_block`, `set_node_pos`, …) plan moves within **one** DSP's 20-slot
+//! array and read it via `dsp_blocks(0)` / `dsp_grid(0)`. That is complete for the HX Stomp, the
+//! only device `Transport::open` matches. On a two-DSP device (Helix Floor) they would need a `dsp`
+//! argument — the slot arithmetic they do is per-DSP, while wire slots are global
+//! (`dsp * 20 + index`, see [`fretwire_data::stream::DSP_SLOT_STRIDE`]). Reading and per-block
+//! edits are already DSP-agnostic; only this planning layer is not.
 
 use crate::editor::{Catalog, EditorPreset};
 use fretwire_protocol::{channel, cmd, edit, op, EditValue, Frame, Tlv};
@@ -95,6 +103,22 @@ impl Session {
     /// The catalog (model table + device param orders) used to interpret presets.
     pub fn catalog(&self) -> &Catalog {
         &self.catalog
+    }
+
+    /// The connected device — its DSP and snapshot counts, model code and support status. Note
+    /// this is what the *USB PID* says; a preset's own `device_model` is the device's own claim,
+    /// and [`Self::device_matches_preset`] compares the two.
+    pub fn device(&self) -> &'static fretwire_protocol::Device {
+        self.transport.device()
+    }
+
+    /// Whether the connected device's model code matches the one stamped into `preset`. `None`
+    /// when either side is unknown (an untested device, or a preset with no model code) — that is
+    /// not a mismatch, just an unanswerable question.
+    pub fn device_matches_preset(&self, preset: &EditorPreset) -> Option<bool> {
+        let expected = self.device().model_code?;
+        let actual = preset.device_model.as_deref()?;
+        Some(expected == actual)
     }
 
     fn next_seq(&mut self, src: u16) -> u8 {
@@ -364,7 +388,7 @@ impl Session {
         let raw = self.read_preset_raw()?;
         let ps = PresetStream::parse(&raw)?;
         let empty = ps
-            .blocks()
+            .dsp_blocks(0)
             .iter()
             .any(|b| b.index as i64 == slot && b.kind == slot_kind::EMPTY);
         if !empty {
@@ -623,7 +647,7 @@ impl Session {
         use fretwire_data::stream::{slot_kind, PresetStream};
         let raw = self.read_preset_raw()?;
         let ps = PresetStream::parse(&raw)?;
-        let blocks = ps.blocks();
+        let blocks = ps.dsp_blocks(0);
         let split_idx = blocks
             .iter()
             .find(|b| b.kind == slot_kind::SPLIT)
@@ -692,7 +716,7 @@ impl Session {
             .structural_node_pos(slot_kind::SPLIT)
             .ok_or_else(|| fretwire_data::Error::Stream("preset is not split".into()))?
             as usize;
-        let blocks = ps.blocks();
+        let blocks = ps.dsp_blocks(0);
         // Common-before window = top slots below the split column.
         let occ: Vec<usize> = blocks
             .iter()
@@ -727,7 +751,7 @@ impl Session {
         // Everything that isn't an empty slot is "occupied" — incl. the split/mixer nodes, so a drop
         // can never land on a structural node either.
         let occupied: std::collections::BTreeSet<usize> =
-            ps.blocks().iter().filter(|b| b.kind != slot_kind::EMPTY).map(|b| b.index).collect();
+            ps.dsp_blocks(0).iter().filter(|b| b.kind != slot_kind::EMPTY).map(|b| b.index).collect();
         self.apply_row_moves(Vec::new(), src_slot, dst_slot, occupied)?;
         self.read_preset()
     }
@@ -753,7 +777,7 @@ impl Session {
         }
         let raw = self.read_preset_raw()?;
         let ps = PresetStream::parse(&raw)?;
-        let blocks = ps.blocks();
+        let blocks = ps.dsp_blocks(0);
         for s in [src_slot, dst_slot] {
             if !blocks.iter().any(|b| b.index as i64 == s && b.kind == slot_kind::EFFECT) {
                 return Err(fretwire_data::Error::Stream(format!("slot {s} has no block")).into());
@@ -869,7 +893,7 @@ impl Session {
         use fretwire_data::stream::{slot_kind, PresetStream};
         let raw = self.read_preset_raw()?;
         let ps = PresetStream::parse(&raw)?;
-        let blocks = ps.blocks();
+        let blocks = ps.dsp_blocks(0);
         // On a split preset, "append" means the end of the **series (row A)** row — the slots before
         // the split node. Prefer the first empty row-A slot after the last row-A block; fall back to
         // any empty row-A slot, then any empty slot at all (row B), so it never fails when A is full.
@@ -919,7 +943,7 @@ impl Session {
             .ok_or_else(|| fretwire_data::Error::Stream("missing peer node position".into()))?;
         // Occupied row-B columns (grid row 1) — the bracket must keep enclosing them.
         let b_cols: Vec<i64> =
-            ps.grid().iter().filter(|c| c.row == 1 && c.occupied).map(|c| c.column).collect();
+            ps.dsp_grid(0).iter().filter(|c| c.row == 1 && c.occupied).map(|c| c.column).collect();
         let (lo, hi) = if kind == slot_kind::SPLIT {
             // split: ≥ 1, ≤ first B block's column, and strictly left of the mixer.
             (1, b_cols.iter().min().copied().unwrap_or(other - 1).min(other - 1))
@@ -980,7 +1004,7 @@ impl Session {
             )
             .into());
         }
-        let blocks = ps.blocks(); // all 20 slots, in index order
+        let blocks = ps.dsp_blocks(0); // all 20 slots, in index order
         let occupied: Vec<usize> =
             blocks.iter().filter(|b| b.kind == slot_kind::EFFECT).map(|b| b.index).collect();
         let from_pos = occupied

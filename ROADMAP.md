@@ -319,6 +319,59 @@ libusb C dependency, clean on Linux; falls back fine for dev on Windows. Workspa
 - [ ] Other architectures — **deliberately not doing**: i686 (dead on the desktop), armv7 / 32-bit Pi
       (won't run the editor usefully), RISC-V (no users). Untestable binaries are a support burden.
 
+## Phase 9 — Other HX devices (Helix Floor first)
+Opened 2026-07-22 by a contributor's Helix Floor captures + backup. Survey: **`docs/helix-floor.md`**.
+The data layer already covers the Floor (355/355 models, 19,377/19,377 param keys resolve) and its
+USB control interface is identical to the Stomp's, so this is mostly plumbing — *once* we can see a
+real session.
+
+- [x] Identify the device: PID `0x4248`, preset `device` ID `0x210001`, fw `0x03800000`. Constant +
+      udev rule landed; no code matches on the PID yet.
+- [x] Decode the `.hxb` backup container (header + concatenated raw zlib streams).
+- [x] Get a capture with HX Edit connected (captures 3 & 4, 2026-07-22).
+- [x] **Verify the handshake — it is byte-identical to the Stomp's.** All ten `device_handshake()`
+      frames appear verbatim in both Floor captures. No change needed. Floor model code is `P21`.
+- [x] Confirm our preset parser reads Floor streams — it does, unmodified, including all 8
+      snapshots. Cross-checked against the `.hxb` backup as ground truth.
+- [x] **Handle slot `type 7` (Looper)** in `fretwire_data::stream` enumeration. Different content
+      shape: model index at key `8`, params at `7 → 4`, enabled at `10`. **Fixed the Stomp too** —
+      a Floor capture's serial preset went from 8 blocks to 9 once its Looper stopped being skipped.
+- [x] **Walk preset key `1` (the second DSP's slot array)** alongside key `0`. Blocks now carry
+      `(dsp, index)` and flatten to the wire slot with `dsp * 20 + index`. `fretwire_protocol::edit`
+      needed no change. `EditorPreset` gained a `DspView` per DSP (its own split/mixer/input/output
+      nodes, grid and load); the flat accessors now mean DSP 0, which is what a one-DSP device has.
+      Verified against a real Floor capture: "Pull Me Under" decodes all **15** blocks across both
+      DSPs with the right rows and footswitch bindings (it used to show 7).
+- [x] **Verify the write path — byte-exact, 9/9 ops.** Captures 3 & 4 are HX Edit-driven and carry
+      the full write path; our existing `edit` builders reproduce the Floor's bytes exactly for
+      `set_value`, `bypass`, `begin_structural`, `swap_model` (incl. a paired amp+cab swap),
+      `save_preset` and select-preset. Envelope shapes are identical to the Stomp's. **No protocol
+      change is needed for the Floor in either direction.**
+- [x] **DSP2 addressing — solved (`WinCap5`, 2026-07-23). Wire slot numbers are global:
+      `slot = dsp * 20 + index`**, so DSP1 is 0–19 and DSP2 is 20–39. There is no DSP field and none
+      is needed. Confirmed by five DSP2 blocks edited in HX Edit on `FACTORY 1` `12B` "Pull Me
+      Under", each sweep's first wire value landing one UI increment from that block's stored value —
+      and consistent with every earlier capture (all slots < 20, all DSP1). The same capture also
+      gives the read side of a parallel, dual-DSP preset. **No further Floor captures are needed.**
+- [x] **Replaced the scattered PID constants with a device-descriptor type.**
+      `fretwire_protocol::Device` + `DEVICES` carry PID, model code, preset `device` ID, DSP count,
+      snapshot count and a `Support` flag; `Device::by_pid`/`by_model_code` do the lookups.
+      `Transport::open` now matches **any** known device (verified ones first) and exposes which it
+      opened via `Transport::device()` / `Session::device()`; `present_devices()` lists everything
+      plugged in. The HX Stomp XL is listed as `Untested` with its unknown fields honestly `None` —
+      we have no capture, preset or backup from one — and opening it logs a warning. Tests pin the
+      invariants, including that every table entry has a matching udev rule.
+- [ ] **Session grid/routing planning is still DSP-0 only.** `add_block_at`, `place_block`,
+      `insert_block`, `reorder_block` and `set_node_pos` plan slot moves inside one 20-slot array
+      and read it via `dsp_blocks(0)`/`dsp_grid(0)` — complete for the Stomp, needs a `dsp` argument
+      for the Floor. Reading and per-block edits are already DSP-agnostic; only this layer is not.
+- [ ] Grid/UI: the routing view assumes one DSP × 2 rows. The Floor needs 2 DSPs × 2 paths. The
+      backend is ready — `PresetDto.dsps[]` carries each DSP's grid/nodes/load, and every cell and
+      block is tagged with its `dsp`; the flat fields mirror `dsps[0]` so the current UI is
+      unaffected until it's rewritten.
+- [ ] `.hxb` import/restore — **independently useful, needs no device and no new captures**. Would
+      give the Stomp backup-file interop too. Format is documented well enough to build against.
+
 ## Safety
 See **`docs/safety.md`**. TL;DR: captures + offline work are zero-risk; live control is low-risk
 (worst case = power cycle); **firmware/flash/bootloader/DFU is the only brick risk and is out of

@@ -27,3 +27,13 @@ __pycache__/
 
 # Raw USB capture recordings — reference only, not needed to build/test
 /captures/*.pcapng
+/captures/**/*.pcapng
+/HelixCaps.7z
+/WinCap3.7z
+/Wincap4.7z
+/WinCap5.7z
+
+# Contributor-supplied captures and device backups. These contain other people's personal
+# preset data; keep them local, never commit them. Distilled findings go in docs/ instead.
+/captures/helix-floor/
+*.hxb

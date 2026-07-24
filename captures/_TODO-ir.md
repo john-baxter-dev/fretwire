@@ -9,9 +9,15 @@ opcode `0x02`, *not* the EDIT channel). What we know:
 
 **Upload / import — op 9** (`{102:txn, 100:9, 101:{…}}`), target keys:
 - `112` = **IR slot index** (0-based; was 1 in the capture).
-- `113` = a **u32 checksum/hash** of the IR data (capture: `0xc0a076ed`). Algorithm unconfirmed —
-  crc32 of the (truncated) blob didn't match; needs a reassembled blob to verify. *Likely* a CRC/hash
-  over the full sample data; **must reproduce it correctly or the device may reject the upload.**
+- `113` = a **u32 checksum of the IR data — SOLVED (2026-07-22) [solid]**. It is the **sum of the
+  8192-byte blob read as 2048 little-endian u32 words, truncated to 32 bits** — *not* a CRC:
+  ```python
+  checksum = sum(struct.unpack("<2048I", blob)) & 0xffffffff   # 0xc0a076ed ✓
+  ```
+  Verified against `import_ir.pcapng` after reassembling the op-9 upload (16 × 496-byte host→dev
+  PRIMARY chunks; same chunking as the op-21 preset write). crc32, crc32-inverted, adler32, byte-sum,
+  big-endian sum and xor were all checked and all differ. The earlier "crc32 didn't match" note was
+  right about crc32 and wrong to assume a CRC.
 - `109` = **name**, a 32-byte NUL-padded string (capture: `"G12-65 212 C Hi-Gn 421+57 Celes"`).
 - `114=1, 115=3, 123=false, 124=false, 125=0` = **format/flags**, constant across this one capture —
   meaning unknown (channels? sample format? normalize?). Need captures of *different* IRs to interpret.
@@ -25,9 +31,12 @@ Then op **13** `{101:2}` = **commit** the write (kind 2, same kind value the pre
 (start the read stream); the IR streams back paged like the preset read (`cmd 0x0c` pagination).
 
 ## Still needed before implementing
-- **Reassemble** the multi-USB-packet op-9 frame to get the full 8192-byte blob, then **identify the
-  `113` checksum algorithm** (try crc32 variants, Adler-32, sum) against the real bytes.
+- ~~Reassemble the op-9 frame and identify the `113` checksum~~ — **done, see above.** Upload is no
+  longer checksum-blocked.
 - Captures of **different IR lengths/formats** (a 1024-sample IR, a stereo IR) to decode `114/115`.
+  The `.hxb` backup format (see `docs/helix-floor.md`) carries **128 IR slots as RIFF WAV, 32-bit
+  float, 48 kHz mono** — a cheap source of real IR payloads to test blob construction against
+  without needing the device.
 - `ir-rename` / `ir-move` / `ir-delete` / `ir-assign-to-block` (the spec below) — not yet captured.
 - **Safety:** upload is a **flash write** (user data, not firmware — low brick risk) — treat like
   `save_preset`: back up, test on an empty slot. Do **not** implement upload until the checksum is

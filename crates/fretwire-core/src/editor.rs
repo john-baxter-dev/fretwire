@@ -751,7 +751,8 @@ impl Catalog {
             ("gain", "Level"),
         ];
         let b = ps.dsp_io_node(dsp, kind)?;
-        let mut params = name_params(&b.params, self.symbols.params(sym), self.param_meta.get(sym));
+        // IO nodes (gate / level-pan) have no category and no trailing-extra quirk.
+        let mut params = name_params(&b.params, self.symbols.params(sym), self.param_meta.get(sym), None);
         for p in &mut params {
             if let Some((_, d)) = DISPLAY_NAMES.iter().find(|(k, _)| *k == p.name) {
                 p.name = d.to_string();
@@ -793,7 +794,7 @@ impl Catalog {
         };
         let (model_name, category) = self.resolve_name(symbolic_id.as_deref());
         let meta = symbolic_id.as_deref().and_then(|s| self.param_meta.get(s));
-        let params = name_params(&b.params, sym.map(|(_, p)| p), meta);
+        let params = name_params(&b.params, sym.map(|(_, p)| p), meta, category);
 
         // Paired cab/IR (amp+cab blocks): resolve its name + name its param group too.
         let paired_sym = b.paired_index.and_then(|i| self.symbols.by_index(i as usize));
@@ -834,6 +835,7 @@ impl Catalog {
                 &b.paired_params,
                 paired_sym.map(|(_, p)| p),
                 paired_symbolic.as_deref().and_then(|s| self.param_meta.get(s)),
+                paired_category,
             ),
             paired_symbolic_id: paired_symbolic,
             paired_category: if b.paired_index.is_some() { paired_category } else { None },
@@ -1091,12 +1093,27 @@ fn split_variant(symbol: &str) -> (&str, Option<&'static str>) {
     }
 }
 
-/// Name a value vector against an ordered name list. Values past the named list become `#i`,
-/// except a lone trailing extra — the time-based-fx `Trails` switch the symbol doesn't list.
+/// Name the lone trailing value a model sends beyond its symbol's listed params, chosen by category:
+/// time-based fx (delay/reverb) append a `Trails` on/off switch, while legacy (non-`CabMicIr_*`) cabs
+/// append a **mic-index** value the symbol omits. Labeling the cab's mic index `Trails` was a bug
+/// (seen on the Floor's `HD2_Cab2x12MailC12Q`, and on any Stomp preset using an old-style cab).
+fn trailing_extra_name(category: Option<i64>) -> &'static str {
+    match category {
+        // 2 = Cab, 19 = Cab (Mic+IR). Native CabMicIr cabs list the mic, so they never hit this
+        // branch; legacy cabs don't, and their trailing value is the mic index.
+        Some(2) | Some(19) => "Mic",
+        _ => "Trails",
+    }
+}
+
+/// Name a value vector against an ordered name list. Values past the named list become `#i`, except
+/// a lone trailing extra the symbol doesn't list — named by [`trailing_extra_name`] from the model's
+/// `category`.
 fn name_params(
     values: &[ParamValue],
     order: Option<&[String]>,
     meta: Option<&std::collections::HashMap<String, ParamMeta>>,
+    category: Option<i64>,
 ) -> Vec<EditorParam> {
     let names = order.unwrap_or(&[]);
     values
@@ -1105,7 +1122,7 @@ fn name_params(
         .map(|(i, &value)| {
             let name = names.get(i).cloned().unwrap_or_else(|| {
                 if i == names.len() && values.len() == names.len() + 1 {
-                    "Trails".to_string()
+                    trailing_extra_name(category).to_string()
                 } else {
                     format!("#{i}")
                 }
@@ -1116,6 +1133,37 @@ fn name_params(
             EditorParam { index: i, name, value, meta }
         })
         .collect()
+}
+
+// Pure naming tests — no reference data needed, so they always run.
+#[cfg(test)]
+mod trailing_extra_tests {
+    use super::{name_params, trailing_extra_name};
+    use fretwire_data::stream::ParamValue;
+
+    #[test]
+    fn cab_categories_name_the_trailing_extra_mic_not_trails() {
+        assert_eq!(trailing_extra_name(Some(2)), "Mic"); // Cab
+        assert_eq!(trailing_extra_name(Some(19)), "Mic"); // Cab (Mic+IR)
+        assert_eq!(trailing_extra_name(Some(10)), "Trails"); // Reverb
+        assert_eq!(trailing_extra_name(Some(9)), "Trails"); // Delay
+        assert_eq!(trailing_extra_name(None), "Trails");
+    }
+
+    #[test]
+    fn legacy_cab_trailing_value_is_named_mic() {
+        // A legacy cab: the symbol lists 5 params but the device sends 6 — the extra is the mic
+        // index. It must be "Mic", not "Trails".
+        let order: Vec<String> =
+            ["Distance", "LowCut", "HighCut", "EarlyReflections", "Level"].iter().map(|s| s.to_string()).collect();
+        let values = vec![ParamValue::Float(0.0); 6];
+        let params = name_params(&values, Some(&order), None, Some(2));
+        assert_eq!(params.last().unwrap().name, "Mic");
+
+        // Same shape, but a reverb (category 10) keeps the Trails name.
+        let params = name_params(&values, Some(&order), None, Some(10));
+        assert_eq!(params.last().unwrap().name, "Trails");
+    }
 }
 
 // These tests validate against the (unshipped) Line 6 reference data, so they only compile when a

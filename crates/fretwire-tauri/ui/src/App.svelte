@@ -244,7 +244,7 @@
     apply(invoke("insert_block", { srcSlot, dstSlot, before }));
   // Drag the split (⋔) / join (⋉) node to a new signal column — re-classifies top-row blocks
   // between common / path A / common-after without moving any block.
-  const onMoveNode = (node, pos) => apply(invoke("set_node_pos", { node, pos }));
+  const onMoveNode = (node, pos, dsp = 0) => apply(invoke("set_node_pos", { node, pos, dsp }));
   const onDelete = (slot) => (deleteDlg = slot);
   function confirmDelete() {
     const slot = deleteDlg;

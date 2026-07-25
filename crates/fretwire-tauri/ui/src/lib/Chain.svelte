@@ -212,7 +212,7 @@
         }}
         ondrop={(e) => {
           e.preventDefault();
-          if (dragNode) onmovenode?.(dragNode, d.pos);
+          if (dragNode) onmovenode?.(dragNode, d.pos, dsp?.dsp ?? 0);
           dragNode = null;
           nodeOver = null;
         }}

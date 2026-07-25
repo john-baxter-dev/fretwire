@@ -500,10 +500,18 @@ everything). Structural-node selection (split/mixer/IO) now spans both DSPs too.
 already carried all of this (`dsps[]` with per-DSP grid/nodes/load; blocks tagged with `dsp`), so
 this was a frontend-only change; `npm run build` is clean.
 
-Still open from this run: **drag-to-place / move-node on DSP2** still routes through `Session`'s
-DSP-0-only planner (`add_block_at`/`place_block`/… read `dsp_blocks(0)`), so structural edits on the
-second DSP aren't wired up — viewing and param-editing DSP2 blocks works, moving them doesn't yet.
-Also still: the legacy-cab **`Trails` mislabel** (param-order bug, visible in the wild), and the GUI
+**DSP-aware routing planner + two-DSP mock (2026-07-25):** the routing methods
+(`add_block_at`/`place_block`/`insert_block`/`reorder_block`/`set_node_pos`) planned in local index
+space against `dsp_blocks(0)`, so a drag or node-move on DSP2 hit the wrong grid. They now plan in
+**global wire-slot space** (`dsp*20+index`) — each derives its DSP from the slot, reads that DSP's
+blocks/grid via `Block::wire_slot()`, and feeds the base-agnostic `plan_*` helpers wire slots;
+`place_block`/`insert_block` reject a cross-DSP move, and `set_node_pos` gained a `dsp` argument
+(threaded from the UI). The browser **mock is now genuinely two-DSP** (stride-20 topology, a Floor
+"Pull Me Under" demo preset at index 0), so the dual-grid path — render, drag, node-move — is
+testable without hardware. New base-20 planner tests + end-to-end mock checks; suite **154**.
+(`move_block_to_row`/`move_before_split` are legacy, not on the grid path, and still assume DSP 0.)
+
+Still open: the legacy-cab **`Trails` mislabel** (param-order bug, visible in the wild), and the GUI
 re-pulls the *whole* preset on nearly every twiddle (multiplied exposure to the truncation bug —
 worth throttling now that the read is robust).
 

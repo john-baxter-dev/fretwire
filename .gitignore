@@ -11,6 +11,7 @@
 # Local working notes and editor/tool state (not part of the published project).
 /CLAUDE.md
 .claude/
+.idea/
 
 # Vendor binaries — never redistribute.
 *.exe

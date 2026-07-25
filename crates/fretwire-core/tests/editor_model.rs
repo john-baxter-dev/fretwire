@@ -11,7 +11,9 @@ use std::path::PathBuf;
 
 // Capture fixtures (our own device recordings) live in the repo under captures/.
 fn data(name: &str) -> Vec<u8> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../captures").join(name);
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../captures")
+        .join(name);
     std::fs::read(p).unwrap()
 }
 
@@ -23,7 +25,9 @@ fn catalog() -> Catalog {
 #[test]
 fn loads_preset_into_named_editable_blocks() {
     let cat = catalog();
-    let preset = cat.load_preset(&data("preset1_stream.msgpack.bin")).unwrap();
+    let preset = cat
+        .load_preset(&data("preset1_stream.msgpack.bin"))
+        .unwrap();
 
     assert_eq!(preset.device_model.as_deref(), Some("P33"));
     assert!(preset.firmware.unwrap().starts_with("v3.71"));
@@ -33,12 +37,28 @@ fn loads_preset_into_named_editable_blocks() {
 
     // DSP meter: this 6-block preset (incl. an amp) draws a plausible, non-trivial slice of the
     // budget, and the amp+cab block is the single biggest consumer.
-    assert!(preset.dsp_load > 10.0 && preset.dsp_load < 100.0, "dsp_load = {}", preset.dsp_load);
-    let amp = preset.blocks.iter().find(|b| b.paired_model_name.is_some()).unwrap();
-    assert!(amp.dsp_load.unwrap() > 20.0, "amp+cab load = {:?}", amp.dsp_load);
+    assert!(
+        preset.dsp_load > 10.0 && preset.dsp_load < 100.0,
+        "dsp_load = {}",
+        preset.dsp_load
+    );
+    let amp = preset
+        .blocks
+        .iter()
+        .find(|b| b.paired_model_name.is_some())
+        .unwrap();
+    assert!(
+        amp.dsp_load.unwrap() > 20.0,
+        "amp+cab load = {:?}",
+        amp.dsp_load
+    );
 
     // The Harmonic Tremolo block: resolved id, mono variant, named params, current values.
-    let ht = preset.blocks.iter().find(|b| b.model_name == "Harmonic Tremolo").unwrap();
+    let ht = preset
+        .blocks
+        .iter()
+        .find(|b| b.model_name == "Harmonic Tremolo")
+        .unwrap();
     assert_eq!(ht.slot, 4);
     assert_eq!(ht.user_label.as_deref(), Some("Tremolo"));
     assert_eq!(ht.symbolic_id.as_deref(), Some("HD2_TremoloHarmonic"));
@@ -64,18 +84,36 @@ fn loads_preset_into_named_editable_blocks() {
 #[test]
 fn lists_swap_candidates_in_a_block_category() {
     let cat = catalog();
-    let preset = cat.load_preset(&data("preset1_stream.msgpack.bin")).unwrap();
-    let ht = preset.blocks.iter().find(|b| b.model_name == "Harmonic Tremolo").unwrap();
+    let preset = cat
+        .load_preset(&data("preset1_stream.msgpack.bin"))
+        .unwrap();
+    let ht = preset
+        .blocks
+        .iter()
+        .find(|b| b.model_name == "Harmonic Tremolo")
+        .unwrap();
     let category = ht.category.expect("tremolo has a category");
 
     let choices = cat.models_in_category(category, ht.variant);
-    assert!(choices.len() > 3, "expected several models in the category, got {}", choices.len());
+    assert!(
+        choices.len() > 3,
+        "expected several models in the category, got {}",
+        choices.len()
+    );
 
     // The current model is itself a candidate, and every candidate is in the same category and
     // resolves back to a real Helix.sym index.
-    assert!(choices.iter().any(|c| c.symbolic_id == "HD2_TremoloHarmonic"));
+    assert!(
+        choices
+            .iter()
+            .any(|c| c.symbolic_id == "HD2_TremoloHarmonic")
+    );
     assert!(choices.iter().all(|c| c.category == Some(category)));
-    assert!(choices.iter().all(|c| cat.symbols.by_index(c.index as usize).is_some()));
+    assert!(
+        choices
+            .iter()
+            .all(|c| cat.symbols.by_index(c.index as usize).is_some())
+    );
     // No duplicate models (one entry per symbolic id).
     let mut ids: Vec<&str> = choices.iter().map(|c| c.symbolic_id.as_str()).collect();
     ids.sort();
@@ -84,14 +122,22 @@ fn lists_swap_candidates_in_a_block_category() {
     assert_eq!(ids.len(), n, "candidates should be de-duplicated per model");
 
     // Deterministic order (the reported "DSP % shuffling" bug was HashMap iteration nondeterminism).
-    assert_eq!(choices, cat.models_in_category(category, ht.variant), "ordering must be stable");
+    assert_eq!(
+        choices,
+        cat.models_in_category(category, ht.variant),
+        "ordering must be stable"
+    );
 
     // After disambiguation, display names are unique within the list (no two identical rows).
     let mut names: Vec<&str> = choices.iter().map(|c| c.name.as_str()).collect();
     names.sort();
     let m = names.len();
     names.dedup();
-    assert_eq!(names.len(), m, "display names should be disambiguated to be unique");
+    assert_eq!(
+        names.len(),
+        m,
+        "display names should be disambiguated to be unique"
+    );
 }
 
 #[test]
@@ -103,9 +149,16 @@ fn lists_named_categories_for_the_selector() {
     // Includes the staple effect types, each with a name; ids resolve via category_name.
     let names: Vec<&str> = categories.iter().map(|(_, n)| *n).collect();
     for want in ["Amp", "Delay", "Reverb", "Distortion", "Modulation"] {
-        assert!(names.contains(&want), "categories should include {want}: {names:?}");
+        assert!(
+            names.contains(&want),
+            "categories should include {want}: {names:?}"
+        );
     }
-    assert!(categories.iter().all(|(id, n)| fretwire_core::editor::category_name(*id) == Some(*n)));
+    assert!(
+        categories
+            .iter()
+            .all(|(id, n)| fretwire_core::editor::category_name(*id) == Some(*n))
+    );
 }
 
 #[test]
@@ -115,8 +168,11 @@ fn collision_disambiguation_amp_vs_preamp() {
     let cat = catalog();
     let amp_cat = 1;
     let choices = cat.models_in_category(amp_cat, None);
-    let panamas: Vec<&str> =
-        choices.iter().filter(|c| c.name.starts_with("EV Panama Red")).map(|c| c.name.as_str()).collect();
+    let panamas: Vec<&str> = choices
+        .iter()
+        .filter(|c| c.name.starts_with("EV Panama Red"))
+        .map(|c| c.name.as_str())
+        .collect();
     assert!(
         panamas.contains(&"EV Panama Red (Amp)") && panamas.contains(&"EV Panama Red (Preamp)"),
         "expected disambiguated amp+preamp entries, got {panamas:?}"
@@ -126,14 +182,22 @@ fn collision_disambiguation_amp_vs_preamp() {
 #[test]
 fn block_produces_byte_exact_bypass_edit() {
     let cat = catalog();
-    let preset = cat.load_preset(&data("preset1_stream.msgpack.bin")).unwrap();
-    let ht = preset.blocks.iter().find(|b| b.model_name == "Harmonic Tremolo").unwrap();
+    let preset = cat
+        .load_preset(&data("preset1_stream.msgpack.bin"))
+        .unwrap();
+    let ht = preset
+        .blocks
+        .iter()
+        .find(|b| b.model_name == "Harmonic Tremolo")
+        .unwrap();
 
     // The editor model emits the exact wire bytes captured from HX Edit (slot 4, enabled, txn 0x03f2).
     let body = ht.set_enabled_edit(true, 0x03f2);
     assert_eq!(
         body,
-        vec![0x83, 0x66, 0xcd, 0x03, 0xf2, 0x64, 0x29, 0x65, 0x82, 0x62, 0x04, 0x3b, 0xc3]
+        vec![
+            0x83, 0x66, 0xcd, 0x03, 0xf2, 0x64, 0x29, 0x65, 0x82, 0x62, 0x04, 0x3b, 0xc3
+        ]
     );
 
     // And it parses back to a bypass of this block's slot.
@@ -146,8 +210,14 @@ fn block_produces_byte_exact_bypass_edit() {
 fn block_produces_param_set_edit_by_name() {
     // Parameter editing is computable: name a param, get the byte-exact set-value command.
     let cat = catalog();
-    let preset = cat.load_preset(&data("preset1_stream.msgpack.bin")).unwrap();
-    let ht = preset.blocks.iter().find(|b| b.model_name == "Harmonic Tremolo").unwrap();
+    let preset = cat
+        .load_preset(&data("preset1_stream.msgpack.bin"))
+        .unwrap();
+    let ht = preset
+        .blocks
+        .iter()
+        .find(|b| b.model_name == "Harmonic Tremolo")
+        .unwrap();
 
     // Mix is index 7 in this block's device order; set it to 0.5.
     let mix = ht.params.iter().find(|p| p.name == "Mix").unwrap();
@@ -165,8 +235,14 @@ fn reverb_params_named_with_trails() {
     // Dynamic Hall = symbolicID VIC_ReverbRotating. Its 13 values = the 12-param symbol + the
     // trailing Trails switch; resolve_order matches symbol+1 and names every param.
     let cat = catalog();
-    let preset = cat.load_preset(&data("preset1_stream.msgpack.bin")).unwrap();
-    let dh = preset.blocks.iter().find(|b| b.model_name == "Dynamic Hall").unwrap();
+    let preset = cat
+        .load_preset(&data("preset1_stream.msgpack.bin"))
+        .unwrap();
+    let dh = preset
+        .blocks
+        .iter()
+        .find(|b| b.model_name == "Dynamic Hall")
+        .unwrap();
 
     assert_eq!(dh.symbolic_id.as_deref(), Some("VIC_ReverbRotating"));
     // The device's own model index (610) says Stereo — our old count-heuristic guessed Mono
@@ -180,21 +256,38 @@ fn reverb_params_named_with_trails() {
 #[test]
 fn split_preset_exposes_editable_routing_nodes() {
     let cat = catalog();
-    let preset = cat.load_preset(&data("split_preset_stream.msgpack.bin")).unwrap();
+    let preset = cat
+        .load_preset(&data("split_preset_stream.msgpack.bin"))
+        .unwrap();
     assert!(preset.split(), "fixture is a split preset");
 
     // Split node resolves to a known type (Split Y) and is selectable/matchable via SPLIT_TYPES.
     let split = preset.split_node().expect("split node present");
     assert_eq!(split.symbolic_id.as_deref(), Some("HD2_AppDSPFlowSplitY"));
     assert!(preset.is_split_node(split.slot));
-    assert!(fretwire_core::editor::SPLIT_TYPES.iter().any(|(_, s, _)| *s == "HD2_AppDSPFlowSplitY"));
+    assert!(
+        fretwire_core::editor::SPLIT_TYPES
+            .iter()
+            .any(|(_, s, _)| *s == "HD2_AppDSPFlowSplitY")
+    );
 
     // Mixer node resolves to the join model, with named, *editable* A/B params (ranges injected).
     let mixer = preset.mixer_node().expect("mixer node present");
     assert!(preset.is_mixer_node(mixer.slot));
-    let a_level = mixer.params.iter().find(|p| p.name == "A Level").expect("mixer has A Level");
-    assert!(a_level.meta.min.is_some() && a_level.meta.max.is_some(), "A Level is an editable slider");
-    let a_pan = mixer.params.iter().find(|p| p.name == "A Pan").expect("mixer has A Pan");
+    let a_level = mixer
+        .params
+        .iter()
+        .find(|p| p.name == "A Level")
+        .expect("mixer has A Level");
+    assert!(
+        a_level.meta.min.is_some() && a_level.meta.max.is_some(),
+        "A Level is an editable slider"
+    );
+    let a_pan = mixer
+        .params
+        .iter()
+        .find(|p| p.name == "A Pan")
+        .expect("mixer has A Pan");
     assert_eq!((a_pan.meta.min, a_pan.meta.max), (Some(0.0), Some(1.0)));
 
     // The routing nodes are addressable through the node-aware lookup used by the param handlers.
@@ -207,7 +300,9 @@ fn split_preset_classifies_common_vs_path_a_vs_path_b() {
     // "Dual Amp" (live dump): Tremolo(slot4) common-before, US Princess(slot6) path A,
     // Reverb(slot7) common-after, GSG100(slot15) path B; split_pos=5, mixer_pos=7.
     let cat = catalog();
-    let p = cat.load_preset(&data("dual_amp_stream.msgpack.bin")).unwrap();
+    let p = cat
+        .load_preset(&data("dual_amp_stream.msgpack.bin"))
+        .unwrap();
     assert!(p.split());
     assert_eq!(p.split_pos(), Some(5));
     assert_eq!(p.mixer_pos(), Some(7));
@@ -221,7 +316,10 @@ fn split_preset_classifies_common_vs_path_a_vs_path_b() {
     assert_eq!(gsg.row, 1, "GSG is on path B (bottom row)");
     // Top row holds common + path A; classify by slot vs split_pos/mixer_pos.
     assert_eq!(trem.row, 0);
-    assert!(trem.slot < p.split_pos().unwrap(), "Tremolo is common (pre-split)");
+    assert!(
+        trem.slot < p.split_pos().unwrap(),
+        "Tremolo is common (pre-split)"
+    );
     let (sp, mp) = (p.split_pos().unwrap(), p.mixer_pos().unwrap());
     assert!(usp.slot >= sp && usp.slot < mp, "US Princess is on path A");
 }
@@ -231,15 +329,25 @@ fn split_preset_classifies_common_vs_path_a_vs_path_b() {
 // sym names get display names ("noiseGate" → "Input Gate").
 #[test]
 fn io_nodes_resolve_named_params() {
-    let p = catalog().load_preset(&data("preset1_stream.msgpack.bin")).unwrap();
+    let p = catalog()
+        .load_preset(&data("preset1_stream.msgpack.bin"))
+        .unwrap();
 
     let input = p.input_node().expect("input node");
     assert_eq!(input.slot, 0);
     assert_eq!(input.model_name, "Input");
     let names: Vec<&str> = input.params.iter().map(|q| q.name.as_str()).collect();
     assert_eq!(names, ["Input Gate", "Threshold", "Decay"]);
-    assert_eq!(input.params[0].meta.value_type, Some(2), "gate is a bool switch");
-    assert_eq!(input.params[1].meta.min, Some(-96.0), "threshold range from io.models");
+    assert_eq!(
+        input.params[0].meta.value_type,
+        Some(2),
+        "gate is a bool switch"
+    );
+    assert_eq!(
+        input.params[1].meta.min,
+        Some(-96.0),
+        "threshold range from io.models"
+    );
     assert_eq!(input.params[1].meta.max, Some(0.0));
 
     let output = p.output_node().expect("output node");
@@ -247,7 +355,11 @@ fn io_nodes_resolve_named_params() {
     assert_eq!(output.model_name, "Output");
     let names: Vec<&str> = output.params.iter().map(|q| q.name.as_str()).collect();
     assert_eq!(names, ["Pan", "Level"]);
-    assert_eq!(output.params[1].meta.min, Some(-120.0), "level range from io.models");
+    assert_eq!(
+        output.params[1].meta.min,
+        Some(-120.0),
+        "level range from io.models"
+    );
     assert_eq!(output.params[1].meta.max, Some(20.0));
 
     // Wire addressing: block() finds them by slot (history labels, param edits).

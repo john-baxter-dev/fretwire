@@ -8,9 +8,9 @@
 //! Cross-platform compile, but only usable where the OS lets us claim the interface — i.e. **Linux**
 //! (on Windows the Line 6 driver owns interface 0).
 
-use futures_lite::future::{self, block_on};
+use fretwire_protocol::{CONTROL_INTERFACE, EP_IN, EP_OUT, Frame, VID_LINE6};
 pub use fretwire_protocol::{Device, Support};
-use fretwire_protocol::{Frame, CONTROL_INTERFACE, EP_IN, EP_OUT, VID_LINE6};
+use futures_lite::future::{self, block_on};
 use nusb::transfer::RequestBuffer;
 
 // Re-exported so callers can name what `present_devices`/`Transport::device` return without
@@ -56,7 +56,10 @@ pub fn present_devices() -> Result<Vec<&'static Device>> {
         .filter(|d| d.vendor_id() == VID_LINE6)
         .map(|d| d.product_id())
         .collect();
-    Ok(fretwire_protocol::DEVICES.iter().filter(|d| pids.contains(&d.pid)).collect())
+    Ok(fretwire_protocol::DEVICES
+        .iter()
+        .filter(|d| pids.contains(&d.pid))
+        .collect())
 }
 
 /// Returns whether any known HX device is currently enumerated.
@@ -106,8 +109,15 @@ impl Transport {
             Ok(i) => i,
             Err(_) => dev.detach_and_claim_interface(CONTROL_INTERFACE)?,
         };
-        tracing::info!("claimed {} control interface {CONTROL_INTERFACE}", device.name);
-        Ok(Transport { iface, device, pending: std::collections::VecDeque::new() })
+        tracing::info!(
+            "claimed {} control interface {CONTROL_INTERFACE}",
+            device.name
+        );
+        Ok(Transport {
+            iface,
+            device,
+            pending: std::collections::VecDeque::new(),
+        })
     }
 
     /// The device this transport is connected to.
@@ -159,7 +169,10 @@ impl Transport {
         let mut frames = Frame::decode_all(&raw)?.into_iter();
         let first = frames
             .next()
-            .ok_or(Error::Frame(fretwire_protocol::Error::Short { need: 16, got: raw.len() }))?;
+            .ok_or(Error::Frame(fretwire_protocol::Error::Short {
+                need: 16,
+                got: raw.len(),
+            }))?;
         self.pending.extend(frames);
         Ok(first)
     }
@@ -197,17 +210,24 @@ impl Transport {
         self.send(frame.encode())?;
         for _ in 0..MAX_SKIP {
             let reply = self.next_frame_within(timeout)?;
-            if reply.dst == frame.src && reply.cmd != fretwire_protocol::cmd::IDLE && accept(&reply) {
+            if reply.dst == frame.src && reply.cmd != fretwire_protocol::cmd::IDLE && accept(&reply)
+            {
                 return Ok(reply);
             }
             tracing::debug!(
                 want_dst = format_args!("{:#06x}", frame.src),
-                got_dst = format_args!("{:#06x}", reply.dst), got_src = format_args!("{:#06x}", reply.src),
-                got_seq = reply.seq, cmd = reply.cmd, body = reply.body.len(),
+                got_dst = format_args!("{:#06x}", reply.dst),
+                got_src = format_args!("{:#06x}", reply.src),
+                got_seq = reply.seq,
+                cmd = reply.cmd,
+                body = reply.body.len(),
                 "skipping non-reply frame",
             );
         }
-        Err(Error::Unmatched { dst: frame.src, seq: frame.seq })
+        Err(Error::Unmatched {
+            dst: frame.src,
+            seq: frame.seq,
+        })
     }
 
     /// Discard any already-buffered frames (e.g. the device's post-transaction epilogue that got

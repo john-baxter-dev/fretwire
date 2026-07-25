@@ -10,7 +10,9 @@ use fretwire_data::stream::PresetStream;
 use std::path::PathBuf;
 
 fn data(name: &str) -> Vec<u8> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../captures").join(name);
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../captures")
+        .join(name);
     std::fs::read(p).unwrap()
 }
 
@@ -19,7 +21,11 @@ fn real_stream_round_trips_and_is_restore_ready() {
     let raw = data("preset1_stream.msgpack.bin");
     let backup = Backup {
         device: "HX Stomp".into(),
-        presets: vec![BackupPreset { index: 3, name: "DIRTY MADS".into(), raw: raw.clone() }],
+        presets: vec![BackupPreset {
+            index: 3,
+            name: "DIRTY MADS".into(),
+            raw: raw.clone(),
+        }],
     };
 
     let restored = Backup::from_json(&backup.to_json()).unwrap();
@@ -31,5 +37,9 @@ fn real_stream_round_trips_and_is_restore_ready() {
     assert_eq!(entry.raw, raw);
     let ps = PresetStream::parse(&entry.raw).unwrap();
     let blob = ps.to_blob();
-    assert!(blob.len() > 1000, "implausibly small preset blob: {} bytes", blob.len());
+    assert!(
+        blob.len() > 1000,
+        "implausibly small preset blob: {} bytes",
+        blob.len()
+    );
 }

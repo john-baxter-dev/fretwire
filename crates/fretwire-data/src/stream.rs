@@ -32,12 +32,20 @@ impl PresetStream {
             .ok_or_else(|| crate::Error::Stream("no MessagePack envelope root".into()))?;
         let blob = map_get(&root.value, ENVELOPE_PRESET_KEY)
             .and_then(value_bytes)
-            .ok_or_else(|| crate::Error::Stream(format!("envelope key {ENVELOPE_PRESET_KEY} missing or not bytes")))?;
+            .ok_or_else(|| {
+                crate::Error::Stream(format!(
+                    "envelope key {ENVELOPE_PRESET_KEY} missing or not bytes"
+                ))
+            })?;
 
         let (seq, _) = read_sequence(blob, 3);
         let magic = match seq.first() {
             Some(Value::String(s)) => s.as_str().unwrap_or("").trim_end_matches('\0').to_string(),
-            _ => return Err(crate::Error::Stream("blob did not start with a magic string".into())),
+            _ => {
+                return Err(crate::Error::Stream(
+                    "blob did not start with a magic string".into(),
+                ));
+            }
         };
         if magic != PRESET_MAGIC {
             return Err(crate::Error::Stream(format!("unexpected magic {magic:?}")));
@@ -49,7 +57,11 @@ impl PresetStream {
             .cloned()
             .ok_or_else(|| crate::Error::Stream("preset map missing".into()))?;
 
-        Ok(PresetStream { magic, header, preset })
+        Ok(PresetStream {
+            magic,
+            header,
+            preset,
+        })
     }
 
     /// Look up a top-level preset field by its integer key.
@@ -68,10 +80,18 @@ impl PresetStream {
     /// or index isn't present. Re-serialize with [`to_blob`] and write via op 21 to apply.
     pub fn set_slot_empty(&mut self, slot: usize) -> bool {
         let (dsp, index) = split_wire_slot(slot as i64);
-        let Some(&key) = DSP_GROUP_KEYS.get(dsp) else { return false };
-        let Some(group) = map_get_mut(&mut self.preset, key) else { return false };
-        let Some(Value::Array(slots)) = map_get_mut(group, 22) else { return false };
-        let Some(slot) = slots.get_mut(index) else { return false };
+        let Some(&key) = DSP_GROUP_KEYS.get(dsp) else {
+            return false;
+        };
+        let Some(group) = map_get_mut(&mut self.preset, key) else {
+            return false;
+        };
+        let Some(Value::Array(slots)) = map_get_mut(group, 22) else {
+            return false;
+        };
+        let Some(slot) = slots.get_mut(index) else {
+            return false;
+        };
         set_map_key(slot, 19, Value::from(slot_kind::EMPTY));
         set_map_key(slot, 20, Value::Nil);
         true
@@ -89,18 +109,29 @@ impl PresetStream {
 
     /// [`Self::set_node_pos`] for a specific DSP.
     pub fn set_dsp_node_pos(&mut self, dsp: usize, kind: i64, pos: i64) -> bool {
-        let Some(&key) = DSP_GROUP_KEYS.get(dsp) else { return false };
-        let Some(group) = map_get_mut(&mut self.preset, key) else { return false };
-        let Some(Value::Array(slots)) = map_get_mut(group, 22) else { return false };
+        let Some(&key) = DSP_GROUP_KEYS.get(dsp) else {
+            return false;
+        };
+        let Some(group) = map_get_mut(&mut self.preset, key) else {
+            return false;
+        };
+        let Some(Value::Array(slots)) = map_get_mut(group, 22) else {
+            return false;
+        };
         let Some(slot) = slots
             .iter_mut()
             .find(|s| map_get(s, 19).and_then(Value::as_i64) == Some(kind))
         else {
             return false;
         };
-        let Some(Value::Map(content)) = map_get_mut(slot, 20) else { return false };
+        let Some(Value::Map(content)) = map_get_mut(slot, 20) else {
+            return false;
+        };
         // The model holder is the content sub-map that carries key 8 (see `structural_node`).
-        let Some(holder) = content.iter_mut().map(|(_, v)| v).find(|v| map_get(v, 8).is_some())
+        let Some(holder) = content
+            .iter_mut()
+            .map(|(_, v)| v)
+            .find(|v| map_get(v, 8).is_some())
         else {
             return false;
         };
@@ -197,7 +228,10 @@ pub fn wire_slot(dsp: usize, index: usize) -> i64 {
 
 /// Split a wire slot number back into `(dsp, index)`.
 pub fn split_wire_slot(slot: i64) -> (usize, usize) {
-    ((slot / DSP_SLOT_STRIDE) as usize, (slot % DSP_SLOT_STRIDE) as usize)
+    (
+        (slot / DSP_SLOT_STRIDE) as usize,
+        (slot % DSP_SLOT_STRIDE) as usize,
+    )
 }
 
 /// One block slot extracted from the device preset.
@@ -266,7 +300,11 @@ impl PresetStream {
         self.field(7)
             .and_then(|m| map_get(m, 36))
             .and_then(value_bytes)
-            .map(|b| String::from_utf8_lossy(b).trim_end_matches('\0').to_string())
+            .map(|b| {
+                String::from_utf8_lossy(b)
+                    .trim_end_matches('\0')
+                    .to_string()
+            })
     }
 
     /// Firmware version string (preset key `7 → 37`).
@@ -274,7 +312,11 @@ impl PresetStream {
         self.field(7)
             .and_then(|m| map_get(m, 37))
             .and_then(value_bytes)
-            .map(|b| String::from_utf8_lossy(b).trim_end_matches('\0').to_string())
+            .map(|b| {
+                String::from_utf8_lossy(b)
+                    .trim_end_matches('\0')
+                    .to_string()
+            })
     }
 
     /// The slot array of one DSP group (`DSP_GROUP_KEYS[dsp] → 22`), if that DSP is populated.
@@ -289,7 +331,9 @@ impl PresetStream {
     /// Which DSPs this preset populates. `[0]` on the HX Stomp (key `1` is nil), `[0, 1]` on the
     /// Helix Floor.
     pub fn dsps(&self) -> Vec<usize> {
-        (0..DSP_GROUP_KEYS.len()).filter(|&d| self.dsp_slots(d).is_some()).collect()
+        (0..DSP_GROUP_KEYS.len())
+            .filter(|&d| self.dsp_slots(d).is_some())
+            .collect()
     }
 
     /// Extract the block slots of **every** populated DSP (`0 → 22`, and `1 → 22` on a two-DSP
@@ -298,12 +342,17 @@ impl PresetStream {
     ///
     /// Reading only key `0` silently drops every DSP2 block, which is what we used to do.
     pub fn blocks(&self) -> Vec<Block> {
-        self.dsps().into_iter().flat_map(|dsp| self.dsp_blocks(dsp)).collect()
+        self.dsps()
+            .into_iter()
+            .flat_map(|dsp| self.dsp_blocks(dsp))
+            .collect()
     }
 
     /// The block slots of a single DSP group.
     pub fn dsp_blocks(&self, dsp: usize) -> Vec<Block> {
-        let Some(slots) = self.dsp_slots(dsp) else { return Vec::new() };
+        let Some(slots) = self.dsp_slots(dsp) else {
+            return Vec::new();
+        };
         slots
             .iter()
             .enumerate()
@@ -379,9 +428,13 @@ impl PresetStream {
     /// Per-DSP rather than preset-wide: each DSP has its own A/B branch and its own flag, and on
     /// the Floor the two commonly differ within one preset.
     pub fn dsp_is_split(&self, dsp: usize) -> bool {
-        let Some(&key) = DSP_GROUP_KEYS.get(dsp) else { return false };
+        let Some(&key) = DSP_GROUP_KEYS.get(dsp) else {
+            return false;
+        };
         !matches!(
-            self.field(key).and_then(|m| map_get(m, 21)).and_then(Value::as_i64),
+            self.field(key)
+                .and_then(|m| map_get(m, 21))
+                .and_then(Value::as_i64),
             None | Some(0)
         )
     }
@@ -475,8 +528,9 @@ impl PresetStream {
             _ => return None,
         };
         let model_index = map_get(holder, 8).and_then(Value::as_i64);
-        let bypassed =
-            map_get(holder, 10).and_then(Value::as_bool).map(|enabled| !enabled);
+        let bypassed = map_get(holder, 10)
+            .and_then(Value::as_bool)
+            .map(|enabled| !enabled);
         let params = map_get(holder, 7)
             .and_then(|m| map_get(m, 4))
             .and_then(|a| match a {
@@ -563,15 +617,24 @@ impl PresetStream {
     /// re-reads after each placement. Each cell maps to exactly one slot: dropping a block onto an
     /// empty cell is a single move to that slot.
     pub fn grid(&self) -> Vec<GridCell> {
-        self.dsps().into_iter().flat_map(|d| self.dsp_grid(d)).collect()
+        self.dsps()
+            .into_iter()
+            .flat_map(|d| self.dsp_grid(d))
+            .collect()
     }
 
     /// [`Self::grid`] for a single DSP. `row` is 0/1 **within that DSP** — a two-DSP device draws
     /// four rows, which the caller composes from `cell.dsp` and `cell.row`.
     pub fn dsp_grid(&self, dsp: usize) -> Vec<GridCell> {
         let blocks = self.dsp_blocks(dsp);
-        let split_idx = blocks.iter().find(|b| b.kind == slot_kind::SPLIT).map(|b| b.index);
-        let mixer_idx = blocks.iter().find(|b| b.kind == slot_kind::MIXER).map(|b| b.index);
+        let split_idx = blocks
+            .iter()
+            .find(|b| b.kind == slot_kind::SPLIT)
+            .map(|b| b.index);
+        let mixer_idx = blocks
+            .iter()
+            .find(|b| b.kind == slot_kind::MIXER)
+            .map(|b| b.index);
         let is_cell =
             |k: i64| k == slot_kind::EFFECT || k == slot_kind::LOOPER || k == slot_kind::EMPTY;
         let mut cells = Vec::new();
@@ -591,7 +654,13 @@ impl PresetStream {
                 // Top row: serial preset, or before the split node.
                 _ => (0u8, b.index as i64),
             };
-            cells.push(GridCell { dsp, slot: b.wire_slot(), row, column, occupied });
+            cells.push(GridCell {
+                dsp,
+                slot: b.wire_slot(),
+                row,
+                column,
+                occupied,
+            });
         }
         cells
     }
@@ -609,7 +678,9 @@ impl PresetStream {
     /// [`Self::structural_node_pos`] for a specific DSP.
     pub fn dsp_structural_node_pos(&self, dsp: usize, kind: i64) -> Option<i64> {
         let slots = self.dsp_slots(dsp)?;
-        let slot = slots.iter().find(|s| map_get(s, 19).and_then(Value::as_i64) == Some(kind))?;
+        let slot = slots
+            .iter()
+            .find(|s| map_get(s, 19).and_then(Value::as_i64) == Some(kind))?;
         let content = map_get(slot, 20)?;
         let holder = match content {
             Value::Map(m) => m.iter().map(|(_, v)| v).find(|v| map_get(v, 8).is_some())?,
@@ -640,9 +711,11 @@ impl PresetStream {
                     _ => return None,
                 };
                 let model = map_get(node, 11)?;
-                let model_name = map_get(model, 5)
-                    .and_then(value_bytes)
-                    .map(|b| String::from_utf8_lossy(b).trim_end_matches('\0').to_string())?;
+                let model_name = map_get(model, 5).and_then(value_bytes).map(|b| {
+                    String::from_utf8_lossy(b)
+                        .trim_end_matches('\0')
+                        .to_string()
+                })?;
                 let model_id = map_get(model, 6).and_then(Value::as_i64);
                 // Node type (`11 → 0`): 1 = DSP block, 2 = controller/footswitch node (e.g. an amp
                 // switch mapped to a button — its name like "OD Sw" is the footswitch label, not a
@@ -650,13 +723,23 @@ impl PresetStream {
                 let node_kind = map_get(model, 0).and_then(Value::as_i64);
                 let user_label = map_get(node, 14)
                     .and_then(value_bytes)
-                    .map(|b| String::from_utf8_lossy(b).trim_end_matches('\0').to_string())
+                    .map(|b| {
+                        String::from_utf8_lossy(b)
+                            .trim_end_matches('\0')
+                            .to_string()
+                    })
                     .filter(|s| !s.is_empty());
                 let slot = map_get(model, 8).and_then(Value::as_i64);
                 // Footswitch = layout position + 1 (FS1 = pos 0); empty positions leave that switch
                 // unbound (→ global tap/tuner). Proven by an FS1↔FS2 swap diff + an FS1-bind diff.
-                Some(PathBlock { model_name, model_id, user_label, slot, node_kind,
-                    footswitch: pos_index as i64 + 1 })
+                Some(PathBlock {
+                    model_name,
+                    model_id,
+                    user_label,
+                    slot,
+                    node_kind,
+                    footswitch: pos_index as i64 + 1,
+                })
             })
             .collect()
     }
@@ -719,7 +802,9 @@ impl PresetStream {
                     controller: g(0).unwrap_or(i as i64),
                     ctype: g(1),
                     target_slot: g(5),
-                    param_index: map_get(def, 6).and_then(|p| map_get(p, 28)).and_then(Value::as_i64),
+                    param_index: map_get(def, 6)
+                        .and_then(|p| map_get(p, 28))
+                        .and_then(Value::as_i64),
                     min: g(4),
                     max: g(7),
                 })
@@ -802,7 +887,11 @@ pub fn parse_preset_list(reassembled: &[u8]) -> crate::Result<Vec<(u16, String)>
         .ok_or_else(|| crate::Error::Stream("no MessagePack envelope root".into()))?;
     let list = match map_get(&root.value, ENVELOPE_PRESET_KEY) {
         Some(Value::Array(a)) => a,
-        _ => return Err(crate::Error::Stream(format!("envelope key {ENVELOPE_PRESET_KEY} is not an array"))),
+        _ => {
+            return Err(crate::Error::Stream(format!(
+                "envelope key {ENVELOPE_PRESET_KEY} is not an array"
+            )));
+        }
     };
     let mut out = Vec::with_capacity(list.len());
     for entry in list {
@@ -847,7 +936,11 @@ pub fn parse_preset_info(reply: &[u8]) -> Option<PresetInfo> {
     let bank = map_get(payload, 107).and_then(Value::as_i64).unwrap_or(0);
     let name = map_get(payload, PRESET_NAME_KEY)
         .and_then(value_bytes)
-        .map(|b| String::from_utf8_lossy(b).trim_end_matches('\0').to_string())
+        .map(|b| {
+            String::from_utf8_lossy(b)
+                .trim_end_matches('\0')
+                .to_string()
+        })
         .unwrap_or_default();
     Some(PresetInfo { bank, index, name })
 }
@@ -882,9 +975,10 @@ pub fn parse_status_push(frame_body: &[u8]) -> Option<StatusPush> {
     }
     // Everything else nests the actual change under an inner key 106.
     let inner = map_get(payload, 106).unwrap_or(payload);
-    if let (Some(slot), Some(enabled)) =
-        (map_get(inner, 98).and_then(Value::as_i64), map_get(inner, 59).and_then(Value::as_bool))
-    {
+    if let (Some(slot), Some(enabled)) = (
+        map_get(inner, 98).and_then(Value::as_i64),
+        map_get(inner, 59).and_then(Value::as_bool),
+    ) {
         return Some(StatusPush::Bypass { slot, enabled });
     }
     if let Some(index) = map_get(inner, 108).and_then(Value::as_i64) {
@@ -895,7 +989,10 @@ pub fn parse_status_push(frame_body: &[u8]) -> Option<StatusPush> {
 
 pub fn map_get(v: &Value, key: i64) -> Option<&Value> {
     match v {
-        Value::Map(m) => m.iter().find(|(k, _)| k.as_i64() == Some(key)).map(|(_, val)| val),
+        Value::Map(m) => m
+            .iter()
+            .find(|(k, _)| k.as_i64() == Some(key))
+            .map(|(_, val)| val),
         _ => None,
     }
 }
@@ -903,7 +1000,10 @@ pub fn map_get(v: &Value, key: i64) -> Option<&Value> {
 /// Mutable [`map_get`].
 fn map_get_mut(v: &mut Value, key: i64) -> Option<&mut Value> {
     match v {
-        Value::Map(m) => m.iter_mut().find(|(k, _)| k.as_i64() == Some(key)).map(|(_, val)| val),
+        Value::Map(m) => m
+            .iter_mut()
+            .find(|(k, _)| k.as_i64() == Some(key))
+            .map(|(_, val)| val),
         _ => None,
     }
 }
@@ -950,8 +1050,12 @@ pub fn locate_root(stream: &[u8], max_scan: usize) -> Option<Root> {
             let consumed = start - cur.len();
             // We want the real payload root: a map or array, not an incidental scalar.
             let container = matches!(value, Value::Array(_) | Value::Map(_));
-            if container && best.as_ref().map_or(true, |b| consumed > b.consumed) {
-                best = Some(Root { offset, consumed, value });
+            if container && best.as_ref().is_none_or(|b| consumed > b.consumed) {
+                best = Some(Root {
+                    offset,
+                    consumed,
+                    value,
+                });
             }
         }
     }
@@ -1006,14 +1110,21 @@ pub fn summarize(v: &Value, depth: usize) -> String {
             Value::Map(m) if depth > 0 => {
                 let mut s = format!("Map({} entries)", m.len());
                 for (k, val) in m.iter().take(24) {
-                    s.push_str(&format!("\n{pad}{} => {}", key_str(k), go(val, depth - 1, indent + 1)));
+                    s.push_str(&format!(
+                        "\n{pad}{} => {}",
+                        key_str(k),
+                        go(val, depth - 1, indent + 1)
+                    ));
                 }
                 s
             }
             Value::Array(a) if depth > 0 => {
                 let mut s = format!("Array({} items)", a.len());
                 for (i, val) in a.iter().take(24).enumerate() {
-                    s.push_str(&format!("\n{pad}[{i}] => {}", go(val, depth - 1, indent + 1)));
+                    s.push_str(&format!(
+                        "\n{pad}[{i}] => {}",
+                        go(val, depth - 1, indent + 1)
+                    ));
                 }
                 s
             }
@@ -1058,7 +1169,7 @@ mod list_tests {
 
     #[test]
     fn parses_status_pushes() {
-        use super::{parse_status_push, StatusPush};
+        use super::{StatusPush, parse_status_push};
         // Real dev.STATUS bodies (8-byte header + msgpack) from the panel-change captures.
         // snapshot -> 1: {105:42, 106:{92:1}}
         assert_eq!(
@@ -1068,12 +1179,18 @@ mod list_tests {
         // footswitch bypass: {105:49, 106:{82:0,68:5,121:17, 106:{98:2, 59:false}}}
         assert_eq!(
             parse_status_push(&hex("00000400110000008269316a845200440579116a8262023bc2")),
-            Some(StatusPush::Bypass { slot: 2, enabled: false })
+            Some(StatusPush::Bypass {
+                slot: 2,
+                enabled: false
+            })
         );
         // bypass on: ...{98:2, 59:true}
         assert_eq!(
             parse_status_push(&hex("00000400110000008269316a845200440579116a8262023bc3")),
-            Some(StatusPush::Bypass { slot: 2, enabled: true })
+            Some(StatusPush::Bypass {
+                slot: 2,
+                enabled: true
+            })
         );
     }
 
@@ -1093,7 +1210,10 @@ mod list_tests {
 
     fn hex(s: &str) -> Vec<u8> {
         let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
     }
 
     #[test]
@@ -1107,12 +1227,22 @@ mod list_tests {
         let env = Value::Map(vec![
             (Value::from(102), Value::from(1)),
             (Value::from(103), Value::from(0)),
-            (Value::from(104), Value::Array(vec![entry(0, "Alpha"), entry(1, "Beta"), entry(2, "Gamma")])),
+            (
+                Value::from(104),
+                Value::Array(vec![entry(0, "Alpha"), entry(1, "Beta"), entry(2, "Gamma")]),
+            ),
         ]);
         let mut stream = vec![0u8; 8]; // fake TLV header for locate_root to scan past
         stream.extend(enc(&env));
         let list = parse_preset_list(&stream).unwrap();
-        assert_eq!(list, vec![(0, "Alpha".to_string()), (1, "Beta".to_string()), (2, "Gamma".to_string())]);
+        assert_eq!(
+            list,
+            vec![
+                (0, "Alpha".to_string()),
+                (1, "Beta".to_string()),
+                (2, "Gamma".to_string())
+            ]
+        );
     }
 
     #[test]
@@ -1123,7 +1253,10 @@ mod list_tests {
             (Value::from(1), Value::from(4)),
             (Value::from(4), Value::from(0)),
             (Value::from(5), Value::from(15)),
-            (Value::from(6), Value::Map(vec![(Value::from(28), Value::from(0))])),
+            (
+                Value::from(6),
+                Value::Map(vec![(Value::from(28), Value::from(0))]),
+            ),
             (Value::from(7), Value::from(0)),
         ]);
         let entry = Value::Array(vec![Value::Map(vec![
@@ -1133,7 +1266,11 @@ mod list_tests {
         let mut table = vec![Value::Nil; 10];
         table[7] = entry;
         let preset = Value::Map(vec![(Value::from(4), Value::Array(table))]);
-        let ps = PresetStream { magic: "l6-helix".to_string(), header: vec![], preset };
+        let ps = PresetStream {
+            magic: "l6-helix".to_string(),
+            header: vec![],
+            preset,
+        };
         let a = ps.assignments();
         assert_eq!(a.len(), 1);
         assert_eq!(a[0].controller, 7);
@@ -1144,13 +1281,21 @@ mod list_tests {
 
     #[test]
     fn parses_snapshots() {
-        let snap = |name: &str| Value::Map(vec![(Value::from(4), Value::from(format!("{name}\0")))]);
+        let snap =
+            |name: &str| Value::Map(vec![(Value::from(4), Value::from(format!("{name}\0")))]);
         let key10 = Value::Map(vec![
             (Value::from(8), Value::from(1)),
-            (Value::from(10), Value::Array(vec![snap("CLEAN"), snap("Just TS"), snap("LEAD")])),
+            (
+                Value::from(10),
+                Value::Array(vec![snap("CLEAN"), snap("Just TS"), snap("LEAD")]),
+            ),
         ]);
         let preset = Value::Map(vec![(Value::from(10), key10)]);
-        let ps = PresetStream { magic: "l6-helix".to_string(), header: vec![], preset };
+        let ps = PresetStream {
+            magic: "l6-helix".to_string(),
+            header: vec![],
+            preset,
+        };
         let (active, names) = ps.snapshots();
         assert_eq!(active, Some(1));
         assert_eq!(names, vec!["CLEAN", "Just TS", "LEAD"]);
@@ -1167,7 +1312,10 @@ mod list_tests {
             (
                 Value::from(20),
                 Value::Map(vec![
-                    (Value::from(24), Value::Map(vec![(Value::from(25), Value::from(80))])),
+                    (
+                        Value::from(24),
+                        Value::Map(vec![(Value::from(25), Value::from(80))]),
+                    ),
                     (Value::from(10), Value::from(true)),
                     (
                         Value::from(11),
@@ -1204,7 +1352,10 @@ mod list_tests {
             header: vec![],
             preset: Value::Map(vec![
                 (Value::from(0), slot_map.clone()),
-                (Value::from(3), Value::Map(vec![(Value::from(8), Value::Array(vec![fs_node]))])),
+                (
+                    Value::from(3),
+                    Value::Map(vec![(Value::from(8), Value::Array(vec![fs_node]))]),
+                ),
             ]),
         };
         let lb = bound.loaded_blocks();
@@ -1233,7 +1384,10 @@ mod list_tests {
             (
                 Value::from(20),
                 Value::Map(vec![
-                    (Value::from(24), Value::Map(vec![(Value::from(25), Value::from(79))])),
+                    (
+                        Value::from(24),
+                        Value::Map(vec![(Value::from(25), Value::from(79))]),
+                    ),
                     (Value::from(10), Value::from(true)),
                     (
                         Value::from(11),
@@ -1270,13 +1424,20 @@ mod list_tests {
             header: vec![],
             preset: Value::Map(vec![
                 (Value::from(0), slot_map),
-                (Value::from(3), Value::Map(vec![(Value::from(8), Value::Array(vec![ctrl_node]))])),
+                (
+                    Value::from(3),
+                    Value::Map(vec![(Value::from(8), Value::Array(vec![ctrl_node]))]),
+                ),
             ]),
         };
         let lb = ps.loaded_blocks();
         assert_eq!(lb.len(), 1, "the kind-6 block must still be enumerated");
         assert_eq!(lb[0].slot, 15);
         assert_eq!(lb[0].model_index, Some(79));
-        assert_ne!(lb[0].node_kind, Some(2), "a controller pointing at a block must not reclassify it");
+        assert_ne!(
+            lb[0].node_kind,
+            Some(2),
+            "a controller pointing at a block must not reclassify it"
+        );
     }
 }

@@ -9,14 +9,15 @@
 //!
 //! Needs no Line 6 reference data (nothing here resolves a model name), so it runs on a clean clone.
 
-use fretwire_data::stream::{
-    slot_kind, split_wire_slot, wire_slot, PresetStream, DSP_SLOT_STRIDE,
-};
+use fretwire_data::stream::{DSP_SLOT_STRIDE, PresetStream, slot_kind, split_wire_slot, wire_slot};
 use rmpv::Value;
 
 /// `{19: kind, 20: content}` — one entry of a DSP's 20-slot array.
 fn slot(kind: i64, content: Value) -> Value {
-    Value::Map(vec![(Value::from(19), Value::from(kind)), (Value::from(20), content)])
+    Value::Map(vec![
+        (Value::from(19), Value::from(kind)),
+        (Value::from(20), content),
+    ])
 }
 
 /// An empty slot (kind 8, nil content).
@@ -151,7 +152,13 @@ fn two_dsp_stream() -> Vec<u8> {
 
 /// A single-DSP preset — key `1` present but nil, exactly as the HX Stomp sends it.
 fn one_dsp_stream() -> Vec<u8> {
-    let dsp0 = dsp_group(0, vec![(1, effect(261, true, &[1.0])), (5, effect(25, true, &[0.24]))]);
+    let dsp0 = dsp_group(
+        0,
+        vec![
+            (1, effect(261, true, &[1.0])),
+            (5, effect(25, true, &[0.24])),
+        ],
+    );
     stream(Value::Map(vec![
         (Value::from(0), dsp0),
         (Value::from(1), Value::Nil),
@@ -171,7 +178,11 @@ fn wire_slot_round_trips() {
     for dsp in 0..2usize {
         for index in 0..DSP_SLOT_STRIDE as usize {
             let s = wire_slot(dsp, index);
-            assert_eq!(split_wire_slot(s), (dsp, index), "round trip for dsp {dsp} index {index}");
+            assert_eq!(
+                split_wire_slot(s),
+                (dsp, index),
+                "round trip for dsp {dsp} index {index}"
+            );
         }
     }
     // The documented framing: DSP1 = 0..19, DSP2 = 20..39.
@@ -190,7 +201,11 @@ fn single_dsp_preset_is_unchanged_by_the_second_group() {
     // Every slot stays below the stride, i.e. numerically identical to the old per-DSP indexing.
     for b in &blocks {
         assert_eq!(b.dsp, 0);
-        assert!(b.wire_slot() < DSP_SLOT_STRIDE, "slot {} should be DSP 0", b.wire_slot());
+        assert!(
+            b.wire_slot() < DSP_SLOT_STRIDE,
+            "slot {} should be DSP 0",
+            b.wire_slot()
+        );
         assert_eq!(b.wire_slot(), b.index as i64);
     }
     assert!(!ps.dsp_is_split(0), "split type 0 = serial");
@@ -225,7 +240,11 @@ fn dsp2_blocks_get_global_wire_slots() {
         .filter(|b| b.index == 13)
         .map(|b| b.wire_slot())
         .collect();
-    assert_eq!(at_13, vec![13, 33], "index 13 exists on both DSPs and must not collide");
+    assert_eq!(
+        at_13,
+        vec![13, 33],
+        "index 13 exists on both DSPs and must not collide"
+    );
 }
 
 #[test]
@@ -240,7 +259,10 @@ fn loaded_blocks_carry_the_global_slot_and_its_dsp() {
     }
     // Row B is resolved against *each DSP's own* split node (index 10), not a preset-wide one.
     let rows: Vec<(i64, u8)> = loaded.iter().map(|b| (b.slot, b.row)).collect();
-    assert_eq!(rows, vec![(1, 0), (5, 0), (13, 1), (27, 0), (28, 0), (33, 1), (37, 1)]);
+    assert_eq!(
+        rows,
+        vec![(1, 0), (5, 0), (13, 1), (27, 0), (28, 0), (33, 1), (37, 1)]
+    );
 }
 
 #[test]
@@ -260,10 +282,17 @@ fn looper_slots_are_enumerated_with_their_own_content_shape() {
     assert_eq!(loop_block.params.len(), 2);
     // Enabled is the same key (`10`) as an effect block.
     assert_eq!(loop_block.bypassed, Some(false));
-    assert!(loop_block.paired_ref.is_none(), "a Looper never has a paired model");
+    assert!(
+        loop_block.paired_ref.is_none(),
+        "a Looper never has a paired model"
+    );
 
     // An effect block on the same DSP still uses the type-6 shape.
-    let fx = ps.effect_blocks().into_iter().find(|b| b.wire_slot() == 28).unwrap();
+    let fx = ps
+        .effect_blocks()
+        .into_iter()
+        .find(|b| b.wire_slot() == 28)
+        .unwrap();
     assert_eq!(fx.model_ref, Some(243));
     assert_eq!(fx.params.len(), 3);
 }
@@ -276,8 +305,12 @@ fn each_dsp_has_its_own_split_state_and_nodes() {
     assert!(ps.dsp_is_split(0));
     assert!(ps.dsp_is_split(1));
 
-    let split0 = ps.dsp_structural_node(0, slot_kind::SPLIT).expect("DSP1 split node");
-    let split1 = ps.dsp_structural_node(1, slot_kind::SPLIT).expect("DSP2 split node");
+    let split0 = ps
+        .dsp_structural_node(0, slot_kind::SPLIT)
+        .expect("DSP1 split node");
+    let split1 = ps
+        .dsp_structural_node(1, slot_kind::SPLIT)
+        .expect("DSP2 split node");
     assert_eq!(split0.slot, 10, "DSP1's split node is at wire slot 10");
     assert_eq!(split1.slot, 30, "DSP2's split node is at wire slot 30");
     assert_eq!(split0.dsp, 0);
@@ -302,19 +335,29 @@ fn grid_cells_are_tagged_with_their_dsp_and_global_slot() {
     assert!(grid.iter().any(|c| c.dsp == 1));
 
     for c in &grid {
-        assert_eq!(split_wire_slot(c.slot).0, c.dsp, "cell slot must decode to its own dsp");
+        assert_eq!(
+            split_wire_slot(c.slot).0,
+            c.dsp,
+            "cell slot must decode to its own dsp"
+        );
     }
     // Per-DSP grids partition the whole grid.
     assert_eq!(ps.dsp_grid(0).len() + ps.dsp_grid(1).len(), grid.len());
 
     // A row-B cell's column is measured from its own DSP's split node.
-    let b33 = grid.iter().find(|c| c.slot == 33).expect("DSP2 index 13 is a cell");
+    let b33 = grid
+        .iter()
+        .find(|c| c.slot == 33)
+        .expect("DSP2 index 13 is a cell");
     assert_eq!((b33.dsp, b33.row, b33.occupied), (1, 1, true));
     assert_eq!(b33.column, 13 - 10 + 1);
 
     // The Looper occupies its cell like any other block.
     let looper_cell = grid.iter().find(|c| c.slot == 27).unwrap();
-    assert!(looper_cell.occupied, "a type-7 slot is occupied, not an empty cell");
+    assert!(
+        looper_cell.occupied,
+        "a type-7 slot is occupied, not an empty cell"
+    );
 }
 
 #[test]

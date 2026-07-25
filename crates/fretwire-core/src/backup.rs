@@ -64,11 +64,15 @@ impl Backup {
         let root: serde_json::Value =
             serde_json::from_str(s).map_err(|e| bad(format!("not JSON: {e}")))?;
         if root["format"].as_str() != Some(FORMAT) {
-            return Err(bad("missing/wrong \"format\" tag — not a fretwire-backup file".into()));
+            return Err(bad(
+                "missing/wrong \"format\" tag — not a fretwire-backup file".into(),
+            ));
         }
         let version = root["version"].as_i64().unwrap_or(0);
         if version != VERSION {
-            return Err(bad(format!("unsupported backup version {version} (expected {VERSION})")));
+            return Err(bad(format!(
+                "unsupported backup version {version} (expected {VERSION})"
+            )));
         }
         let device = root["device"].as_str().unwrap_or("unknown").to_string();
         let entries = root["presets"]
@@ -83,8 +87,7 @@ impl Backup {
             let hex = e["raw_hex"]
                 .as_str()
                 .ok_or_else(|| bad(format!("preset #{i}: missing \"raw_hex\"")))?;
-            let raw = hex_decode(hex)
-                .map_err(|m| bad(format!("preset #{i} (\"{name}\"): {m}")))?;
+            let raw = hex_decode(hex).map_err(|m| bad(format!("preset #{i} (\"{name}\"): {m}")))?;
             presets.push(BackupPreset { index, name, raw });
         }
         Ok(Backup { device, presets })
@@ -110,13 +113,12 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn hex_decode(s: &str) -> std::result::Result<Vec<u8>, String> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err("odd-length hex".into());
     }
     (0..s.len() / 2)
         .map(|i| {
-            u8::from_str_radix(&s[i * 2..i * 2 + 2], 16)
-                .map_err(|_| format!("bad hex at byte {i}"))
+            u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).map_err(|_| format!("bad hex at byte {i}"))
         })
         .collect()
 }
@@ -130,8 +132,16 @@ mod tests {
         let b = Backup {
             device: "HX Stomp".into(),
             presets: vec![
-                BackupPreset { index: 0, name: "Lead".into(), raw: vec![0x83, 0xa6, 0x00, 0xff] },
-                BackupPreset { index: 125, name: "".into(), raw: vec![] },
+                BackupPreset {
+                    index: 0,
+                    name: "Lead".into(),
+                    raw: vec![0x83, 0xa6, 0x00, 0xff],
+                },
+                BackupPreset {
+                    index: 125,
+                    name: "".into(),
+                    raw: vec![],
+                },
             ],
         };
         let json = b.to_json();
@@ -145,8 +155,7 @@ mod tests {
     fn rejects_foreign_files() {
         assert!(Backup::from_json("{}").is_err());
         assert!(Backup::from_json("not json").is_err());
-        let wrong_version =
-            r#"{"format":"fretwire-backup","version":2,"device":"x","presets":[]}"#;
+        let wrong_version = r#"{"format":"fretwire-backup","version":2,"device":"x","presets":[]}"#;
         assert!(Backup::from_json(wrong_version).is_err());
         let bad_hex = r#"{"format":"fretwire-backup","version":1,"device":"x",
             "presets":[{"index":0,"name":"a","raw_hex":"zz"}]}"#;
@@ -156,7 +165,10 @@ mod tests {
     #[test]
     fn hex_helpers() {
         assert_eq!(hex_encode(&[0x00, 0x0f, 0xf0, 0xff]), "000ff0ff");
-        assert_eq!(hex_decode("000ff0ff").unwrap(), vec![0x00, 0x0f, 0xf0, 0xff]);
+        assert_eq!(
+            hex_decode("000ff0ff").unwrap(),
+            vec![0x00, 0x0f, 0xf0, 0xff]
+        );
         assert!(hex_decode("abc").is_err());
     }
 }

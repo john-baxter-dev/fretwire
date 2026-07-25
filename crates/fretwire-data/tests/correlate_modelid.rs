@@ -28,7 +28,9 @@ fn data(name: &str) -> Vec<u8> {
 // Our own captured preset stream lives in the in-repo `captures/` dir (not Line 6 data, so it's
 // not part of the import cache).
 fn capture(name: &str) -> Vec<u8> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../captures").join(name);
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../captures")
+        .join(name);
     std::fs::read(p).unwrap()
 }
 
@@ -58,13 +60,24 @@ fn symbolic_id_is_the_only_unique_key() {
     let mut names: HashMap<&str, u32> = HashMap::new();
     let mut syms: HashMap<&str, u32> = HashMap::new();
     for i in 0..d.len() {
-        if let Some(n) = d.name(i) { *names.entry(n).or_default() += 1; }
-        if let Some(s) = d.symbolic_id(i) { *syms.entry(s).or_default() += 1; }
+        if let Some(n) = d.name(i) {
+            *names.entry(n).or_default() += 1;
+        }
+        if let Some(s) = d.symbolic_id(i) {
+            *syms.entry(s).or_default() += 1;
+        }
     }
     // symbolicID: globally unique. name: many collisions (cab/amp/preamp/legacy variants).
-    assert_eq!(syms.len(), d.len(), "symbolicID must be unique across the whole table");
+    assert_eq!(
+        syms.len(),
+        d.len(),
+        "symbolicID must be unique across the whole table"
+    );
     let colliding_names = names.values().filter(|&&c| c > 1).count();
-    assert!(colliding_names > 100, "expected many colliding display names, got {colliding_names}");
+    assert!(
+        colliding_names > 100,
+        "expected many colliding display names, got {colliding_names}"
+    );
 }
 
 #[test]
@@ -109,7 +122,9 @@ fn slot_key_24_25_indexes_helix_sym() {
     ];
     for (slot, want) in expect {
         let idx = by_slot[&slot] as usize;
-        let (sym, _params) = syms.by_index(idx).unwrap_or_else(|| panic!("slot {slot} idx {idx}"));
+        let (sym, _params) = syms
+            .by_index(idx)
+            .unwrap_or_else(|| panic!("slot {slot} idx {idx}"));
         assert_eq!(sym, want, "slot {slot}");
     }
 }
@@ -119,12 +134,19 @@ fn name_plus_category_plus_paramcount_is_effectively_unique() {
     let d = defs();
     let mut keys: HashMap<(String, Option<i64>, Option<usize>), u32> = HashMap::new();
     for i in 0..d.len() {
-        let k = (d.name(i).unwrap_or("?").to_string(), d.category(i), d.param_count(i));
+        let k = (
+            d.name(i).unwrap_or("?").to_string(),
+            d.category(i),
+            d.param_count(i),
+        );
         *keys.entry(k).or_default() += 1;
     }
     let collisions = keys.values().filter(|&&c| c > 1).count();
     // 4 residual groups: Input, Output (per-device), and the Match H30/G25 cab defect (x2 banks).
-    assert!(collisions <= 4, "expected <=4 residual collisions, got {collisions}");
+    assert!(
+        collisions <= 4,
+        "expected <=4 residual collisions, got {collisions}"
+    );
 }
 
 #[test]
@@ -139,7 +161,9 @@ fn resolve_effect_blocks_to_symbolic_ids() {
         ("Dynamic Hall", "VIC_ReverbRotating"),
     ];
     for (name, sym) in expect {
-        let id = d.resolve(name, None).unwrap_or_else(|c| panic!("{name} ambiguous: {c:?}"));
+        let id = d
+            .resolve(name, None)
+            .unwrap_or_else(|c| panic!("{name} ambiguous: {c:?}"));
         assert_eq!(d.symbolic_id(id), Some(sym));
     }
 }
@@ -157,7 +181,9 @@ fn resolve_needs_category_for_amp_vs_preamp() {
     assert_ne!(cats[0], cats[1], "amp and preamp should differ in category");
     // Given the amp's category, resolution becomes unique.
     let amp_cat = d.category(candidates[0]);
-    let id = d.resolve("A30 Fawn Brt", amp_cat).expect("unique with category");
+    let id = d
+        .resolve("A30 Fawn Brt", amp_cat)
+        .expect("unique with category");
     assert!(d.symbolic_id(id).unwrap().starts_with("HD2_"));
 }
 
@@ -168,7 +194,10 @@ fn dump_preset_block_numbers() {
     let ps = preset();
     eprintln!("=== path blocks: name / 11->6 / slot ===");
     for p in ps.footswitch_layout().into_iter().flatten() {
-        eprintln!("  {:<18} 11->6={:?} slot={:?}", p.model_name, p.model_id, p.slot);
+        eprintln!(
+            "  {:<18} 11->6={:?} slot={:?}",
+            p.model_name, p.model_id, p.slot
+        );
     }
     eprintln!("=== effect blocks: slot / 24->25 (handle) ===");
     for b in ps.effect_blocks() {

@@ -2,11 +2,14 @@
 //! Each frame is decoded, checked field-by-field, then re-encoded and required to reproduce
 //! the original wire bytes exactly — proving the codec matches HX Edit's output.
 
-use fretwire_protocol::{channel, cmd, op, Frame, Tlv, MAGIC, MAGIC_HANDSHAKE};
+use fretwire_protocol::{Frame, MAGIC, MAGIC_HANDSHAKE, Tlv, channel, cmd, op};
 
 fn hex(s: &str) -> Vec<u8> {
     let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
 }
 
 // --- real captured frames (full wire bytes incl. header + padding) ---
@@ -18,12 +21,17 @@ const HANDSHAKE: &str = "0c0000280110ef03000000020001002100100000";
 // reference SESSION_OPEN_1 (Packet 2).
 const SESSION_OPEN_1: &str = "110000180110ef030002000400100000010002000100000002000000";
 // capture1 frame 2307 — bypass toggle (op 0x0006, ilen 13) on the edit channel.
-const BYPASS: &str = "1d0000188010ed03002700043a1b0000010006000d0000008366cd03f16429658262073bc2000000";
+const BYPASS: &str =
+    "1d0000188010ed03002700043a1b0000010006000d0000008366cd03f16429658262073bc2000000";
 
 fn round_trip(name: &str, wire_hex: &str) -> Frame {
     let wire = hex(wire_hex);
     let f = Frame::decode(&wire).unwrap_or_else(|e| panic!("decode {name}: {e}"));
-    assert_eq!(f.encode(), wire, "{name} did not re-encode to the original bytes");
+    assert_eq!(
+        f.encode(),
+        wire,
+        "{name} did not re-encode to the original bytes"
+    );
     f
 }
 
@@ -96,7 +104,14 @@ fn rejects_truncated_buffers() {
 fn stream_chunk_uses_u16_length() {
     // A 272-byte stream chunk (256-byte body) carries len = 0x0108 in the first two bytes,
     // matching real chunk headers like `08 01 00 18 ...` (frame 2425 of the preset-open capture).
-    let f = Frame::new(channel::EDIT.1, channel::EDIT.0, 0x7b, cmd::OPEN, 0x0b94, vec![0xAB; 256]);
+    let f = Frame::new(
+        channel::EDIT.1,
+        channel::EDIT.0,
+        0x7b,
+        cmd::OPEN,
+        0x0b94,
+        vec![0xAB; 256],
+    );
     let wire = f.encode();
     assert_eq!(wire.len(), 272);
     assert_eq!(&wire[0..2], &[0x08, 0x01]); // 264 = 256 body + 8, little-endian u16

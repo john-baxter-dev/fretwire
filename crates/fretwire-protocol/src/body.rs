@@ -4,7 +4,7 @@
 //! The `type` is the sub-command (see `crate::op`); `value` is its payload. For a parameter
 //! set (`type == op::PARAM_SET`) the value ends with the new setting as a **big-endian f32**.
 
-use crate::{u16le, u32le, Error, Result};
+use crate::{Error, Result, u16le, u32le};
 
 /// Marker on a host command body (`01 00`).
 pub const TLV_MARKER_CMD: u16 = 0x0001;
@@ -23,7 +23,11 @@ pub struct Tlv {
 impl Tlv {
     /// A host command TLV (`marker = 01 00`).
     pub fn command(ty: u16, value: Vec<u8>) -> Self {
-        Tlv { marker: TLV_MARKER_CMD, ty, value }
+        Tlv {
+            marker: TLV_MARKER_CMD,
+            ty,
+            value,
+        }
     }
 
     /// Parse a TLV from a frame's significant `body` bytes.
@@ -34,7 +38,10 @@ impl Tlv {
         let len = u32le(&body[4..8]) as usize;
         let end = TLV_HEADER_LEN + len;
         if end > body.len() {
-            return Err(Error::BadLength { declared: end, avail: body.len() });
+            return Err(Error::BadLength {
+                declared: end,
+                avail: body.len(),
+            });
         }
         Ok(Tlv {
             marker: u16le(&body[0..2]),

@@ -40,8 +40,10 @@ impl DeviceSymbols {
     /// Parse `Helix.sym`.
     pub fn parse(bytes: &[u8]) -> crate::Result<DeviceSymbols> {
         let entries: Vec<Entry> = serde_json::from_slice(bytes)?;
-        let ordered: Vec<(String, Vec<String>)> =
-            entries.into_iter().map(|e| (e.symbol, e.parameters)).collect();
+        let ordered: Vec<(String, Vec<String>)> = entries
+            .into_iter()
+            .map(|e| (e.symbol, e.parameters))
+            .collect();
         let by_name = ordered.iter().cloned().collect();
         Ok(DeviceSymbols { by_name, ordered })
     }
@@ -60,7 +62,9 @@ impl DeviceSymbols {
     /// This is the device's authoritative model identity; verified against a hand-built preset
     /// (591 → US Princess amp, 80 → Simple Delay) and the factory capture.
     pub fn by_index(&self, idx: usize) -> Option<(&str, &[String])> {
-        self.ordered.get(idx).map(|(s, p)| (s.as_str(), p.as_slice()))
+        self.ordered
+            .get(idx)
+            .map(|(s, p)| (s.as_str(), p.as_slice()))
     }
 
     /// Ordered parameter names for a full device symbol (e.g. `"HD2_TremoloHarmonicMono"`).
@@ -75,25 +79,29 @@ impl DeviceSymbols {
     /// Reverbs send **one extra trailing value** — the `Trails` switch — that the device symbol
     /// doesn't list, so the observed vector is `symbol_len + 1`. That case is accepted and the
     /// extra name is synthesized as `"Trails"`. Returns `None` if no variant matches.
-    pub fn resolve_order(&self, host_symbol: &str, count: usize) -> Option<(&'static str, Vec<String>)> {
+    pub fn resolve_order(
+        &self,
+        host_symbol: &str,
+        count: usize,
+    ) -> Option<(&'static str, Vec<String>)> {
         // Prefer an exact length match across *both* variants (so a Mono `len+1` can't shadow the
         // correct Stereo exact match).
         for v in VARIANTS {
-            if let Some(p) = self.by_name.get(&format!("{host_symbol}{v}")) {
-                if p.len() == count {
-                    return Some((v, p.clone()));
-                }
+            if let Some(p) = self.by_name.get(&format!("{host_symbol}{v}"))
+                && p.len() == count
+            {
+                return Some((v, p.clone()));
             }
         }
         // Reverb `@trails` +1: the last device value is the Trails on/off switch, not listed in
         // the symbol. Accept `symbol_len + 1` and name the extra value "Trails".
         for v in VARIANTS {
-            if let Some(p) = self.by_name.get(&format!("{host_symbol}{v}")) {
-                if p.len() + 1 == count {
-                    let mut names = p.clone();
-                    names.push("Trails".to_string());
-                    return Some((v, names));
-                }
+            if let Some(p) = self.by_name.get(&format!("{host_symbol}{v}"))
+                && p.len() + 1 == count
+            {
+                let mut names = p.clone();
+                names.push("Trails".to_string());
+                return Some((v, names));
             }
         }
         None

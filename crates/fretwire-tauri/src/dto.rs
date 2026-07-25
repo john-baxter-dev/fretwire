@@ -20,9 +20,10 @@ pub fn push_dtos(pushes: &[StatusPush]) -> Vec<PushDto> {
     pushes
         .iter()
         .filter_map(|p| match p {
-            StatusPush::Bypass { slot, enabled } => {
-                Some(PushDto::Bypass { slot: *slot, enabled: *enabled })
-            }
+            StatusPush::Bypass { slot, enabled } => Some(PushDto::Bypass {
+                slot: *slot,
+                enabled: *enabled,
+            }),
             StatusPush::Snapshot(i) => Some(PushDto::Snapshot { index: *i }),
             StatusPush::Preset(i) => Some(PushDto::Preset { index: *i }),
             StatusPush::Other(_) => None,
@@ -33,11 +34,7 @@ pub fn push_dtos(pushes: &[StatusPush]) -> Vec<PushDto> {
 /// JSON can't represent NaN/Infinity — `serde_json` errors on them, which for an async Tauri command
 /// leaves the invoke promise hanging. Coerce any non-finite float to a safe finite value.
 fn fin(x: f64) -> f64 {
-    if x.is_finite() {
-        x
-    } else {
-        0.0
-    }
+    if x.is_finite() { x } else { 0.0 }
 }
 
 fn fin_opt(x: Option<f64>) -> Option<f64> {
@@ -109,7 +106,10 @@ impl From<&EditorParam> for ParamDto {
                 .meta
                 .stops
                 .iter()
-                .map(|s| SegStopDto { value: fin(s.value), label: s.label.clone() })
+                .map(|s| SegStopDto {
+                    value: fin(s.value),
+                    label: s.label.clone(),
+                })
                 .collect(),
         }
     }
@@ -183,7 +183,13 @@ pub struct GridCellDto {
 
 impl From<&fretwire_core::fretwire_data::stream::GridCell> for GridCellDto {
     fn from(c: &fretwire_core::fretwire_data::stream::GridCell) -> Self {
-        GridCellDto { dsp: c.dsp, slot: c.slot, row: c.row, column: c.column, occupied: c.occupied }
+        GridCellDto {
+            dsp: c.dsp,
+            slot: c.slot,
+            row: c.row,
+            column: c.column,
+            occupied: c.occupied,
+        }
     }
 }
 
@@ -289,9 +295,10 @@ impl From<&EditorPreset> for PresetDto {
                         input_node: d.input_node.as_ref().map(BlockDto::from),
                         output_node: d.output_node.as_ref().map(BlockDto::from),
                         grid: d.grid.iter().map(GridCellDto::from).collect(),
-                        dsp_load: fin(
-                            loads.iter().find(|(i, _)| *i == d.dsp).map_or(0.0, |(_, l)| *l),
-                        ),
+                        dsp_load: fin(loads
+                            .iter()
+                            .find(|(i, _)| *i == d.dsp)
+                            .map_or(0.0, |(_, l)| *l)),
                     })
                     .collect()
             },

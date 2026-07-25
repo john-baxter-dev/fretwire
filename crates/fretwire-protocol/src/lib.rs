@@ -9,7 +9,7 @@ pub mod edit;
 mod frame;
 pub mod session;
 
-pub use body::{Tlv, TLV_MARKER_CMD, TLV_MARKER_REPLY};
+pub use body::{TLV_MARKER_CMD, TLV_MARKER_REPLY, Tlv};
 pub use edit::{EditBody, EditValue};
 pub use frame::{Frame, MAGIC, MAGIC_HANDSHAKE};
 

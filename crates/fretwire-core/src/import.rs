@@ -56,12 +56,19 @@ pub fn data_status_in(dir: PathBuf) -> DataStatus {
             entries
                 .flatten()
                 .filter(|e| {
-                    e.file_name().to_str().map(is_reference_file).unwrap_or(false)
+                    e.file_name()
+                        .to_str()
+                        .map(is_reference_file)
+                        .unwrap_or(false)
                 })
                 .count()
         })
         .unwrap_or(0);
-    DataStatus { present: dir.join(REQUIRED).is_file(), dir, files }
+    DataStatus {
+        present: dir.join(REQUIRED).is_file(),
+        dir,
+        files,
+    }
 }
 
 /// Import reference data from `source` (an installer file or an extracted directory) into
@@ -101,7 +108,8 @@ pub fn import_into(source: &Path, dest: PathBuf) -> crate::Result<ImportSummary>
     // under a `res` directory if the same name appears twice).
     let mut found: Vec<PathBuf> = Vec::new();
     collect_wanted(search_root, &mut found);
-    let mut by_name: std::collections::BTreeMap<String, PathBuf> = std::collections::BTreeMap::new();
+    let mut by_name: std::collections::BTreeMap<String, PathBuf> =
+        std::collections::BTreeMap::new();
     for p in found {
         let name = match p.file_name().and_then(|s| s.to_str()) {
             Some(n) => n.to_string(),
@@ -145,7 +153,11 @@ pub fn import_into(source: &Path, dest: PathBuf) -> crate::Result<ImportSummary>
         .filter(|n| !dest.join(n).exists())
         .map(|n| n.to_string())
         .collect();
-    Ok(ImportSummary { copied, dest, missing })
+    Ok(ImportSummary {
+        copied,
+        dest,
+        missing,
+    })
 }
 
 /// Whether `name` is a reference-data file we import. `.hlx` is restricted to the default/empty
@@ -168,15 +180,17 @@ pub fn is_reference_file(name: &str) -> bool {
 
 /// Recursively collect reference-data files (by name) under `dir`.
 fn collect_wanted(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
             collect_wanted(&path, out);
-        } else if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-            if is_reference_file(name) {
-                out.push(path);
-            }
+        } else if let Some(name) = path.file_name().and_then(|s| s.to_str())
+            && is_reference_file(name)
+        {
+            out.push(path);
         }
     }
 }
@@ -196,7 +210,11 @@ fn unpack_with_7z(installer: &Path, tmp: &Path) -> crate::Result<()> {
             .status();
         match result {
             Ok(st) if matches!(st.code(), Some(0) | Some(1)) => return Ok(()),
-            Ok(st) => return Err(err(format!("{bin} failed to extract the installer (exit {st})"))),
+            Ok(st) => {
+                return Err(err(format!(
+                    "{bin} failed to extract the installer (exit {st})"
+                )));
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => return Err(err(format!("running {bin}: {e}"))),
         }

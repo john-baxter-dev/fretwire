@@ -10,7 +10,7 @@
 #![cfg(have_bundled_data)]
 
 use fretwire_core::editor::Catalog;
-use fretwire_data::stream::{slot_kind, DSP_SLOT_STRIDE};
+use fretwire_data::stream::{DSP_SLOT_STRIDE, slot_kind};
 use rmpv::Value;
 
 fn catalog() -> Catalog {
@@ -18,7 +18,10 @@ fn catalog() -> Catalog {
 }
 
 fn slot(kind: i64, content: Value) -> Value {
-    Value::Map(vec![(Value::from(19), Value::from(kind)), (Value::from(20), content)])
+    Value::Map(vec![
+        (Value::from(19), Value::from(kind)),
+        (Value::from(20), content),
+    ])
 }
 
 fn params(values: &[f32]) -> Value {
@@ -38,7 +41,10 @@ fn effect(model: i64, values: &[f32]) -> Value {
                 ]),
             ),
             (Value::from(10), Value::from(true)),
-            (Value::from(11), Value::Map(vec![(Value::from(4), params(values))])),
+            (
+                Value::from(11),
+                Value::Map(vec![(Value::from(4), params(values))]),
+            ),
         ]),
     )
 }
@@ -50,7 +56,10 @@ fn looper(model: i64, values: &[f32]) -> Value {
         Value::Map(vec![
             (Value::from(8), Value::from(model)),
             (Value::from(10), Value::from(true)),
-            (Value::from(7), Value::Map(vec![(Value::from(4), params(values))])),
+            (
+                Value::from(7),
+                Value::Map(vec![(Value::from(4), params(values))]),
+            ),
         ]),
     )
 }
@@ -60,7 +69,10 @@ fn node(kind: i64, model: i64, pos: i64) -> Value {
         (Value::from(8), Value::from(model)),
         (Value::from(13), Value::from(pos)),
         (Value::from(10), Value::from(true)),
-        (Value::from(7), Value::Map(vec![(Value::from(4), params(&[0.5, 0.0]))])),
+        (
+            Value::from(7),
+            Value::Map(vec![(Value::from(4), params(&[0.5, 0.0]))]),
+        ),
     ]);
     slot(kind, Value::Map(vec![(Value::from(15), holder)]))
 }
@@ -84,19 +96,28 @@ fn dsp_group(split_type: i64, blocks: Vec<(usize, Value)>) -> Value {
 fn two_dsp_stream() -> Vec<u8> {
     let dsp0 = dsp_group(
         0,
-        vec![(1, effect(261, &[1.0, 0.0])), (8, effect(243, &[0.8, 0.1, 83.0, 4300.0, 0.3, 0.0]))],
+        vec![
+            (1, effect(261, &[1.0, 0.0])),
+            (8, effect(243, &[0.8, 0.1, 83.0, 4300.0, 0.3, 0.0])),
+        ],
     );
     let dsp1 = dsp_group(
         3,
         vec![
             (7, looper(153, &[0.5, 1.0])),
-            (13, effect(18, &[0.68, 0.45, 0.4, 0.66, 0.56, 0.57, 0.35, 0.4])),
+            (
+                13,
+                effect(18, &[0.68, 0.45, 0.4, 0.66, 0.56, 0.57, 0.35, 0.4]),
+            ),
         ],
     );
     let preset = Value::Map(vec![
         (Value::from(0), dsp0),
         (Value::from(1), dsp1),
-        (Value::from(7), Value::Map(vec![(Value::from(36), Value::from("P21\0"))])),
+        (
+            Value::from(7),
+            Value::Map(vec![(Value::from(36), Value::from("P21\0"))]),
+        ),
     ]);
 
     let mut blob = Vec::new();
@@ -115,8 +136,11 @@ fn both_dsps_load_with_resolved_names_and_global_slots() {
     let p = catalog().load_preset(&two_dsp_stream()).unwrap();
     assert_eq!(p.device_model.as_deref(), Some("P21"));
 
-    let by_slot: Vec<(i64, usize, &str)> =
-        p.blocks.iter().map(|b| (b.slot, b.dsp, b.model_name.as_str())).collect();
+    let by_slot: Vec<(i64, usize, &str)> = p
+        .blocks
+        .iter()
+        .map(|b| (b.slot, b.dsp, b.model_name.as_str()))
+        .collect();
     assert_eq!(
         by_slot,
         vec![
@@ -131,7 +155,10 @@ fn both_dsps_load_with_resolved_names_and_global_slots() {
     // The Looper resolved its model through the type-7 content shape, so it has real params.
     let looper = p.block(27).expect("looper at global slot 27");
     assert_eq!(looper.dsp, 1);
-    assert_eq!(looper.params.first().map(|x| x.name.as_str()), Some("Playback"));
+    assert_eq!(
+        looper.params.first().map(|x| x.name.as_str()),
+        Some("Playback")
+    );
 
     // A DSP2 block's params resolve in the model's own Helix.sym order.
     let amp = p.block(33).expect("amp at global slot 33");
@@ -174,7 +201,10 @@ fn routing_nodes_of_every_dsp_are_reachable_by_slot() {
     assert!(p.block(30).is_some(), "DSP2's split node");
     assert!(p.is_split_node(30));
     assert!(p.is_mixer_node(39));
-    assert!(!p.is_split_node(10), "DSP1 is serial — it has no exposed split node");
+    assert!(
+        !p.is_split_node(10),
+        "DSP1 is serial — it has no exposed split node"
+    );
     assert!(p.block(20).is_some(), "DSP2's input node");
 }
 
@@ -183,7 +213,10 @@ fn dsp_load_is_reported_per_dsp() {
     let p = catalog().load_preset(&two_dsp_stream()).unwrap();
     let loads = p.dsp_load_by_dsp();
     assert_eq!(loads.len(), 2);
-    assert_eq!(loads.iter().map(|(d, _)| *d).collect::<Vec<_>>(), vec![0, 1]);
+    assert_eq!(
+        loads.iter().map(|(d, _)| *d).collect::<Vec<_>>(),
+        vec![0, 1]
+    );
     for (dsp, load) in &loads {
         assert!(*load > 0.0, "dsp {dsp} should draw some load");
     }
@@ -196,11 +229,18 @@ fn dsp_load_is_reported_per_dsp() {
 fn grid_partitions_by_dsp_and_keeps_slots_global() {
     let p = catalog().load_preset(&two_dsp_stream()).unwrap();
     let grid = p.grid();
-    assert_eq!(grid.len(), p.dsps.iter().map(|d| d.grid.len()).sum::<usize>());
+    assert_eq!(
+        grid.len(),
+        p.dsps.iter().map(|d| d.grid.len()).sum::<usize>()
+    );
 
     for c in &grid {
         let expected_dsp = (c.slot / DSP_SLOT_STRIDE) as usize;
-        assert_eq!(c.dsp, expected_dsp, "cell {} is tagged with the wrong dsp", c.slot);
+        assert_eq!(
+            c.dsp, expected_dsp,
+            "cell {} is tagged with the wrong dsp",
+            c.slot
+        );
     }
     // Same (row, column) on different DSPs is legal — they are distinct cells.
     let collisions = grid
@@ -223,5 +263,8 @@ fn edits_to_a_dsp2_block_address_it_by_the_global_slot() {
     assert_eq!(from_block, direct);
 
     let bypass_from_block = amp.set_enabled_edit(false, 8);
-    assert_eq!(bypass_from_block, fretwire_protocol::edit::bypass(33, false, 8));
+    assert_eq!(
+        bypass_from_block,
+        fretwire_protocol::edit::bypass(33, false, 8)
+    );
 }

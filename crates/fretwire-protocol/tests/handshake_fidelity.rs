@@ -4,7 +4,10 @@
 use fretwire_protocol::session::device_handshake;
 
 fn hx(s: &str) -> Vec<u8> {
-    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
 }
 
 #[test]
@@ -28,6 +31,10 @@ fn device_handshake_is_byte_exact() {
     let frames = device_handshake();
     assert_eq!(frames.len(), expected.len(), "frame count");
     for (i, (f, want)) in frames.iter().zip(expected).enumerate() {
-        assert_eq!(f.encode(), hx(want), "handshake frame {i} differs from capture");
+        assert_eq!(
+            f.encode(),
+            hx(want),
+            "handshake frame {i} differs from capture"
+        );
     }
 }

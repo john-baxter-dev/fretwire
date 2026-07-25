@@ -19,7 +19,7 @@
 //! and per-block edits were already DSP-agnostic; this makes the planning layer so too.
 
 use crate::editor::{Catalog, EditorPreset};
-use fretwire_protocol::{channel, cmd, edit, op, EditValue, Frame, Tlv};
+use fretwire_protocol::{EditValue, Frame, Tlv, channel, cmd, edit, op};
 use fretwire_usb::Transport;
 use std::collections::HashMap;
 
@@ -88,11 +88,15 @@ impl Session {
                 saved_cursor: Some(0),
             };
             // Clear any frames a previous session left on the wire so the handshake starts aligned.
-            s.transport.drain_wire(std::time::Duration::from_millis(120), 64);
+            s.transport
+                .drain_wire(std::time::Duration::from_millis(120), 64);
             match s.handshake() {
                 Ok(()) => return Ok(s),
                 Err(e) => {
-                    tracing::warn!(attempt, "handshake failed ({e}); releasing interface and retrying");
+                    tracing::warn!(
+                        attempt,
+                        "handshake failed ({e}); releasing interface and retrying"
+                    );
                     last_err = Some(e);
                     drop(s); // release the interface — resets the device's stale session state
                 }
@@ -148,11 +152,18 @@ impl Session {
     /// Send one frame on `chan` and return its matched reply, maintaining the channel's running
     /// `arg` offset: the frame is stamped with the current offset, then the offset is advanced by
     /// the reply's body length (the rule observed across the connect capture).
-    fn channel_request(&mut self, chan: (u16, u16), cmd: u8, body: Vec<u8>) -> crate::Result<Frame> {
+    fn channel_request(
+        &mut self,
+        chan: (u16, u16),
+        cmd: u8,
+        body: Vec<u8>,
+    ) -> crate::Result<Frame> {
         let (src, dst) = chan;
         let seq = self.next_seq(src);
         let arg = self.cur_arg(src);
-        let reply = self.transport.request(&Frame::new(src, dst, seq, cmd, arg, body))?;
+        let reply = self
+            .transport
+            .request(&Frame::new(src, dst, seq, cmd, arg, body))?;
         self.advance_arg(src, reply.body.len() as u32);
         Ok(reply)
     }
@@ -186,11 +197,11 @@ impl Session {
         let seq = self.next_seq(src);
         let arg = self.cur_arg(src);
         let frame = Frame::new(src, dst, seq, cmd, arg, body);
-        let reply = self.transport.request_matching(
-            &frame,
-            std::time::Duration::from_secs(3),
-            |f| reply_txn(&f.body) == Some(txn),
-        )?;
+        let reply =
+            self.transport
+                .request_matching(&frame, std::time::Duration::from_secs(3), |f| {
+                    reply_txn(&f.body) == Some(txn)
+                })?;
         self.advance_arg(src, reply.body.len() as u32);
         Ok(reply)
     }
@@ -208,22 +219,35 @@ impl Session {
         // on the Stomp, "P21…" on the Floor). Key off the code we opened the device with rather than
         // a hard-coded "P33", or every non-Stomp connect logs a spurious "no model string seen".
         let want = self.device().model_code;
-        for (i, f) in fretwire_protocol::session::device_handshake().into_iter().enumerate() {
+        for (i, f) in fretwire_protocol::session::device_handshake()
+            .into_iter()
+            .enumerate()
+        {
             let reply = self.transport.request(&f)?;
-            if model.is_none() {
-                if let Some(s) = ascii_run(&reply.body) {
-                    let hit = match want {
-                        Some(code) => s.starts_with(code),
-                        // Untested device with no known code: accept any "P##"-style identity.
-                        None => s.starts_with('P') && s.len() >= 3 && s[1..3].bytes().all(|b| b.is_ascii_digit()),
-                    };
-                    if hit {
-                        model = Some(s);
+            if model.is_none()
+                && let Some(s) = ascii_run(&reply.body)
+            {
+                let hit = match want {
+                    Some(code) => s.starts_with(code),
+                    // Untested device with no known code: accept any "P##"-style identity.
+                    None => {
+                        s.starts_with('P')
+                            && s.len() >= 3
+                            && s[1..3].bytes().all(|b| b.is_ascii_digit())
                     }
+                };
+                if hit {
+                    model = Some(s);
                 }
             }
-            tracing::debug!(packet = i + 1, src = f.src, cmd = reply.cmd, body = reply.body.len(),
-                bytes = format_args!("{:02x?}", reply.body), "handshake reply");
+            tracing::debug!(
+                packet = i + 1,
+                src = f.src,
+                cmd = reply.cmd,
+                body = reply.body.len(),
+                bytes = format_args!("{:02x?}", reply.body),
+                "handshake reply"
+            );
         }
         // After bring-up, continue each channel's seq counter past the handshake frames.
         self.seq.insert(channel::PRIMARY.0, 5);
@@ -257,11 +281,13 @@ impl Session {
         for (src, dst) in [channel::STATUS, channel::EDIT, channel::PRIMARY] {
             let seq = self.next_seq(src);
             let arg = self.cur_arg(src);
-            self.transport.send_frame(&Frame::new(src, dst, seq, cmd::IDLE, arg, Vec::new()))?;
+            self.transport
+                .send_frame(&Frame::new(src, dst, seq, cmd::IDLE, arg, Vec::new()))?;
         }
         // Drain the device's queued keepalives/meters so they don't sit in front of the next edit's
         // reply. Short per-frame quiet window; bounded so a chatty device can't stall the tick.
-        self.transport.drain_wire(std::time::Duration::from_millis(15), 64);
+        self.transport
+            .drain_wire(std::time::Duration::from_millis(15), 64);
         Ok(())
     }
 
@@ -273,9 +299,12 @@ impl Session {
         for (src, dst) in [channel::STATUS, channel::EDIT, channel::PRIMARY] {
             let seq = self.next_seq(src);
             let arg = self.cur_arg(src);
-            self.transport.send_frame(&Frame::new(src, dst, seq, cmd::IDLE, arg, Vec::new()))?;
+            self.transport
+                .send_frame(&Frame::new(src, dst, seq, cmd::IDLE, arg, Vec::new()))?;
         }
-        let frames = self.transport.drain_collect(std::time::Duration::from_millis(15), 96);
+        let frames = self
+            .transport
+            .drain_collect(std::time::Duration::from_millis(15), 96);
         let pushes = frames
             .iter()
             .filter_map(|f| fretwire_data::stream::parse_status_push(&f.body))
@@ -298,7 +327,9 @@ impl Session {
         let (src, dst) = channel::EDIT;
         let seq = self.next_seq(src);
         let arg = self.cur_arg(src);
-        let _ = self.transport.send_frame(&Frame::new(src, dst, seq, cmd::CHUNK, arg, Vec::new()));
+        let _ = self
+            .transport
+            .send_frame(&Frame::new(src, dst, seq, cmd::CHUNK, arg, Vec::new()));
         Ok(ack)
     }
 
@@ -343,7 +374,8 @@ impl Session {
     /// browse ops. Correlated by transaction id so an interleaved keepalive isn't mistaken for the ACK.
     pub fn rename_preset(&mut self, bank: i64, slot: i64, name: &str) -> crate::Result<()> {
         let txn = self.bump_txn();
-        let tlv = Tlv::command(op::SESSION_OPEN, edit::rename_preset(bank, slot, name, txn)).to_bytes();
+        let tlv =
+            Tlv::command(op::SESSION_OPEN, edit::rename_preset(bank, slot, name, txn)).to_bytes();
         self.transport.drain();
         let reply = self.edit_request_txn(cmd::OPEN, tlv, txn)?;
         tracing::debug!(reply = ?reply.body, "rename ACK");
@@ -362,7 +394,12 @@ impl Session {
     /// Swap the model of the block in `slot` to `model_index` (its `Helix.sym` index), with
     /// `paired_index` for a paired cab/IR (`-1` = none). The device resets the block's params to the
     /// new model's defaults (confirmed by on-device diff). Op 40; rides the edit channel.
-    pub fn swap_model(&mut self, slot: i64, model_index: i64, paired_index: i64) -> crate::Result<()> {
+    pub fn swap_model(
+        &mut self,
+        slot: i64,
+        model_index: i64,
+        paired_index: i64,
+    ) -> crate::Result<()> {
         let txn = self.bump_txn();
         let body = edit::swap_model(slot, model_index, paired_index, txn);
         self.send_edit(body)?;
@@ -382,7 +419,12 @@ impl Session {
     /// Add a block at `slot` with model `model_index` (its `Helix.sym` index) and `paired_index`
     /// (`-1` = no paired cab/IR), enabled (op 39). The device fills the new block's params with the
     /// model's defaults; re-read to see them. Rides the edit channel.
-    pub fn add_block(&mut self, slot: i64, model_index: i64, paired_index: i64) -> crate::Result<()> {
+    pub fn add_block(
+        &mut self,
+        slot: i64,
+        model_index: i64,
+        paired_index: i64,
+    ) -> crate::Result<()> {
         let txn = self.bump_txn();
         let body = edit::add_block(slot, model_index, paired_index, txn);
         self.send_edit(body)?;
@@ -392,8 +434,13 @@ impl Session {
     /// [`add_block`] with an occupancy guard: `slot` must be an **empty** grid slot (op 39 into an
     /// occupied slot would clobber the block there). The primitive behind the grid's
     /// click-an-empty-cell add flow.
-    pub fn add_block_at(&mut self, slot: i64, model_index: i64, paired_index: i64) -> crate::Result<()> {
-        use fretwire_data::stream::{slot_kind, split_wire_slot, PresetStream};
+    pub fn add_block_at(
+        &mut self,
+        slot: i64,
+        model_index: i64,
+        paired_index: i64,
+    ) -> crate::Result<()> {
+        use fretwire_data::stream::{PresetStream, slot_kind, split_wire_slot};
         let raw = self.read_preset_raw()?;
         let ps = PresetStream::parse(&raw)?;
         let (dsp, _) = split_wire_slot(slot);
@@ -439,19 +486,31 @@ impl Session {
         let mut sent = 0usize;
         for chunk in tlv.chunks(CHUNK) {
             let seq = self.next_seq(src);
-            self.transport.send_frame(&Frame::new(src, dst, seq, cmd::OPEN, arg, chunk.to_vec()))?;
+            self.transport.send_frame(&Frame::new(
+                src,
+                dst,
+                seq,
+                cmd::OPEN,
+                arg,
+                chunk.to_vec(),
+            ))?;
             sent += chunk.len();
             tracing::debug!(arg, len = chunk.len(), sent, total, "write-preset chunk");
             // Consume the device's interleaved flow-control ACKs so neither side's queue backs up.
-            let _ = self.transport.drain_collect(std::time::Duration::from_millis(5), 8);
+            let _ = self
+                .transport
+                .drain_collect(std::time::Duration::from_millis(5), 8);
         }
         // Terminate the transfer (empty cmd 0x08), as HX Edit does after the last data frame.
         let seq = self.next_seq(src);
-        self.transport.send_frame(&Frame::new(src, dst, seq, cmd::CHUNK, arg, Vec::new()))?;
+        self.transport
+            .send_frame(&Frame::new(src, dst, seq, cmd::CHUNK, arg, Vec::new()))?;
 
         // Best-effort: note whether the device echoed our txn in its apply-ACK (key 103). Not gated
         // on — a re-read by the caller is the real confirmation.
-        let acks = self.transport.drain_collect(std::time::Duration::from_millis(80), 32);
+        let acks = self
+            .transport
+            .drain_collect(std::time::Duration::from_millis(80), 32);
         let acked = acks.iter().any(|f| reply_txn(&f.body) == Some(txn));
         tracing::info!(bytes = total, acked, "write-preset sent");
         Ok(())
@@ -473,7 +532,9 @@ impl Session {
             Some(r) => r.clone(),
             None => self.read_preset_raw().ok()?,
         };
-        fretwire_data::stream::PresetStream::parse(&raw).ok().map(|ps| ps.to_blob())
+        fretwire_data::stream::PresetStream::parse(&raw)
+            .ok()
+            .map(|ps| ps.to_blob())
     }
 
     /// Human name for the block at `slot` — the user label if set, else the model name — resolved
@@ -484,7 +545,8 @@ impl Session {
             .as_ref()
             .and_then(|raw| self.catalog.load_preset(raw).ok())
             .and_then(|p| {
-                p.block(slot).map(|b| b.user_label.clone().unwrap_or_else(|| b.model_name.clone()))
+                p.block(slot)
+                    .map(|b| b.user_label.clone().unwrap_or_else(|| b.model_name.clone()))
             })
             .unwrap_or_else(|| format!("slot {slot}"))
     }
@@ -500,7 +562,10 @@ impl Session {
             .and_then(|p| {
                 p.block(slot).and_then(|b| {
                     let params = if paired { &b.paired_params } else { &b.params };
-                    params.iter().find(|q| q.index as i64 == param_index).map(|q| q.name.clone())
+                    params
+                        .iter()
+                        .find(|q| q.index as i64 == param_index)
+                        .map(|q| q.name.clone())
                 })
             });
         match param_name {
@@ -511,7 +576,9 @@ impl Session {
 
     /// A model's display name by `Helix.sym` index, for labeling adds/swaps.
     pub fn model_label(&self, model_index: i64) -> String {
-        self.catalog.model_name_by_index(model_index).unwrap_or_else(|| "block".into())
+        self.catalog
+            .model_name_by_index(model_index)
+            .unwrap_or_else(|| "block".into())
     }
 
     /// Start an undoable edit: seed the timeline with the loaded state if empty, drop any redo
@@ -521,7 +588,10 @@ impl Session {
         if self.history.is_empty() {
             match self.current_blob() {
                 Some(blob) => {
-                    self.history.push(HistoryEntry { label: "Loaded".into(), blob });
+                    self.history.push(HistoryEntry {
+                        label: "Loaded".into(),
+                        blob,
+                    });
                     self.cursor = 0;
                 }
                 None => {
@@ -542,7 +612,9 @@ impl Session {
     /// Finish an undoable edit: snapshot the (re-read) post-edit state as a new timeline entry and
     /// move the cursor to it. No-op if [`Self::edit_begin`] didn't run or the edit failed first.
     pub fn edit_commit(&mut self) {
-        let Some(label) = self.pending.take() else { return };
+        let Some(label) = self.pending.take() else {
+            return;
+        };
         let Some(blob) = self.current_blob() else {
             tracing::warn!("edit history: no post-edit state to snapshot");
             return;
@@ -634,7 +706,11 @@ impl Session {
     /// from [`crate::editor::SPLIT_TYPES`]) via swap-model (op 40) — surgical/FS-safe. The device
     /// resets the node's params to the new type's defaults, as with any model swap. Re-reads and
     /// returns the new preset.
-    pub fn set_split_type(&mut self, split_slot: i64, model_index: i64) -> crate::Result<EditorPreset> {
+    pub fn set_split_type(
+        &mut self,
+        split_slot: i64,
+        model_index: i64,
+    ) -> crate::Result<EditorPreset> {
         self.swap_model(split_slot, model_index, -1)?;
         self.read_preset()
     }
@@ -654,7 +730,7 @@ impl Session {
         parallel: bool,
         pos: usize,
     ) -> crate::Result<EditorPreset> {
-        use fretwire_data::stream::{slot_kind, PresetStream};
+        use fretwire_data::stream::{PresetStream, slot_kind};
         let raw = self.read_preset_raw()?;
         let ps = PresetStream::parse(&raw)?;
         let blocks = ps.dsp_blocks(0);
@@ -662,12 +738,21 @@ impl Session {
             .iter()
             .find(|b| b.kind == slot_kind::SPLIT)
             .map(|b| b.index)
-            .ok_or_else(|| fretwire_data::Error::Stream("no split node in the preset grid".into()))?;
-        let mixer_idx =
-            blocks.iter().find(|b| b.kind == slot_kind::MIXER).map(|b| b.index).unwrap_or(blocks.len());
+            .ok_or_else(|| {
+                fretwire_data::Error::Stream("no split node in the preset grid".into())
+            })?;
+        let mixer_idx = blocks
+            .iter()
+            .find(|b| b.kind == slot_kind::MIXER)
+            .map(|b| b.index)
+            .unwrap_or(blocks.len());
         // The target row's slot window (exclusive of the structural nodes): bottom = between split and
         // mixer; top = before the split node.
-        let (lo, hi) = if parallel { (split_idx, mixer_idx) } else { (0, split_idx) };
+        let (lo, hi) = if parallel {
+            (split_idx, mixer_idx)
+        } else {
+            (0, split_idx)
+        };
         // Blocks already in that window, and its empty slots — both in slot order.
         let occ: Vec<usize> = blocks
             .iter()
@@ -708,8 +793,11 @@ impl Session {
                 .ok_or_else(no_slot)?;
             (Vec::new(), target)
         };
-        let occupied: std::collections::BTreeSet<usize> =
-            blocks.iter().filter(|b| b.kind != slot_kind::EMPTY).map(|b| b.index).collect();
+        let occupied: std::collections::BTreeSet<usize> = blocks
+            .iter()
+            .filter(|b| b.kind != slot_kind::EMPTY)
+            .map(|b| b.index)
+            .collect();
         self.apply_row_moves(moves, src_slot, target as i64, occupied)?;
         self.read_preset()
     }
@@ -719,7 +807,7 @@ impl Session {
     /// **left** (`plan_insert_right_end`) so the split's column — and thus the whole parallel section
     /// — stays anchored. Re-reads and returns the preset.
     pub fn move_before_split(&mut self, src_slot: i64) -> crate::Result<EditorPreset> {
-        use fretwire_data::stream::{slot_kind, PresetStream};
+        use fretwire_data::stream::{PresetStream, slot_kind};
         let raw = self.read_preset_raw()?;
         let ps = PresetStream::parse(&raw)?;
         let split_pos = ps
@@ -730,7 +818,9 @@ impl Session {
         // Common-before window = top slots below the split column.
         let occ: Vec<usize> = blocks
             .iter()
-            .filter(|b| b.kind == slot_kind::EFFECT && b.index < split_pos && b.index as i64 != src_slot)
+            .filter(|b| {
+                b.kind == slot_kind::EFFECT && b.index < split_pos && b.index as i64 != src_slot
+            })
             .map(|b| b.index)
             .collect();
         let free: Vec<usize> = blocks
@@ -740,8 +830,11 @@ impl Session {
             .collect();
         let (moves, target) = plan_insert_right_end(&occ, &free, split_pos)
             .ok_or_else(|| fretwire_data::Error::Stream("no free slot before the split".into()))?;
-        let occupied: std::collections::BTreeSet<usize> =
-            blocks.iter().filter(|b| b.kind != slot_kind::EMPTY).map(|b| b.index).collect();
+        let occupied: std::collections::BTreeSet<usize> = blocks
+            .iter()
+            .filter(|b| b.kind != slot_kind::EMPTY)
+            .map(|b| b.index)
+            .collect();
         self.apply_row_moves(moves, src_slot, target as i64, occupied)?;
         self.read_preset()
     }
@@ -752,16 +845,15 @@ impl Session {
     /// the block there). This is the primitive behind the routing grid — every cell is one exact
     /// slot, so a drop is a single move. Re-reads and returns the preset.
     pub fn place_block(&mut self, src_slot: i64, dst_slot: i64) -> crate::Result<EditorPreset> {
-        use fretwire_data::stream::{slot_kind, split_wire_slot, PresetStream};
+        use fretwire_data::stream::{PresetStream, slot_kind, split_wire_slot};
         if src_slot == dst_slot {
             return self.read_preset();
         }
         let (dsp, _) = split_wire_slot(src_slot);
         if split_wire_slot(dst_slot).0 != dsp {
-            return Err(fretwire_data::Error::Stream(
-                "can't move a block between DSPs".into(),
-            )
-            .into());
+            return Err(
+                fretwire_data::Error::Stream("can't move a block between DSPs".into()).into(),
+            );
         }
         let raw = self.read_preset_raw()?;
         let ps = PresetStream::parse(&raw)?;
@@ -792,20 +884,25 @@ impl Session {
         dst_slot: i64,
         before: bool,
     ) -> crate::Result<EditorPreset> {
-        use fretwire_data::stream::{slot_kind, split_wire_slot, PresetStream, DSP_SLOT_STRIDE};
+        use fretwire_data::stream::{DSP_SLOT_STRIDE, PresetStream, slot_kind, split_wire_slot};
         if src_slot == dst_slot {
             return self.read_preset();
         }
         let (dsp, _) = split_wire_slot(src_slot);
         if split_wire_slot(dst_slot).0 != dsp {
-            return Err(fretwire_data::Error::Stream("can't move a block between DSPs".into()).into());
+            return Err(
+                fretwire_data::Error::Stream("can't move a block between DSPs".into()).into(),
+            );
         }
         let base = dsp as i64 * DSP_SLOT_STRIDE;
         let raw = self.read_preset_raw()?;
         let ps = PresetStream::parse(&raw)?;
         let blocks = ps.dsp_blocks(dsp);
         for s in [src_slot, dst_slot] {
-            if !blocks.iter().any(|b| b.wire_slot() == s && b.kind == slot_kind::EFFECT) {
+            if !blocks
+                .iter()
+                .any(|b| b.wire_slot() == s && b.kind == slot_kind::EFFECT)
+            {
                 return Err(fretwire_data::Error::Stream(format!("slot {s} has no block")).into());
             }
         }
@@ -813,7 +910,11 @@ impl Session {
         // base+11..=base+18 (the nodes at base+0/9/10/19 bound them).
         let row_of = |s: i64| {
             let local = s - base;
-            if (11..=18).contains(&local) { (base + 11, base + 18) } else { (base + 1, base + 8) }
+            if (11..=18).contains(&local) {
+                (base + 11, base + 18)
+            } else {
+                (base + 1, base + 8)
+            }
         };
         let (lo, hi) = row_of(dst_slot);
         let same_row = row_of(src_slot) == (lo, hi);
@@ -842,14 +943,24 @@ impl Session {
                 .filter(|b| b.kind == slot_kind::EFFECT && (lo..=hi).contains(&b.wire_slot()))
                 .map(|b| b.wire_slot() as usize)
                 .collect();
-            let from_pos =
-                with_src.iter().position(|&s| s as i64 == src_slot).expect("src is in this row");
+            let from_pos = with_src
+                .iter()
+                .position(|&s| s as i64 == src_slot)
+                .expect("src is in this row");
             let scratch = blocks
                 .iter()
                 .filter(|b| b.kind == slot_kind::EMPTY)
                 .map(|b| b.wire_slot() as usize)
-                .min_by_key(|&s| if (lo..=hi).contains(&(s as i64)) { 0 } else { 1 })
-                .ok_or_else(|| fretwire_data::Error::Stream("no empty slot to reorder through".into()))?;
+                .min_by_key(|&s| {
+                    if (lo..=hi).contains(&(s as i64)) {
+                        0
+                    } else {
+                        1
+                    }
+                })
+                .ok_or_else(|| {
+                    fretwire_data::Error::Stream("no empty slot to reorder through".into())
+                })?;
             // `pos` is the insertion index among the *other* blocks (src excluded from `occ`), which
             // is exactly src's final order index — plan_reorder's `to`. (No −1 adjustment here:
             // that applies only when the drop gap is counted over the src-included list, as in
@@ -867,8 +978,9 @@ impl Session {
                 .filter(|b| b.kind == slot_kind::EMPTY && (lo..=hi).contains(&b.wire_slot()))
                 .map(|b| b.wire_slot() as usize)
                 .collect();
-            let (moves, target) = plan_row_insert(&occ, &free, pos)
-                .ok_or_else(|| fretwire_data::Error::Stream("no free slot in the destination row".into()))?;
+            let (moves, target) = plan_row_insert(&occ, &free, pos).ok_or_else(|| {
+                fretwire_data::Error::Stream("no free slot in the destination row".into())
+            })?;
             let occupied: std::collections::BTreeSet<usize> = blocks
                 .iter()
                 .filter(|b| b.kind != slot_kind::EMPTY)
@@ -890,16 +1002,17 @@ impl Session {
         target: i64,
         mut occupied: std::collections::BTreeSet<usize>,
     ) -> crate::Result<()> {
-        let guard = |occupied: &std::collections::BTreeSet<usize>, dst: usize| -> crate::Result<()> {
-            if occupied.contains(&dst) {
-                Err(fretwire_data::Error::Stream(format!(
-                    "refusing move onto occupied slot {dst} (would delete a block)"
-                ))
-                .into())
-            } else {
-                Ok(())
-            }
-        };
+        let guard =
+            |occupied: &std::collections::BTreeSet<usize>, dst: usize| -> crate::Result<()> {
+                if occupied.contains(&dst) {
+                    Err(fretwire_data::Error::Stream(format!(
+                        "refusing move onto occupied slot {dst} (would delete a block)"
+                    ))
+                    .into())
+                } else {
+                    Ok(())
+                }
+            };
         for (from, to) in moves {
             guard(&occupied, to)?;
             occupied.remove(&from);
@@ -913,7 +1026,7 @@ impl Session {
         let t1 = self.bump_txn();
         self.send_edit(edit::begin_structural(src_slot, t1))?;
         let t2 = self.bump_txn();
-        self.send_edit(edit::move_block(src_slot, target as i64, t2))?;
+        self.send_edit(edit::move_block(src_slot, target, t2))?;
         Ok(())
     }
 
@@ -922,16 +1035,23 @@ impl Session {
     /// (the device fills the new block's default params, and footswitch bindings are preserved).
     /// Re-reads and returns the new preset. The user can then drag it into position. Returns an error
     /// if the chain has no free slot.
-    pub fn add_block_append(&mut self, model_index: i64, paired_index: i64) -> crate::Result<EditorPreset> {
-        use fretwire_data::stream::{slot_kind, PresetStream};
+    pub fn add_block_append(
+        &mut self,
+        model_index: i64,
+        paired_index: i64,
+    ) -> crate::Result<EditorPreset> {
+        use fretwire_data::stream::{PresetStream, slot_kind};
         let raw = self.read_preset_raw()?;
         let ps = PresetStream::parse(&raw)?;
         let blocks = ps.dsp_blocks(0);
         // On a split preset, "append" means the end of the **series (row A)** row — the slots before
         // the split node. Prefer the first empty row-A slot after the last row-A block; fall back to
         // any empty row-A slot, then any empty slot at all (row B), so it never fails when A is full.
-        let split_idx = blocks.iter().find(|b| b.kind == slot_kind::SPLIT).map(|b| b.index);
-        let in_row_a = |idx: usize| split_idx.map_or(true, |s| idx < s);
+        let split_idx = blocks
+            .iter()
+            .find(|b| b.kind == slot_kind::SPLIT)
+            .map(|b| b.index);
+        let in_row_a = |idx: usize| split_idx.is_none_or(|s| idx < s);
         let series_last = blocks
             .iter()
             .filter(|b| b.kind == slot_kind::EFFECT && in_row_a(b.index))
@@ -941,7 +1061,11 @@ impl Session {
         let target = blocks
             .iter()
             .find(|b| b.kind == slot_kind::EMPTY && in_row_a(b.index) && b.index > series_last)
-            .or_else(|| blocks.iter().find(|b| b.kind == slot_kind::EMPTY && in_row_a(b.index)))
+            .or_else(|| {
+                blocks
+                    .iter()
+                    .find(|b| b.kind == slot_kind::EMPTY && in_row_a(b.index))
+            })
             .or_else(|| blocks.iter().find(|b| b.kind == slot_kind::EMPTY))
             .map(|b| b.index as i64)
             .ok_or_else(|| fretwire_data::Error::Stream("no free slot to add a block".into()))?;
@@ -961,28 +1085,49 @@ impl Session {
     /// written position verbatim — verified live 2026-07-06 (drag ⋔/⋉ in the GUI; the re-read and
     /// the pedal's own routing display both follow). [solid]
     pub fn set_node_pos(&mut self, dsp: usize, kind: i64, pos: i64) -> crate::Result<EditorPreset> {
-        use fretwire_data::stream::{slot_kind, PresetStream};
+        use fretwire_data::stream::{PresetStream, slot_kind};
         if kind != slot_kind::SPLIT && kind != slot_kind::MIXER {
-            return Err(fretwire_data::Error::Stream(format!("not a movable node kind: {kind}")).into());
+            return Err(
+                fretwire_data::Error::Stream(format!("not a movable node kind: {kind}")).into(),
+            );
         }
         let raw = self.read_preset_raw()?;
         let mut ps = PresetStream::parse(&raw)?;
         if !ps.dsp_is_split(dsp) {
             return Err(fretwire_data::Error::Stream(format!("DSP {dsp} is not split")).into());
         }
-        let other_kind = if kind == slot_kind::SPLIT { slot_kind::MIXER } else { slot_kind::SPLIT };
+        let other_kind = if kind == slot_kind::SPLIT {
+            slot_kind::MIXER
+        } else {
+            slot_kind::SPLIT
+        };
         let other = ps
             .dsp_structural_node_pos(dsp, other_kind)
             .ok_or_else(|| fretwire_data::Error::Stream("missing peer node position".into()))?;
         // Occupied row-B columns (grid row 1) — the bracket must keep enclosing them.
-        let b_cols: Vec<i64> =
-            ps.dsp_grid(dsp).iter().filter(|c| c.row == 1 && c.occupied).map(|c| c.column).collect();
+        let b_cols: Vec<i64> = ps
+            .dsp_grid(dsp)
+            .iter()
+            .filter(|c| c.row == 1 && c.occupied)
+            .map(|c| c.column)
+            .collect();
         let (lo, hi) = if kind == slot_kind::SPLIT {
             // split: ≥ 1, ≤ first B block's column, and strictly left of the mixer.
-            (1, b_cols.iter().min().copied().unwrap_or(other - 1).min(other - 1))
+            (
+                1,
+                b_cols
+                    .iter()
+                    .min()
+                    .copied()
+                    .unwrap_or(other - 1)
+                    .min(other - 1),
+            )
         } else {
             // mixer: past the last B block's column, and strictly right of the split.
-            ((b_cols.iter().max().copied().unwrap_or(other) + 1).max(other + 1), 16)
+            (
+                (b_cols.iter().max().copied().unwrap_or(other) + 1).max(other + 1),
+                16,
+            )
         };
         if pos < lo || pos > hi {
             return Err(fretwire_data::Error::Stream(format!(
@@ -991,7 +1136,9 @@ impl Session {
             .into());
         }
         if !ps.set_dsp_node_pos(dsp, kind, pos) {
-            return Err(fretwire_data::Error::Stream("node holder not found in preset".into()).into());
+            return Err(
+                fretwire_data::Error::Stream("node holder not found in preset".into()).into(),
+            );
         }
         self.write_preset(ps.to_blob())?;
         self.read_preset()
@@ -1028,7 +1175,7 @@ impl Session {
     /// spare empty slot — each preceded by op 78 — exactly as HX Edit does. Re-reads once at the end
     /// and returns the new preset. Serial presets only for now (errors on a split preset).
     pub fn reorder_block(&mut self, src_slot: i64, gap: usize) -> crate::Result<EditorPreset> {
-        use fretwire_data::stream::{slot_kind, split_wire_slot, PresetStream};
+        use fretwire_data::stream::{PresetStream, slot_kind, split_wire_slot};
         let (dsp, _) = split_wire_slot(src_slot);
         let raw = self.read_preset_raw()?;
         let ps = PresetStream::parse(&raw)?;
@@ -1039,17 +1186,24 @@ impl Session {
             .into());
         }
         let blocks = ps.dsp_blocks(dsp); // this DSP's 20 slots, in index order
-        let occupied: Vec<usize> =
-            blocks.iter().filter(|b| b.kind == slot_kind::EFFECT).map(|b| b.wire_slot() as usize).collect();
+        let occupied: Vec<usize> = blocks
+            .iter()
+            .filter(|b| b.kind == slot_kind::EFFECT)
+            .map(|b| b.wire_slot() as usize)
+            .collect();
         let from_pos = occupied
             .iter()
             .position(|&s| s as i64 == src_slot)
-            .ok_or_else(|| fretwire_data::Error::Stream("source slot is not an effect block".into()))?;
+            .ok_or_else(|| {
+                fretwire_data::Error::Stream("source slot is not an effect block".into())
+            })?;
         let scratch = blocks
             .iter()
             .find(|b| b.kind == slot_kind::EMPTY)
             .map(|b| b.wire_slot() as usize)
-            .ok_or_else(|| fretwire_data::Error::Stream("no empty slot to reorder through".into()))?;
+            .ok_or_else(|| {
+                fretwire_data::Error::Stream("no empty slot to reorder through".into())
+            })?;
 
         let n = occupied.len();
         // The drop gap (blocks-before-drop) maps to a final order position. Removing the dragged
@@ -1094,7 +1248,12 @@ impl Session {
     /// Set a knob/continuous parameter on the block's **paired cab/IR** (the second model fused into
     /// an amp+cab slot), by its index in the cab's param order. Same as [`Self::set_param`] but
     /// targets the paired sub-model (wire `26:1`).
-    pub fn set_paired_param(&mut self, slot: i64, param_index: i64, value: f32) -> crate::Result<()> {
+    pub fn set_paired_param(
+        &mut self,
+        slot: i64,
+        param_index: i64,
+        value: f32,
+    ) -> crate::Result<()> {
         let txn = self.bump_txn();
         let body = edit::set_paired_value(slot, param_index, value, txn);
         self.send_edit(body)?;
@@ -1112,7 +1271,11 @@ impl Session {
         value: i64,
     ) -> crate::Result<()> {
         let txn = self.bump_txn();
-        let model_sel = if paired { edit::MODEL_PAIRED } else { edit::MODEL_MAIN };
+        let model_sel = if paired {
+            edit::MODEL_PAIRED
+        } else {
+            edit::MODEL_MAIN
+        };
         let body = edit::set_value_on(slot, model_sel, param_index, EditValue::Int(value), txn);
         self.send_edit(body)?;
         Ok(())
@@ -1135,11 +1298,14 @@ impl Session {
                         // Seed the edit-history timeline with the loaded state (entry 0) the first
                         // time a preset is read after connect / preset switch — so the history pane
                         // exists (and A/B against "as loaded" works) before any edit is made.
-                        if self.history.is_empty() {
-                            if let Some(blob) = self.current_blob() {
-                                self.history.push(HistoryEntry { label: "Loaded".into(), blob });
-                                self.cursor = 0;
-                            }
+                        if self.history.is_empty()
+                            && let Some(blob) = self.current_blob()
+                        {
+                            self.history.push(HistoryEntry {
+                                label: "Loaded".into(),
+                                blob,
+                            });
+                            self.cursor = 0;
                         }
                         return Ok(preset);
                     }
@@ -1148,7 +1314,8 @@ impl Session {
                 Err(e) => last_err = Some(e),
             }
             tracing::warn!(attempt, "preset read/decode failed; draining and retrying");
-            self.transport.drain_wire(std::time::Duration::from_millis(60), 256);
+            self.transport
+                .drain_wire(std::time::Duration::from_millis(60), 256);
         }
         Err(last_err.expect("loop runs at least once"))
     }
@@ -1182,7 +1349,10 @@ impl Session {
             tracing::debug!(slot, attempt, "block still settling after edit; re-reading");
             prev = next;
         }
-        tracing::warn!(slot, "block never settled within the read budget; returning the last read");
+        tracing::warn!(
+            slot,
+            "block never settled within the read budget; returning the last read"
+        );
         Ok(prev)
     }
 
@@ -1217,13 +1387,13 @@ impl Session {
             // the slot we selected — a mismatch means the sweep desynced; stop rather than save
             // mislabeled blobs.
             fretwire_data::stream::PresetStream::parse(&raw)?;
-            if let Some(i) = &info {
-                if i.index != index {
-                    return Err(crate::Error::Backup(format!(
-                        "device reports preset {} while backing up slot {index} — sweep desynced, aborting",
-                        i.index
-                    )));
-                }
+            if let Some(i) = &info
+                && i.index != index
+            {
+                return Err(crate::Error::Backup(format!(
+                    "device reports preset {} while backing up slot {index} — sweep desynced, aborting",
+                    i.index
+                )));
             }
             let name = info
                 .map(|i| i.name)
@@ -1239,7 +1409,10 @@ impl Session {
         // The sweep changed the editing context out from under any cached state.
         self.last_raw = None;
         self.clear_history();
-        Ok(crate::backup::Backup { device: "HX Stomp".into(), presets })
+        Ok(crate::backup::Backup {
+            device: "HX Stomp".into(),
+            presets,
+        })
     }
 
     /// Restore one backed-up preset into setlist `slot`: select the slot, replay the stored stream
@@ -1273,7 +1446,8 @@ impl Session {
         // read's first reply and desync the whole sequence into a bulk-IN timeout. At connect the
         // wire is already quiet, so this just costs one short read.
         self.transport.drain();
-        self.transport.drain_wire(std::time::Duration::from_millis(30), 128);
+        self.transport
+            .drain_wire(std::time::Duration::from_millis(30), 128);
 
         // The non-destructive read sequence HX Edit issues on connect (decoded from startup.pcapng):
         // open the edit buffer (op 76), prepare (op 24), query identity (op 23), start the stream
@@ -1282,21 +1456,41 @@ impl Session {
         // state-push/keepalive can't be mistaken for the reply (the stream-start reply *is* chunk #0,
         // so a mismatch there yields a stream with no envelope → "key 104 missing").
         let txn = self.bump_txn();
-        let open = self.edit_request_txn(cmd::OPEN, Tlv::command(op::PARAM_SET, edit::read_open(txn)).to_bytes(), txn)?;
+        let open = self.edit_request_txn(
+            cmd::OPEN,
+            Tlv::command(op::PARAM_SET, edit::read_open(txn)).to_bytes(),
+            txn,
+        )?;
         tracing::info!(arg = open.arg, body = open.body.len(), "read-open reply");
 
         let txn = self.bump_txn();
-        self.edit_request_txn(cmd::STREAM, Tlv::command(op::PARAM_SET, edit::read_prep(txn)).to_bytes(), txn)?;
+        self.edit_request_txn(
+            cmd::STREAM,
+            Tlv::command(op::PARAM_SET, edit::read_prep(txn)).to_bytes(),
+            txn,
+        )?;
 
         let txn = self.bump_txn();
-        let info = self.edit_request_txn(cmd::STREAM, Tlv::command(op::PARAM_SET, edit::read_info(txn)).to_bytes(), txn)?;
+        let info = self.edit_request_txn(
+            cmd::STREAM,
+            Tlv::command(op::PARAM_SET, edit::read_info(txn)).to_bytes(),
+            txn,
+        )?;
         let preset_info = fretwire_data::stream::parse_preset_info(&info.body);
         tracing::info!(?preset_info, "read-info reply (current preset identity)");
 
         // Start the paged stream; the reply carries chunk #0 (and echoes the txn).
         let txn = self.bump_txn();
-        let first = self.edit_request_txn(cmd::STREAM, Tlv::command(op::PARAM_SET, edit::stream_start(txn)).to_bytes(), txn)?;
-        tracing::info!(arg = first.arg, body = first.body.len(), "stream-start reply (chunk #0)");
+        let first = self.edit_request_txn(
+            cmd::STREAM,
+            Tlv::command(op::PARAM_SET, edit::stream_start(txn)).to_bytes(),
+            txn,
+        )?;
+        tracing::info!(
+            arg = first.arg,
+            body = first.body.len(),
+            "stream-start reply (chunk #0)"
+        );
 
         // Reassemble: each reply's body is a chunk; request more (cmd 0x08, empty body) until the
         // stream ends. `edit_request` advances the channel offset per reply.
@@ -1335,7 +1529,9 @@ impl Session {
                     Some(t) => {
                         empties += 1;
                         tracing::warn!(
-                            got = payload.len(), want = t, empties,
+                            got = payload.len(),
+                            want = t,
+                            empties,
                             "short chunk before declared stream end — skipping, continuing read",
                         );
                         if empties >= 8 {
@@ -1374,7 +1570,8 @@ impl Session {
         // yielding a preset *blob* (binary key 104) instead of the list *array* ("key 104 is not an
         // array"). Drain, then txn-match the structured steps so chunk #0 is the real stream start.
         self.transport.drain();
-        self.transport.drain_wire(std::time::Duration::from_millis(30), 128);
+        self.transport
+            .drain_wire(std::time::Duration::from_millis(30), 128);
 
         let txn = self.bump_txn();
         let open = self.edit_request_txn(cmd::OPEN, tlv(edit::browse_open(txn)), txn)?;
@@ -1385,7 +1582,11 @@ impl Session {
 
         let txn = self.bump_txn();
         let first = self.edit_request_txn(cmd::STREAM, tlv(edit::presets_stream(txn)), txn)?;
-        tracing::info!(arg = first.arg, body = first.body.len(), "preset-list stream chunk #0");
+        tracing::info!(
+            arg = first.arg,
+            body = first.body.len(),
+            "preset-list stream chunk #0"
+        );
 
         let mut payload = first.body.clone();
         let full_chunk = first.body.len();
@@ -1431,9 +1632,14 @@ impl Session {
             let frame = Frame::new(src, dst, seq, cmd::SESSION_CLOSE, arg, Vec::new());
             match self.transport.request_within(&frame, CLOSE_ACK_WAIT) {
                 Ok(reply) => tracing::debug!(
-                    src = format_args!("{src:#06x}"), ack_arg = reply.arg, "session-close acked"),
+                    src = format_args!("{src:#06x}"),
+                    ack_arg = reply.arg,
+                    "session-close acked"
+                ),
                 Err(e) => tracing::debug!(
-                    src = format_args!("{src:#06x}"), "session-close ack skipped ({e})"),
+                    src = format_args!("{src:#06x}"),
+                    "session-close ack skipped ({e})"
+                ),
             }
         }
         // Let the device finish processing the close before the interface is released.
@@ -1469,8 +1675,8 @@ fn reply_txn(body: &[u8]) -> Option<u16> {
         // A fixmap header (0x81..=0x8f) whose first key is positive-fixint 102 (0x66).
         if (0x81..=0x8f).contains(&body[i]) && body.get(i + 1) == Some(&0x66) {
             return match body.get(i + 2)? {
-                v @ 0x00..=0x7f => Some(*v as u16),                            // positive fixint
-                0xcc => body.get(i + 3).map(|x| *x as u16),                    // uint8
+                v @ 0x00..=0x7f => Some(*v as u16),         // positive fixint
+                0xcc => body.get(i + 3).map(|x| *x as u16), // uint8
                 0xcd => Some(u16::from_be_bytes([*body.get(i + 3)?, *body.get(i + 4)?])), // uint16
                 _ => None,
             };
@@ -1546,7 +1752,7 @@ fn plan_row_insert(
         let target = free
             .iter()
             .copied()
-            .find(|&s| last.map_or(true, |l| s > l))
+            .find(|&s| last.is_none_or(|l| s > l))
             .or_else(|| free.first().copied())?;
         return Some((Vec::new(), target));
     }
@@ -1634,9 +1840,18 @@ mod insert_pos_tests {
     use super::plan_reorder;
 
     /// Apply a plan_reorder move list to a slot→label board and return the final row order.
-    fn simulate(labels: &[&str], slots: &[usize], scratch: usize, from: usize, to: usize) -> Vec<String> {
-        let mut board: std::collections::BTreeMap<usize, String> =
-            slots.iter().copied().zip(labels.iter().map(|s| s.to_string())).collect();
+    fn simulate(
+        labels: &[&str],
+        slots: &[usize],
+        scratch: usize,
+        from: usize,
+        to: usize,
+    ) -> Vec<String> {
+        let mut board: std::collections::BTreeMap<usize, String> = slots
+            .iter()
+            .copied()
+            .zip(labels.iter().map(|s| s.to_string()))
+            .collect();
         for (a, b) in plan_reorder(slots, scratch, from, to) {
             let block = board.remove(&a).expect("move source occupied");
             assert!(!board.contains_key(&b), "move destination must be empty");
@@ -1654,7 +1869,13 @@ mod insert_pos_tests {
     fn drop_after_maps_pos_to_final_index() {
         // [NG, Glitz, Min, Amp, SD]: drag NG onto Amp's right half → others [Glitz, Min, Amp, SD],
         // pos = 3 → final [Glitz, Min, Amp, NG, SD].
-        let fin = simulate(&["NG", "Glitz", "Min", "Amp", "SD"], &[1, 2, 3, 4, 5], 6, 0, 3);
+        let fin = simulate(
+            &["NG", "Glitz", "Min", "Amp", "SD"],
+            &[1, 2, 3, 4, 5],
+            6,
+            0,
+            3,
+        );
         assert_eq!(fin, ["Glitz", "Min", "Amp", "NG", "SD"]);
     }
 
@@ -1662,7 +1883,13 @@ mod insert_pos_tests {
     fn drop_before_maps_pos_to_final_index() {
         // Drag SD onto Glitz's left half → others [NG, Glitz, Min, Amp], pos = 1 → final
         // [NG, SD, Glitz, Min, Amp].
-        let fin = simulate(&["NG", "Glitz", "Min", "Amp", "SD"], &[1, 2, 3, 4, 5], 6, 4, 1);
+        let fin = simulate(
+            &["NG", "Glitz", "Min", "Amp", "SD"],
+            &[1, 2, 3, 4, 5],
+            6,
+            4,
+            1,
+        );
         assert_eq!(fin, ["NG", "SD", "Glitz", "Min", "Amp"]);
     }
 
@@ -1737,8 +1964,16 @@ mod dsp2_base_tests {
         // park it in 25, shift the rest left, drop it into the vacated last slot — all in DSP2's
         // slots, never touching DSP1 (0..19).
         let moves = plan_reorder(&[21, 22, 23, 24], 25, 0, 3);
-        assert_eq!(moves, vec![(21, 25), (22, 21), (23, 22), (24, 23), (25, 24)]);
-        assert!(moves.iter().flat_map(|&(a, b)| [a, b]).all(|s| (20..40).contains(&s)));
+        assert_eq!(
+            moves,
+            vec![(21, 25), (22, 21), (23, 22), (24, 23), (25, 24)]
+        );
+        assert!(
+            moves
+                .iter()
+                .flat_map(|&(a, b)| [a, b])
+                .all(|s| (20..40).contains(&s))
+        );
     }
 }
 
@@ -1749,14 +1984,22 @@ mod reorder_tests_legacy {
     /// Apply a move list to an occupancy/content model and assert every destination was empty.
     fn simulate(slots: &[usize], scratch: usize, moves: &[(usize, usize)]) -> Vec<Option<usize>> {
         // cell[slot] = Some(block_id) | None. Block ids = original position in `slots`.
-        let max = slots.iter().copied().chain(std::iter::once(scratch)).max().unwrap_or(0);
+        let max = slots
+            .iter()
+            .copied()
+            .chain(std::iter::once(scratch))
+            .max()
+            .unwrap_or(0);
         let mut cell = vec![None; max + 1];
         for (id, &sl) in slots.iter().enumerate() {
             cell[sl] = Some(id);
         }
         for &(a, b) in moves {
             assert!(cell[a].is_some(), "move source {a} was empty");
-            assert!(cell[b].is_none(), "move dest {b} was occupied (op 43 needs an empty slot)");
+            assert!(
+                cell[b].is_none(),
+                "move dest {b} was occupied (op 43 needs an empty slot)"
+            );
             cell[b] = cell[a].take();
         }
         cell
@@ -1809,14 +2052,19 @@ mod tests {
 
     fn hex(s: &str) -> Vec<u8> {
         let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
     }
 
     #[test]
     fn reads_txn_from_a_complete_envelope_reply() {
         // read-info reply (startup.pcapng): TLV header + {102:0x3ea, 103:0, 104:{...}}.
-        let body = hex("00000600260000008366cd03ea670068866bcd00006ccd00146da9447561\
-                        6c20416d700075c35392cd2292005c00");
+        let body = hex(
+            "00000600260000008366cd03ea670068866bcd00006ccd00146da9447561\
+                        6c20416d700075c35392cd2292005c00",
+        );
         assert_eq!(reply_txn(&body), Some(0x03ea));
     }
 

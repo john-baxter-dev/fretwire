@@ -8,29 +8,26 @@ use anyhow::Result;
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
     let mut args = std::env::args().skip(1);
     let cmd = args.next().unwrap_or_else(|| "detect".into());
     match cmd.as_str() {
-        "detect" => {
-            match fretwire_usb::present_devices() {
-                Ok(found) if found.is_empty() => println!("no HX device found"),
-                Ok(found) => {
-                    for d in found {
-                        let note = match d.support {
-                            fretwire_usb::Support::Verified => String::new(),
-                            fretwire_usb::Support::Untested => " (untested device)".into(),
-                        };
-                        println!("{}: present{note}", d.name);
-                    }
+        "detect" => match fretwire_usb::present_devices() {
+            Ok(found) if found.is_empty() => println!("no HX device found"),
+            Ok(found) => {
+                for d in found {
+                    let note = match d.support {
+                        fretwire_usb::Support::Verified => String::new(),
+                        fretwire_usb::Support::Untested => " (untested device)".into(),
+                    };
+                    println!("{}: present{note}", d.name);
                 }
-                Err(e) => println!("usb error: {e}"),
             }
-        }
+            Err(e) => println!("usb error: {e}"),
+        },
         "show-preset" => {
             let path = args.next().ok_or_else(|| {
                 anyhow::anyhow!("usage: fretwire show-preset <reassembled-stream.bin>")
@@ -39,7 +36,9 @@ fn main() -> Result<()> {
         }
         "decode-edit" => {
             let hex = args.next().ok_or_else(|| {
-                anyhow::anyhow!("usage: fretwire decode-edit <hex bytes of the edit body, e.g. 8366cd03f2...>")
+                anyhow::anyhow!(
+                    "usage: fretwire decode-edit <hex bytes of the edit body, e.g. 8366cd03f2...>"
+                )
             })?;
             decode_edit(&hex)?;
         }
@@ -73,11 +72,17 @@ fn main() -> Result<()> {
         "bypass" => {
             // Pedal semantics: `bypass <slot> on` engages bypass (block OFF); `off` activates it.
             let slot: i64 = next_num(&mut args, "slot")?;
-            let bypassed = matches!(args.next().as_deref(), Some("on") | Some("true") | Some("1"));
+            let bypassed = matches!(
+                args.next().as_deref(),
+                Some("on") | Some("true") | Some("1")
+            );
             let mut s = fretwire_core::Session::connect()?;
             s.set_enabled(slot, !bypassed)?;
-            println!("slot {slot} bypass -> {}  (block {})",
-                if bypassed { "on" } else { "off" }, if bypassed { "off" } else { "on" });
+            println!(
+                "slot {slot} bypass -> {}  (block {})",
+                if bypassed { "on" } else { "off" },
+                if bypassed { "off" } else { "on" }
+            );
         }
         "set" => {
             let slot: i64 = next_num(&mut args, "slot")?;
@@ -148,8 +153,12 @@ fn main() -> Result<()> {
             // PROBE: read the preset and write it back unchanged via op 21, then re-read. Safe — it
             // touches the edit buffer only (reversible by reloading) and changes nothing. The first
             // hardware test of the whole-preset-write path.
-            eprintln!("op-21 write probe: re-writing the current preset UNCHANGED (edit buffer only,");
-            eprintln!("reversible by reloading the preset). Watch RUST_LOG=trace for the chunk frames.");
+            eprintln!(
+                "op-21 write probe: re-writing the current preset UNCHANGED (edit buffer only,"
+            );
+            eprintln!(
+                "reversible by reloading the preset). Watch RUST_LOG=trace for the chunk frames."
+            );
             let mut s = fretwire_core::Session::connect()?;
             let preset = s.rewrite_preset_unchanged()?;
             println!("round-trip complete — re-read preset:");
@@ -160,7 +169,9 @@ fn main() -> Result<()> {
             // first, as HX Edit does). Preserves the footswitch layout of the other blocks. Edit
             // buffer only; reload the preset to undo.
             let slot: i64 = next_num(&mut args, "slot")?;
-            eprintln!("deleting block at slot {slot} via op-28 (surgical; keeps footswitch layout).");
+            eprintln!(
+                "deleting block at slot {slot} via op-28 (surgical; keeps footswitch layout)."
+            );
             let mut s = fretwire_core::Session::connect()?;
             let preset = s.delete_block(slot)?;
             println!("deleted slot {slot}:");
@@ -170,14 +181,20 @@ fn main() -> Result<()> {
             // Position-aware cross-row move: `move-to-row <src-slot> <p|s> <pos>` (p=parallel/B,
             // s=series/A; pos = insertion index among the target row's blocks, or 'end').
             let src: i64 = next_num(&mut args, "src-slot")?;
-            let par = matches!(args.next().as_deref(), Some("p") | Some("parallel") | Some("1"));
+            let par = matches!(
+                args.next().as_deref(),
+                Some("p") | Some("parallel") | Some("1")
+            );
             let pos = match args.next().as_deref() {
                 Some("end") | None => usize::MAX,
                 Some(n) => n.parse().unwrap_or(usize::MAX),
             };
             let mut s = fretwire_core::Session::connect()?;
             let preset = s.move_block_to_row(src, par, pos)?;
-            println!("moved slot {src} to {} row at pos {pos}:", if par { "parallel" } else { "series" });
+            println!(
+                "moved slot {src} to {} row at pos {pos}:",
+                if par { "parallel" } else { "series" }
+            );
             print_preset(&preset);
         }
         "before-split" => {
@@ -218,12 +235,16 @@ fn main() -> Result<()> {
             // the stored name — does NOT commit the edit buffer (any pending edits stay unsaved).
             let slot: i64 = next_num(&mut args, "slot")?;
             let name = args.next().ok_or_else(|| {
-                anyhow::anyhow!("usage: fretwire rename <slot> <name> [bank]  (name-only, doesn't save edits)")
+                anyhow::anyhow!(
+                    "usage: fretwire rename <slot> <name> [bank]  (name-only, doesn't save edits)"
+                )
             })?;
             let bank: i64 = args.next().map(|s| s.parse().unwrap_or(0)).unwrap_or(0);
             let mut s = fretwire_core::Session::connect()?;
             s.rename_preset(bank, slot, &name)?;
-            println!("renamed bank {bank} slot {slot} to {name:?} (name-only; edit buffer not saved)");
+            println!(
+                "renamed bank {bank} slot {slot} to {name:?} (name-only; edit buffer not saved)"
+            );
         }
         "swap" => {
             // Swap a block's model: `swap <slot> <model-index> [paired-index]`. model-index is the
@@ -236,9 +257,15 @@ fn main() -> Result<()> {
             // the budget is unconfirmed and the device is the final arbiter (see DSP_BUDGET).
             let projected = match s.read_preset() {
                 Ok(preset) => {
-                    let old = preset.blocks.iter().find(|b| b.slot == slot)
-                        .and_then(|b| b.dsp_load).unwrap_or(0.0);
-                    let new = s.catalog().model_load_by_index(index)
+                    let old = preset
+                        .blocks
+                        .iter()
+                        .find(|b| b.slot == slot)
+                        .and_then(|b| b.dsp_load)
+                        .unwrap_or(0.0);
+                    let new = s
+                        .catalog()
+                        .model_load_by_index(index)
                         .map(|l| l + s.catalog().model_load_by_index(paired).unwrap_or(0.0));
                     new.map(|n| (preset.dsp_load, preset.dsp_load - old + n))
                 }
@@ -247,25 +274,34 @@ fn main() -> Result<()> {
                     None
                 }
             };
-            if let Some((_cur, proj)) = projected {
-                if proj > fretwire_core::editor::DSP_BUDGET {
-                    eprintln!("⚠  projected DSP ~{proj:.1}% exceeds the ~{:.0}% budget — the device \
-                        may reject this swap or drop a block.", fretwire_core::editor::DSP_BUDGET);
-                }
+            if let Some((_cur, proj)) = projected
+                && proj > fretwire_core::editor::DSP_BUDGET
+            {
+                eprintln!(
+                    "⚠  projected DSP ~{proj:.1}% exceeds the ~{:.0}% budget — the device \
+                    may reject this swap or drop a block.",
+                    fretwire_core::editor::DSP_BUDGET
+                );
             }
             s.swap_model(slot, index, paired)?;
             let delta = projected
                 .map(|(cur, proj)| format!("  (DSP ~{cur:.1}% -> ~{proj:.1}%)"))
                 .unwrap_or_default();
-            println!("slot {slot} -> model index {index}{}{delta}",
-                if paired >= 0 { format!(" (paired cab {paired})") } else { String::new() });
+            println!(
+                "slot {slot} -> model index {index}{}{delta}",
+                if paired >= 0 {
+                    format!(" (paired cab {paired})")
+                } else {
+                    String::new()
+                }
+            );
         }
         "rename-snapshot" => {
             // Rename a snapshot: `rename-snapshot <index> <name>` (0-based index).
             let index: i64 = next_num(&mut args, "index")?;
-            let name = args.next().ok_or_else(|| {
-                anyhow::anyhow!("usage: fretwire rename-snapshot <index> <name>")
-            })?;
+            let name = args
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("usage: fretwire rename-snapshot <index> <name>"))?;
             let mut s = fretwire_core::Session::connect()?;
             s.rename_snapshot(index, &name)?;
             println!("snapshot {index} renamed to {name:?}");
@@ -284,7 +320,9 @@ fn main() -> Result<()> {
             //   fretwire save <slot> <name> [bank]   (bank defaults to 0)
             let slot: i64 = next_num(&mut args, "slot")?;
             let name = args.next().ok_or_else(|| {
-                anyhow::anyhow!("usage: fretwire save <slot> <name> [bank]  (⚠ overwrites the slot)")
+                anyhow::anyhow!(
+                    "usage: fretwire save <slot> <name> [bank]  (⚠ overwrites the slot)"
+                )
             })?;
             let bank: i64 = args.next().map(|s| s.parse().unwrap_or(0)).unwrap_or(0);
             eprintln!("⚠  PERSISTENT WRITE: overwriting bank {bank} slot {slot} with the current");
@@ -295,7 +333,9 @@ fn main() -> Result<()> {
         }
         "dump-raw" => {
             // Connect and save the raw reassembled preset stream to a file (for diffing states).
-            let path = args.next().ok_or_else(|| anyhow::anyhow!("usage: fretwire dump-raw <out.bin>"))?;
+            let path = args
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("usage: fretwire dump-raw <out.bin>"))?;
             let mut s = fretwire_core::Session::connect()?;
             let raw = s.read_preset_raw()?;
             std::fs::write(&path, &raw)?;
@@ -304,7 +344,9 @@ fn main() -> Result<()> {
         "backup" => {
             // Read every preset on the device into a JSON backup file. Reads only — flash is
             // never written — but the active-preset cursor sweeps the setlist (it's put back).
-            let path = args.next().ok_or_else(|| anyhow::anyhow!("usage: fretwire backup <out.json>"))?;
+            let path = args
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("usage: fretwire backup <out.json>"))?;
             let mut s = fretwire_core::Session::connect()?;
             println!("backing up the setlist (the pedal will step through every preset)…");
             let backup = s.backup_setlist(|done, total, name| {
@@ -315,8 +357,11 @@ fn main() -> Result<()> {
         }
         "backup-show" => {
             // Offline: list what a backup file contains (indices + names), to pick a restore.
-            let path = args.next().ok_or_else(|| anyhow::anyhow!("usage: fretwire backup-show <backup.json>"))?;
-            let backup = fretwire_core::backup::Backup::from_json(&std::fs::read_to_string(&path)?)?;
+            let path = args
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("usage: fretwire backup-show <backup.json>"))?;
+            let backup =
+                fretwire_core::backup::Backup::from_json(&std::fs::read_to_string(&path)?)?;
             println!("{} — {} presets:", backup.device, backup.presets.len());
             for p in &backup.presets {
                 println!("  [{:>3}] {}  ({} bytes)", p.index, p.name, p.raw.len());
@@ -329,11 +374,17 @@ fn main() -> Result<()> {
                 anyhow::anyhow!("usage: fretwire restore <backup.json> <backup-index> [target-slot]  (⚠ overwrites the slot)")
             })?;
             let index: i64 = next_num(&mut args, "backup-index")?;
-            let slot: i64 = args.next().map(|s| s.parse().unwrap_or(index)).unwrap_or(index);
-            let backup = fretwire_core::backup::Backup::from_json(&std::fs::read_to_string(&path)?)?;
-            let entry = backup
-                .preset(index)
-                .ok_or_else(|| anyhow::anyhow!("backup has no preset at index {index} (see: fretwire backup-show {path})"))?;
+            let slot: i64 = args
+                .next()
+                .map(|s| s.parse().unwrap_or(index))
+                .unwrap_or(index);
+            let backup =
+                fretwire_core::backup::Backup::from_json(&std::fs::read_to_string(&path)?)?;
+            let entry = backup.preset(index).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "backup has no preset at index {index} (see: fretwire backup-show {path})"
+                )
+            })?;
             let mut s = fretwire_core::Session::connect()?;
             let current = s
                 .list_presets()?
@@ -341,22 +392,34 @@ fn main() -> Result<()> {
                 .find(|(i, _)| *i as i64 == slot)
                 .map(|(_, n)| n)
                 .unwrap_or_else(|| "?".into());
-            eprintln!("⚠  PERSISTENT WRITE: restoring {:?} into slot {slot}, overwriting {current:?}.", entry.name);
+            eprintln!(
+                "⚠  PERSISTENT WRITE: restoring {:?} into slot {slot}, overwriting {current:?}.",
+                entry.name
+            );
             let preset = s.restore_preset(&entry.raw, slot, &entry.name)?;
-            println!("restored {:?} to slot {slot}; device now shows:", entry.name);
+            println!(
+                "restored {:?} to slot {slot}; device now shows:",
+                entry.name
+            );
             print_preset(&preset);
         }
         "tree" => {
             // Offline: print the MessagePack structure of a saved raw stream (RE exploration).
-            let path = args.next().ok_or_else(|| anyhow::anyhow!("usage: fretwire tree <stream.bin> [depth]"))?;
+            let path = args
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("usage: fretwire tree <stream.bin> [depth]"))?;
             let depth: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(4);
             let ps = fretwire_data::stream::PresetStream::parse(&std::fs::read(&path)?)?;
             println!("{}", fretwire_data::stream::summarize(&ps.preset, depth));
         }
         "diff-stream" => {
             // Offline: find the integer-key paths that differ between two saved streams.
-            let a = args.next().ok_or_else(|| anyhow::anyhow!("usage: fretwire diff-stream <a.bin> <b.bin>"))?;
-            let b = args.next().ok_or_else(|| anyhow::anyhow!("usage: fretwire diff-stream <a.bin> <b.bin>"))?;
+            let a = args
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("usage: fretwire diff-stream <a.bin> <b.bin>"))?;
+            let b = args
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("usage: fretwire diff-stream <a.bin> <b.bin>"))?;
             diff_stream(&a, &b)?;
         }
         "probe" => {
@@ -364,10 +427,10 @@ fn main() -> Result<()> {
             // sequence (e.g. trying open-resource body variants) without recompiling.
             let cmd_b = u8::from_str_radix(&strip_hex(&args.next().unwrap_or_default()), 16)
                 .map_err(|e| anyhow::anyhow!("bad cmd hex: {e}"))?;
-            let arg = u32::from_str_radix(&strip_hex(&args.next().unwrap_or_default()), 16)
-                .unwrap_or(0);
+            let arg =
+                u32::from_str_radix(&strip_hex(&args.next().unwrap_or_default()), 16).unwrap_or(0);
             let body = parse_hex(&args.next().unwrap_or_default())?;
-            use fretwire_core::fretwire_protocol::{channel, Frame};
+            use fretwire_core::fretwire_protocol::{Frame, channel};
             let (src, dst) = channel::EDIT;
             let mut s = fretwire_core::Session::connect()?;
             let reply = s.request(&Frame::new(src, dst, 0, cmd_b, arg, body))?;
@@ -401,21 +464,45 @@ fn main() -> Result<()> {
         other => {
             eprintln!("unknown command: {other}");
             eprintln!("usage: fretwire <command>");
-            eprintln!("  offline: detect | show-preset <stream.bin> | decode-edit <hex> | diff-stream <a.bin> <b.bin>");
-            eprintln!("           import-data <installer|dir>   (reference data from your own install; dir needs no 7z)");
-            eprintln!("           install-udev [--print]   (install the udev rule for non-root USB access)");
+            eprintln!(
+                "  offline: detect | show-preset <stream.bin> | decode-edit <hex> | diff-stream <a.bin> <b.bin>"
+            );
+            eprintln!(
+                "           import-data <installer|dir>   (reference data from your own install; dir needs no 7z)"
+            );
+            eprintln!(
+                "           install-udev [--print]   (install the udev rule for non-root USB access)"
+            );
             eprintln!("  live:    connect | disconnect | pull | presets | goto <preset> [bank]");
-            eprintln!("           bypass <slot> <on|off> | set <slot> <param-idx> <value> | snapshot <index>");
-            eprintln!("           set-cab <slot> <param-idx> <value>   (edit the paired cab/IR's params)");
-            eprintln!("           save <slot> <name> [bank]   (⚠ persistent write — overwrites the slot)");
-            eprintln!("           swap <slot> <model-index> [paired-index] | rename-snapshot <index> <name>");
-            eprintln!("           move <src-slot> <dst-slot> | add-block <slot> <model-index> [paired-index]");
-            eprintln!("           write-roundtrip   (op-21 probe: rewrite preset unchanged) | delete-block <slot>");
-            eprintln!("           rename <slot> <name> [bank]   (name-only, op 6 — does NOT save edits)");
-            eprintln!("           split-type <y|ab|xover|dyn>   (retype the parallel split node, op 40)");
+            eprintln!(
+                "           bypass <slot> <on|off> | set <slot> <param-idx> <value> | snapshot <index>"
+            );
+            eprintln!(
+                "           set-cab <slot> <param-idx> <value>   (edit the paired cab/IR's params)"
+            );
+            eprintln!(
+                "           save <slot> <name> [bank]   (⚠ persistent write — overwrites the slot)"
+            );
+            eprintln!(
+                "           swap <slot> <model-index> [paired-index] | rename-snapshot <index> <name>"
+            );
+            eprintln!(
+                "           move <src-slot> <dst-slot> | add-block <slot> <model-index> [paired-index]"
+            );
+            eprintln!(
+                "           write-roundtrip   (op-21 probe: rewrite preset unchanged) | delete-block <slot>"
+            );
+            eprintln!(
+                "           rename <slot> <name> [bank]   (name-only, op 6 — does NOT save edits)"
+            );
+            eprintln!(
+                "           split-type <y|ab|xover|dyn>   (retype the parallel split node, op 40)"
+            );
             eprintln!("           setting <id> <value>  (op 25 probe)");
             eprintln!("           backup <out.json>   (read every preset to a file — reads only)");
-            eprintln!("           restore <backup.json> <index> [slot]   (⚠ persistent write — overwrites the slot)");
+            eprintln!(
+                "           restore <backup.json> <index> [slot]   (⚠ persistent write — overwrites the slot)"
+            );
             eprintln!("           backup-show <backup.json>   (offline: list a backup's contents)");
             eprintln!("  debug:   probe <cmd-hex> <arg-hex> <body-hex> | dump-raw <out.bin>");
         }
@@ -427,8 +514,11 @@ fn next_num<T: std::str::FromStr>(args: &mut impl Iterator<Item = String>, what:
 where
     T::Err: std::fmt::Display,
 {
-    let s = args.next().ok_or_else(|| anyhow::anyhow!("missing argument: {what}"))?;
-    s.parse::<T>().map_err(|e| anyhow::anyhow!("bad {what} {s:?}: {e}"))
+    let s = args
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("missing argument: {what}"))?;
+    s.parse::<T>()
+        .map_err(|e| anyhow::anyhow!("bad {what} {s:?}: {e}"))
 }
 
 /// The udev rule, embedded at build time from the canonical copy in `packaging/` so `install-udev`
@@ -448,7 +538,7 @@ fn install_udev() -> Result<()> {
     match std::fs::write(target, UDEV_RULE) {
         Ok(()) => {
             println!("wrote {UDEV_RULE_PATH}");
-            reload_udev(|prog, a| run_status(prog, a));
+            reload_udev(run_status);
         }
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
             println!("Installing the udev rule needs root — running the install via sudo.");
@@ -462,7 +552,9 @@ fn install_udev() -> Result<()> {
         Err(e) => return Err(e.into()),
     }
 
-    println!("\n\u{2713} udev rule installed. Unplug and replug your HX Stomp for it to take effect.");
+    println!(
+        "\n\u{2713} udev rule installed. Unplug and replug your HX Stomp for it to take effect."
+    );
     Ok(())
 }
 
@@ -477,7 +569,11 @@ fn install_udev_via_sudo() -> Result<()> {
         tmp = shell_quote(&tmp.to_string_lossy()),
         target = shell_quote(UDEV_RULE_PATH),
     );
-    let status = Command::new("sudo").arg("sh").arg("-c").arg(&script).status();
+    let status = Command::new("sudo")
+        .arg("sh")
+        .arg("-c")
+        .arg(&script)
+        .status();
     let _ = std::fs::remove_file(&tmp);
     match status {
         Ok(st) if st.success() => Ok(()),
@@ -526,7 +622,11 @@ fn print_udev_manual() {
 /// `fretwire_core::import` so the GUI's first-run screen can offer the same thing; this just prints.
 fn import_data(source: &str) -> Result<()> {
     let summary = fretwire_core::import::import_from(std::path::Path::new(source))?;
-    println!("imported {} reference file(s) → {}", summary.copied, summary.dest.display());
+    println!(
+        "imported {} reference file(s) → {}",
+        summary.copied,
+        summary.dest.display()
+    );
     for name in &summary.missing {
         eprintln!("⚠  {name} missing — model names/ordering won't be available");
     }
@@ -543,7 +643,10 @@ fn strip_hex(s: &str) -> String {
 /// Parse a loose hex string (spaces/separators allowed) into bytes.
 fn parse_hex(hex: &str) -> Result<Vec<u8>> {
     let clean = strip_hex(hex);
-    anyhow::ensure!(clean.len() % 2 == 0, "hex has an odd number of digits");
+    anyhow::ensure!(
+        clean.len().is_multiple_of(2),
+        "hex has an odd number of digits"
+    );
     (0..clean.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(&clean[i..i + 2], 16).map_err(Into::into))
@@ -625,8 +728,8 @@ fn diff_values(a: &rmpv::Value, b: &rmpv::Value, path: String, out: &mut Vec<Str
                     None => out.push(format!("{path}[{i}]: {av} -> (absent)")),
                 }
             }
-            for i in aa.len()..ba.len() {
-                out.push(format!("{path}[{i}]: (absent) -> {}", ba[i]));
+            for (i, item) in ba.iter().enumerate().skip(aa.len()) {
+                out.push(format!("{path}[{i}]: (absent) -> {}", item));
             }
         }
         _ => {
@@ -657,7 +760,11 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
         preset.device_model.as_deref().unwrap_or("?"),
         preset.firmware.as_deref().unwrap_or("?")
     );
-    let topo = if preset.split() { "split (parallel)" } else { "serial" };
+    let topo = if preset.split() {
+        "split (parallel)"
+    } else {
+        "serial"
+    };
     // A two-DSP device budgets each DSP separately, so report them separately.
     let load = match preset.dsp_load_by_dsp().as_slice() {
         [(_, one)] => format!("DSP {one:.1}% used ({:.1}% free)", (100.0 - one).max(0.0)),
@@ -667,21 +774,38 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
             .collect::<Vec<_>>()
             .join(" · "),
     };
-    println!("{} block(s) · {topo} topology · {load}", preset.blocks.len());
+    println!(
+        "{} block(s) · {topo} topology · {load}",
+        preset.blocks.len()
+    );
     for b in &preset.blocks {
-        let label = b.user_label.as_deref().map(|l| format!(" \"{l}\"")).unwrap_or_default();
+        let label = b
+            .user_label
+            .as_deref()
+            .map(|l| format!(" \"{l}\""))
+            .unwrap_or_default();
         let bypass = match b.bypassed {
             Some(true) => "  [bypassed]",
             _ => "",
         };
         let variant = b.variant.map(|v| format!(" {v}")).unwrap_or_default();
         if b.is_controller {
-            println!("\n  slot {:<2} {} [footswitch/controller assignment]", b.slot, b.model_name);
+            println!(
+                "\n  slot {:<2} {} [footswitch/controller assignment]",
+                b.slot, b.model_name
+            );
             continue;
         }
         let row = if b.row == 1 { " (row B)" } else { "" };
-        let fs = if b.footswitch > 0 { format!("FS{} · ", b.footswitch) } else { String::new() };
-        let dsp = b.dsp_load.map(|l| format!("  ({l:.1}% DSP)")).unwrap_or_default();
+        let fs = if b.footswitch > 0 {
+            format!("FS{} · ", b.footswitch)
+        } else {
+            String::new()
+        };
+        let dsp = b
+            .dsp_load
+            .map(|l| format!("  ({l:.1}% DSP)"))
+            .unwrap_or_default();
         println!(
             "\n  {}slot {:<2}{} {}{}  [{}]{}{}{}",
             fs,
@@ -695,24 +819,46 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
             dsp,
         );
         for p in &b.params {
-            println!("       [{:>2}] {:<14} = {}", p.index, p.name, fmt_value(p.value));
+            println!(
+                "       [{:>2}] {:<14} = {}",
+                p.index,
+                p.name,
+                fmt_value(p.value)
+            );
         }
         if let Some(cab) = &b.paired_model_name {
             println!("       + cab: {cab}");
             for p in &b.paired_params {
-                println!("       [{:>2}] {:<14} = {}", p.index, p.name, fmt_value(p.value));
+                println!(
+                    "       [{:>2}] {:<14} = {}",
+                    p.index,
+                    p.name,
+                    fmt_value(p.value)
+                );
             }
         }
     }
     if !preset.snapshot_names.is_empty() {
-        let active = preset.active_snapshot.map(|i| format!(" (active: {i})")).unwrap_or_default();
+        let active = preset
+            .active_snapshot
+            .map(|i| format!(" (active: {i})"))
+            .unwrap_or_default();
         println!("\nsnapshots{active}: {}", preset.snapshot_names.join(", "));
     }
     if !preset.assignments.is_empty() {
-        println!("\n{} footswitch/controller assignment(s):", preset.assignments.len());
+        println!(
+            "\n{} footswitch/controller assignment(s):",
+            preset.assignments.len()
+        );
         for a in &preset.assignments {
-            let param = a.param_index.map(|p| format!(" param {p}")).unwrap_or_default();
-            let slot = a.target_slot.map(|s| format!("slot {s}")).unwrap_or_else(|| "?".into());
+            let param = a
+                .param_index
+                .map(|p| format!(" param {p}"))
+                .unwrap_or_default();
+            let slot = a
+                .target_slot
+                .map(|s| format!("slot {s}"))
+                .unwrap_or_else(|| "?".into());
             println!("  controller {} -> {}{}", a.controller, slot, param);
         }
     }

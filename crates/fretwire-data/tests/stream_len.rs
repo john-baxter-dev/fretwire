@@ -9,7 +9,9 @@ use std::path::PathBuf;
 use fretwire_data::stream::declared_stream_len;
 
 fn capture(name: &str) -> Vec<u8> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../captures").join(name);
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../captures")
+        .join(name);
     std::fs::read(p).expect("read capture fixture")
 }
 
@@ -18,9 +20,14 @@ fn capture(name: &str) -> Vec<u8> {
 /// keeps reading toward, so it must never exceed the true size.
 #[test]
 fn declared_length_matches_fixtures() {
-    for name in ["dual_amp_stream.msgpack.bin", "split_preset_stream.msgpack.bin", "preset1_stream.msgpack.bin"] {
+    for name in [
+        "dual_amp_stream.msgpack.bin",
+        "split_preset_stream.msgpack.bin",
+        "preset1_stream.msgpack.bin",
+    ] {
         let bytes = capture(name);
-        let declared = declared_stream_len(&bytes).unwrap_or_else(|| panic!("{name}: no declared length"));
+        let declared =
+            declared_stream_len(&bytes).unwrap_or_else(|| panic!("{name}: no declared length"));
         assert!(
             declared <= bytes.len() && bytes.len() - declared <= 1,
             "{name}: declared {declared} not within [len-1, len] of actual {}",
@@ -32,10 +39,19 @@ fn declared_length_matches_fixtures() {
 /// Exact values, pinned so a change in the envelope layout is caught.
 #[test]
 fn declared_length_exact_values() {
-    assert_eq!(declared_stream_len(&capture("dual_amp_stream.msgpack.bin")), Some(2609));
-    assert_eq!(declared_stream_len(&capture("split_preset_stream.msgpack.bin")), Some(2857));
+    assert_eq!(
+        declared_stream_len(&capture("dual_amp_stream.msgpack.bin")),
+        Some(2609)
+    );
+    assert_eq!(
+        declared_stream_len(&capture("split_preset_stream.msgpack.bin")),
+        Some(2857)
+    );
     // preset1 carries one trailing pad byte (file is 2804); the declared payload is 2803.
-    assert_eq!(declared_stream_len(&capture("preset1_stream.msgpack.bin")), Some(2803));
+    assert_eq!(
+        declared_stream_len(&capture("preset1_stream.msgpack.bin")),
+        Some(2803)
+    );
 }
 
 /// A truncated chunk #0 with the declared length reached mid-payload is exactly the failure the
@@ -55,5 +71,8 @@ fn rejects_short_and_implausible() {
     // marker/type = 0, len = 0 -> total would be just the prefix (no payload): rejected.
     assert_eq!(declared_stream_len(&[0, 0, 0, 0, 0, 0, 0, 0]), None);
     // A garbage length (0xFFFF_FFFF) must not be trusted, or the reader loops forever.
-    assert_eq!(declared_stream_len(&[0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff]), None);
+    assert_eq!(
+        declared_stream_len(&[0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff]),
+        None
+    );
 }

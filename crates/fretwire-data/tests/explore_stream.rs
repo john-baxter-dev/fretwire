@@ -10,7 +10,8 @@ use std::path::PathBuf;
 
 fn blob() -> Vec<u8> {
     // Our own capture fixture lives in the repo under captures/.
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../captures/preset1_stream.msgpack.bin");
+    let p =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../captures/preset1_stream.msgpack.bin");
     std::fs::read(p).expect("read preset stream blob")
 }
 
@@ -29,7 +30,11 @@ fn data_dir() -> PathBuf {
 #[test]
 fn locates_and_summarizes_root() {
     let data = blob();
-    eprintln!("stream is {} bytes; first 24: {:02x?}", data.len(), &data[..24]);
+    eprintln!(
+        "stream is {} bytes; first 24: {:02x?}",
+        data.len(),
+        &data[..24]
+    );
 
     let root = fretwire_data::stream::locate_root(&data, 64)
         .expect("should find a MessagePack container root");
@@ -42,36 +47,54 @@ fn locates_and_summarizes_root() {
     );
 
     // Sanity: the root should account for most of the stream.
-    assert!(root.consumed > data.len() / 2, "root consumed too little — envelope/offset wrong");
+    assert!(
+        root.consumed > data.len() / 2,
+        "root consumed too little — envelope/offset wrong"
+    );
 
     // The root is an envelope map {102: size, 103: ?, 104: <preset blob>}. Key 104 holds a
     // binary string whose content is *itself* MessagePack — the real preset. Drill in.
     let inner = map_get(&root.value, 104).expect("key 104 present");
     let bytes = value_bytes(inner).expect("key 104 is a string/binary blob");
-    eprintln!("\nkey 104 blob is {} bytes; first 16: {:02x?}", bytes.len(), &bytes[..16.min(bytes.len())]);
+    eprintln!(
+        "\nkey 104 blob is {} bytes; first 16: {:02x?}",
+        bytes.len(),
+        &bytes[..16.min(bytes.len())]
+    );
 
     // The blob is a flat sequence of concatenated MessagePack values.
     let (seq, consumed) = fretwire_data::stream::read_sequence(bytes, 80);
-    eprintln!("\nINNER sequence: {} values, consumed {} of {} bytes", seq.len(), consumed, bytes.len());
+    eprintln!(
+        "\nINNER sequence: {} values, consumed {} of {} bytes",
+        seq.len(),
+        consumed,
+        bytes.len()
+    );
     for (i, v) in seq.iter().enumerate() {
         eprintln!("  [{i:>3}] {}", fretwire_data::stream::summarize(v, 1));
     }
 
     // The last value is the preset map — expand it deeply.
     if let Some(preset) = seq.last() {
-        eprintln!("\n===== PRESET MAP (deep) =====\n{}", fretwire_data::stream::summarize(preset, 4));
+        eprintln!(
+            "\n===== PRESET MAP (deep) =====\n{}",
+            fretwire_data::stream::summarize(preset, 4)
+        );
     }
 }
 
 #[test]
 fn locate_model_names() {
     // Find where strings like "Bucket Brigade" live in the blob, and dump preset keys 5/6/10.
-    use fretwire_data::stream::{summarize, PresetStream};
+    use fretwire_data::stream::{PresetStream, summarize};
     let data = blob();
     let needle = b"Bucket Brigade";
     if let Some(pos) = data.windows(needle.len()).position(|w| w == needle) {
         let start = pos.saturating_sub(8);
-        eprintln!("'Bucket Brigade' at blob offset {pos}; context bytes: {:02x?}", &data[start..(pos + 24).min(data.len())]);
+        eprintln!(
+            "'Bucket Brigade' at blob offset {pos}; context bytes: {:02x?}",
+            &data[start..(pos + 24).min(data.len())]
+        );
     } else {
         eprintln!("'Bucket Brigade' not found as raw ASCII");
     }
@@ -93,7 +116,11 @@ fn loaded_blocks_combine_identity_and_values() {
     // four), each with a model index + a non-empty value vector.
     assert_eq!(loaded.len(), 6);
     for b in &loaded {
-        assert!(b.model_index.is_some(), "slot {} had no model index", b.slot);
+        assert!(
+            b.model_index.is_some(),
+            "slot {} had no model index",
+            b.slot
+        );
         assert!(!b.params.is_empty(), "slot {} had no params", b.slot);
     }
 
@@ -113,7 +140,11 @@ fn reads_param_values_via_path_to_slot() {
     let ps = PresetStream::parse(&blob()).unwrap();
     let blocks = ps.blocks();
     let val = |model_name: &str, idx: usize| -> Option<ParamValue> {
-        let pb = ps.footswitch_layout().into_iter().flatten().find(|p| p.model_name == model_name)?;
+        let pb = ps
+            .footswitch_layout()
+            .into_iter()
+            .flatten()
+            .find(|p| p.model_name == model_name)?;
         let s = pb.slot?;
         let slot = blocks.iter().find(|b| b.index as i64 == s)?;
         slot.params.get(idx).copied()
@@ -146,11 +177,16 @@ fn zip_param_names_to_values() {
             Some(m) => m,
             None => continue,
         };
-        let slot = pb.slot.and_then(|s| blocks.iter().find(|b| b.index as i64 == s));
+        let slot = pb
+            .slot
+            .and_then(|s| blocks.iter().find(|b| b.index as i64 == s));
         let values = slot.map(|b| b.params.as_slice()).unwrap_or(&[]);
         eprintln!(
             "\n== {} (slot {:?})  model params={} device values={} ==",
-            pb.model_name, pb.slot, model.params.len(), values.len()
+            pb.model_name,
+            pb.slot,
+            model.params.len(),
+            values.len()
         );
         for (i, p) in model.params.iter().enumerate() {
             let v = values.get(i);
@@ -160,11 +196,20 @@ fn zip_param_names_to_values() {
                 Some(ParamValue::Bool(b)) => format!("{b}"),
                 None => "—".into(),
             };
-            eprintln!("   {:<16} = {:<8} (model default {:?}, type {:?})",
-                p.symbolic_id, vs, p.default_f64().or_else(|| p.default_bool().map(|b| b as i64 as f64)), p.value_type);
+            eprintln!(
+                "   {:<16} = {:<8} (model default {:?}, type {:?})",
+                p.symbolic_id,
+                vs,
+                p.default_f64()
+                    .or_else(|| p.default_bool().map(|b| b as i64 as f64)),
+                p.value_type
+            );
         }
         if values.len() > model.params.len() {
-            eprintln!("   (+{} trailing device values beyond model params)", values.len() - model.params.len());
+            eprintln!(
+                "   (+{} trailing device values beyond model params)",
+                values.len() - model.params.len()
+            );
         }
     }
 }
@@ -172,7 +217,7 @@ fn zip_param_names_to_values() {
 #[test]
 fn correlate_path_to_slots() {
     // Hypothesis: a path node's key 11->8 is the slot index into the block-slots array.
-    use fretwire_data::stream::{map_get, PresetStream};
+    use fretwire_data::stream::{PresetStream, map_get};
     use rmpv::Value;
 
     let ps = PresetStream::parse(&blob()).unwrap();
@@ -191,7 +236,11 @@ fn correlate_path_to_slots() {
         let name = model
             .and_then(|m| map_get(m, 5))
             .and_then(fretwire_data::stream::value_bytes)
-            .map(|b| String::from_utf8_lossy(b).trim_end_matches('\0').to_string());
+            .map(|b| {
+                String::from_utf8_lossy(b)
+                    .trim_end_matches('\0')
+                    .to_string()
+            });
         let k8 = model.and_then(|m| map_get(m, 8)).and_then(Value::as_i64);
         match (name, k8) {
             (Some(n), Some(slot)) => {
@@ -210,14 +259,20 @@ fn correlate_path_to_slots() {
     eprintln!("\n=== populated slots ===");
     for b in &blocks {
         if !b.params.is_empty() || b.kind == 6 {
-            eprintln!("  slot {} kind={} #params={} model_ref={:?}", b.index, b.kind, b.params.len(), b.model_ref);
+            eprintln!(
+                "  slot {} kind={} #params={} model_ref={:?}",
+                b.index,
+                b.kind,
+                b.params.len(),
+                b.model_ref
+            );
         }
     }
 }
 
 #[test]
 fn dump_populated_blocks() {
-    use fretwire_data::stream::{map_get, summarize, PresetStream};
+    use fretwire_data::stream::{PresetStream, map_get, summarize};
     use rmpv::Value;
 
     let ps = PresetStream::parse(&blob()).unwrap();
@@ -237,15 +292,17 @@ fn dump_populated_blocks() {
     for (i, slot) in slots.iter().enumerate() {
         let ty = map_get(slot, 19).and_then(Value::as_i64);
         if matches!(ty, Some(0) | Some(1) | Some(2) | Some(3)) {
-            eprintln!("\n-- slot {i} STRUCTURAL (type {ty:?}) --\n{}",
-                summarize(map_get(slot, 20).unwrap_or(&Value::Nil), 2));
+            eprintln!(
+                "\n-- slot {i} STRUCTURAL (type {ty:?}) --\n{}",
+                summarize(map_get(slot, 20).unwrap_or(&Value::Nil), 2)
+            );
         }
     }
 }
 
 #[test]
 fn parses_preset_stream_structure() {
-    use fretwire_data::stream::{map_get, value_bytes, PresetStream};
+    use fretwire_data::stream::{PresetStream, map_get, value_bytes};
     use rmpv::Value;
 
     let ps = PresetStream::parse(&blob()).expect("parse preset stream");
@@ -260,7 +317,10 @@ fn parses_preset_stream_structure() {
     );
 
     // Block-slots field (key 0 -> 22): an array of slot descriptors.
-    let blocks = ps.field(0).and_then(|m| map_get(m, 22)).expect("block slots");
+    let blocks = ps
+        .field(0)
+        .and_then(|m| map_get(m, 22))
+        .expect("block slots");
     let slots = match blocks {
         Value::Array(a) => a,
         _ => panic!("block slots not an array"),
@@ -271,7 +331,10 @@ fn parses_preset_stream_structure() {
         .iter()
         .filter(|s| map_get(s, 19).and_then(Value::as_i64) == Some(6))
         .count();
-    assert!(populated >= 5, "expected several populated blocks, got {populated}");
+    assert!(
+        populated >= 5,
+        "expected several populated blocks, got {populated}"
+    );
 }
 
 fn load_all_models() -> std::collections::HashMap<String, fretwire_data::Model> {
@@ -294,18 +357,25 @@ fn load_all_models() -> std::collections::HashMap<String, fretwire_data::Model> 
 
 #[test]
 fn set_slot_empty_matches_native_empty_and_keeps_bindings() {
-    use fretwire_data::stream::{map_get, read_sequence, PresetStream};
+    use fretwire_data::stream::{PresetStream, map_get, read_sequence};
 
     let mut ps = PresetStream::parse(&blob()).unwrap();
     let fs_before = map_get(&ps.preset, 3).cloned(); // footswitch layout
     let assign_before = map_get(&ps.preset, 4).cloned(); // assignments
 
     let slots = map_get(&ps.preset, 0).and_then(|g| map_get(g, 22)).unwrap();
-    let rmpv::Value::Array(arr) = slots else { panic!("no slot array") };
+    let rmpv::Value::Array(arr) = slots else {
+        panic!("no slot array")
+    };
     // A native empty slot is exactly {19: 8, 20: nil} — what set_slot_empty produces.
-    let native_empty =
-        arr.iter().find(|s| map_get(s, 19).and_then(|v| v.as_i64()) == Some(8)).cloned();
-    let victim = arr.iter().position(|s| map_get(s, 19).and_then(|v| v.as_i64()) == Some(6)).unwrap();
+    let native_empty = arr
+        .iter()
+        .find(|s| map_get(s, 19).and_then(|v| v.as_i64()) == Some(8))
+        .cloned();
+    let victim = arr
+        .iter()
+        .position(|s| map_get(s, 19).and_then(|v| v.as_i64()) == Some(6))
+        .unwrap();
 
     assert!(ps.set_slot_empty(victim));
     let our_empty = match map_get(&ps.preset, 0).and_then(|g| map_get(g, 22)) {
@@ -313,42 +383,66 @@ fn set_slot_empty_matches_native_empty_and_keeps_bindings() {
         _ => panic!(),
     };
     if let Some(ne) = native_empty {
-        assert_eq!(our_empty, ne, "our empty slot must match the device's native empty");
+        assert_eq!(
+            our_empty, ne,
+            "our empty slot must match the device's native empty"
+        );
     }
 
     // Our serializer preserves the binding structures through a delete — so any binding loss the
     // device shows on a delete-write is device-side re-derivation, not our serialization.
     let re = ps.to_blob();
     let (seq, _) = read_sequence(&re, 3);
-    assert_eq!(map_get(&seq[2], 3).cloned(), fs_before, "FS layout (key 3) must survive serialize");
-    assert_eq!(map_get(&seq[2], 4).cloned(), assign_before, "assignments (key 4) must survive");
+    assert_eq!(
+        map_get(&seq[2], 3).cloned(),
+        fs_before,
+        "FS layout (key 3) must survive serialize"
+    );
+    assert_eq!(
+        map_get(&seq[2], 4).cloned(),
+        assign_before,
+        "assignments (key 4) must survive"
+    );
 }
 
 #[test]
 fn to_blob_round_trips_the_preset() {
-    use fretwire_data::stream::{locate_root, map_get, read_sequence, value_bytes, PresetStream};
+    use fretwire_data::stream::{PresetStream, locate_root, map_get, read_sequence, value_bytes};
 
     let data = blob();
     let ps = PresetStream::parse(&data).unwrap();
 
     // The original nested blob the device sent (read-stream key 104).
     let root = locate_root(&data, 64).unwrap();
-    let orig = value_bytes(map_get(&root.value, 104).unwrap()).unwrap().to_vec();
+    let orig = value_bytes(map_get(&root.value, 104).unwrap())
+        .unwrap()
+        .to_vec();
 
     let re = ps.to_blob();
 
     // Diagnostic: how close are we to byte-identical? (Not required — the device parses msgpack.)
     if re == orig {
-        eprintln!("to_blob is BYTE-IDENTICAL to the device blob ({} bytes)", re.len());
+        eprintln!(
+            "to_blob is BYTE-IDENTICAL to the device blob ({} bytes)",
+            re.len()
+        );
     } else {
         let at = re.iter().zip(&orig).position(|(a, b)| a != b);
-        eprintln!("to_blob differs (re={} orig={} first diff @ {:?})", re.len(), orig.len(), at);
+        eprintln!(
+            "to_blob differs (re={} orig={} first diff @ {:?})",
+            re.len(),
+            orig.len(),
+            at
+        );
     }
 
     // Required: re-parsing our blob yields the same magic / header / preset tree.
     let (seq, _) = read_sequence(&re, 3);
     assert_eq!(seq.len(), 3, "blob should hold 3 values");
-    assert_eq!(value_bytes(&seq[0]).unwrap(), format!("{}\0", ps.magic).as_bytes());
+    assert_eq!(
+        value_bytes(&seq[0]).unwrap(),
+        format!("{}\0", ps.magic).as_bytes()
+    );
     assert_eq!(value_bytes(&seq[1]).unwrap(), ps.header.as_slice());
     assert_eq!(&seq[2], &ps.preset, "preset map must round-trip exactly");
 }
@@ -366,7 +460,10 @@ fn path_blocks_resolve_to_models() {
     assert!(names.contains(&"Dynamic Hall"));
 
     // The Harmonic Tremolo block was renamed by the user to "Tremolo".
-    let ht = paths.iter().find(|p| p.model_name == "Harmonic Tremolo").unwrap();
+    let ht = paths
+        .iter()
+        .find(|p| p.model_name == "Harmonic Tremolo")
+        .unwrap();
     assert_eq!(ht.user_label.as_deref(), Some("Tremolo"));
 
     // Bridge: device block model names resolve against the shipped .models database, giving us
@@ -379,8 +476,14 @@ fn path_blocks_resolve_to_models() {
             resolved += 1;
         }
     }
-    eprintln!("resolved {resolved}/{} device blocks to .models definitions", paths.len());
-    assert!(resolved >= 3, "expected to resolve most blocks, got {resolved}");
+    eprintln!(
+        "resolved {resolved}/{} device blocks to .models definitions",
+        paths.len()
+    );
+    assert!(
+        resolved >= 3,
+        "expected to resolve most blocks, got {resolved}"
+    );
 }
 
 #[test]
@@ -399,7 +502,11 @@ fn typed_device_preset_model() {
 
     // Every effect block carries an ordered param vector; values are floats/ints/bools.
     for b in &effects {
-        assert!(!b.params.is_empty(), "effect block {} had no params", b.index);
+        assert!(
+            !b.params.is_empty(),
+            "effect block {} had no params",
+            b.index
+        );
     }
     // Spot-check a known block: slot 4 had a 10-value vector starting 1.9, 0.33, 3, ...
     let slot4 = all.iter().find(|b| b.index == 4).unwrap();
@@ -411,7 +518,9 @@ fn typed_device_preset_model() {
 
 fn map_get(v: &rmpv::Value, key: i64) -> Option<&rmpv::Value> {
     if let rmpv::Value::Map(m) = v {
-        m.iter().find(|(k, _)| k.as_i64() == Some(key)).map(|(_, val)| val)
+        m.iter()
+            .find(|(k, _)| k.as_i64() == Some(key))
+            .map(|(_, val)| val)
     } else {
         None
     }

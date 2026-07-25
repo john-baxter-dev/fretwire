@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::str::FromStr;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Preset {
@@ -52,10 +53,6 @@ impl Preset {
         Ok(serde_json::from_value(value)?)
     }
 
-    pub fn from_str(s: &str) -> crate::Result<Self> {
-        Self::from_slice(s.as_bytes())
-    }
-
     /// Preset display name (`data.meta.name`).
     pub fn name(&self) -> &str {
         &self.data.meta.name
@@ -63,9 +60,14 @@ impl Preset {
 
     /// Iterate the signal-path keys present in `tone` (`dsp0`, `dsp1`, ...).
     pub fn dsp_paths(&self) -> impl Iterator<Item = &String> {
-        self.data
-            .tone
-            .keys()
-            .filter(|k| k.starts_with("dsp"))
+        self.data.tone.keys().filter(|k| k.starts_with("dsp"))
+    }
+}
+
+impl FromStr for Preset {
+    type Err = crate::Error;
+
+    fn from_str(s: &str) -> crate::Result<Self> {
+        Self::from_slice(s.as_bytes())
     }
 }

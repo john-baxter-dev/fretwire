@@ -958,6 +958,30 @@ pub fn locate_root(stream: &[u8], max_scan: usize) -> Option<Root> {
     best
 }
 
+/// Byte length of the fixed prefix that precedes the MessagePack envelope: `marker:u16`,
+/// `type:u16`, `len:u32` (little-endian).
+const STREAM_PREFIX: usize = 8;
+
+/// The total reassembled length the preset-stream envelope declares, if it can be read from the
+/// first chunk. The stream opens with `marker:u16, type:u16, len:u32(LE)`; the whole stream is
+/// `len + STREAM_PREFIX` bytes (the device may append a trailing pad byte, so treat this as a
+/// **minimum** target, not an exact size — `preset1_stream` carries one extra byte).
+///
+/// Returns `None` when `chunk0` is too short to hold the prefix or the declared size is
+/// implausible, so the reassembler falls back to its short-chunk terminator heuristic. The upper
+/// bound rejects a garbage length (e.g. from a frame that isn't really chunk #0) that would
+/// otherwise make the reader request chunks forever.
+pub fn declared_stream_len(chunk0: &[u8]) -> Option<usize> {
+    /// Presets are single-digit KB; 1 MiB is a generous ceiling that still rejects noise.
+    const MAX_STREAM: usize = 1 << 20;
+    if chunk0.len() < STREAM_PREFIX {
+        return None;
+    }
+    let len = u32::from_le_bytes(chunk0[4..STREAM_PREFIX].try_into().ok()?) as usize;
+    let total = len.checked_add(STREAM_PREFIX)?;
+    (total > STREAM_PREFIX && total <= MAX_STREAM).then_some(total)
+}
+
 /// Read a flat sequence of concatenated MessagePack values (the device encodes the preset
 /// body this way rather than as one container). Stops at end-of-input, the first decode error,
 /// or after `max` values. Returns the values plus the number of bytes consumed.

@@ -462,6 +462,39 @@ survey in **`docs/helix-floor.md`**. Headlines:
 - 8 new tests, including one asserting **every** table entry has a matching udev rule — a device
   without one silently fails with EACCES on a normal desktop. Suite: **148 passing**.
 
+**FIRST HARDWARE RUN on a real Helix Floor (2026-07-24, the contributor "Sean"):** fretwire ran
+against a physical Floor for the first time — via the Tauri GUI (`cargo tauri dev`). **It works.**
+Interface claim, handshake, and the whole read path succeed; the GUI shows the live preset with the
+correct **15-block** Pull Me Under decode, `device P21`, `fw 7d01f5e`, 8 snapshots, and combined DSP
+%. **Writes work too** (he went past the read-only line): bypass toggles grey out *on the pedal*,
+param edits (Hot Springs Dwell/Spring Count/Drip) move live, and **`save` persisted**. So on the
+Floor: reads ✅, edits ✅, saves ✅, snapshots ✅, preset list ✅, device match ✅.
+
+The one real defect: **preset-stream reassembly truncated intermittently and then wedged the wire**
+(his "shits its pants and drops the connection"). Signature from his logs is unambiguous — **every
+failed read reassembled to an exact multiple of 256; every good read ended mid-chunk.** The old
+loop's rule was "the first chunk shorter than chunk #0 ends the stream", so a single **empty** chunk
+reply mid-stream (a batched keepalive/state-push mistaken for a chunk, or a zero-length packet)
+was read as the terminator → payload truncated at a 256 boundary → the unread tail desynced the next
+transaction → cascade to `timed out waiting for a bulk IN`. Dual-DSP presets die sooner because
+they span more chunks (more exposure), matching his observation exactly.
+
+**Fix (2026-07-25):** the preset stream's envelope declares its own length
+(`marker:u16,type:u16,len:u32(LE)` → stream is `len+8` bytes). `fretwire_data::stream::declared_stream_len`
+reads it from chunk #0, and `read_preset` now makes that the authority for "done": it skips a
+premature short/empty chunk and keeps reading until the declared payload is whole, falling back to
+the short-chunk heuristic only when the length can't be read. Bounded against a garbage length /
+non-terminating device. Also fixed: the handshake's model-string check was hard-coded to `"P33"`, so
+every Floor connect logged a spurious `no model string seen` — it now keys off the connected
+device's `model_code`. **Verified against the 3 tracked stream fixtures + unit tests; the on-hardware
+confirmation is the next Floor run.** Suite: **152 passing**.
+
+Still open from this run (GUI, not protocol): the routing grid renders **only DSP1** (DSP2 path
+27–38 absent — the known-unimplemented two-DSP Svelte grid); the header sums both DSPs into one
+`DSP %` (shows >100% — should be per-DSP); the legacy-cab **`Trails` mislabel** is visible in the
+wild; and the GUI re-pulls the *whole* preset on nearly every twiddle, which multiplied exposure to
+the truncation bug.
+
 ## Prioritized next steps
 > **The path to live control is in `docs/next-steps.md`.** TL;DR: (1) **on Windows now** — capture a
 > dozen single-knob edits, decode with `fretwire decode-edit`, find out if param keys generalize (the

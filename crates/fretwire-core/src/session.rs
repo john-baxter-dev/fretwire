@@ -203,12 +203,20 @@ impl Session {
     /// `fretwire_protocol::session::primary_handshake()` (the HX Stomp XL sequence) is an alternative.
     pub fn handshake(&mut self) -> crate::Result<()> {
         let mut model: Option<String> = None;
+        // The identity reply embeds the connected device's model code as ASCII (e.g. "P33"/"P33Main"
+        // on the Stomp, "P21…" on the Floor). Key off the code we opened the device with rather than
+        // a hard-coded "P33", or every non-Stomp connect logs a spurious "no model string seen".
+        let want = self.device().model_code;
         for (i, f) in fretwire_protocol::session::device_handshake().into_iter().enumerate() {
             let reply = self.transport.request(&f)?;
-            // The identity reply embeds the model code as ASCII (e.g. "P33"/"P33Main").
             if model.is_none() {
                 if let Some(s) = ascii_run(&reply.body) {
-                    if s.starts_with("P33") {
+                    let hit = match want {
+                        Some(code) => s.starts_with(code),
+                        // Untested device with no known code: accept any "P##"-style identity.
+                        None => s.starts_with('P') && s.len() >= 3 && s[1..3].bytes().all(|b| b.is_ascii_digit()),
+                    };
+                    if hit {
                         model = Some(s);
                     }
                 }
@@ -1264,22 +1272,62 @@ impl Session {
         let first = self.edit_request_txn(cmd::STREAM, Tlv::command(op::PARAM_SET, edit::stream_start(txn)).to_bytes(), txn)?;
         tracing::info!(arg = first.arg, body = first.body.len(), "stream-start reply (chunk #0)");
 
-        // Reassemble: each reply's body is a chunk; request more (cmd 0x08, empty body) until a
-        // short read ends the stream. `edit_request` advances the channel offset per reply.
+        // Reassemble: each reply's body is a chunk; request more (cmd 0x08, empty body) until the
+        // stream ends. `edit_request` advances the channel offset per reply.
+        //
+        // The stream's envelope declares its own length (`declared_stream_len`), and we make that
+        // the authority for "done". The older rule — "the first chunk shorter than chunk #0 ends
+        // the stream" — is only a heuristic: on the Floor a single **empty** chunk reply can arrive
+        // mid-stream (a batched keepalive/state-push mistaken for a chunk, or a zero-length packet),
+        // and treating it as the terminator truncated the payload at an exact 256-byte boundary,
+        // then desynced the wire. Live evidence: every truncated read Sean captured landed on a
+        // multiple of 256 while every good read ended mid-chunk. With the declared length we skip a
+        // premature short/empty chunk and keep reading until the payload is actually whole; the
+        // heuristic still governs when the envelope length can't be read (fallback below).
         let mut payload = first.body.clone();
         let full_chunk = first.body.len();
-        loop {
+        let target = fretwire_data::stream::declared_stream_len(&first.body);
+        // Bounds so a garbage length or a device that never terminates can't loop forever.
+        let max_chunks = target.map_or(4096, |t| t / full_chunk.max(1) + 8);
+        let mut empties = 0usize;
+        for _ in 0..max_chunks {
+            if target.is_some_and(|t| payload.len() >= t) {
+                break; // whole declared payload is in hand
+            }
             let chunk = self.edit_request(cmd::CHUNK, Vec::new())?;
             let n = chunk.body.len();
             tracing::debug!(arg = chunk.arg, body = n, "chunk reply");
             payload.extend_from_slice(&chunk.body);
-            if n == 0 || n < full_chunk {
-                break; // short read ends the stream
+            if n < full_chunk {
+                match target {
+                    // No declared length: fall back to "short chunk ends the stream".
+                    None => break,
+                    // A short/empty chunk that completes the declared payload is the real terminator.
+                    Some(t) if payload.len() >= t => break,
+                    // A short/empty chunk *before* the declared end is spurious — skip it and keep
+                    // reading. Bound consecutive empties so a wedged device still errors out.
+                    Some(t) => {
+                        empties += 1;
+                        tracing::warn!(
+                            got = payload.len(), want = t, empties,
+                            "short chunk before declared stream end — skipping, continuing read",
+                        );
+                        if empties >= 8 {
+                            break;
+                        }
+                    }
+                }
+            } else {
+                empties = 0;
             }
         }
 
         self.transport.drain(); // clear any batched epilogue frames
-        tracing::info!(bytes = payload.len(), "reassembled preset stream");
+        tracing::info!(
+            bytes = payload.len(),
+            declared = target,
+            "reassembled preset stream",
+        );
         Ok((payload, preset_info))
     }
 

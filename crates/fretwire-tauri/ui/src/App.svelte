@@ -65,25 +65,54 @@
     node.select?.();
   };
 
+  // Each DSP's routing view (one on the HX Stomp, two on the Helix Floor). Fall back to the
+  // preset's flat DSP-0 fields when the backend didn't send `dsps` (older payloads / the mock).
+  const dspViews = $derived.by(() => {
+    if (!preset) return [];
+    if (preset.dsps?.length) return preset.dsps;
+    return [
+      {
+        dsp: 0,
+        split: preset.split,
+        split_pos: preset.split_pos,
+        mixer_pos: preset.mixer_pos,
+        split_node: preset.split_node,
+        mixer_node: preset.mixer_node,
+        input_node: preset.input_node,
+        output_node: preset.output_node,
+        grid: preset.grid ?? [],
+        dsp_load: preset.dsp_load,
+      },
+    ];
+  });
+  // Every structural node across all DSPs — so a DSP-2 split/mixer/IO node is selectable too.
+  const allNodes = $derived(
+    dspViews.flatMap((v) => [v.split_node, v.mixer_node, v.input_node, v.output_node]),
+  );
+  // Each DSP carries its own ~100% budget, so a block's fit is judged against *its* DSP's load,
+  // not the combined total (which can exceed 100% on the Floor). Slots are global: `dsp*20+index`.
+  const loadForSlot = (slot) => {
+    const v = dspViews.find((x) => x.dsp === Math.floor(slot / 20));
+    return v ? v.dsp_load : (preset?.dsp_load ?? 0);
+  };
+  // Header readout: "38.4%" on the Stomp, "38.4% · 58.9%" (per DSP) on the Floor.
+  const dspLoadLabel = $derived(dspViews.map((v) => v.dsp_load.toFixed(1) + "%").join(" · "));
+
   // Whether the selected slot is a structural node (split/mixer/input/output) rather than a normal
   // block — nodes aren't swappable or deletable.
   const selectedIsNode = $derived(
-    !!preset &&
-      selectedSlot != null &&
-      [preset.split_node, preset.mixer_node, preset.input_node, preset.output_node].some(
-        (n) => n?.slot === selectedSlot,
-      ),
+    !!preset && selectedSlot != null && allNodes.some((n) => n?.slot === selectedSlot),
   );
-  const selectedIsSplit = $derived(!!preset && preset.split_node?.slot === selectedSlot);
+  const selectedIsSplit = $derived(
+    !!preset && dspViews.some((v) => v.split_node?.slot === selectedSlot),
+  );
 
   // The selected block, looked up fresh from the current preset (so it reflects live edits).
   const selectedBlock = $derived.by(() => {
     if (!preset || selectedSlot == null) return null;
     return (
       preset.blocks.find((b) => b.slot === selectedSlot) ??
-      [preset.split_node, preset.mixer_node, preset.input_node, preset.output_node].find(
-        (n) => n?.slot === selectedSlot,
-      ) ??
+      allNodes.find((n) => n?.slot === selectedSlot) ??
       null
     );
   });
@@ -435,7 +464,7 @@
           <span>device <b>{preset.device_model ?? "—"}</b></span>
           <span>fw <b>{preset.firmware ?? "—"}</b></span>
           <span>routing <b>{preset.split ? "parallel (split)" : "serial"}</b></span>
-          <span>DSP <b>{preset.dsp_load.toFixed(1)}%</b></span>
+          <span>DSP <b>{dspLoadLabel}</b></span>
         </div>
         {#if preset.snapshot_names.length}
           <div class="snapshots">
@@ -461,24 +490,34 @@
         {#if addTarget != null}
           <ModelPicker
             title={addTarget >= 0 ? `Add block — slot ${addTarget}` : "Add block"}
-            remaining={BUDGET - preset.dsp_load}
+            remaining={BUDGET -
+              (addTarget >= 0 ? loadForSlot(addTarget) : Math.min(...dspViews.map((v) => v.dsp_load)))}
             onpick={onAdd}
             oncancel={() => (addTarget = null)}
           />
         {/if}
-        <Chain
-          {preset}
-          {selectedSlot}
-          onselect={(slot) => (selectedSlot = slot)}
-          onplace={onPlace}
-          oninsert={onInsert}
-          onmovenode={onMoveNode}
-          onaddat={(slot) => (addTarget = slot)}
-        />
+        {#each dspViews as dspView (dspView.dsp)}
+          {#if dspViews.length > 1}
+            <div class="dsp-head">
+              DSP {dspView.dsp + 1}
+              <span class="dsp-load">{dspView.dsp_load.toFixed(1)}%</span>
+            </div>
+          {/if}
+          <Chain
+            {preset}
+            dsp={dspView}
+            {selectedSlot}
+            onselect={(slot) => (selectedSlot = slot)}
+            onplace={onPlace}
+            oninsert={onInsert}
+            onmovenode={onMoveNode}
+            onaddat={(slot) => (addTarget = slot)}
+          />
+        {/each}
         {#if selectedBlock}
           <ParamPanel
             block={selectedBlock}
-            dspLoad={preset.dsp_load}
+            dspLoad={selectedBlock ? loadForSlot(selectedBlock.slot) : preset.dsp_load}
             isNode={selectedIsNode}
             isSplit={selectedIsSplit}
             {splitTypes}
@@ -783,6 +822,25 @@
   }
   .hint {
     color: #9aa3b2;
+  }
+  /* Per-DSP label above each routing grid — only shown on multi-DSP devices (the Floor). */
+  .dsp-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 14px 0 6px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: #9aa3b2;
+    text-transform: uppercase;
+  }
+  .dsp-head .dsp-load {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0;
+    color: #6d7688;
+    text-transform: none;
   }
   .dlg-field {
     display: flex;

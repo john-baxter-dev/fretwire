@@ -489,11 +489,23 @@ every Floor connect logged a spurious `no model string seen` — it now keys off
 device's `model_code`. **Verified against the 3 tracked stream fixtures + unit tests; the on-hardware
 confirmation is the next Floor run.** Suite: **152 passing**.
 
-Still open from this run (GUI, not protocol): the routing grid renders **only DSP1** (DSP2 path
-27–38 absent — the known-unimplemented two-DSP Svelte grid); the header sums both DSPs into one
-`DSP %` (shows >100% — should be per-DSP); the legacy-cab **`Trails` mislabel** is visible in the
-wild; and the GUI re-pulls the *whole* preset on nearly every twiddle, which multiplied exposure to
-the truncation bug.
+**GUI two-DSP routing grid (2026-07-25):** the grid used to render **only DSP1**; it now draws one
+routing grid **per DSP** (both paths of each), stacked with a `DSP 1 / DSP 2` label + per-DSP load.
+`Chain.svelte` takes a `dsp` prop (one `DspDto`) and `App.svelte` loops `preset.dsps`; a single-DSP
+device / the mock passes no `dsp` and falls back to the flat DSP-0 fields (unchanged). The header
+`DSP %` is now **per-DSP** (`38.4% · 58.9%`) instead of one summed >100% number, and — the
+functional half — the model-picker / swap **DSP-fit greyout budgets against the block's own DSP
+load**, not the combined total (which on the Floor exceeded the 100% budget and greyed out
+everything). Structural-node selection (split/mixer/IO) now spans both DSPs too. The backend DTO
+already carried all of this (`dsps[]` with per-DSP grid/nodes/load; blocks tagged with `dsp`), so
+this was a frontend-only change; `npm run build` is clean.
+
+Still open from this run: **drag-to-place / move-node on DSP2** still routes through `Session`'s
+DSP-0-only planner (`add_block_at`/`place_block`/… read `dsp_blocks(0)`), so structural edits on the
+second DSP aren't wired up — viewing and param-editing DSP2 blocks works, moving them doesn't yet.
+Also still: the legacy-cab **`Trails` mislabel** (param-order bug, visible in the wild), and the GUI
+re-pulls the *whole* preset on nearly every twiddle (multiplied exposure to the truncation bug —
+worth throttling now that the read is robust).
 
 ## Prioritized next steps
 > **The path to live control is in `docs/next-steps.md`.** TL;DR: (1) **on Windows now** — capture a

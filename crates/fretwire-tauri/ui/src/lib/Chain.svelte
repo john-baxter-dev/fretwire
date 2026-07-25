@@ -3,7 +3,12 @@
   // targets) laid out by the device's real grid columns, with SVG wires behind. Each cell maps to
   // exactly one slot; dropping a block onto an empty cell is a single `place_block` to that slot,
   // and the device recomputes the split/mixer columns from where blocks land (we re-read after).
-  let { preset, selectedSlot = null, onselect, onplace, oninsert, onmovenode, onaddat } = $props();
+  // `preset` supplies the global block list (slots run `dsp * 20 + index`); `dsp` is the one DSP's
+  // routing view this instance draws (grid + split/mixer/io nodes for that DSP). The Helix Floor
+  // renders two Chains, one per DSP; a single-DSP device (or the mock) passes no `dsp` and we fall
+  // back to the preset's flat, DSP-0 fields.
+  let { preset, dsp = null, selectedSlot = null, onselect, onplace, oninsert, onmovenode, onaddat } = $props();
+  const d = $derived(dsp ?? preset);
 
   // Block accent color by device model category (ids from fretwire-core editor::category_name) — so the
   // chain reads at a glance: amps warm red, drives yellow, delays green, reverbs orange, etc.
@@ -47,9 +52,9 @@
   let nodeOver = $state(null);
 
   const view = $derived.by(() => {
-    const allCells = preset.grid ?? [];
+    const allCells = d.grid ?? [];
     const bySlot = new Map(preset.blocks.map((b) => [b.slot, b]));
-    const split = preset.split && preset.split_pos != null && preset.mixer_pos != null;
+    const split = d.split && d.split_pos != null && d.mixer_pos != null;
     // The grid carries the empty row-B cells even on a serial preset (the split/mixer node slots
     // always exist in the device's fixed slot array). Normally we hide that row when serial — but
     // while a drag is in flight we reveal it as drop targets: dropping a block there is how the
@@ -63,7 +68,7 @@
     const lastOcc = allCells.reduce((m, c) => (c.occupied ? Math.max(m, c.column) : m), 0);
     const maxCol = dragging
       ? maxAllCol
-      : Math.max(1, Math.min(Math.max(lastOcc + 1, split ? preset.mixer_pos : 1), maxAllCol));
+      : Math.max(1, Math.min(Math.max(lastOcc + 1, split ? d.mixer_pos : 1), maxAllCol));
     const cells = allCells.filter(
       (c) => c.column <= maxCol && (showB || c.row === 0),
     );
@@ -90,8 +95,8 @@
     // The fixed input/output nodes (slots 0 and 9) — clickable to edit gate/threshold/decay and
     // level/pan in the param panel.
     const io = [];
-    if (preset.input_node) io.push({ slot: preset.input_node.slot, x: 4, label: "IN" });
-    if (preset.output_node) io.push({ slot: preset.output_node.slot, x: topRight + 8, label: "OUT" });
+    if (d.input_node) io.push({ slot: d.input_node.slot, x: 4, label: "IN" });
+    if (d.output_node) io.push({ slot: d.output_node.slot, x: topRight + 8, label: "OUT" });
     // Serial preset + drag in flight: a dashed ghost of the would-be parallel path under the B row,
     // hinting that a drop there creates the split.
     const ghosts =
@@ -101,16 +106,16 @@
     let nodes = [];
     let nodeDrops = [];
     if (split) {
-      const xSplit = gapX(preset.split_pos);
-      const xMixer = gapX(preset.mixer_pos);
+      const xSplit = gapX(d.split_pos);
+      const xMixer = gapX(d.mixer_pos);
       const yT = midY(TOP_Y), yB = midY(BOT_Y);
       wires.push(`M ${xSplit} ${yT} V ${yB} H ${xMixer} V ${yT}`);
       // Seat the node glyphs in the vertical gap between the two rows (on the branch wire), where no
       // cell lives — so they never overlap blocks however tight the columns are.
       const yNode = (TOP_Y + CH + BOT_Y) / 2;
       nodes = [
-        { kind: "split", x: xSplit, y: yNode, text: "⋔", slot: preset.split_node?.slot },
-        { kind: "mixer", x: xMixer, y: yNode, text: "⋉", slot: preset.mixer_node?.slot },
+        { kind: "split", x: xSplit, y: yNode, text: "⋔", slot: d.split_node?.slot },
+        { kind: "mixer", x: xMixer, y: yNode, text: "⋉", slot: d.mixer_node?.slot },
       ];
       // While a node drags, offer the valid gap positions as drop zones — same constraints as the
       // backend: the bracket must keep enclosing the occupied B row, and split < mixer.
@@ -118,12 +123,12 @@
         const bCols = allCells.filter((c) => c.row === 1 && c.occupied).map((c) => c.column);
         const [lo, hi] =
           dragNode === "split"
-            ? [1, Math.min(bCols.length ? Math.min(...bCols) : Infinity, preset.mixer_pos - 1)]
+            ? [1, Math.min(bCols.length ? Math.min(...bCols) : Infinity, d.mixer_pos - 1)]
             : [
-                Math.max(bCols.length ? Math.max(...bCols) + 1 : 0, preset.split_pos + 1),
+                Math.max(bCols.length ? Math.max(...bCols) + 1 : 0, d.split_pos + 1),
                 maxCol + 1,
               ];
-        const cur = dragNode === "split" ? preset.split_pos : preset.mixer_pos;
+        const cur = dragNode === "split" ? d.split_pos : d.mixer_pos;
         for (let p = lo; p <= hi; p++) {
           if (p !== cur) nodeDrops.push({ pos: p, x: gapX(p) });
         }

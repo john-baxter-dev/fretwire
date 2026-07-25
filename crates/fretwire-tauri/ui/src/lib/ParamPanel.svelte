@@ -153,7 +153,7 @@
 
     {#if isSplit && splitTypes.length}
       <div class="splittype">
-        <label>Split type</label>
+        <span class="cap">Split type</span>
         <select
           value={block.symbolic_id}
           onchange={(e) => {
@@ -214,7 +214,7 @@
       {@const k = key(paired, p)}
       {@const c = control(p)}
       <div class="ctrl">
-        <label>{p.name}</label>
+        <span class="cap">{p.name}</span>
         {#if c === "enum"}
           <select value={p.value} onchange={(e) => onEnum(block.slot, paired, p.index, Number(e.currentTarget.value))}>
             {#each p.enum_labels as lbl, i}<option value={i}>{lbl}</option>{/each}
@@ -341,7 +341,7 @@
     gap: 10px;
     margin-bottom: 12px;
   }
-  .splittype label {
+  .splittype .cap {
     color: #c3c9d4;
     font-size: 13px;
   }
@@ -364,7 +364,7 @@
     gap: 10px;
     min-width: 0;
   }
-  .ctrl label {
+  .ctrl .cap {
     color: #c3c9d4;
     font-size: 13px;
   }

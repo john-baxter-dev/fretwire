@@ -3,7 +3,7 @@
   // model in the chosen category with its DSP cost; the current model is marked, and models that
   // wouldn't fit the remaining DSP budget are disabled — mirroring HX Edit's grey-out.
   import { invoke } from "./ipc.js";
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
 
   let {
     title = "Change model",
@@ -18,7 +18,9 @@
   } = $props();
 
   let cats = $state([]);
-  let categoryId = $state(initialCategory);
+  // Intentionally a one-time snapshot of the prop (the picker's starting category, then
+  // user-driven); `untrack` says so and silences the "only the initial value" lint.
+  let categoryId = $state(untrack(() => initialCategory));
   let models = $state([]);
   let loading = $state(false);
   let err = $state(null);

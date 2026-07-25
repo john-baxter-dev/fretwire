@@ -9,13 +9,14 @@
 //! those spots are marked `LIVE:`. The design keeps raw frame access ([`Session::request`]) so the
 //! sequence can be probed interactively before the convenience methods are trusted.
 //!
-//! **Single-DSP scope.** The grid/routing methods here (`add_block_at`, `place_block`,
+//! **Per-DSP routing.** The grid/routing methods here (`add_block_at`, `place_block`,
 //! `insert_block`, `reorder_block`, `set_node_pos`, …) plan moves within **one** DSP's 20-slot
-//! array and read it via `dsp_blocks(0)` / `dsp_grid(0)`. That is complete for the HX Stomp, the
-//! only device `Transport::open` matches. On a two-DSP device (Helix Floor) they would need a `dsp`
-//! argument — the slot arithmetic they do is per-DSP, while wire slots are global
-//! (`dsp * 20 + index`, see [`fretwire_data::stream::DSP_SLOT_STRIDE`]). Reading and per-block
-//! edits are already DSP-agnostic; only this planning layer is not.
+//! array. They work in **global wire-slot space** (`dsp * 20 + index`, see
+//! [`fretwire_data::stream::DSP_SLOT_STRIDE`]): each derives the target DSP from its slot argument,
+//! reads that DSP's blocks/grid (`dsp_blocks(dsp)` / `dsp_grid(dsp)` via `Block::wire_slot()`), and
+//! the `plan_*` helpers below operate on those wire slots directly. A move that spans two DSPs is
+//! rejected — the UI can't express one, and the device's surgical ops address a single grid. Reading
+//! and per-block edits were already DSP-agnostic; this makes the planning layer so too.
 
 use crate::editor::{Catalog, EditorPreset};
 use fretwire_protocol::{channel, cmd, edit, op, EditValue, Frame, Tlv};
@@ -392,13 +393,14 @@ impl Session {
     /// occupied slot would clobber the block there). The primitive behind the grid's
     /// click-an-empty-cell add flow.
     pub fn add_block_at(&mut self, slot: i64, model_index: i64, paired_index: i64) -> crate::Result<()> {
-        use fretwire_data::stream::{slot_kind, PresetStream};
+        use fretwire_data::stream::{slot_kind, split_wire_slot, PresetStream};
         let raw = self.read_preset_raw()?;
         let ps = PresetStream::parse(&raw)?;
+        let (dsp, _) = split_wire_slot(slot);
         let empty = ps
-            .dsp_blocks(0)
+            .dsp_blocks(dsp)
             .iter()
-            .any(|b| b.index as i64 == slot && b.kind == slot_kind::EMPTY);
+            .any(|b| b.wire_slot() == slot && b.kind == slot_kind::EMPTY);
         if !empty {
             return Err(fretwire_data::Error::Stream(format!(
                 "slot {slot} is not an empty grid slot (refusing add — it would overwrite)"
@@ -750,16 +752,27 @@ impl Session {
     /// the block there). This is the primitive behind the routing grid — every cell is one exact
     /// slot, so a drop is a single move. Re-reads and returns the preset.
     pub fn place_block(&mut self, src_slot: i64, dst_slot: i64) -> crate::Result<EditorPreset> {
-        use fretwire_data::stream::{slot_kind, PresetStream};
+        use fretwire_data::stream::{slot_kind, split_wire_slot, PresetStream};
         if src_slot == dst_slot {
             return self.read_preset();
+        }
+        let (dsp, _) = split_wire_slot(src_slot);
+        if split_wire_slot(dst_slot).0 != dsp {
+            return Err(fretwire_data::Error::Stream(
+                "can't move a block between DSPs".into(),
+            )
+            .into());
         }
         let raw = self.read_preset_raw()?;
         let ps = PresetStream::parse(&raw)?;
         // Everything that isn't an empty slot is "occupied" — incl. the split/mixer nodes, so a drop
-        // can never land on a structural node either.
-        let occupied: std::collections::BTreeSet<usize> =
-            ps.dsp_blocks(0).iter().filter(|b| b.kind != slot_kind::EMPTY).map(|b| b.index).collect();
+        // can never land on a structural node either. Wire slots, so the guard matches the ops.
+        let occupied: std::collections::BTreeSet<usize> = ps
+            .dsp_blocks(dsp)
+            .iter()
+            .filter(|b| b.kind != slot_kind::EMPTY)
+            .map(|b| b.wire_slot() as usize)
+            .collect();
         self.apply_row_moves(Vec::new(), src_slot, dst_slot, occupied)?;
         self.read_preset()
     }
@@ -779,20 +792,29 @@ impl Session {
         dst_slot: i64,
         before: bool,
     ) -> crate::Result<EditorPreset> {
-        use fretwire_data::stream::{slot_kind, PresetStream};
+        use fretwire_data::stream::{slot_kind, split_wire_slot, PresetStream, DSP_SLOT_STRIDE};
         if src_slot == dst_slot {
             return self.read_preset();
         }
+        let (dsp, _) = split_wire_slot(src_slot);
+        if split_wire_slot(dst_slot).0 != dsp {
+            return Err(fretwire_data::Error::Stream("can't move a block between DSPs".into()).into());
+        }
+        let base = dsp as i64 * DSP_SLOT_STRIDE;
         let raw = self.read_preset_raw()?;
         let ps = PresetStream::parse(&raw)?;
-        let blocks = ps.dsp_blocks(0);
+        let blocks = ps.dsp_blocks(dsp);
         for s in [src_slot, dst_slot] {
-            if !blocks.iter().any(|b| b.index as i64 == s && b.kind == slot_kind::EFFECT) {
+            if !blocks.iter().any(|b| b.wire_slot() == s && b.kind == slot_kind::EFFECT) {
                 return Err(fretwire_data::Error::Stream(format!("slot {s} has no block")).into());
             }
         }
-        // The fixed topology's row windows: top row 1–8, row B 11–18 (nodes at 0/9/10/19 bound them).
-        let row_of = |s: i64| if (11..=18).contains(&s) { (11usize, 18usize) } else { (1, 8) };
+        // The fixed topology's row windows, in wire slots: top row base+1..=base+8, row B
+        // base+11..=base+18 (the nodes at base+0/9/10/19 bound them).
+        let row_of = |s: i64| {
+            let local = s - base;
+            if (11..=18).contains(&local) { (base + 11, base + 18) } else { (base + 1, base + 8) }
+        };
         let (lo, hi) = row_of(dst_slot);
         let same_row = row_of(src_slot) == (lo, hi);
         // The destination row's blocks and empties, in slot order (src excluded from `occ` so
@@ -801,10 +823,10 @@ impl Session {
             .iter()
             .filter(|b| {
                 b.kind == slot_kind::EFFECT
-                    && (lo..=hi).contains(&b.index)
-                    && b.index as i64 != src_slot
+                    && (lo..=hi).contains(&b.wire_slot())
+                    && b.wire_slot() != src_slot
             })
-            .map(|b| b.index)
+            .map(|b| b.wire_slot() as usize)
             .collect();
         let dst_pos = occ
             .iter()
@@ -817,16 +839,16 @@ impl Session {
             // topology never transiently changes; any empty slot works).
             let with_src: Vec<usize> = blocks
                 .iter()
-                .filter(|b| b.kind == slot_kind::EFFECT && (lo..=hi).contains(&b.index))
-                .map(|b| b.index)
+                .filter(|b| b.kind == slot_kind::EFFECT && (lo..=hi).contains(&b.wire_slot()))
+                .map(|b| b.wire_slot() as usize)
                 .collect();
             let from_pos =
                 with_src.iter().position(|&s| s as i64 == src_slot).expect("src is in this row");
             let scratch = blocks
                 .iter()
                 .filter(|b| b.kind == slot_kind::EMPTY)
-                .map(|b| b.index)
-                .min_by_key(|&s| if (lo..=hi).contains(&s) { 0 } else { 1 })
+                .map(|b| b.wire_slot() as usize)
+                .min_by_key(|&s| if (lo..=hi).contains(&(s as i64)) { 0 } else { 1 })
                 .ok_or_else(|| fretwire_data::Error::Stream("no empty slot to reorder through".into()))?;
             // `pos` is the insertion index among the *other* blocks (src excluded from `occ`), which
             // is exactly src's final order index — plan_reorder's `to`. (No −1 adjustment here:
@@ -842,13 +864,16 @@ impl Session {
         } else {
             let free: Vec<usize> = blocks
                 .iter()
-                .filter(|b| b.kind == slot_kind::EMPTY && (lo..=hi).contains(&b.index))
-                .map(|b| b.index)
+                .filter(|b| b.kind == slot_kind::EMPTY && (lo..=hi).contains(&b.wire_slot()))
+                .map(|b| b.wire_slot() as usize)
                 .collect();
             let (moves, target) = plan_row_insert(&occ, &free, pos)
                 .ok_or_else(|| fretwire_data::Error::Stream("no free slot in the destination row".into()))?;
-            let occupied: std::collections::BTreeSet<usize> =
-                blocks.iter().filter(|b| b.kind != slot_kind::EMPTY).map(|b| b.index).collect();
+            let occupied: std::collections::BTreeSet<usize> = blocks
+                .iter()
+                .filter(|b| b.kind != slot_kind::EMPTY)
+                .map(|b| b.wire_slot() as usize)
+                .collect();
             self.apply_row_moves(moves, src_slot, target as i64, occupied)?;
         }
         self.read_preset()
@@ -935,23 +960,23 @@ impl Session {
     /// must still enclose every occupied row-B column, and split < mixer. The device honors a
     /// written position verbatim — verified live 2026-07-06 (drag ⋔/⋉ in the GUI; the re-read and
     /// the pedal's own routing display both follow). [solid]
-    pub fn set_node_pos(&mut self, kind: i64, pos: i64) -> crate::Result<EditorPreset> {
+    pub fn set_node_pos(&mut self, dsp: usize, kind: i64, pos: i64) -> crate::Result<EditorPreset> {
         use fretwire_data::stream::{slot_kind, PresetStream};
         if kind != slot_kind::SPLIT && kind != slot_kind::MIXER {
             return Err(fretwire_data::Error::Stream(format!("not a movable node kind: {kind}")).into());
         }
         let raw = self.read_preset_raw()?;
         let mut ps = PresetStream::parse(&raw)?;
-        if !ps.is_split() {
-            return Err(fretwire_data::Error::Stream("preset is not split".into()).into());
+        if !ps.dsp_is_split(dsp) {
+            return Err(fretwire_data::Error::Stream(format!("DSP {dsp} is not split")).into());
         }
         let other_kind = if kind == slot_kind::SPLIT { slot_kind::MIXER } else { slot_kind::SPLIT };
         let other = ps
-            .structural_node_pos(other_kind)
+            .dsp_structural_node_pos(dsp, other_kind)
             .ok_or_else(|| fretwire_data::Error::Stream("missing peer node position".into()))?;
         // Occupied row-B columns (grid row 1) — the bracket must keep enclosing them.
         let b_cols: Vec<i64> =
-            ps.dsp_grid(0).iter().filter(|c| c.row == 1 && c.occupied).map(|c| c.column).collect();
+            ps.dsp_grid(dsp).iter().filter(|c| c.row == 1 && c.occupied).map(|c| c.column).collect();
         let (lo, hi) = if kind == slot_kind::SPLIT {
             // split: ≥ 1, ≤ first B block's column, and strictly left of the mixer.
             (1, b_cols.iter().min().copied().unwrap_or(other - 1).min(other - 1))
@@ -965,7 +990,7 @@ impl Session {
             ))
             .into());
         }
-        if !ps.set_node_pos(kind, pos) {
+        if !ps.set_dsp_node_pos(dsp, kind, pos) {
             return Err(fretwire_data::Error::Stream("node holder not found in preset".into()).into());
         }
         self.write_preset(ps.to_blob())?;
@@ -1003,18 +1028,19 @@ impl Session {
     /// spare empty slot — each preceded by op 78 — exactly as HX Edit does. Re-reads once at the end
     /// and returns the new preset. Serial presets only for now (errors on a split preset).
     pub fn reorder_block(&mut self, src_slot: i64, gap: usize) -> crate::Result<EditorPreset> {
-        use fretwire_data::stream::{slot_kind, PresetStream};
+        use fretwire_data::stream::{slot_kind, split_wire_slot, PresetStream};
+        let (dsp, _) = split_wire_slot(src_slot);
         let raw = self.read_preset_raw()?;
         let ps = PresetStream::parse(&raw)?;
-        if ps.is_split() {
+        if ps.dsp_is_split(dsp) {
             return Err(fretwire_data::Error::Stream(
                 "reordering on split (parallel) presets isn't supported yet".into(),
             )
             .into());
         }
-        let blocks = ps.dsp_blocks(0); // all 20 slots, in index order
+        let blocks = ps.dsp_blocks(dsp); // this DSP's 20 slots, in index order
         let occupied: Vec<usize> =
-            blocks.iter().filter(|b| b.kind == slot_kind::EFFECT).map(|b| b.index).collect();
+            blocks.iter().filter(|b| b.kind == slot_kind::EFFECT).map(|b| b.wire_slot() as usize).collect();
         let from_pos = occupied
             .iter()
             .position(|&s| s as i64 == src_slot)
@@ -1022,7 +1048,7 @@ impl Session {
         let scratch = blocks
             .iter()
             .find(|b| b.kind == slot_kind::EMPTY)
-            .map(|b| b.index)
+            .map(|b| b.wire_slot() as usize)
             .ok_or_else(|| fretwire_data::Error::Stream("no empty slot to reorder through".into()))?;
 
         let n = occupied.len();
@@ -1680,6 +1706,39 @@ mod row_insert_tests {
     fn insert_no_room_returns_none() {
         // Block at 18 (top of the region) with no free slot to its right → can't shift.
         assert!(plan_row_insert(&[18], &[], 0).is_none());
+    }
+}
+
+/// The routing methods now plan in global wire-slot space (`dsp * 20 + index`) so they work on
+/// either DSP. That is only sound if the `plan_*` helpers are base-agnostic — they compare and pick
+/// slots, never assuming a 0 base. These mirror the DSP-0 cases above at DSP 2's base (20), and the
+/// output must be exactly the DSP-0 result shifted by 20.
+#[cfg(test)]
+mod dsp2_base_tests {
+    use super::{plan_reorder, plan_row_insert};
+
+    #[test]
+    fn row_insert_matches_dsp0_shifted_by_20() {
+        // DSP2 B row: block at 35 (= 15 + 20), free 36/37/38. Insert at front → shift 35→36,
+        // newcomer takes 35 — the DSP-0 `(15→16), target 15` case, shifted by a DSP.
+        let (moves, target) = plan_row_insert(&[35], &[36, 37, 38], 0).unwrap();
+        assert_eq!(moves, vec![(35, 36)]);
+        assert_eq!(target, 35);
+
+        // Append at the end takes the next free slot with no shifts, same as DSP 0.
+        let (moves, target) = plan_row_insert(&[35], &[36, 37, 38], 1).unwrap();
+        assert!(moves.is_empty());
+        assert_eq!(target, 36);
+    }
+
+    #[test]
+    fn reorder_bubbles_through_a_dsp2_scratch_slot() {
+        // DSP2 top row blocks [21,22,23,24], scratch empty at 25. Move the first block to the end:
+        // park it in 25, shift the rest left, drop it into the vacated last slot — all in DSP2's
+        // slots, never touching DSP1 (0..19).
+        let moves = plan_reorder(&[21, 22, 23, 24], 25, 0, 3);
+        assert_eq!(moves, vec![(21, 25), (22, 21), (23, 22), (24, 23), (25, 24)]);
+        assert!(moves.iter().flat_map(|&(a, b)| [a, b]).all(|s| (20..40).contains(&s)));
     }
 }
 

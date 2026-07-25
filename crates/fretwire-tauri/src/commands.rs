@@ -452,7 +452,7 @@ pub async fn insert_block(
 /// re-classifies blocks between common/path-A/common-after without moving any block. Goes through
 /// the op-21 whole-preset write (edit buffer only).
 #[tauri::command]
-pub async fn set_node_pos(state: State<'_, AppState>, node: String, pos: i64) -> R<PresetDto> {
+pub async fn set_node_pos(state: State<'_, AppState>, node: String, pos: i64, dsp: usize) -> R<PresetDto> {
     use fretwire_core::fretwire_data::stream::slot_kind;
     let kind = match node.as_str() {
         "split" => slot_kind::SPLIT,
@@ -462,7 +462,7 @@ pub async fn set_node_pos(state: State<'_, AppState>, node: String, pos: i64) ->
     returning_edit(
         &state,
         move |_| format!("Move {node} node \u{2192} col {pos}"),
-        move |s| s.set_node_pos(kind, pos),
+        move |s| s.set_node_pos(dsp, kind, pos),
     ).await
 }
 

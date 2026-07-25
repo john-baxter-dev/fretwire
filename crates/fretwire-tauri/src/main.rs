@@ -26,7 +26,11 @@ fn main() {
     // explicit override if the user already set it.
     #[cfg(target_os = "linux")]
     if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        // SAFETY (Rust 2024 made `set_var` unsafe: mutating the environment races other threads
+        // reading it): this runs at the very top of `main`, before `tauri::Builder` — and thus
+        // before GTK/WebKit or the async runtime spawn any thread — so the process is still
+        // single-threaded and no concurrent env access is possible.
+        unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
     }
 
     tauri::Builder::default()

@@ -511,9 +511,17 @@ blocks/grid via `Block::wire_slot()`, and feeds the base-agnostic `plan_*` helpe
 testable without hardware. New base-20 planner tests + end-to-end mock checks; suite **154**.
 (`move_block_to_row`/`move_before_split` are legacy, not on the grid path, and still assume DSP 0.)
 
-Still open: the legacy-cab **`Trails` mislabel** (param-order bug, visible in the wild), and the GUI
-re-pulls the *whole* preset on nearly every twiddle (multiplied exposure to the truncation bug —
-worth throttling now that the read is robust).
+**Pre-build cleanup (2026-07-25):** the legacy-cab **`Trails` mislabel** is fixed (trailing extra is
+`"Mic"` for cabs, `"Trails"` only for time-based fx — `editor::trailing_extra_name`), and the
+dev-mode Svelte console warnings (Dialog role, ParamPanel labels, ModelPicker initial-value lint)
+that cluttered the tester's logs are cleared. Suite **156**.
+
+Deliberately left as-is: the GUI re-pulls the *whole* preset after each committed edit
+(`mutate_edit` → `read_preset`). It amplified exposure to the truncation bug, but the reassembly fix
+de-fanged it (reads are now robust), and the drag path (`preview_param`) already skips the re-read —
+only the final commit re-reads. Removing it would risk undo/redo-history and DSP-load correctness and
+add a new untested local-patch path right before a hardware test, so it stays until after the next
+Floor run.
 
 ## Prioritized next steps
 > **The path to live control is in `docs/next-steps.md`.** TL;DR: (1) **on Windows now** — capture a

@@ -291,13 +291,14 @@ Worked example — factory preset **"Jail Breaker"** (`FACTORY 2`, index 72). Th
 Re-checked after the fix: that preset now reports **9** blocks, the ninth being
 `6 Switch Looper [HD2_Looper] Stereo` at wire slot **28** (DSP2 index 8), matching the backup.
 
-### Unrelated bug spotted in passing
+### Unrelated bug spotted in passing — FIXED (2026-07-25)
 
-Legacy (non-`CabMicIr_*`) cab models mislabel their parameter list. `HD2_Cab2x12MailC12Q` has
-params `@mic, Distance, LowCut, HighCut, EarlyReflections, Level, @enabled`; we print the five real
-values correctly but label the trailing mic index as `Trails`. The Stomp's `CabMicIr_*` cabs label
-fine, so this is a **legacy-cab-family issue, not a Floor issue** — a Stomp preset using an old-style
-cab should reproduce it.
+Legacy (non-`CabMicIr_*`) cab models mislabeled their parameter list. `HD2_Cab2x12MailC12Q` has
+params `@mic, Distance, LowCut, HighCut, EarlyReflections, Level, @enabled`; we printed the five real
+values correctly but labeled the trailing mic index as `Trails`. The Stomp's `CabMicIr_*` cabs label
+fine, so this was a **legacy-cab-family issue, not a Floor issue** — any Stomp preset using an
+old-style cab reproduced it. Fixed: `editor::name_params` takes the model category and names the
+trailing extra `"Mic"` for cabs (categories 2/19), `"Trails"` only for time-based fx.
 
 ### The write path works on the Floor, byte-for-byte  [solid]
 
@@ -410,13 +411,14 @@ now connect.** What remains:
    `dsp_blocks(0)`/`dsp_grid(0)` — explicitly DSP 0, which is complete for the Stomp. They need a
    `dsp` argument for the Floor. Reading and per-block edits are already DSP-agnostic, so a Floor
    session can read, browse and edit parameters today; it just can't re-route DSP2 yet.
-2. **Render two DSPs in the routing grid.** The backend is ready: `PresetDto.dsps[]` carries each
-   DSP's grid, nodes and load, and every block/cell is tagged with its `dsp`. The flat DTO fields
-   still mirror `dsps[0]`, so the current UI keeps working until it's rewritten.
+2. **Render two DSPs in the routing grid.** ✅ Done (2026-07-25) — `Chain.svelte` draws one grid per
+   DSP from `PresetDto.dsps[]`, and the routing planner is DSP-aware (drag/insert/node-move on either
+   DSP). The two-DSP browser mock ("Pull Me Under") makes it testable without hardware.
 3. **`.hxb` reading** — still independently useful, still needs no device. The format above is
    complete enough to implement against.
-4. **Fix the legacy-cab parameter labels** (the `Trails` mislabel above). Unrelated to the Floor;
-   worth a separate look with a Stomp preset that uses an old-style cab.
+4. **Fix the legacy-cab parameter labels** — ✅ Done (2026-07-25). The trailing extra value is now
+   named `"Mic"` for cab categories (it's the mic index) and `"Trails"` only for time-based fx; see
+   `editor::trailing_extra_name`.
 
 > **Untested on hardware.** Everything above is verified against captures and the backup, offline.
 > Nobody has yet run fretwire against a physical Helix Floor — the first connection is still a

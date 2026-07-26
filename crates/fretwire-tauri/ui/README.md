@@ -102,8 +102,14 @@ working. Keep the mock's return shapes in sync with `../src/dto.rs`.
 
 ```sh
 npm run build                       # → ../dist
-cargo run -p fretwire-tauri               # from the repo root, runs against real hardware
+cargo run -p fretwire-tauri --release     # from the repo root, runs against real hardware
 ```
+
+`--release` is required: a debug build points the webview at `devUrl`
+(`http://localhost:5173`) and ignores `../dist`, so it errors with *"Could not connect to
+localhost: Connection refused"* unless the dev server is up. For hot-reloading UI work against
+the real backend, run `npm exec --prefix ui tauri dev` from `crates/fretwire-tauri` instead — it
+starts Vite and the app together.
 
 In the real Tauri webview the mock is bundled but never used — `window.__TAURI_INTERNALS__` is
 present, so `ipc.js` routes to the real backend.

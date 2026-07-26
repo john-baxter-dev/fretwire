@@ -8,14 +8,14 @@ compile time (see `../tauri.conf.json`).
 | you want | command | what you get |
 |---|---|---|
 | iterate on the UI | `npm run dev` (here) | browser + mock device, hot reload, no Rust |
-| UI against the real pedal | `cargo tauri dev` (from `..`) | real backend in a real window, hot reload |
-| the shipped app | `npm run build` then `cargo build --release -p fretwire-tauri --features custom-protocol` | `dist/` embedded into the binary |
+| UI against the real pedal | `npm run tauri:dev` (here) | real backend in a real window, hot reload |
+| the shipped app | `npm run build` then `cargo build --release -p fretwire-tauri` | `dist/` embedded into the binary |
 
-`cargo tauri dev` starts this dev server itself (`beforeDevCommand` in `tauri.conf.json`) and points
-the app at `http://localhost:5173` instead of the embedded `dist/`. The port is pinned with
-`strictPort`, so if something else holds 5173 Vite fails loudly rather than moving to 5174 and
-leaving the app staring at a dead URL. It needs the Tauri CLI —
-`npm exec tauri dev`, or `cargo install tauri-cli` for the `cargo tauri` form.
+`npm run tauri:dev` starts this dev server itself (`beforeDevCommand` in `tauri.conf.json`) and
+points the app at `http://localhost:5173` instead of the embedded `dist/`. It runs
+`tauri dev -- --no-default-features` from the crate root — the flag matters, see "Building for the
+real app" below. The port is pinned with `strictPort`, so if something else holds 5173 Vite fails
+loudly rather than moving to 5174 and leaving the app staring at a dead URL.
 
 ## Working on the frontend without hardware (or a Rust toolchain)
 
@@ -101,16 +101,17 @@ working. Keep the mock's return shapes in sync with `../src/dto.rs`.
 ## Building for the real app
 
 ```sh
-npm run build                                            # → ../dist
-cargo run -p fretwire-tauri --features custom-protocol   # from the repo root, real hardware
+npm run build                          # → ../dist
+cargo run -p fretwire-tauri --release  # from the repo root, runs against real hardware
 ```
 
-`--features custom-protocol` is required — it is what makes Tauri serve the embedded `../dist`
-rather than `devUrl` (`http://localhost:5173`). Without it you get *"Could not connect to
-localhost: Connection refused"* unless the dev server happens to be up, and `--release` does not
-change that: the choice comes from the feature alone. The `tauri` CLI passes it for you, so
-`tauri dev`/`tauri build` never hit this. For hot-reloading UI work against the real backend, run
-`npm exec --prefix ui tauri dev` from `crates/fretwire-tauri` instead.
+Build `../dist` first: the `custom-protocol` feature is on by default so that plain cargo builds
+work, and that makes `../dist` a build-time requirement — the codegen panics if it is missing.
+
+For hot-reloading UI work against the real backend, use `npm run tauri:dev` (from here), which is
+`tauri dev -- --no-default-features`. Turning the feature off is what points the webview at this
+dev server instead of the embedded `../dist`; a `tauri dev` *without* it would silently serve the
+last built `dist/` and your edits would appear to do nothing.
 
 In the real Tauri webview the mock is bundled but never used — `window.__TAURI_INTERNALS__` is
 present, so `ipc.js` routes to the real backend.

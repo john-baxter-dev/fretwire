@@ -51,6 +51,32 @@ in the console and reload. The mock's `import_data` fakes a successful import af
 (and throws if you give it `/`, so the error state is reachable). A browser can't open a native file
 picker, so `pickPath()` falls back to a prompt for a typed path.
 
+### Choosing which device to mock
+
+fretwire supports two units whose UI differs, so the mock can present as either:
+
+```js
+fretwireMock.device()          // what am I right now?
+fretwireMock.device("floor")   // Helix Floor: two DSPs, eight setlists  (the default)
+fretwireMock.device("stomp")   // HX Stomp: one DSP, one flat preset list
+```
+
+**Reload after switching** — it applies on the next connect. The choice is saved to `localStorage`,
+so it survives the reload.
+
+What actually changes:
+
+| | HX Stomp | Helix Floor |
+|---|---|---|
+| Routing grids | 1 | 2, stacked with per-DSP load |
+| Setlists | one flat list | 8 (Factory 1/2, User 1–5, Templates) |
+| Setlist picker | **hidden** | shown in the sidebar |
+| Snapshots | 3 | 8 |
+
+The picker is hidden on a one-setlist device on purpose — HX Edit shows no setlist control for the
+Stomp either. Floor mode leaves User 3–5 empty, which is what a stock unit looks like and exercises
+the empty-list state.
+
 ### Simulating live device pushes
 
 To exercise live-follow (changes the UI mirrors when they originate on the hardware, e.g. a

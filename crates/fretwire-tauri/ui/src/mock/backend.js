@@ -7,6 +7,11 @@
 // It is wired in via `../lib/ipc.js`, which routes `invoke`/`listen` here whenever the app runs
 // outside a Tauri webview (i.e. the Vite dev server in a browser). The real backend is untouched.
 //
+// It can present as either supported unit, so the device-dependent UI is testable without hardware:
+//   fretwireMock.device("floor")   // two DSPs, eight setlists  (the default)
+//   fretwireMock.device("stomp")   // one DSP, one flat list, no setlist picker
+// The choice sticks across reloads; reload after switching, since it applies on the next connect.
+//
 // State is intentionally persistent for the session: edits mutate the in-memory setlist, so the app
 // feels stateful. Reload the page to reset. Trigger live-follow pushes by hand from the devtools
 // console via `window.fretwireMock` (see the bottom of this file).
@@ -384,9 +389,23 @@ function floorSetlists() {
 // Session state
 // ---------------------------------------------------------------------------------------------
 let connected = false;
+
 // Which unit the mock is pretending to be, and its setlists: banks[bank] is a list of presets.
-let deviceMode = "floor";
-let banks = floorSetlists();
+// The choice is remembered across reloads (`fretwireMock.device(…)` writes it), because switching
+// device only takes effect on the next connect — so you reload anyway, and losing the setting on
+// every reload would make Stomp mode almost impossible to actually sit in.
+const MODE_KEY = "fretwire.mock.device";
+const storage = (() => {
+  try {
+    return typeof localStorage !== "undefined" ? localStorage : null;
+  } catch {
+    return null; // e.g. a sandboxed iframe, or Node
+  }
+})();
+const savedMode = storage?.getItem(MODE_KEY);
+let deviceMode = savedMode && DEVICES[savedMode] ? savedMode : "floor";
+const buildBanks = () => (deviceMode === "floor" ? floorSetlists() : [stompPresets()]);
+let banks = buildBanks();
 let currentBank = 0;
 const setlistNames = () => DEVICES[deviceMode].setlists;
 const bankOf = (b) => banks[b] ?? [];
@@ -1016,16 +1035,27 @@ if (typeof window !== "undefined") {
      * "floor" (two DSPs, eight setlists). Reload or reconnect after switching.
      */
     device(mode) {
+      if (mode === undefined) {
+        console.info(
+          `[fretwire] mock device: ${DEVICES[deviceMode].name} (${deviceMode}). ` +
+            `Switch with fretwireMock.device("stomp") or ("floor").`,
+        );
+        return deviceMode;
+      }
       if (!DEVICES[mode]) {
         console.warn(`[fretwire] unknown device ${mode} — use "stomp" or "floor"`);
-        return;
+        return deviceMode;
       }
       deviceMode = mode;
-      banks = mode === "floor" ? floorSetlists() : [stompPresets()];
+      storage?.setItem(MODE_KEY, mode); // remembered across reloads
+      banks = buildBanks();
       currentBank = 0;
       current = bankOf(0)[0];
       clearHistory();
-      console.info(`[fretwire] mock is now a ${DEVICES[mode].name} — reconnect to see it.`);
+      console.info(
+        `[fretwire] mock is now a ${DEVICES[mode].name} — reload the page (the setting sticks).`,
+      );
+      return mode;
     },
     /** Pretend the reference data was never imported, so the first-run screen shows. */
     needsData() {

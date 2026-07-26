@@ -543,12 +543,21 @@ GUI survived a long unattended session. DSP2 renders. Three new findings, all ad
    Confirmed from traffic: `PresetInfo { bank: 2, index: 17, name: "Sludge" }` in User 1, so
    `Factory 1 = 0, Factory 2 = 1, User 1 = 2`; the rest of the order is off the unit's menu
    [hypothesis]. A panel-side preset change now also pulls the sidebar into the device's setlist.
-3. **Wrong active snapshot** [open]. The decoder is fine — key `10 → 8` is the snapshot **stored**
-   with the preset (dual_amp's fixture reads 1, saved on SNAPSHOT 2), and the unit has a global
-   snapshot-recall preference, so the live selection can differ. Panel changes reach us as pushes
-   (type 42/46) and are applied; what's missing is a way to *query* the live snapshot on connect.
-   Needs a capture of HX Edit connecting to a unit parked on a non-default snapshot. `read_preset`
-   now logs the stored value at debug level.
+3. **Wrong active snapshot — FIXED and confirmed on hardware (2026-07-26).** The preset blob's
+   `10 → 8` is the snapshot **stored** with the preset, not the live one. Settled on our own HX
+   Stomp: parked on SNAPSHOT 3, the blob reported **0**. Scene-matching (comparing the decoded
+   per-snapshot bypass matrix against the live block state) couldn't decide it either — that
+   preset's snapshots 2 and 3 held identical scenes, so the match was ambiguous. Both candidate
+   fixes were therefore wrong.
+
+   Decoding the **op-23 read-info reply** in full found the answer already on the wire:
+   `{107:bank, 108:index, 109:name, 92:snapshot, 117:?, 83:[u32,0]}` — **key `92` is the live
+   active snapshot**, the same key a snapshot status-push carries (`{105:42, 106:{92:n}}`). We
+   parsed 107/108/109 and dropped the rest. In the `Dual Amp` capture key 92 = 0, matching that
+   preset's live scene while its blob stores 1 — three independent signals agreeing.
+   `PresetInfo::snapshot` carries it and `Session::read_preset` prefers it over the blob (blob kept
+   as the fallback for offline decodes). The GUI needed no change: it reads `active_snapshot`, now
+   correct at the source. Verified live via `fretwire pull`. Keys `117`/`83` still unidentified.
 
 **Mock device modes (2026-07-26):** `fretwireMock.device("stomp"|"floor")` flips the browser mock
 between a one-DSP/one-list HX Stomp and a two-DSP/eight-setlist Helix Floor, so the setlist picker's

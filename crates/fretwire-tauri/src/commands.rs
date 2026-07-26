@@ -58,10 +58,10 @@ pub fn spawn_heartbeat(app: tauri::AppHandle, session: Arc<Mutex<Option<Session>
                 }
             };
             let dtos = crate::dto::push_dtos(&pushes);
-            if !dtos.is_empty() {
-                if let Err(e) = app.emit("device-pushes", dtos) {
-                    tracing::warn!("failed to emit device-pushes: {e}");
-                }
+            if !dtos.is_empty()
+                && let Err(e) = app.emit("device-pushes", dtos)
+            {
+                tracing::warn!("failed to emit device-pushes: {e}");
             }
         }
     });

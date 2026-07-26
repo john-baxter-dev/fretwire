@@ -1,0 +1,31 @@
+#!/bin/sh
+# fretwire pre-push: the same gates CI runs, before the push instead of after.
+#   enable once with:  git config core.hooksPath .githooks
+#   bypass once with:  git push --no-verify
+set -e
+
+cd "$(git rev-parse --show-toplevel)"
+
+OFFLINE="-p fretwire -p fretwire-data -p fretwire-protocol -p fretwire-usb -p fretwire-core -p fretwire-cli"
+
+echo "pre-push: rustfmt…"
+cargo fmt --all --check
+
+echo "pre-push: clippy (offline crates)…"
+# shellcheck disable=SC2086
+cargo clippy --all-targets $OFFLINE -- -D warnings
+
+echo "pre-push: tests (offline crates)…"
+# shellcheck disable=SC2086
+cargo test $OFFLINE
+
+# The GUI needs WebKitGTK and a built frontend (dist/ isn't in git). Check it only when
+# that's already in place, so a fresh clone can still push without building the UI.
+if [ -d crates/fretwire-tauri/dist ]; then
+  echo "pre-push: clippy (GUI)…"
+  cargo clippy --all-targets -p fretwire-tauri -- -D warnings
+else
+  echo "pre-push: skipping GUI clippy (crates/fretwire-tauri/dist not built)"
+fi
+
+echo "pre-push: OK"

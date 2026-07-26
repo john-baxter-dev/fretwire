@@ -509,7 +509,8 @@ blocks/grid via `Block::wire_slot()`, and feeds the base-agnostic `plan_*` helpe
 (threaded from the UI). The browser **mock is now genuinely two-DSP** (stride-20 topology, a Floor
 "Pull Me Under" demo preset at index 0), so the dual-grid path — render, drag, node-move — is
 testable without hardware. New base-20 planner tests + end-to-end mock checks; suite **154**.
-(`move_block_to_row`/`move_before_split` are legacy, not on the grid path, and still assume DSP 0.)
+(`move_block_to_row`/`move_before_split` are legacy — CLI-only, not on the GUI grid path — but were
+converted to wire space too on 2026-07-26, so they no longer silently plan against DSP 0.)
 
 **Pre-build cleanup (2026-07-25):** the legacy-cab **`Trails` mislabel** is fixed (trailing extra is
 `"Mic"` for cabs, `"Trails"` only for time-based fx — `editor::trailing_extra_name`), and the

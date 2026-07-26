@@ -730,44 +730,49 @@ impl Session {
         parallel: bool,
         pos: usize,
     ) -> crate::Result<EditorPreset> {
-        use fretwire_data::stream::{PresetStream, slot_kind};
+        use fretwire_data::stream::{PresetStream, slot_kind, split_wire_slot};
         let raw = self.read_preset_raw()?;
         let ps = PresetStream::parse(&raw)?;
-        let blocks = ps.dsp_blocks(0);
-        let split_idx = blocks
+        // Plan in wire space (`dsp * 20 + index`) against the source block's own DSP, so this works
+        // on either DSP of a Floor rather than silently planning against DSP 0.
+        let (dsp, _) = split_wire_slot(src_slot);
+        let blocks = ps.dsp_blocks(dsp);
+        let base = blocks.first().map(|b| b.wire_slot()).unwrap_or(0);
+        let split_slot = blocks
             .iter()
             .find(|b| b.kind == slot_kind::SPLIT)
-            .map(|b| b.index)
+            .map(|b| b.wire_slot() as usize)
             .ok_or_else(|| {
                 fretwire_data::Error::Stream("no split node in the preset grid".into())
             })?;
-        let mixer_idx = blocks
+        let mixer_slot = blocks
             .iter()
             .find(|b| b.kind == slot_kind::MIXER)
-            .map(|b| b.index)
-            .unwrap_or(blocks.len());
+            .map(|b| b.wire_slot() as usize)
+            .unwrap_or(base as usize + blocks.len());
         // The target row's slot window (exclusive of the structural nodes): bottom = between split and
         // mixer; top = before the split node.
         let (lo, hi) = if parallel {
-            (split_idx, mixer_idx)
+            (split_slot, mixer_slot)
         } else {
-            (0, split_idx)
+            (base as usize, split_slot)
         };
         // Blocks already in that window, and its empty slots — both in slot order.
         let occ: Vec<usize> = blocks
             .iter()
             .filter(|b| {
-                b.kind == slot_kind::EFFECT
-                    && b.index > lo
-                    && b.index < hi
-                    && b.index as i64 != src_slot
+                let s = b.wire_slot() as usize;
+                b.kind == slot_kind::EFFECT && s > lo && s < hi && b.wire_slot() != src_slot
             })
-            .map(|b| b.index)
+            .map(|b| b.wire_slot() as usize)
             .collect();
         let free: Vec<usize> = blocks
             .iter()
-            .filter(|b| b.kind == slot_kind::EMPTY && b.index > lo && b.index < hi)
-            .map(|b| b.index)
+            .filter(|b| {
+                let s = b.wire_slot() as usize;
+                b.kind == slot_kind::EMPTY && s > lo && s < hi
+            })
+            .map(|b| b.wire_slot() as usize)
             .collect();
         let no_slot = || {
             let row = if parallel { "parallel" } else { "series" };
@@ -796,7 +801,7 @@ impl Session {
         let occupied: std::collections::BTreeSet<usize> = blocks
             .iter()
             .filter(|b| b.kind != slot_kind::EMPTY)
-            .map(|b| b.index)
+            .map(|b| b.wire_slot() as usize)
             .collect();
         self.apply_row_moves(moves, src_slot, target as i64, occupied)?;
         self.read_preset()
@@ -807,33 +812,43 @@ impl Session {
     /// **left** (`plan_insert_right_end`) so the split's column — and thus the whole parallel section
     /// — stays anchored. Re-reads and returns the preset.
     pub fn move_before_split(&mut self, src_slot: i64) -> crate::Result<EditorPreset> {
-        use fretwire_data::stream::{PresetStream, slot_kind};
+        use fretwire_data::stream::{PresetStream, slot_kind, split_wire_slot};
         let raw = self.read_preset_raw()?;
         let ps = PresetStream::parse(&raw)?;
+        // Wire space, against the source block's own DSP (see `move_block_to_row`).
+        let (dsp, _) = split_wire_slot(src_slot);
+        let blocks = ps.dsp_blocks(dsp);
+        let base = blocks.first().map(|b| b.wire_slot()).unwrap_or(0) as usize;
+        // The split's signal-flow *column*; on the top row column == local index, so the wire slot
+        // that column corresponds to is `base + split_pos`.
         let split_pos = ps
-            .structural_node_pos(slot_kind::SPLIT)
+            .dsp_structural_node_pos(dsp, slot_kind::SPLIT)
             .ok_or_else(|| fretwire_data::Error::Stream("preset is not split".into()))?
             as usize;
-        let blocks = ps.dsp_blocks(0);
+        let split_wire = base + split_pos;
         // Common-before window = top slots below the split column.
         let occ: Vec<usize> = blocks
             .iter()
             .filter(|b| {
-                b.kind == slot_kind::EFFECT && b.index < split_pos && b.index as i64 != src_slot
+                let s = b.wire_slot() as usize;
+                b.kind == slot_kind::EFFECT && s < split_wire && b.wire_slot() != src_slot
             })
-            .map(|b| b.index)
+            .map(|b| b.wire_slot() as usize)
             .collect();
         let free: Vec<usize> = blocks
             .iter()
-            .filter(|b| b.kind == slot_kind::EMPTY && b.index > 0 && b.index < split_pos)
-            .map(|b| b.index)
+            .filter(|b| {
+                let s = b.wire_slot() as usize;
+                b.kind == slot_kind::EMPTY && s > base && s < split_wire
+            })
+            .map(|b| b.wire_slot() as usize)
             .collect();
-        let (moves, target) = plan_insert_right_end(&occ, &free, split_pos)
+        let (moves, target) = plan_insert_right_end(&occ, &free, split_wire)
             .ok_or_else(|| fretwire_data::Error::Stream("no free slot before the split".into()))?;
         let occupied: std::collections::BTreeSet<usize> = blocks
             .iter()
             .filter(|b| b.kind != slot_kind::EMPTY)
-            .map(|b| b.index)
+            .map(|b| b.wire_slot() as usize)
             .collect();
         self.apply_row_moves(moves, src_slot, target as i64, occupied)?;
         self.read_preset()

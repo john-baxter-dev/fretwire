@@ -10,3 +10,7 @@ serde.workspace = true
 serde_json.workspace = true
 rmpv.workspace = true
 thiserror.workspace = true
+flate2.workspace = true
+
+[dev-dependencies]
+flate2.workspace = true

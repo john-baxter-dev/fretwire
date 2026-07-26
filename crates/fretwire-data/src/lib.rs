@@ -5,6 +5,7 @@
 //! The wire protocol that drives a physical device lives in the `fretwire-protocol` / `fretwire-usb`
 //! crates and is recovered separately via USB capture.
 
+pub mod hxb;
 pub mod modeldefs;
 pub mod models;
 pub mod preset;

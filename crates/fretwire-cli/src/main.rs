@@ -121,6 +121,45 @@ fn main() -> Result<()> {
                 println!("  [{i:>3}] {name}");
             }
         }
+        "show-backup" => {
+            // Inspect an HX Edit `.hxb` device backup offline (no pedal). Reads only.
+            let path = args
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("usage: fretwire show-backup <backup.hxb>"))?;
+            let bytes = std::fs::read(&path)?;
+            let b = fretwire_data::hxb::Hxb::parse(&bytes)?;
+            let device = fretwire_usb::DEVICES
+                .iter()
+                .find(|d| d.preset_device_id == Some(b.device_id))
+                .map(|d| d.name)
+                .unwrap_or("unknown device");
+            println!("{path}");
+            println!(
+                "  device {device} ({:#010x}), fw {:#010x}, {} streams",
+                b.device_id,
+                b.device_version,
+                b.streams.len()
+            );
+            if !b.comment.is_empty() {
+                println!("  comment: {}", b.comment);
+            }
+            println!("  {} impulse responses", b.impulse_responses().len());
+            let verbose = args.next().as_deref() == Some("--presets");
+            for s in b.setlists() {
+                println!(
+                    "  [{}] {:<12} {}/{} slots used",
+                    s.bank,
+                    s.name,
+                    s.populated(),
+                    s.presets.len()
+                );
+                if verbose {
+                    for p in s.presets.iter().flatten() {
+                        println!("        [{:>3}] {}", p.index, p.name);
+                    }
+                }
+            }
+        }
         "setlists" => {
             // Name each setlist the connected device has, with the bank index `presets`/`goto` take.
             let mut s = fretwire_core::Session::connect()?;
@@ -491,6 +530,9 @@ fn main() -> Result<()> {
             eprintln!("usage: fretwire <command>");
             eprintln!(
                 "  offline: detect | show-preset <stream.bin> | decode-edit <hex> | diff-stream <a.bin> <b.bin>"
+            );
+            eprintln!(
+                "           show-backup <backup.hxb> [--presets]   (inspect an HX Edit device backup)"
             );
             eprintln!(
                 "           import-data <installer|dir>   (reference data from your own install; dir needs no 7z)"

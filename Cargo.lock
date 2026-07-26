@@ -861,6 +861,7 @@ dependencies = [
 name = "fretwire-data"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "rmpv",
  "serde",
  "serde_json",

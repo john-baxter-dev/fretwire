@@ -123,6 +123,28 @@ bytes:
 
 8 × 128 = **1024 preset slots** (363 populated in this backup).
 
+**Implemented 2026-07-26: `fretwire_data::hxb`** parses the container — header, the stream walk,
+setlists, presets and IRs — and `fretwire show-backup <file.hxb> [--presets]` prints it. Verified
+against the contributor's real backup: 138 streams, 128 IRs, and
+
+```
+  [0] FACTORY 1    128/128 slots used      [4] USER 3       0/128
+  [1] FACTORY 2    128/128 slots used      [5] USER 4       0/128
+  [2] USER 1        63/128 slots used      [6] USER 5       0/128
+  [3] USER 2         1/128 slots used      [7] TEMPLATES   43/128
+```
+
+363 populated, matching the count above. **The setlist order in this file is the `bank` numbering**
+— bank 2 is `USER 1` and holds `Sludge` at index 17, exactly what a live read-info reply reported
+(`PresetInfo { bank: 2, index: 17, name: "Sludge" }`). Two independent sources, so `Device::setlists`
+is now [solid] rather than a guess off the unit's menu.
+
+The tests use a **synthetic** `.hxb` built in-test, not the contributor's file — that backup is
+personal device data and stays out of git.
+
+**Reading only.** A preset inside a `.hxb` is a `tone` **JSON** object, not the MessagePack blob the
+wire exchanges, so restoring one to the device needs a JSON→blob conversion that doesn't exist yet.
+
 Note the globals JSON contains keys for *other* devices in the family (`P33FS3Function`,
 `P36LastHomeView`) — it's a family-wide schema, not a Floor-specific one.
 
@@ -412,8 +434,9 @@ now connect.** What remains:
 2. **Render two DSPs in the routing grid.** ✅ Done (2026-07-25) — `Chain.svelte` draws one grid per
    DSP from `PresetDto.dsps[]`, and the routing planner is DSP-aware (drag/insert/node-move on either
    DSP). The two-DSP browser mock ("Pull Me Under") makes it testable without hardware.
-3. **`.hxb` reading** — still independently useful, still needs no device. The format above is
-   complete enough to implement against.
+3. **`.hxb` reading** — ✅ Done (2026-07-26). `fretwire_data::hxb` + `fretwire show-backup`; see
+   the container section above. Restoring *from* a `.hxb` is still open (the presets inside are
+   `tone` JSON, not wire blobs).
 4. **Fix the legacy-cab parameter labels** — ✅ Done (2026-07-25). The trailing extra value is now
    named `"Mic"` for cab categories (it's the mic index) and `"Trails"` only for time-based fx; see
    `editor::trailing_extra_name`.

@@ -100,19 +100,20 @@ pub const DEVICES: &[Device] = &[
         preset_device_id: Some(0x0021_0001),
         dsps: Some(2),
         snapshots: Some(8),
-        // Names and order as the unit's own PRESETS menu lists them. [hypothesis — the order is
-        // taken from the device's menu; only `bank: 2` == "User 1" is confirmed from traffic, by a
-        // read-info reply reporting `PresetInfo { bank: 2, index: 17, name: "Sludge" }` for a
-        // preset the user had selected in User 1]
+        // The device's own names, in its own casing, in bank order. [solid — two independent
+        // sources agree: a `.hxb` backup's eight `L6Setlist` streams carry these names in this
+        // order (`fretwire_data::hxb`), and a live read-info reply reported
+        // `PresetInfo { bank: 2, index: 17, name: "Sludge" }` for a preset the user had selected
+        // in USER 1 — that backup's bank 2 is `USER 1` and holds `Sludge` at index 17]
         setlists: Some(&[
-            "Factory 1",
-            "Factory 2",
-            "User 1",
-            "User 2",
-            "User 3",
-            "User 4",
-            "User 5",
-            "Templates",
+            "FACTORY 1",
+            "FACTORY 2",
+            "USER 1",
+            "USER 2",
+            "USER 3",
+            "USER 4",
+            "USER 5",
+            "TEMPLATES",
         ]),
         support: Support::Verified,
     },

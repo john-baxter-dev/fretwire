@@ -64,10 +64,16 @@ fn main() -> Result<()> {
             println!("disconnected — session-close sent on all channels; pedal back to standalone");
         }
         "pull" => {
-            // Read the currently-loaded preset live and print it.
+            // Read the currently-loaded preset live and print it, including the snapshot
+            // diagnosis — so comparing what the pedal's screen shows against what the preset
+            // stores is a single command with no file juggling.
             let mut s = fretwire_core::Session::connect()?;
             let preset = s.read_preset()?;
             print_preset(&preset);
+            if let Some(raw) = s.last_raw() {
+                let raw = raw.to_vec();
+                print_snapshot_diagnosis(&raw);
+            }
         }
         "bypass" => {
             // Pedal semantics: `bypass <slot> on` engages bypass (block OFF); `off` activates it.

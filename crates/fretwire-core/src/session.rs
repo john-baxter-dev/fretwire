@@ -526,6 +526,13 @@ impl Session {
     // (the GUI command layer) brackets each undoable edit with `edit_begin(label)`/`edit_commit()`;
     // the blobs come from `last_raw` — refreshed by every read — so snapshots cost no USB traffic.
 
+    /// The raw preset stream from the last read, if any. Cached by every read, so this costs no
+    /// USB traffic — for callers that need the undecoded bytes (diagnostics, `PresetStream`
+    /// fields the editor view doesn't surface) after a `read_preset`.
+    pub fn last_raw(&self) -> Option<&[u8]> {
+        self.last_raw.as_deref()
+    }
+
     /// The current edit buffer as an op-21-writable blob, from the read cache (or a fresh read).
     fn current_blob(&mut self) -> Option<Vec<u8>> {
         let raw = match &self.last_raw {

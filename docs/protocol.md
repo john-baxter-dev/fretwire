@@ -301,6 +301,7 @@ The MessagePack envelope keys 100/101 are an **operation + target**, and op 20 i
 | **20** | `{107: bank, 108: preset}` | **SELECT PRESET** — loads it; **changes device state** |
 | **76** | `{}` | open the current edit buffer for a (non-destructive) read |
 | **24** | `{118: 128}` | read-sequence prepare (purpose TBD; replicated from capture) |
+| **23** | reply `{107:bank, 108:index, 109:name, 92:snapshot, 117:?, 83:[u32,0]}` | read-info: current preset identity **and the live active snapshot** (key 92 — the authority; the preset blob's own `10 → 8` is the *stored* one and can differ). [solid] |
 | **23** | `nil` | read-sequence query — **reply carries the current preset identity** (see below) |
 | **22** | `nil` | start the paged stream — reply = chunk #0 |
 

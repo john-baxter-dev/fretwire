@@ -74,6 +74,12 @@ fn main() -> Result<()> {
                 let raw = raw.to_vec();
                 print_snapshot_diagnosis(&raw);
             }
+            // The authority: key 92 of the read-info reply, which is what `active_snapshot` above
+            // now reflects. Printed alongside so a mismatch with the blob is visible at a glance.
+            match preset.current.as_ref().and_then(|c| c.snapshot) {
+                Some(live) => println!("  => device reports live snapshot {live} (key 92)"),
+                None => println!("  => device reported no live snapshot (key 92 absent)"),
+            }
         }
         "bypass" => {
             // Pedal semantics: `bypass <slot> on` engages bypass (block OFF); `off` activates it.
@@ -861,7 +867,7 @@ fn print_snapshot_diagnosis(stream: &[u8]) {
         .map(|(i, _)| i)
         .collect();
     let stored = ps.snapshots().0;
-    println!("\nsnapshots (stored active index: {stored:?})");
+    println!("\nsnapshots (stored-in-blob active index: {stored:?})");
     for (i, s) in snaps.iter().enumerate() {
         let on: Vec<String> = live
             .iter()

@@ -392,3 +392,35 @@ fn re_serializing_preserves_both_dsp_groups() {
     assert_eq!(again.effect_blocks(), ps.effect_blocks());
     assert_eq!(again.grid(), ps.grid());
 }
+
+// The op-23 read-info reply carries the **live** active snapshot in key 92 — the same key a
+// snapshot status-push uses. This matters because the preset blob's own stored index (`10 → 8`)
+// can disagree: an HX Stomp parked on SNAPSHOT 3 reported 0 there, which is the wrong-snapshot bug.
+// Bytes are the `Dual Amp` read-info reply from startup.pcapng; its payload decodes to
+// `{107:0, 108:20, 109:"Dual Amp\0", 117:true, 83:[8850,0], 92:0}`.
+#[test]
+fn read_info_reply_carries_the_live_snapshot() {
+    fn hex(s: &str) -> Vec<u8> {
+        let clean: String = s.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+        (0..clean.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&clean[i..i + 2], 16).unwrap())
+            .collect()
+    }
+    let body = hex(
+        "00000600260000008366cd03ea670068866bcd00006ccd00146da9447561\
+         6c20416d700075c35392cd2292005c00",
+    );
+
+    let info = fretwire_data::stream::parse_preset_info(&body).expect("parses");
+    assert_eq!(
+        (info.bank, info.index, info.name.as_str()),
+        (0, 20, "Dual Amp")
+    );
+    // The live snapshot — which this same capture's preset blob disagrees with (it stores 1).
+    assert_eq!(
+        info.snapshot,
+        Some(0),
+        "key 92 is the device's live active snapshot"
+    );
+}

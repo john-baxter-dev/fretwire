@@ -1316,17 +1316,22 @@ impl Session {
             match self.read_preset_inner() {
                 Ok((payload, info)) => match self.catalog.load_preset(&payload) {
                     Ok(mut preset) => {
+                        // The blob's `10 → 8` is the snapshot that was *stored* with the preset, not
+                        // the one the pedal is on: an HX Stomp parked on SNAPSHOT 3 reported 0.
+                        // The read-info reply's key 92 *is* the live value (same key the snapshot
+                        // status-push uses), so prefer it and keep the stored one only as a
+                        // fallback for offline decodes. See docs/protocol.md.
+                        if let Some(live) = info.as_ref().and_then(|i| i.snapshot) {
+                            if preset.active_snapshot != Some(live) {
+                                tracing::debug!(
+                                    stored = ?preset.active_snapshot,
+                                    live,
+                                    "preset blob's stored snapshot disagrees with the device; using the device's"
+                                );
+                            }
+                            preset.active_snapshot = Some(live);
+                        }
                         preset.current = info;
-                        // The blob's active snapshot is the one that was *stored* with the preset,
-                        // which is not always the one the device is *currently* on — the unit has a
-                        // global snapshot-recall preference, and a panel-side switch only reaches us
-                        // as a status push. Logged so a hardware run can correlate the two; see
-                        // docs/helix-floor.md.
-                        tracing::debug!(
-                            stored_active_snapshot = ?preset.active_snapshot,
-                            snapshot_names = preset.snapshot_names.len(),
-                            "decoded preset snapshot state"
-                        );
                         self.last_raw = Some(payload);
                         // Seed the edit-history timeline with the loaded state (entry 0) the first
                         // time a preset is read after connect / preset switch — so the history pane

@@ -1001,6 +1001,15 @@ pub struct PresetInfo {
     pub index: i64,
     /// Preset name (key 109), NUL-trimmed.
     pub name: String,
+    /// **The live active snapshot** (key 92), 0-based — what the pedal is showing *right now*.
+    ///
+    /// This is the authority, and it is not the same thing as the preset blob's own
+    /// `10 → 8` ([`PresetStream::snapshots`]), which is the snapshot that was **stored** with the
+    /// preset. The two genuinely disagree: on an HX Stomp parked on SNAPSHOT 3, the blob reported 0.
+    /// [solid — key 92 is the snapshot index in status pushes too (`{105:42, 106:{92:n}}`), and in
+    /// the `Dual Amp` read-info capture it reads 0, matching that preset's live block scene while
+    /// its stored index says 1]
+    pub snapshot: Option<i64>,
 }
 
 /// Parse an **op-23 read-info** reply body into the current preset's identity. The reply envelope
@@ -1020,7 +1029,15 @@ pub fn parse_preset_info(reply: &[u8]) -> Option<PresetInfo> {
                 .to_string()
         })
         .unwrap_or_default();
-    Some(PresetInfo { bank, index, name })
+    // Key 92 = the live active snapshot. Same key the snapshot status-push uses, so the device
+    // reports its current scene on every read; we simply used to throw it away.
+    let snapshot = map_get(payload, 92).and_then(Value::as_i64);
+    Some(PresetInfo {
+        bank,
+        index,
+        name,
+        snapshot,
+    })
 }
 
 /// A state-change the device pushes **unsolicited** on the status channel when something changes on

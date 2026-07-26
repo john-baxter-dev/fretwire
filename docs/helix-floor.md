@@ -477,7 +477,7 @@ device). Confirmed from traffic: `PresetInfo { bank: 2, index: 17, name: "Sludge
 the user had selected in **User 1** — so `Factory 1 = 0, Factory 2 = 1, User 1 = 2`. The rest of the
 order is read off the unit's PRESETS menu [hypothesis].
 
-### Active snapshot can be wrong  [open — strong lead found 2026-07-26]
+### Active snapshot can be wrong — FIXED 2026-07-26
 
 The GUI highlighted snapshot 5 while the unit was on snapshot 1. The decoder is *not* at fault: the
 preset blob's key `10 → 8` is the snapshot that was **stored** with the preset (dual_amp's fixture
@@ -495,7 +495,21 @@ stored index and the stored scene genuinely disagree in a fixture we already had
 hardware involved — the same failure mode Sean saw. Both facts are pinned by tests
 (`snapshot_matrix_matches_the_live_block_state`, `dual_amp_stored_active_snapshot_disagrees_with_its_scene`).
 
-The obvious fix — derive the live snapshot by matching the matrix against the live block states —
-is ambiguous when two snapshots hold identical scenes (`preset1_stream`'s snapshots 1 and 2 are
-identical), so it is not implemented. Sean's dumps plus a "unit shows N / fretwire shows M" report
-should say whether matching wins in practice, or whether key `8` means something else entirely.
+**Resolved: the device tells us, and we were discarding it.** An HX Stomp parked on SNAPSHOT 3
+reported a stored index of **0**, refuting "key `8` is the live snapshot" outright. Scene-matching
+was ambiguous on that preset (snapshots 2 and 3 held identical scenes), so it can't carry the fix
+either — but decoding the **op-23 read-info reply** in full showed the answer was already on the
+wire:
+
+```
+104: {107: 0, 108: 20, 109: "Dual Amp\0", 117: true, 83: [8850, 0], 92: 0}
+```
+
+**Key `92` is the live active snapshot** — the same key a snapshot status-push carries
+(`{105:42, 106:{92:n}}`). We parsed only 107/108/109 and dropped the rest. In the `Dual Amp`
+capture key 92 reads 0, matching that preset's live block *scene*, while its blob stores 1 — three
+independent signals now agreeing.
+
+`PresetInfo::snapshot` carries it, and `Session::read_preset` overrides the blob's stored value with
+it (falling back to the blob for offline decodes, which have no device to ask). Keys `117` (bool)
+and `83` (`[u32, 0]`) in that reply are still unidentified.

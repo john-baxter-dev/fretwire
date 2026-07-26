@@ -563,12 +563,18 @@ how a live warning survived), and the global `RUSTFLAGS: -D warnings` dropped in
 `-- -D warnings` to clippy, so third-party dep warnings can't fail the build. `.githooks/pre-push`
 runs the same gates locally (`git config core.hooksPath .githooks`).
 
-Deliberately left as-is: the GUI re-pulls the *whole* preset after each committed edit
-(`mutate_edit` → `read_preset`). It amplified exposure to the truncation bug, but the reassembly fix
-de-fanged it (reads are now robust), and the drag path (`preview_param`) already skips the re-read —
-only the final commit re-reads. Removing it would risk undo/redo-history and DSP-load correctness and
-add a new untested local-patch path right before a hardware test, so it stays until after the next
-Floor run.
+**The post-edit re-pull: revisited 2026-07-26, staying as-is.** Audited the read counts rather than
+guessing. The wrapper split is already correct — `mutate_edit` wraps only session methods that do
+*not* read internally (`set_param`, `set_paired_param`, `set_param_enum`, `set_bypass`,
+`rename_snapshot`: 0 internal reads each), and `returning_edit` wraps the ones that do, so nothing
+double-reads. That leaves **one** full stream read per param commit, and two per structural edit —
+one to plan against current state, one to pick up the device's recomputed routing. Both are
+inherent, and the drag path (`preview_param`) already skips the commit read entirely.
+
+Removing the param-commit read would mean patching the param into `last_raw` locally (there is no
+`PresetStream` param setter yet) and would put undo/redo history — which snapshots that blob — at
+risk for a latency win the user mostly can't feel, since dragging never hits it. Not worth it; this
+is now a settled decision, not a deferral.
 
 ## Prioritized next steps
 > **The path to live control is in `docs/next-steps.md`.** TL;DR: (1) **on Windows now** — capture a

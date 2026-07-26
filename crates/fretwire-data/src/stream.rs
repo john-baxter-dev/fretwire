@@ -603,10 +603,17 @@ impl PresetStream {
 
     /// The editor's **grid** view: one cell per draggable slot (effect or empty), with its row and
     /// display column, for the routing UI. The 20-slot array is a fixed topology — `[0 = input,
-    /// 1..9 = top row, 10 = split node, 11..18 = row B, 19 = mixer node]` [solid] — so:
-    /// - top row (before the split node): `row 0`, `column = slot`;
-    /// - row B (between split and mixer nodes): `row 1`, `column = slot − split_idx + 1` (so B aligns
-    ///   under the matching A column).
+    /// 1..=8 = top row, 9 = output, 10 = split node, 11..=18 = row B, 19 = mixer node]` [solid,
+    /// verified against preset1/dual_amp: slot 0 is kind 0, slot 9 is kind 1] — so the grid is
+    /// **8 columns wide in both rows**, and each row's slot index *is* its column:
+    /// - top row: `row 0`, `column = slot` (slots 1..=8 → columns 1..=8);
+    /// - row B: `row 1`, `column = slot − 10` (slots 11..=18 → columns 1..=8), so B sits in the
+    ///   same absolute column space as A — a row-B block at column `c` is directly under the
+    ///   row-A slot `c`.
+    ///
+    /// Row B's column is **not** derived from the split node's signal-flow position: the node
+    /// positions ([`Self::structural_node_pos`]) say where the bracket opens and closes, the slot
+    /// index says which column a block occupies, and the device keeps the two consistent.
     ///
     /// The split/mixer node slots exist **even on serial presets** (kinds 2/3 with `is_split() ==
     /// false` — [solid], preset1 fixture), so the empty row-B cells are always emitted: dropping a
@@ -646,8 +653,8 @@ impl PresetStream {
             let (row, column) = match split_idx {
                 Some(s) if b.index > s => match mixer_idx {
                     // Row B: between the split and mixer nodes.
-                    Some(m) if b.index < m => (1u8, (b.index - s + 1) as i64),
-                    None => (1u8, (b.index - s + 1) as i64),
+                    Some(m) if b.index < m => (1u8, (b.index - s) as i64),
+                    None => (1u8, (b.index - s) as i64),
                     // A slot at/after the mixer node index (only the mixer itself) — skip.
                     Some(_) => continue,
                 },

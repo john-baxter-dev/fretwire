@@ -1123,10 +1123,11 @@ impl Session {
                     .min(other - 1),
             )
         } else {
-            // mixer: past the last B block's column, and strictly right of the split.
+            // mixer: past the last B block's column, and strictly right of the split. The grid is
+            // 8 columns wide, so column 9 (just past the last one) is as far right as it goes.
             (
                 (b_cols.iter().max().copied().unwrap_or(other) + 1).max(other + 1),
-                16,
+                9,
             )
         };
         if pos < lo || pos > hi {

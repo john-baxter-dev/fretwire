@@ -189,9 +189,11 @@ fn structural_node_parses_split_and_mixer() {
     );
 }
 
-// The routing grid maps every draggable slot to exactly one (row, column) cell: top-row cells carry
-// `column == slot`, row-B cells align under their A column (`slot − split_idx + 1`), and the input
-// slot and split/mixer nodes are excluded. Every effect block shows up as an occupied cell.
+// The routing grid maps every draggable slot to exactly one (row, column) cell. The grid is 8
+// columns wide in both rows (slots 1..=8 on top, 11..=18 on B), so a cell's column is its slot
+// index within its own row: `column == slot` on top, `column == slot − 10` on B — putting B in the
+// same absolute column space as A. The input slot and the split/mixer nodes are excluded, and
+// every effect block shows up as an occupied cell.
 #[test]
 fn grid_maps_slots_to_rows_and_columns() {
     use fretwire_data::stream::slot_kind;
@@ -214,11 +216,7 @@ fn grid_maps_slots_to_rows_and_columns() {
             assert!(c.slot < split_idx, "top cells are before the split node");
         } else {
             assert_eq!(c.row, 1, "only rows 0 and 1 exist");
-            assert_eq!(
-                c.column,
-                c.slot - split_idx + 1,
-                "row-B column aligns under A"
-            );
+            assert_eq!(c.column, c.slot - split_idx, "row-B column aligns under A");
             assert!(c.slot > split_idx, "row-B cells are after the split node");
         }
     }
@@ -228,6 +226,44 @@ fn grid_maps_slots_to_rows_and_columns() {
             .find(|c| c.slot == b.index as i64)
             .expect("effect block has a cell");
         assert!(cell.occupied, "effect block's cell is occupied");
+    }
+}
+
+// The grid's two coordinate systems have to agree: a cell's column comes from its slot index,
+// while the split/mixer glyphs are drawn at their signal-flow positions (holder key 13). If those
+// disagree, blocks on the parallel path render *outside* the bracket that is supposed to contain
+// them — which is exactly what a `slot − split_idx + 1` row-B column did on Helix Floor presets,
+// where it shifted every B block one column right of where the device put it.
+#[test]
+fn row_b_cells_sit_inside_the_split_bracket() {
+    use fretwire_data::stream::slot_kind;
+    for fixture in ["dual_amp_stream.msgpack.bin", "split_preset_stream.msgpack.bin"] {
+        let ps = PresetStream::parse(&capture(fixture)).unwrap();
+        for d in ps.dsps() {
+            for c in ps.dsp_grid(d) {
+                assert!(
+                    (1..=8).contains(&c.column),
+                    "{fixture} dsp{d}: column {} outside the 8-column grid",
+                    c.column,
+                );
+            }
+            if !ps.dsp_is_split(d) {
+                continue;
+            }
+            let split = ps
+                .dsp_structural_node_pos(d, slot_kind::SPLIT)
+                .expect("split pos");
+            let mixer = ps
+                .dsp_structural_node_pos(d, slot_kind::MIXER)
+                .expect("mixer pos");
+            for c in ps.dsp_grid(d).iter().filter(|c| c.row == 1 && c.occupied) {
+                assert!(
+                    split <= c.column && c.column < mixer,
+                    "{fixture} dsp{d}: row-B block at column {} escapes the bracket {split}..{mixer}",
+                    c.column,
+                );
+            }
+        }
     }
 }
 

@@ -344,13 +344,14 @@ fn grid_cells_are_tagged_with_their_dsp_and_global_slot() {
     // Per-DSP grids partition the whole grid.
     assert_eq!(ps.dsp_grid(0).len() + ps.dsp_grid(1).len(), grid.len());
 
-    // A row-B cell's column is measured from its own DSP's split node.
+    // A row-B cell's column is its index within its own DSP's row B: local slot 13 is row-B
+    // column 3, in the same 1..=8 column space the top row uses.
     let b33 = grid
         .iter()
         .find(|c| c.slot == 33)
         .expect("DSP2 index 13 is a cell");
     assert_eq!((b33.dsp, b33.row, b33.occupied), (1, 1, true));
-    assert_eq!(b33.column, 13 - 10 + 1);
+    assert_eq!(b33.column, 13 - 10);
 
     // The Looper occupies its cell like any other block.
     let looper_cell = grid.iter().find(|c| c.slot == 27).unwrap();

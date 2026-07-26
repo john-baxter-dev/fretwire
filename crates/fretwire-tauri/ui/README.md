@@ -9,7 +9,7 @@ compile time (see `../tauri.conf.json`).
 |---|---|---|
 | iterate on the UI | `npm run dev` (here) | browser + mock device, hot reload, no Rust |
 | UI against the real pedal | `cargo tauri dev` (from `..`) | real backend in a real window, hot reload |
-| the shipped app | `npm run build` then `cargo build --release -p fretwire-tauri` | `dist/` embedded into the binary |
+| the shipped app | `npm run build` then `cargo build --release -p fretwire-tauri --features custom-protocol` | `dist/` embedded into the binary |
 
 `cargo tauri dev` starts this dev server itself (`beforeDevCommand` in `tauri.conf.json`) and points
 the app at `http://localhost:5173` instead of the embedded `dist/`. The port is pinned with
@@ -101,15 +101,16 @@ working. Keep the mock's return shapes in sync with `../src/dto.rs`.
 ## Building for the real app
 
 ```sh
-npm run build                       # → ../dist
-cargo run -p fretwire-tauri --release     # from the repo root, runs against real hardware
+npm run build                                            # → ../dist
+cargo run -p fretwire-tauri --features custom-protocol   # from the repo root, real hardware
 ```
 
-`--release` is required: a debug build points the webview at `devUrl`
-(`http://localhost:5173`) and ignores `../dist`, so it errors with *"Could not connect to
-localhost: Connection refused"* unless the dev server is up. For hot-reloading UI work against
-the real backend, run `npm exec --prefix ui tauri dev` from `crates/fretwire-tauri` instead — it
-starts Vite and the app together.
+`--features custom-protocol` is required — it is what makes Tauri serve the embedded `../dist`
+rather than `devUrl` (`http://localhost:5173`). Without it you get *"Could not connect to
+localhost: Connection refused"* unless the dev server happens to be up, and `--release` does not
+change that: the choice comes from the feature alone. The `tauri` CLI passes it for you, so
+`tauri dev`/`tauri build` never hit this. For hot-reloading UI work against the real backend, run
+`npm exec --prefix ui tauri dev` from `crates/fretwire-tauri` instead.
 
 In the real Tauri webview the mock is bundled but never used — `window.__TAURI_INTERNALS__` is
 present, so `ipc.js` routes to the real backend.

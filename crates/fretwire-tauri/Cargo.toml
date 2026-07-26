@@ -10,6 +10,15 @@ description = "fretwire GUI on a Tauri (WebKitGTK) webview"
 name = "fretwire-gui"
 path = "src/main.rs"
 
+[features]
+# Serve the frontend from the embedded `dist/` instead of the dev server. Tauri decides this
+# purely from this feature — `dev: cfg!(not(feature = "custom-protocol"))` in tauri-macros — and
+# *not* from debug/release, so `cargo run --release` without it still points the webview at
+# `devUrl` (http://localhost:5173) and fails with "Could not connect to localhost". The `tauri`
+# CLI passes this automatically, which is why `tauri build`/`tauri dev` always worked; a plain
+# `cargo run` needs it spelled out. DO NOT REMOVE.
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

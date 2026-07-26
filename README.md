@@ -104,13 +104,14 @@ Re-run `npm run build` after any frontend change; the Rust side won't pick it up
 **3. Run it.**
 
 ```
-cargo run -p fretwire-tauri --release
+cargo run -p fretwire-tauri --features custom-protocol
 ```
 
-`--release` matters: a debug build loads the Vite dev server (`devUrl`) rather than the `dist/` you
-just built, and fails with *"Could not connect to localhost: Connection refused"* if it isn't
-running. To work on the UI with hot reload instead, use
-`cd crates/fretwire-tauri && npm exec --prefix ui tauri dev`, which starts both.
+The `custom-protocol` feature is what tells Tauri to serve the `dist/` you just built instead of a
+dev server; without it the window opens on *"Could not connect to localhost: Connection refused"*.
+(`--release` makes no difference to this — only the feature does.) To work on the UI with hot
+reload instead, use `cd crates/fretwire-tauri && npm exec --prefix ui tauri dev`, which starts both
+the dev server and the app.
 
 Connect, browse presets, edit blocks and parameters, drag blocks around the routing grid, manage
 snapshots, save, back up and restore. It live-follows the hardware, so footswitch and panel changes

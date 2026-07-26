@@ -69,6 +69,13 @@ pub struct Device {
     /// a preset's identity (`PresetInfo::bank`, key `107`) is an index into this list. The HX Stomp
     /// has a single flat list; the Helix Floor has eight.
     pub setlists: Option<&'static [&'static str]>,
+    /// Preset slots **per setlist**. This is the stride between setlists in the preset-list
+    /// browse's *global* numbering: a browse entry's index is `bank * setlist_size + slot`, while
+    /// a preset's own identity (`PresetInfo::index`) is the bank-relative `slot`. Confusing the
+    /// two sends an out-of-range preset number to the device.
+    /// [solid for the Floor — its `.hxb` holds exactly 128 slots in each of the 8 setlists, and a
+    /// browse of TEMPLATES (bank 7) returned indices starting at 896 = 7 × 128]
+    pub setlist_size: Option<usize>,
     /// How much of the above is confirmed from real traffic.
     pub support: Support,
 }
@@ -91,6 +98,9 @@ pub const DEVICES: &[Device] = &[
         // One flat list of 126 presets — no setlist concept on the Stomp. [solid — `list_presets`
         // returns the lot and bank 0 is the only bank that answers]
         setlists: Some(&["Presets"]),
+        // One setlist, so bank is always 0 and the stride is never applied. 126 is what a live
+        // browse returned.
+        setlist_size: Some(126),
         support: Support::Verified,
     },
     Device {
@@ -115,6 +125,7 @@ pub const DEVICES: &[Device] = &[
             "USER 5",
             "TEMPLATES",
         ]),
+        setlist_size: Some(128),
         support: Support::Verified,
     },
     Device {
@@ -125,6 +136,7 @@ pub const DEVICES: &[Device] = &[
         dsps: None,
         snapshots: None,
         setlists: None,
+        setlist_size: None,
         support: Support::Untested,
     },
 ];
@@ -146,6 +158,12 @@ impl Device {
     /// is what actually decides it at parse time.
     pub fn dsp_count(&self) -> usize {
         self.dsps.unwrap_or(1)
+    }
+
+    /// Preset slots per setlist — the stride between setlists in the browse's global numbering.
+    /// Falls back to 128 (the only multi-setlist layout we have measured) when unknown.
+    pub fn setlist_stride(&self) -> i64 {
+        self.setlist_size.unwrap_or(128) as i64
     }
 
     /// This device's setlist names, in bank order. Falls back to a single unnamed list when we

@@ -172,6 +172,21 @@ fn main() -> Result<()> {
                 }
             }
         }
+        "dump-list" => {
+            // Save the raw reassembled preset-list stream for a setlist (reads only). Diagnostic:
+            // the browse's numbering hasn't fully reconciled with the device's own.
+            let bank: i64 = next_num(&mut args, "bank")?;
+            let path = args
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("usage: fretwire dump-list <bank> <out.bin>"))?;
+            let mut s = fretwire_core::Session::connect()?;
+            let raw = s.list_presets_raw(bank)?;
+            std::fs::write(&path, &raw)?;
+            println!("wrote {} bytes of bank {bank}'s list to {path}", raw.len());
+            for (i, name) in s.list_presets_in(bank)?.iter().take(8) {
+                println!("  [{i:>3}] {name}");
+            }
+        }
         "setlists" => {
             // Name each setlist the connected device has, with the bank index `presets`/`goto` take.
             let mut s = fretwire_core::Session::connect()?;
@@ -553,6 +568,9 @@ fn main() -> Result<()> {
                 "           install-udev [--print]   (install the udev rule for non-root USB access)"
             );
             eprintln!("  live:    connect | disconnect | pull | presets [bank] | setlists");
+            eprintln!(
+                "           dump-list <bank> <out.bin>   (raw preset-list stream, diagnostic)"
+            );
             eprintln!("           goto <preset> [bank]");
             eprintln!(
                 "           bypass <slot> <on|off>   (on = bypassed / block off, as on the pedal)"

@@ -342,9 +342,40 @@ impl Session {
         Ok(())
     }
 
+    /// Reject a `(bank, slot)` pair the device cannot address, **before** it reaches the wire.
+    ///
+    /// This exists because a real incident: the preset-list browse numbers presets globally
+    /// (`bank * setlist_size + slot`) while these commands take the bank-relative slot, and the GUI
+    /// passed the global number straight through. Selecting a TEMPLATES preset therefore sent
+    /// `goto_preset(bank = 7, preset = 906)` — far past the end of a 128-slot setlist — and **locked
+    /// the device up hard enough to need a reboot**. An out-of-range slot must never be sent again:
+    /// there is no reason to believe the firmware handles one gracefully, and `save_preset` with a
+    /// bogus slot would be a persistent write to who-knows-where.
+    fn check_preset_addr(&self, bank: i64, slot: i64, what: &str) -> crate::Result<()> {
+        let d = self.device();
+        let banks = d.setlist_names().len() as i64;
+        let stride = d.setlist_stride();
+        if bank < 0 || bank >= banks {
+            return Err(fretwire_data::Error::Stream(format!(
+                "{what}: bank {bank} out of range (device has {banks} setlist(s))"
+            ))
+            .into());
+        }
+        if slot < 0 || slot >= stride {
+            return Err(fretwire_data::Error::Stream(format!(
+                "{what}: preset slot {slot} out of range 0..{stride} for bank {bank} — this looks \
+                 like a global preset number ({}) rather than a slot within the setlist",
+                bank * stride + slot
+            ))
+            .into());
+        }
+        Ok(())
+    }
+
     /// Navigate the device to `preset` in `bank` (op 20 SELECT). **Changes the active preset** —
     /// this is the destructive counterpart to `read_preset`. Rides the edit channel like an edit.
     pub fn goto_preset(&mut self, bank: i64, preset: i64) -> crate::Result<()> {
+        self.check_preset_addr(bank, preset, "goto_preset")?;
         let txn = self.bump_txn();
         let body = edit::select_preset(bank, preset, txn);
         self.send_edit(body)?;
@@ -355,6 +386,7 @@ impl Session {
     /// `slot` in device flash.** `bank` is normally 0; `slot` is the flat preset index (as `goto`
     /// and `list_presets` use). `name` is stored NUL-terminated. Rides the edit channel like an edit.
     pub fn save_preset(&mut self, bank: i64, slot: i64, name: &str) -> crate::Result<()> {
+        self.check_preset_addr(bank, slot, "save_preset")?;
         let txn = self.bump_txn();
         let body = edit::save_preset(bank, slot, name, txn);
         self.send_edit(body)?;
@@ -373,6 +405,7 @@ impl Session {
     /// same command dispatch and is what we use — the same substitution `list_presets` makes for the
     /// browse ops. Correlated by transaction id so an interleaved keepalive isn't mistaken for the ACK.
     pub fn rename_preset(&mut self, bank: i64, slot: i64, name: &str) -> crate::Result<()> {
+        self.check_preset_addr(bank, slot, "rename_preset")?;
         let txn = self.bump_txn();
         let tlv =
             Tlv::command(op::SESSION_OPEN, edit::rename_preset(bank, slot, name, txn)).to_bytes();
@@ -1607,6 +1640,26 @@ impl Session {
     /// [`Self::list_presets`] for a specific **setlist** (`bank`). The index of each returned
     /// preset is relative to that setlist, and pairs with `goto_preset(bank, index)`.
     pub fn list_presets_in(&mut self, bank: i64) -> crate::Result<Vec<(u16, String)>> {
+        let payload = self.list_presets_raw(bank)?;
+        // The browse numbers presets **globally** (`bank * setlist_size + slot`) — a TEMPLATES
+        // (bank 7) listing comes back starting at 896 = 7 × 128 — whereas a preset's own identity
+        // (`PresetInfo::index`) is the bank-relative slot, and that is what `goto_preset` /
+        // `save_preset` take. Normalise here so callers only ever see one numbering: passing a
+        // global index through as a slot is how `goto_preset(7, 906)` reached the device and
+        // locked it up.
+        let base = bank * self.device().setlist_stride();
+        let out: Vec<(u16, String)> = fretwire_data::stream::parse_preset_list(&payload)?
+            .into_iter()
+            .map(|(global, name)| ((global as i64 - base).max(0) as u16, name))
+            .collect();
+        tracing::debug!(bank, base, n = out.len(), "preset list normalised to slots");
+        Ok(out)
+    }
+
+    /// The **raw reassembled preset-list stream** for `bank`, undecoded. Diagnostic hook: the
+    /// browse's index numbering has not fully reconciled with the device's own (a listing has been
+    /// seen offset from the same device's `.hxb` backup), and a captured stream is what settles it.
+    pub fn list_presets_raw(&mut self, bank: i64) -> crate::Result<Vec<u8>> {
         // HX Edit lists on the primary channel, but our reconstructed handshake doesn't leave
         // primary browse-ready; the edit channel is browse-capable in our session. LIVE experiment.
         let chan = channel::EDIT;
@@ -1654,7 +1707,7 @@ impl Session {
             bank,
             "reassembled preset-list stream"
         );
-        Ok(fretwire_data::stream::parse_preset_list(&payload)?)
+        Ok(payload)
     }
 
     /// Cleanly tear down the session, returning the pedal to standalone operation.

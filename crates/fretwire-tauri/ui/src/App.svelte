@@ -188,7 +188,15 @@
       bypasses.clear(); // those pushes belonged to the preset we just left
     }
     await refreshPreset();
-    if (presetChanged) activeSnapshot = preset?.active_snapshot ?? 0;
+    if (presetChanged) {
+      activeSnapshot = preset?.active_snapshot ?? 0;
+      // Follow the device into whichever setlist it landed in — switching presets from the panel
+      // can cross setlists, and the sidebar would otherwise keep listing the old one with nothing
+      // highlighted. Re-list even within the same bank, since names may have changed.
+      const bank = preset?.bank ?? 0;
+      if (bank !== viewBank) viewBank = bank;
+      await refreshPresets(bank);
+    }
     // Footswitch bypass: like snapshots, the device's readable stream lags its own push, so the
     // re-read can still carry the pre-toggle state. Overlay the pushed values onto the fresh read.
     if (bypasses.size && preset) {

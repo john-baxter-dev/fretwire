@@ -1295,6 +1295,16 @@ impl Session {
                 Ok((payload, info)) => match self.catalog.load_preset(&payload) {
                     Ok(mut preset) => {
                         preset.current = info;
+                        // The blob's active snapshot is the one that was *stored* with the preset,
+                        // which is not always the one the device is *currently* on — the unit has a
+                        // global snapshot-recall preference, and a panel-side switch only reaches us
+                        // as a status push. Logged so a hardware run can correlate the two; see
+                        // docs/helix-floor.md.
+                        tracing::debug!(
+                            stored_active_snapshot = ?preset.active_snapshot,
+                            snapshot_names = preset.snapshot_names.len(),
+                            "decoded preset snapshot state"
+                        );
                         self.last_raw = Some(payload);
                         // Seed the edit-history timeline with the loaded state (entry 0) the first
                         // time a preset is read after connect / preset switch — so the history pane

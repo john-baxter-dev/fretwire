@@ -406,11 +406,9 @@ model code, preset `device` ID, DSP and snapshot counts, and a `Support` flag), 
 `Verified`; `Session::device()` tells the layers above what they're talking to. **So a Floor will
 now connect.** What remains:
 
-1. **Teach `Session`'s routing planner about DSPs.** `add_block_at`, `place_block`, `insert_block`,
-   `reorder_block` and `set_node_pos` plan moves inside one 20-slot array and now read it via
-   `dsp_blocks(0)`/`dsp_grid(0)` — explicitly DSP 0, which is complete for the Stomp. They need a
-   `dsp` argument for the Floor. Reading and per-block edits are already DSP-agnostic, so a Floor
-   session can read, browse and edit parameters today; it just can't re-route DSP2 yet.
+1. **Teach `Session`'s routing planner about DSPs.** ✅ Done (2026-07-25) — `add_block_at`,
+   `place_block`, `insert_block`, `reorder_block` and `set_node_pos` all plan in wire space and take
+   the DSP from the slot; cross-DSP moves are rejected.
 2. **Render two DSPs in the routing grid.** ✅ Done (2026-07-25) — `Chain.svelte` draws one grid per
    DSP from `PresetDto.dsps[]`, and the routing planner is DSP-aware (drag/insert/node-move on either
    DSP). The two-DSP browser mock ("Pull Me Under") makes it testable without hardware.
@@ -420,6 +418,48 @@ now connect.** What remains:
    named `"Mic"` for cab categories (it's the mic index) and `"Trails"` only for time-based fx; see
    `editor::trailing_extra_name`.
 
-> **Untested on hardware.** Everything above is verified against captures and the backup, offline.
-> Nobody has yet run fretwire against a physical Helix Floor — the first connection is still a
-> first. It should work; it hasn't been proven.
+## First hardware run (2026-07-26)  [solid]
+
+fretwire has now been run against a physical Helix Floor by a contributor. It connects, handshakes
+(`device reports "P21"`), reads presets across both DSPs, edits, and holds a session without
+crashing. Three things came out of it.
+
+### Preset-stream reassembly — FIXED
+
+Reads truncated at a multiple of 256 whenever an empty chunk landed mid-stream and was mistaken for
+the terminator. The stream envelope's declared length (`marker:u16, type:u16, len:u32le`, total =
+`len + 8`) is authoritative; `fretwire_data::stream::declared_stream_len` now drives reassembly and
+short chunks before that length are skipped rather than treated as EOF.
+
+### Row-B grid columns — FIXED
+
+Blocks on a parallel path rendered *outside* the Y-loop bracket. `dsp_grid` derived a row-B cell's
+column as `slot − split_idx + 1`, where `split_idx` is the split node's slot-array index (always
+10) — so row B was pinned to columns 2..=9 and never consulted the split node's signal-flow
+position, which is where the glyphs are drawn. The 20-slot array is
+`[0=in, 1..=8 row A, 9=out, 10=split, 11..=18 row B, 19=mixer]`: **both rows are 8 columns**, so a
+row-B column is `slot − 10`, in the same absolute space as row A.
+
+> **Still needs confirming on hardware.** The fix is forced by the 20-slot arithmetic and matches
+> both split fixtures, but every fixture we have holds only *one* row-B block. A `dump-raw` of a
+> Floor preset with several (e.g. `BMBLFOOT PRINCE`, row B at slots 13/14/15) would close it out.
+> Those are Line 6 factory presets — keep any such dump local and gitignored, diagnosis only.
+
+### Setlists — IMPLEMENTED
+
+The Floor has eight setlists; we only ever browsed bank 0, so a unit sitting in User 1 listed
+Factory 1's names. `edit::presets_stream` had the bank hardcoded to 0. Now parameterised, with
+`Device::setlists` naming them and the sidebar picking between them (hidden on a one-setlist
+device). Confirmed from traffic: `PresetInfo { bank: 2, index: 17, name: "Sludge" }` for a preset
+the user had selected in **User 1** — so `Factory 1 = 0, Factory 2 = 1, User 1 = 2`. The rest of the
+order is read off the unit's PRESETS menu [hypothesis].
+
+### Active snapshot can be wrong  [open]
+
+The GUI highlighted snapshot 5 while the unit was on snapshot 1. The decoder is *not* at fault: the
+preset blob's key `10 → 8` is the snapshot that was **stored** with the preset (dual_amp's fixture
+reads 1, having been saved on SNAPSHOT 2), and the device has a global snapshot-recall preference,
+so the live selection can differ from the stored one. A panel-side change reaches us only as a
+status push (type 42/46), which we already apply. What's missing is a way to *query* the live
+snapshot on connect — that needs a capture of HX Edit connecting to a unit parked on a non-default
+snapshot. `read_preset` now logs the stored value at debug level to help correlate.

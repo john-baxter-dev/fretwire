@@ -516,6 +516,52 @@ testable without hardware. New base-20 planner tests + end-to-end mock checks; s
 dev-mode Svelte console warnings (Dialog role, ParamPanel labels, ModelPicker initial-value lint)
 that cluttered the tester's logs are cleared. Suite **156**.
 
+**Second hardware run (2026-07-26).** The reassembly fix holds: every read in Sean's logs now
+reports `reassembled preset stream bytes=N declared=N`, including one that skipped a premature short
+chunk mid-stream (`short chunk before declared stream end — skipping, continuing read got=7168
+want=7373`) and completed correctly. No truncation, no wedged wire, no reconnect prompts, and the
+GUI survived a long unattended session. DSP2 renders. Three new findings, all addressed:
+
+1. **Row-B blocks rendered outside the Y-loop** — his "the y-loop renders the start of the loop on
+   the right, and the mixer on the left". `dsp_grid` computed a row-B column as
+   `slot − split_idx + 1` where `split_idx` is the split node's *slot-array index*, always 10 — so
+   row B was pinned to columns 2..=9 and never consulted the split's signal-flow position, which is
+   where the glyphs are drawn. Probing the fixtures pins the topology (slot 0 = kind 0 input, slot 9
+   = kind 1 output): `[0=in, 1..=8 row A, 9=out, 10=split, 11..=18 row B, 19=mixer]` — **both rows
+   are 8 columns**, so the column is `slot − 10`. Both split fixtures land their row-B block exactly
+   at their split position under the new formula. Regression test asserts occupied row-B cells stay
+   inside `split_pos..mixer_pos` and no column leaves the grid. *Every fixture we have has only one
+   row-B block, so a `dump-raw` of a multi-B Floor preset (BMBLFOOT PRINCE, slots 13/14/15) is still
+   wanted to close it out.*
+2. **Setlists implemented.** The Floor has eight (Factory 1/2, User 1-5, Templates); we only ever
+   browsed bank 0, so a unit in User 1 listed Factory 1's names — Sean's "the list on the left
+   doesn't show the other user1 presets". Nearly everything was already plumbed (`PresetInfo.bank`,
+   `goto/save/rename_preset(bank, …)`); the one defect was `edit::presets_stream` hardcoding the
+   bank to 0. Now parameterised, `Device::setlists` names them, `Session::list_presets_in(bank)`,
+   and the sidebar has a picker — **hidden on a one-setlist device**, as HX Edit does for the Stomp.
+   Confirmed from traffic: `PresetInfo { bank: 2, index: 17, name: "Sludge" }` in User 1, so
+   `Factory 1 = 0, Factory 2 = 1, User 1 = 2`; the rest of the order is off the unit's menu
+   [hypothesis]. A panel-side preset change now also pulls the sidebar into the device's setlist.
+3. **Wrong active snapshot** [open]. The decoder is fine — key `10 → 8` is the snapshot **stored**
+   with the preset (dual_amp's fixture reads 1, saved on SNAPSHOT 2), and the unit has a global
+   snapshot-recall preference, so the live selection can differ. Panel changes reach us as pushes
+   (type 42/46) and are applied; what's missing is a way to *query* the live snapshot on connect.
+   Needs a capture of HX Edit connecting to a unit parked on a non-default snapshot. `read_preset`
+   now logs the stored value at debug level.
+
+**Mock device modes (2026-07-26):** `fretwireMock.device("stomp"|"floor")` flips the browser mock
+between a one-DSP/one-list HX Stomp and a two-DSP/eight-setlist Helix Floor, so the setlist picker's
+presence and the dual-grid layout are both testable without hardware.
+
+**CI was broken and had never run (2026-07-26).** The clippy step passed its `-p` flags *after* the
+`--`, sending them to the clippy driver (`error: Unrecognized option: 'p'`) — and the workflow only
+triggered on `master`/`main`, so with all Floor work on a feature branch it had never executed at
+all. Fixed, plus: triggers on every branch, a `rustfmt` job, a **GUI clippy job** (plain
+`cargo clippy` only checks `default-members`, which excludes `fretwire-tauri` — that blind spot is
+how a live warning survived), and the global `RUSTFLAGS: -D warnings` dropped in favour of passing
+`-- -D warnings` to clippy, so third-party dep warnings can't fail the build. `.githooks/pre-push`
+runs the same gates locally (`git config core.hooksPath .githooks`).
+
 Deliberately left as-is: the GUI re-pulls the *whole* preset after each committed edit
 (`mutate_edit` → `read_preset`). It amplified exposure to the truncation bug, but the reassembly fix
 de-fanged it (reads are now robust), and the drag path (`preview_param`) already skips the re-read —

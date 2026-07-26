@@ -454,7 +454,7 @@ device). Confirmed from traffic: `PresetInfo { bank: 2, index: 17, name: "Sludge
 the user had selected in **User 1** — so `Factory 1 = 0, Factory 2 = 1, User 1 = 2`. The rest of the
 order is read off the unit's PRESETS menu [hypothesis].
 
-### Active snapshot can be wrong  [open]
+### Active snapshot can be wrong  [open — strong lead found 2026-07-26]
 
 The GUI highlighted snapshot 5 while the unit was on snapshot 1. The decoder is *not* at fault: the
 preset blob's key `10 → 8` is the snapshot that was **stored** with the preset (dual_amp's fixture
@@ -463,3 +463,16 @@ so the live selection can differ from the stored one. A panel-side change reache
 status push (type 42/46), which we already apply. What's missing is a way to *query* the live
 snapshot on connect — that needs a capture of HX Edit connecting to a unit parked on a non-default
 snapshot. `read_preset` now logs the stored value at debug level to help correlate.
+
+**Decoding the snapshot bypass matrix (key `10 → 10 → [i] → 3`) turned this from a guess into a
+measurement.** Each snapshot stores one `[_, enabled]` pair per slot — the scene it recalls. In
+`preset1_stream` the live blocks match snapshot 0's row and key `8` says 0, so both agree. In
+`dual_amp_stream` key `8` says **1**, but the live block state is snapshot **0**'s scene. So the
+stored index and the stored scene genuinely disagree in a fixture we already had, offline, with no
+hardware involved — the same failure mode Sean saw. Both facts are pinned by tests
+(`snapshot_matrix_matches_the_live_block_state`, `dual_amp_stored_active_snapshot_disagrees_with_its_scene`).
+
+The obvious fix — derive the live snapshot by matching the matrix against the live block states —
+is ambiguous when two snapshots hold identical scenes (`preset1_stream`'s snapshots 1 and 2 are
+identical), so it is not implemented. Sean's dumps plus a "unit shows N / fretwire shows M" report
+should say whether matching wins in practice, or whether key `8` means something else entirely.

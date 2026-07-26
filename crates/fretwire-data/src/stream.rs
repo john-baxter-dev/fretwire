@@ -768,9 +768,80 @@ pub struct Assignment {
     pub max: Option<i64>,
 }
 
+/// One snapshot's stored state, from a preset's key `10 → 10` array.
+///
+/// A snapshot is a per-preset scene: which blocks are on, at what tempo. Decoded from the two
+/// Stomp split fixtures; the bypass matrix is [solid] (see [`PresetStream::snapshot_details`]),
+/// the rest [partial].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotInfo {
+    /// Display name (key `4`), NUL-trimmed.
+    pub name: String,
+    /// Key `0` — true on every snapshot in the fixtures, so read as "slot in use" rather than
+    /// anything the user toggles. [hypothesis]
+    pub in_use: bool,
+    /// Key `5` — 120 in every fixture, which is the Helix's default BPM. [hypothesis — plausible
+    /// as the snapshot's stored tempo, but never observed at another value]
+    pub tempo: Option<i64>,
+    /// Per-slot **enabled** state in this snapshot, indexed by slot in the same array the blocks
+    /// use (key `3`: one `[_, enabled]` pair per slot). `true` = block active, `false` = bypassed
+    /// — the inverse of [`Block::bypassed`].
+    ///
+    /// The array is as long as the device's slot array (20 on the Stomp, key `9`). A Floor's
+    /// two-DSP layout has not been observed here — no captured Floor preset stream — so treat
+    /// indices past the first DSP as unverified.
+    pub block_enabled: Vec<bool>,
+}
+
 impl PresetStream {
+    /// Per-snapshot stored state: name, tempo, and the **bypass matrix** (which blocks are on in
+    /// each snapshot).
+    ///
+    /// The matrix is [solid]: in `preset1_stream`, the live blocks are bypassed at slots 2/3/4/7
+    /// and active at 5/6, which is exactly snapshot 0's `key 3` — and `key 10 → 8` reports 0.
+    ///
+    /// **`key 10 → 8` is not reliably the live snapshot.** In `dual_amp_stream` it reports 1, but
+    /// the live block state (slot 4 bypassed, 6/7/15 active) matches snapshot **0**; snapshots 1
+    /// and 2 there are pristine "everything on". So the stored index and the stored scene disagree
+    /// in that fixture. This is the most likely explanation for the GUI highlighting the wrong
+    /// snapshot on hardware — see `docs/helix-floor.md`. Deriving the live snapshot by matching
+    /// this matrix against the live block states is a candidate fix, but it is ambiguous whenever
+    /// two snapshots hold identical scenes (as snapshots 1 and 2 do in `preset1_stream`), so it is
+    /// deliberately not done here.
+    pub fn snapshot_details(&self) -> Vec<SnapshotInfo> {
+        let Some(Value::Array(snaps)) = self.field(10).and_then(|m| map_get(m, 10)) else {
+            return Vec::new();
+        };
+        snaps
+            .iter()
+            .map(|s| SnapshotInfo {
+                name: map_get(s, 4)
+                    .and_then(|v| v.as_str())
+                    .map(|v| v.trim_end_matches('\0').to_string())
+                    .unwrap_or_default(),
+                in_use: map_get(s, 0).and_then(Value::as_bool).unwrap_or(false),
+                tempo: map_get(s, 5).and_then(Value::as_i64),
+                // Each entry is a 2-element array; the *second* element is the enabled flag (the
+                // first is false throughout every fixture, so it discriminates nothing).
+                block_enabled: match map_get(s, 3) {
+                    Some(Value::Array(slots)) => slots
+                        .iter()
+                        .map(|e| match e {
+                            Value::Array(pair) => {
+                                pair.get(1).and_then(Value::as_bool).unwrap_or(false)
+                            }
+                            _ => false,
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                },
+            })
+            .collect()
+    }
+
     /// Snapshot names and the active snapshot index (preset key `10`: `8` = active index,
-    /// `10` = `Array` of snapshot maps each with `4` = name). [partial — names + active only]
+    /// `10` = `Array` of snapshot maps each with `4` = name). See [`Self::snapshot_details`] for
+    /// the full per-snapshot state — and for why the active index is not fully trustworthy.
     pub fn snapshots(&self) -> (Option<i64>, Vec<String>) {
         let root = self.field(10);
         let active = root.and_then(|m| map_get(m, 8)).and_then(Value::as_i64);

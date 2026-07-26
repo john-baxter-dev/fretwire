@@ -126,8 +126,26 @@ of a `Map{7}` node:
   lists **only footswitch-bound blocks**, in FS order — it is empty when nothing's on a switch (a
   preset meant to be driven by snapshots/preset-changes), which is why block enumeration must come
   from the slot array, not here. Key `4` is the **separate** parameter-controller table.
-- **Snapshots:** names + active index in **key `10`** (`8` = active, `10` = `[{4: name, …}]`); the
-  per-block snapshot value matrix is in key `2` (and `10`'s sub-arrays). Names/active parsed; values TBD.
+- **Snapshots: key `10`.** `8` = stored active index, `9` = slot count (20), `10` = `Array` of
+  snapshot objects, `13` = `Array[20]` of per-slot flags (all `true` in every fixture).
+  Each snapshot object is `{0: in-use, 1: Array[11], 2: Array[64], 3: Array[20], 4: name,
+  5: tempo?, 12, 14}`:
+  - **`3` = the bypass matrix [solid]** — one `[_, enabled]` pair per slot; `enabled` is the
+    inverse of a block's `bypassed`. The first element of the pair is `false` throughout and
+    discriminates nothing. Proven against `preset1_stream`: its live blocks (2/3/4/7 bypassed,
+    5/6 active) are exactly snapshot 0's row, and `8` reports 0. Parsed by
+    `PresetStream::snapshot_details`.
+  - **`8` is not reliably the *live* snapshot.** `dual_amp_stream` stores `8 = 1`, yet its live
+    block state matches snapshot **0** (snapshots 1/2 there are pristine "everything on"). Both
+    facts are locked in by tests. This is the standing lead on the GUI highlighting the wrong
+    snapshot on hardware. Deriving the live snapshot by matching the matrix against live block
+    state is a candidate fix but ambiguous when two snapshots hold identical scenes — which
+    `preset1_stream`'s snapshots 1 and 2 do.
+  - `2` = `Array[64]` of `[bool, int, nil]`, one per controller/param slot — the per-snapshot
+    **parameter** values. Almost entirely `[false, 64, nil]` in the fixtures (64 reads as a
+    midpoint default), so the encoding of an actually-varying value is still TBD: it needs a
+    capture of one knob moved between two snapshots.
+  - `1` = `Array[11]` of `[13, false, [0; 7]]` — uniform in every fixture, purpose unknown.
 
 ### Block enumeration: the slot array is authoritative  [solid]
 **Blocks are enumerated from the slot array `0 → 22`, not the signal path.** Each kind-6 slot is a

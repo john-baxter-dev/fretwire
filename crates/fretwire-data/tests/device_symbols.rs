@@ -408,3 +408,54 @@ fn set_node_pos_round_trips_through_blob() {
         "blob carries the new mixer pos"
     );
 }
+
+// The per-snapshot bypass matrix (preset key `10 → 10 → [i] → 3`): one `[_, enabled]` pair per
+// slot, `enabled` being the inverse of `Block::bypassed`. Pinned against the live block state,
+// which is the only ground truth available — a preset's loaded blocks *are* its active snapshot's
+// scene.
+#[test]
+fn snapshot_matrix_matches_the_live_block_state() {
+    let ps = PresetStream::parse(&capture("preset1_stream.msgpack.bin")).unwrap();
+    let snaps = ps.snapshot_details();
+    assert_eq!(snaps.len(), 3, "the Stomp has 3 snapshots");
+    assert_eq!(snaps[0].name, "SNAPSHOT 1");
+    assert_eq!(snaps[0].block_enabled.len(), 20, "one entry per slot");
+
+    // preset1's live blocks: 2/3/4/7 bypassed, 5/6 active. `key 10 → 8` says snapshot 0 is active,
+    // and snapshot 0's matrix agrees exactly — which is what makes the decode [solid].
+    assert_eq!(ps.snapshots().0, Some(0));
+    for b in ps.blocks().iter().filter(|b| b.is_block()) {
+        let bypassed = b.bypassed.expect("block has a bypass flag");
+        assert_eq!(
+            snaps[0].block_enabled[b.index], !bypassed,
+            "slot {} disagrees with snapshot 0's matrix",
+            b.index
+        );
+    }
+}
+
+// ...and the fixture that shows the stored active index can't be trusted on its own: dual_amp
+// reports snapshot 1 active, but its live block state is snapshot 0's scene. Locked in as a
+// regression so the discrepancy can't be "tidied away" without noticing — it is the standing lead
+// on the GUI highlighting the wrong snapshot on hardware.
+#[test]
+fn dual_amp_stored_active_snapshot_disagrees_with_its_scene() {
+    let ps = PresetStream::parse(&capture("dual_amp_stream.msgpack.bin")).unwrap();
+    let snaps = ps.snapshot_details();
+    assert_eq!(ps.snapshots().0, Some(1), "stored active index is 1");
+
+    let live: Vec<(usize, bool)> = ps
+        .blocks()
+        .iter()
+        .filter(|b| b.is_block())
+        .map(|b| (b.index, !b.bypassed.unwrap()))
+        .collect();
+    let matches = |s: &fretwire_data::stream::SnapshotInfo| {
+        live.iter().all(|&(slot, on)| s.block_enabled[slot] == on)
+    };
+    assert!(matches(&snaps[0]), "the live scene is snapshot 0's");
+    assert!(
+        !matches(&snaps[1]),
+        "but the stored active index points at snapshot 1, whose scene differs"
+    );
+}

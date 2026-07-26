@@ -815,7 +815,82 @@ fn show_preset(path: &str) -> Result<()> {
     let stream = std::fs::read(path)?;
     let preset = Catalog::load()?.load_preset(&stream)?;
     print_preset(&preset);
+    print_snapshot_diagnosis(&stream);
     Ok(())
+}
+
+/// Print each snapshot's stored scene next to the preset's **live** block state, and say whether
+/// the stored active index agrees with it.
+///
+/// This exists to settle an open question (see `docs/helix-floor.md`): preset key `10 → 8` claims
+/// an active snapshot, but in `dual_amp_stream` it names one whose scene is *not* what the preset
+/// actually has loaded. We cannot tell from captures alone whether the index or the scene is the
+/// truth — so dump a preset from a device parked on a *known* snapshot and read this off:
+///
+///   * "stored active index agrees" → key `8` is right; the GUI's current behaviour is correct.
+///   * the scene-match line names the snapshot the pedal really shows → key `8` is unreliable and
+///     matching the scene is the fix.
+fn print_snapshot_diagnosis(stream: &[u8]) {
+    use fretwire_data::stream::PresetStream;
+    let Ok(ps) = PresetStream::parse(stream) else {
+        return;
+    };
+    let snaps = ps.snapshot_details();
+    if snaps.is_empty() {
+        return;
+    }
+    let live: Vec<(usize, bool)> = ps
+        .blocks()
+        .iter()
+        .filter(|b| b.is_block())
+        .filter_map(|b| b.bypassed.map(|byp| (b.index, !byp)))
+        .collect();
+    let matches: Vec<usize> = snaps
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| {
+            live.iter()
+                .all(|&(slot, on)| s.block_enabled.get(slot) == Some(&on))
+        })
+        .map(|(i, _)| i)
+        .collect();
+    let stored = ps.snapshots().0;
+    println!("\nsnapshots (stored active index: {stored:?})");
+    for (i, s) in snaps.iter().enumerate() {
+        let on: Vec<String> = live
+            .iter()
+            .map(|&(slot, _)| {
+                let enabled = s.block_enabled.get(slot).copied().unwrap_or(false);
+                format!("{slot}{}", if enabled { "+" } else { "-" })
+            })
+            .collect();
+        println!(
+            "  [{i}] {:<14} {}{}",
+            s.name,
+            on.join(" "),
+            if matches.contains(&i) {
+                "   <- matches the live scene"
+            } else {
+                ""
+            }
+        );
+    }
+    let live_str: Vec<String> = live
+        .iter()
+        .map(|&(slot, on)| format!("{slot}{}", if on { "+" } else { "-" }))
+        .collect();
+    println!("  live       {}", live_str.join(" "));
+    match (stored, matches.as_slice()) {
+        (Some(a), m) if m.contains(&(a as usize)) => {
+            println!("  => stored active index agrees with the live scene");
+        }
+        (Some(a), [only]) => {
+            println!("  => MISMATCH: stored index says {a}, but the live scene is snapshot {only}");
+        }
+        (Some(a), []) => println!("  => the live scene matches no snapshot (stored index: {a})"),
+        (Some(a), m) => println!("  => ambiguous: stored {a}, scene matches {m:?}"),
+        (None, _) => println!("  => no stored active index"),
+    }
 }
 
 /// Print an editor preset as a block/param tree.

@@ -103,12 +103,37 @@ fn main() -> Result<()> {
             println!("slot {slot} cab param[{param_index}] -> {value}");
         }
         "presets" => {
-            // List every preset on the device with its index (non-destructive).
+            // List one setlist's presets with their indices (non-destructive). `presets [bank]`;
+            // bank defaults to the setlist the device is currently sitting in.
             let mut s = fretwire_core::Session::connect()?;
-            let presets = s.list_presets()?;
-            println!("{} presets:", presets.len());
+            let bank = match args.next() {
+                Some(a) => a.parse().unwrap_or(0),
+                None => s.read_preset()?.current.map(|c| c.bank).unwrap_or(0),
+            };
+            let names = s.device().setlist_names();
+            let label = names
+                .get(bank as usize)
+                .map(|n| format!(" ({n})"))
+                .unwrap_or_default();
+            let presets = s.list_presets_in(bank)?;
+            println!("{} presets in bank {bank}{label}:", presets.len());
             for (i, name) in &presets {
                 println!("  [{i:>3}] {name}");
+            }
+        }
+        "setlists" => {
+            // Name each setlist the connected device has, with the bank index `presets`/`goto` take.
+            let mut s = fretwire_core::Session::connect()?;
+            let current = s.read_preset()?.current.map(|c| c.bank);
+            let names = s.device().setlist_names();
+            println!("{} setlist(s) on the {}:", names.len(), s.device().name);
+            for (i, name) in names.iter().enumerate() {
+                let here = if Some(i as i64) == current {
+                    "  <- current"
+                } else {
+                    ""
+                };
+                println!("  [{i}] {name}{here}");
             }
         }
         "goto" => {
@@ -473,10 +498,12 @@ fn main() -> Result<()> {
             eprintln!(
                 "           install-udev [--print]   (install the udev rule for non-root USB access)"
             );
-            eprintln!("  live:    connect | disconnect | pull | presets | goto <preset> [bank]");
+            eprintln!("  live:    connect | disconnect | pull | presets [bank] | setlists");
+            eprintln!("           goto <preset> [bank]");
             eprintln!(
-                "           bypass <slot> <on|off> | set <slot> <param-idx> <value> | snapshot <index>"
+                "           bypass <slot> <on|off>   (on = bypassed / block off, as on the pedal)"
             );
+            eprintln!("           set <slot> <param-idx> <value> | snapshot <index>");
             eprintln!(
                 "           set-cab <slot> <param-idx> <value>   (edit the paired cab/IR's params)"
             );

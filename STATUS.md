@@ -613,8 +613,9 @@ Floor run.
      captures into decoded control frames.
    - **Write path DONE:** edits ride `cmd 0x04` on the edit channel (`{102:txn,100:op,101:{…}}`),
      the device ACKs `{102,103:0,104:nil}`, then a best-effort `cmd 0x08` follow-up. **op 41 key 59 =
-     ENABLED (true = on/enabled), so `bypass <slot> on` *enables* the block** (CLI naming is
-     backwards — consider renaming). `set` verified live (Tremolo Mix 1.0→0.5→1.0 via read-back).
+     ENABLED (true = on/enabled)**, i.e. the wire flag is the inverse of "bypassed". The CLI
+     already inverts it, so `bypass <slot> on` **bypasses** the block (pedal semantics) — an
+     earlier note here claimed the naming was backwards; it isn't. `set` verified live (Tremolo Mix 1.0→0.5→1.0 via read-back).
    - **Robustness DONE:** bulk reads are bounded by a cancellable 3 s timeout (race vs
      `futures-timer`, dropping the transfer cancels the URB — no leak). `connect()` drains stale
      wire frames and **retries** on a failed handshake (a prior session leaves the device unable to

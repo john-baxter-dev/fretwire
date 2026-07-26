@@ -65,6 +65,10 @@ pub struct Device {
     pub dsps: Option<usize>,
     /// Snapshots per preset.
     pub snapshots: Option<usize>,
+    /// The device's **setlists**, in bank order — the `bank` of `goto_preset`/`save_preset` and of
+    /// a preset's identity (`PresetInfo::bank`, key `107`) is an index into this list. The HX Stomp
+    /// has a single flat list; the Helix Floor has eight.
+    pub setlists: Option<&'static [&'static str]>,
     /// How much of the above is confirmed from real traffic.
     pub support: Support,
 }
@@ -84,6 +88,9 @@ pub const DEVICES: &[Device] = &[
         preset_device_id: Some(0x0021_0006),
         dsps: Some(1),
         snapshots: Some(3),
+        // One flat list of 126 presets — no setlist concept on the Stomp. [solid — `list_presets`
+        // returns the lot and bank 0 is the only bank that answers]
+        setlists: Some(&["Presets"]),
         support: Support::Verified,
     },
     Device {
@@ -93,6 +100,20 @@ pub const DEVICES: &[Device] = &[
         preset_device_id: Some(0x0021_0001),
         dsps: Some(2),
         snapshots: Some(8),
+        // Names and order as the unit's own PRESETS menu lists them. [hypothesis — the order is
+        // taken from the device's menu; only `bank: 2` == "User 1" is confirmed from traffic, by a
+        // read-info reply reporting `PresetInfo { bank: 2, index: 17, name: "Sludge" }` for a
+        // preset the user had selected in User 1]
+        setlists: Some(&[
+            "Factory 1",
+            "Factory 2",
+            "User 1",
+            "User 2",
+            "User 3",
+            "User 4",
+            "User 5",
+            "Templates",
+        ]),
         support: Support::Verified,
     },
     Device {
@@ -102,6 +123,7 @@ pub const DEVICES: &[Device] = &[
         preset_device_id: None,
         dsps: None,
         snapshots: None,
+        setlists: None,
         support: Support::Untested,
     },
 ];
@@ -123,6 +145,12 @@ impl Device {
     /// is what actually decides it at parse time.
     pub fn dsp_count(&self) -> usize {
         self.dsps.unwrap_or(1)
+    }
+
+    /// This device's setlist names, in bank order. Falls back to a single unnamed list when we
+    /// don't know — the conservative choice: bank 0 is the only bank every HX device answers on.
+    pub fn setlist_names(&self) -> &'static [&'static str] {
+        self.setlists.unwrap_or(&["Presets"])
     }
 }
 

@@ -652,15 +652,19 @@ pub fn presets_open(txn: u16) -> Vec<u8> {
     ]))
 }
 
-/// Build the **presets-stream-start** body (op 1): `{102:txn, 100:1, 101:{107:0, 101:2}}`.
-pub fn presets_stream(txn: u16) -> Vec<u8> {
+/// Build the **presets-stream-start** body (op 1): `{102:txn, 100:1, 101:{107:bank, 101:2}}`.
+///
+/// `bank` is the **setlist** to list — the same index `select_preset`/`save_preset` take, and the
+/// one a preset reports as [`fretwire_data::stream::PresetInfo::bank`]. This was hardcoded to 0,
+/// which is why a Helix Floor sitting in User 1 (bank 2) still listed the Factory 1 names.
+pub fn presets_stream(txn: u16, bank: i64) -> Vec<u8> {
     encode(Value::Map(vec![
         (Value::from(K_TXN), Value::from(txn)),
         (Value::from(K_OP), Value::from(OP_PRESETS_STREAM)),
         (
             Value::from(K_TARGET),
             Value::Map(vec![
-                (Value::from(K_SELECT_BANK), Value::from(0)),
+                (Value::from(K_SELECT_BANK), Value::from(bank)),
                 (Value::from(K_LIST_KIND), Value::from(2)),
             ]),
         ),
@@ -942,9 +946,17 @@ mod tests {
         );
         // op 1, target {107:0, 101:2}  ->  83 66 cd03ea 64 01 65 82 6b 00 65 02
         assert_eq!(
-            presets_stream(0x03ea),
+            presets_stream(0x03ea, 0),
             [
                 0x83, 0x66, 0xcd, 0x03, 0xea, 0x64, 0x01, 0x65, 0x82, 0x6b, 0x00, 0x65, 0x02
+            ]
+        );
+        // Same frame for a different setlist: only the 107 value moves (bank 2 = "User 1" on the
+        // Helix Floor). The bank was hardcoded to 0 here, so every list came back as Factory 1.
+        assert_eq!(
+            presets_stream(0x03ea, 2),
+            [
+                0x83, 0x66, 0xcd, 0x03, 0xea, 0x64, 0x01, 0x65, 0x82, 0x6b, 0x02, 0x65, 0x02
             ]
         );
     }

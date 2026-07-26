@@ -2,12 +2,47 @@
   // Preset browser sidebar: the full setlist, current highlighted, click to load. Header buttons
   // save/rename. Save As (choose target slot + name) covers copy and overwrite. Backup/Restore
   // round-trip the whole setlist through a JSON file on disk.
-  let { presets, currentIndex, dirty = false, onGoto, onSave, onSaveAs, onRename, onBackup, onRestore } = $props();
+  let {
+    presets,
+    currentIndex,
+    dirty = false,
+    setlists = [],
+    viewBank = 0,
+    currentBank = 0,
+    onPickSetlist,
+    onGoto,
+    onSave,
+    onSaveAs,
+    onRename,
+    onBackup,
+    onRestore,
+  } = $props();
 
   const pad = (n) => String(n).padStart(3, "0");
+
+  // Only a device with more than one setlist gets the picker — an HX Stomp has a single flat
+  // preset list and HX Edit shows no setlist control at all for it.
+  const hasSetlists = $derived(setlists.length > 1);
+  // The highlighted row means "this is what's loaded", which is only true while looking at the
+  // setlist it was loaded from. Browsing another one highlights nothing.
+  const viewingCurrent = $derived(!hasSetlists || viewBank === currentBank);
 </script>
 
 <div class="sidebar">
+  {#if hasSetlists}
+    <div class="setlist">
+      <label for="setlist-pick">Setlist</label>
+      <select
+        id="setlist-pick"
+        value={viewBank}
+        onchange={(e) => onPickSetlist?.(Number(e.currentTarget.value))}
+      >
+        {#each setlists as name, i}
+          <option value={i}>{name}</option>
+        {/each}
+      </select>
+    </div>
+  {/if}
   <div class="tools">
     <button onclick={onSave} title="Overwrite the current preset">Save</button>
     <button onclick={onSaveAs} title="Save to a chosen slot / copy / overwrite">Save As…</button>
@@ -19,10 +54,10 @@
   </div>
   <div class="list">
     {#each presets as p (p.index)}
-      <button class="row" class:current={p.index === currentIndex} onclick={() => onGoto(p.index)}>
+      <button class="row" class:current={viewingCurrent && p.index === currentIndex} onclick={() => onGoto(p.index)}>
         <span class="idx">{pad(p.index)}</span>
         <span class="nm">{p.name}</span>
-        {#if dirty && p.index === currentIndex}<span class="dirty" title="Edited — not saved">●</span>{/if}
+        {#if dirty && viewingCurrent && p.index === currentIndex}<span class="dirty" title="Edited — not saved">●</span>{/if}
       </button>
     {/each}
     {#if !presets.length}<div class="empty">no presets loaded</div>{/if}
@@ -39,6 +74,30 @@
     display: flex;
     flex-direction: column;
     max-height: 70vh;
+  }
+  .setlist {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 10px 0;
+  }
+  .setlist label {
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #8b93a3;
+  }
+  .setlist select {
+    font: inherit;
+    font-size: 12px;
+    flex: 1;
+    min-width: 0;
+    background: #23262e;
+    color: #e6e8ec;
+    border: 1px solid #2a2e37;
+    border-radius: 6px;
+    padding: 5px 6px;
+    cursor: pointer;
   }
   .tools {
     display: flex;

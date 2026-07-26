@@ -264,23 +264,41 @@
   }
 
   // ---- preset management ----
-  async function refreshPresets() {
+  // A device may hold several setlists (the Helix Floor has eight; the Stomp one flat list).
+  // `viewBank` is the setlist the sidebar is showing, which is not necessarily the one the loaded
+  // preset came from — you can browse User 2 while sitting on a Factory 1 preset.
+  let setlists = $state([]);
+  let viewBank = $state(0);
+  const presetBank = $derived(preset?.bank ?? 0);
+
+  async function refreshPresets(bank = viewBank) {
     try {
-      presets = await invoke("list_presets");
+      presets = await invoke("list_presets", { bank });
     } catch (e) {
       toast("preset list: " + e);
     }
   }
 
+  // Switch which setlist the sidebar lists. Browsing only — the device stays on its preset until
+  // one is actually clicked.
+  async function onPickSetlist(bank) {
+    viewBank = bank;
+    presets = [];
+    await refreshPresets(bank);
+  }
+
   async function onGoto(index) {
     selectedSlot = null;
-    await apply(invoke("goto_preset", { bank: 0, preset: index }));
+    await apply(invoke("goto_preset", { bank: viewBank, preset: index }));
     activeSnapshot = preset?.active_snapshot ?? 0;
   }
 
   async function onSave() {
     if (!preset) return;
-    await apply(invoke("save_preset", { bank: 0, slot: preset.index, name: preset.name ?? "" }));
+    // Overwrite in place — the bank the preset was read from, not the one being browsed.
+    await apply(
+      invoke("save_preset", { bank: presetBank, slot: preset.index, name: preset.name ?? "" }),
+    );
     await refreshPresets();
     status = `Saved to slot ${preset.index}.`;
   }
@@ -294,7 +312,8 @@
     const { slot, name: rawName } = saveAsDlg;
     const name = rawName.trim();
     saveAsDlg = null;
-    await apply(invoke("save_preset", { bank: 0, slot, name }));
+    // Save As picks a slot out of the visible list, so it targets the browsed setlist.
+    await apply(invoke("save_preset", { bank: viewBank, slot, name }));
     await refreshPresets();
     status = `Saved to slot ${slot} as "${name}".`;
   }
@@ -305,7 +324,7 @@
     renameDlg = null;
     if (!name) return;
     try {
-      await invoke("rename_preset", { bank: 0, slot: preset.index, name });
+      await invoke("rename_preset", { bank: presetBank, slot: preset.index, name });
       await refreshPresets();
       status = `Renamed slot ${preset.index} to "${name}".`;
     } catch (e) {
@@ -379,7 +398,15 @@
       preset = await invoke("connect");
       connected = true;
       activeSnapshot = preset.active_snapshot ?? 0;
-      await refreshPresets();
+      // Open the sidebar on the setlist the device is actually sitting in, not always Factory 1 —
+      // otherwise a Floor parked in User 1 lists names that have nothing to do with its screen.
+      try {
+        setlists = await invoke("setlists");
+      } catch (e) {
+        setlists = [];
+      }
+      viewBank = preset.bank ?? 0;
+      await refreshPresets(viewBank);
       try {
         splitTypes = await invoke("split_types");
       } catch (e) {
@@ -402,6 +429,8 @@
     connected = false;
     preset = null;
     presets = [];
+    setlists = [];
+    viewBank = 0;
     selectedSlot = null;
     status = "Disconnected — pedal back to standalone.";
   }
@@ -454,7 +483,7 @@
 <main>
   {#if preset}
     <div class="workspace">
-      <PresetList {presets} currentIndex={preset.index} dirty={preset.dirty} {onGoto} {onSave} {onSaveAs} {onRename} {onBackup} {onRestore} />
+      <PresetList {presets} currentIndex={preset.index} dirty={preset.dirty} {setlists} {viewBank} currentBank={presetBank} {onPickSetlist} {onGoto} {onSave} {onSaveAs} {onRename} {onBackup} {onRestore} />
       <div class="content">
         <div class="meta">
           <span>

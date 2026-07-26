@@ -76,6 +76,7 @@ fn main() {
             commands::rename_preset,
             commands::rename_snapshot,
             commands::list_presets,
+            commands::setlists,
             commands::backup_setlist,
             commands::backup_show,
             commands::restore_preset,

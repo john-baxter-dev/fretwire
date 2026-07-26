@@ -221,8 +221,10 @@ const outputSlot = (base) => base + 9;
 const splitSlot = (base) => base + SPLIT_LOCAL;
 const mixerSlot = (base) => base + MIXER_LOCAL;
 // Display column within the DSP: top slot base+n → col n; row-B slot base+10+n → col n+1.
+// The grid is 8 columns wide in *both* rows: top slots 1..8 are columns 1..8, row-B slots 11..18
+// are columns 1..8 too, in the same absolute column space. Matches PresetStream::dsp_grid.
 const topCol = (slot) => localOf(slot);
-const bCol = (slot) => localOf(slot) - SPLIT_LOCAL + 1;
+const bCol = (slot) => localOf(slot) - SPLIT_LOCAL;
 const isRowB = (slot) => localOf(slot) >= 11 && localOf(slot) <= 18;
 const rowSlots = (slot) => (isRowB(slot) ? bSlots(baseOf(slot)) : topSlots(baseOf(slot)));
 // The bases of every DSP this preset carries (one on the Stomp, two on the Floor).
@@ -243,7 +245,8 @@ function splitMixerPos(p, base) {
   const minB = Math.min(...cols), maxB = Math.max(...cols);
   const np = p.nodePos[dspOf(base)] ?? {};
   const splitPos = Math.min(np.split ?? minB, minB);
-  const mixerPos = Math.max(np.mixer ?? Math.min(maxB + 2, 10), maxB + 1, splitPos + 1);
+  // Column 9 — one past the 8-wide grid — is as far right as the mixer goes.
+  const mixerPos = Math.max(np.mixer ?? Math.min(maxB + 2, 9), maxB + 1, splitPos + 1);
   return { splitPos, mixerPos };
 }
 
@@ -309,9 +312,25 @@ function floorPreset() {
   });
 }
 
-// The setlist. Index 0 is the two-DSP Floor preset (shows both routing grids on connect).
-const presets = [
-  floorPreset(),
+// ---------------------------------------------------------------------------------------------
+// Device modes. The mock can present as either unit so the UI differences are visible without
+// hardware: an HX Stomp has one flat preset list (HX Edit shows no setlist control at all), while
+// a Helix Floor has eight setlists and two DSPs. Switch with `fretwireMock.device("stomp")`.
+// ---------------------------------------------------------------------------------------------
+const DEVICES = {
+  stomp: {
+    name: "HX Stomp",
+    // One unnamed list — matches Device::setlist_names() falling back to ["Presets"].
+    setlists: ["Presets"],
+  },
+  floor: {
+    name: "Helix Floor",
+    setlists: ["Factory 1", "Factory 2", "User 1", "User 2", "User 3", "User 4", "User 5", "Templates"],
+  },
+};
+
+// The Stomp's single flat list. Index 0 is the split "Dual Amp" preset.
+const stompPresets = () => [
   dualAmpPreset(),
   serialPreset("Crunch Lead", 1, [
     { sym: "gate" }, { sym: "drive_minotaur" },
@@ -329,13 +348,49 @@ const presets = [
   serialPreset("Clean DI", 5, [{ sym: "comp_la" }, { sym: "eq_graphic" }]),
   serialPreset("Lead Boost", 6, [{ sym: "boost_kinky" }, { sym: "amp_brit", cab: "cab_212" }, { sym: "reverb_hall" }]),
   serialPreset("Init Tone", 7, [{ sym: "amp_cali", cab: "cab_412" }]),
-];
+].map((p, i) => ({ ...p, index: i }));
+
+// The Floor's eight setlists. Only some are populated — User 3..5 are empty on a stock unit, which
+// is worth being able to see. Preset indices restart at 0 in every setlist, exactly as the wire
+// reports them (PresetInfo.index is relative to its bank).
+function floorSetlists() {
+  const bank = (...ps) => ps.map((p, i) => ({ ...p, index: i }));
+  return [
+    // Factory 1 — index 0 is the two-DSP preset, so connecting shows both routing grids.
+    bank(floorPreset(), dualAmpPreset(), serialPreset("Riffs And Beards", 0, [
+      { sym: "gate" }, { sym: "drive_teemah" }, { sym: "amp_placater", cab: "cab_412", label: "Amp" },
+    ]), serialPreset("Felix Mark IV", 0, [
+      { sym: "comp_la" }, { sym: "amp_brit", cab: "cab_212", label: "Amp" }, { sym: "reverb_hall" },
+    ])),
+    // Factory 2
+    bank(serialPreset("Bumble Acoustic", 0, [{ sym: "comp_deluxe" }, { sym: "eq_graphic" }]),
+      serialPreset("The Blue Agave", 0, [{ sym: "wah_teardrop" }, { sym: "amp_jazz", cab: "cab_112" }])),
+    // User 1 — where Sean's "Sludge" lives.
+    bank(serialPreset("Sludge", 0, [
+      { sym: "gate" }, { sym: "drive_minotaur" }, { sym: "amp_placater", cab: "cab_412", label: "Amp" },
+      { sym: "delay_simple" },
+    ]), serialPreset("Richeese", 0, [{ sym: "boost_kinky" }, { sym: "amp_cali", cab: "cab_212" }])),
+    // User 2
+    bank(serialPreset("Scratch Pad", 0, [{ sym: "amp_cali", cab: "cab_412" }])),
+    [], // User 3 — empty
+    [], // User 4 — empty
+    [], // User 5 — empty
+    // Templates
+    bank(serialPreset("Blank", 0, []), serialPreset("Basic Amp", 0, [{ sym: "amp_jazz", cab: "cab_112" }])),
+  ];
+}
 
 // ---------------------------------------------------------------------------------------------
 // Session state
 // ---------------------------------------------------------------------------------------------
 let connected = false;
-let current = presets[0];
+// Which unit the mock is pretending to be, and its setlists: banks[bank] is a list of presets.
+let deviceMode = "floor";
+let banks = floorSetlists();
+let currentBank = 0;
+const setlistNames = () => DEVICES[deviceMode].setlists;
+const bankOf = (b) => banks[b] ?? [];
+let current = bankOf(0)[0];
 // Backup/restore round-trip (see the backup_setlist handler): the last backup made this session.
 let lastBackup = null;
 
@@ -511,7 +566,7 @@ function toDto(p) {
   const d0 = dsps[0];
   const occupied = allEditSlots(p).filter((i) => p.slots[i]?.kind === "effect");
   return {
-    name: p.name, index: p.index, bank: 0, device_model: p.deviceModel, firmware: p.firmware,
+    name: p.name, index: p.index, bank: currentBank, device_model: p.deviceModel, firmware: p.firmware,
     // Flat fields mirror DSP 0, exactly like the real PresetDto, so a single-DSP UI still works.
     split: d0.split, dsp_load: dsps.reduce((s, v) => s + v.dsp_load, 0),
     split_pos: d0.split_pos, mixer_pos: d0.mixer_pos,
@@ -775,10 +830,11 @@ const HANDLERS = {
     current.active_snapshot = index;
     return toDto(current);
   },
-  goto_preset: ({ preset }) => {
-    const target = presets.find((p) => p.index === preset);
+  goto_preset: ({ bank = currentBank, preset }) => {
+    const target = bankOf(bank).find((p) => p.index === preset);
     if (target) {
       current = target;
+      currentBank = bank;
       clearHistory(); // the history belongs to the old preset
       seedHistory();
     }
@@ -793,26 +849,27 @@ const HANDLERS = {
     return historyJump(historyCursor + 1);
   },
   history_jump: ({ index }) => historyJump(index),
-  save_preset: ({ slot, name }) => {
+  save_preset: ({ bank = currentBank, slot, name }) => {
     savedCursor = historyCursor; // the buffer's current state is now "in flash"
-    if (slot === current.index) {
+    if (bank === currentBank && slot === current.index) {
       if (name) current.name = name;
     } else {
-      // Save As to a different slot: deep-copy the current preset into that slot.
+      // Save As to a different slot: deep-copy the current preset into that slot of that setlist.
       const copy = {
         ...current, index: slot, name: name || current.name,
         slots: clone(current.slots), nodePos: { ...current.nodePos },
         snapshot_names: [...current.snapshot_names],
       };
-      const at = presets.findIndex((p) => p.index === slot);
-      if (at >= 0) presets[at] = copy;
-      else presets.push(copy);
-      presets.sort((a, b) => a.index - b.index);
+      const list = bankOf(bank);
+      const at = list.findIndex((p) => p.index === slot);
+      if (at >= 0) list[at] = copy;
+      else list.push(copy);
+      list.sort((a, b) => a.index - b.index);
     }
     return toDto(current);
   },
-  rename_preset: ({ slot, name }) => {
-    const target = presets.find((p) => p.index === slot);
+  rename_preset: ({ bank = currentBank, slot, name }) => {
+    const target = bankOf(bank).find((p) => p.index === slot);
     if (target && name) target.name = name;
     return null;
   },
@@ -820,19 +877,24 @@ const HANDLERS = {
     if (index >= 0 && index < current.snapshot_names.length) current.snapshot_names[index] = name;
     return toDto(current);
   },
-  list_presets: () => presets.map((p) => ({ index: p.index, name: p.name })),
+  list_presets: ({ bank = currentBank } = {}) =>
+    bankOf(bank).map((p) => ({ index: p.index, name: p.name })),
+  // The connected device's setlist names. One entry on a Stomp, so the UI hides the picker.
+  setlists: () => setlistNames().slice(),
 
   // ---- backup / restore -----------------------------------------------------------------------
   // The real backend sweeps the device and writes a `fretwire-backup` JSON file at `path`. The mock
   // mirrors the file *shape* exactly (its "raw" is hex of the mock preset state instead of a
   // MessagePack stream), triggers a browser download of it, and keeps it in memory so
   // backup_show/restore_preset work in the same session — a browser can't read arbitrary paths.
+  // Backs up the *currently browsed* setlist, which is what the real sweep walks.
   backup_setlist: async ({ path }) => {
     const entries = [];
-    for (let i = 0; i < presets.length; i++) {
-      const p = presets[i];
+    const list = bankOf(currentBank);
+    for (let i = 0; i < list.length; i++) {
+      const p = list[i];
       await sleep(120); // the real sweep takes ~a second per preset; make the progress UI visible
-      emit("backup-progress", { done: i + 1, total: presets.length, name: p.name });
+      emit("backup-progress", { done: i + 1, total: list.length, name: p.name });
       entries.push({
         index: p.index,
         name: p.name,
@@ -842,7 +904,10 @@ const HANDLERS = {
         })),
       });
     }
-    lastBackup = { format: "fretwire-backup", version: 1, device: "HX Stomp (mock)", presets: entries };
+    lastBackup = {
+      format: "fretwire-backup", version: 1,
+      device: `${DEVICES[deviceMode].name} (mock)`, presets: entries,
+    };
     // Offer the file as a download, named like the requested path.
     const blob = new Blob([JSON.stringify(lastBackup, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
@@ -866,11 +931,12 @@ const HANDLERS = {
       name: state.name, index: slot, active_snapshot: state.active_snapshot ?? 0,
       snapshot_names: state.snapshot_names ?? [], slots: state.slots, nodePos: state.nodePos,
     };
-    const at = presets.findIndex((p) => p.index === slot);
-    if (at >= 0) presets[at] = restored;
+    const list = bankOf(currentBank);
+    const at = list.findIndex((p) => p.index === slot);
+    if (at >= 0) list[at] = restored;
     else {
-      presets.push(restored);
-      presets.sort((a, b) => a.index - b.index);
+      list.push(restored);
+      list.sort((a, b) => a.index - b.index);
     }
     // Like Session::restore_preset: the device ends up on the restored slot, history reset.
     current = restored;
@@ -935,14 +1001,31 @@ if (typeof window !== "undefined") {
       current.active_snapshot = index;
       emit("device-pushes", [{ kind: "Snapshot", index }]);
     },
-    /** Switch preset as if from the panel. */
-    preset(index) {
-      const target = presets.find((p) => p.index === index);
+    /** Switch preset as if from the panel, optionally in another setlist. */
+    preset(index, bank = currentBank) {
+      const target = bankOf(bank).find((p) => p.index === index);
       if (target) {
         current = target;
+        currentBank = bank;
         clearHistory(); // like the heartbeat clearing on a panel preset push
       }
       emit("device-pushes", [{ kind: "Preset", index }]);
+    },
+    /**
+     * Pretend to be the other unit: "stomp" (one DSP, one flat preset list, no setlist picker) or
+     * "floor" (two DSPs, eight setlists). Reload or reconnect after switching.
+     */
+    device(mode) {
+      if (!DEVICES[mode]) {
+        console.warn(`[fretwire] unknown device ${mode} — use "stomp" or "floor"`);
+        return;
+      }
+      deviceMode = mode;
+      banks = mode === "floor" ? floorSetlists() : [stompPresets()];
+      currentBank = 0;
+      current = bankOf(0)[0];
+      clearHistory();
+      console.info(`[fretwire] mock is now a ${DEVICES[mode].name} — reconnect to see it.`);
     },
     /** Pretend the reference data was never imported, so the first-run screen shows. */
     needsData() {

@@ -1,0 +1,97 @@
+Subject: Helix Floor support is in — up for testing it on the actual hardware?
+
+
+Hi,
+
+Your last capture cracked it. The question I was stuck on was how an edit
+addresses a block on the second DSP, and the answer turned out to be that slot
+numbers just run straight through both of them: DSP1 is 0-19, DSP2 is 20-39.
+No hidden field, no mode switch. Sweeping those five blocks instead of the two
+I asked for is what made it certain - each one landed exactly where that rule
+predicts, so it was five confirmations instead of one. Thank you for that.
+
+Floor support is now written and passing tests. It reads both DSPs, handles
+Looper blocks (which we were silently skipping - that was a bug on the Stomp
+too), and connects to the Floor's USB ID. Against your captures it decodes
+"Pull Me Under" completely: all 15 blocks, both paths, correct footswitch
+assignments.
+
+But all of that is offline, against recordings. Nobody has ever run this
+against a physical Helix Floor. If you're willing, that's the one thing left
+that I can't do myself.
+
+It's all read-only. Nothing writes to the pedal, and nothing goes anywhere near
+firmware. Worst realistic case is that it doesn't connect and you unplug it.
+
+
+WHAT I'D NEED YOU TO DO
+
+Setup, on the Linux box, one time:
+
+    git clone -b helix_floor https://github.com/john-baxter-dev/fretwire
+    cd fretwire
+    cargo build -p fretwire-cli --release
+
+
+Step 1 - import the reference data from your own HX Edit install.
+
+This one is important and it has to come first, or nothing else works. The
+tool ships none of Line 6's data - it reads the model and parameter tables out
+of your own HX Edit installation.
+
+Copy the "res" folder out of your Windows HX Edit install directory over to the
+Linux box, then:
+
+    ./target/release/fretwire import-data /path/to/res
+
+(An HX Edit installer .exe works too, but it needs 7z installed to unpack it.
+The res folder is less hassle.)
+
+
+Step 2 - install the USB permissions rule, then unplug and replug the Helix.
+
+    ./target/release/fretwire install-udev
+
+The replug matters. The rule only takes effect the next time the device
+enumerates.
+
+
+Step 3 - the actual test.
+
+Run these four in order, and send me the output of each one, including any
+errors:
+
+    ./target/release/fretwire detect
+    ./target/release/fretwire connect
+    ./target/release/fretwire presets
+    ./target/release/fretwire pull
+
+For the last one, have a preset loaded that uses both paths. FACTORY 1, 12B
+"Pull Me Under" would be perfect - that's the one we decoded from your
+captures, so I can compare the live output against what I already know it
+should say, block for block.
+
+
+PLEASE DON'T RUN THESE YET
+
+save, write-roundtrip, delete-block, or anything else that changes the pedal.
+Those write to the device. I'd like to confirm reading works first. Writes come
+after that, and I'll want you to take a fresh backup before we try them.
+
+
+IF SOMETHING GOES WRONG
+
+Any hang or error, this gives me what I need to debug it:
+
+    RUST_LOG=trace ./target/release/fretwire connect 2>&1 | tail -50
+
+Two failures I half expect. A permissions error on "connect" usually just means
+the udev rule hasn't taken yet - unplug and replug and try again. A timeout on
+"connect" would be more interesting; the retry logic has never run against a
+Floor, so that's genuinely new ground.
+
+No rush on any of this, and no obligation - you've already given this project
+more than I expected. If you'd rather not plug experimental software into your
+pedal I completely understand.
+
+Thanks again,

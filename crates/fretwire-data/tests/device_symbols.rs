@@ -237,7 +237,10 @@ fn grid_maps_slots_to_rows_and_columns() {
 #[test]
 fn row_b_cells_sit_inside_the_split_bracket() {
     use fretwire_data::stream::slot_kind;
-    for fixture in ["dual_amp_stream.msgpack.bin", "split_preset_stream.msgpack.bin"] {
+    for fixture in [
+        "dual_amp_stream.msgpack.bin",
+        "split_preset_stream.msgpack.bin",
+    ] {
         let ps = PresetStream::parse(&capture(fixture)).unwrap();
         for d in ps.dsps() {
             for c in ps.dsp_grid(d) {

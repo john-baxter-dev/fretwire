@@ -1560,7 +1560,16 @@ impl Session {
     /// primary channel, but our reconstructed handshake doesn't leave primary browse-ready; the
     /// edit channel serves the same browse resource and works, so we use it. Verified live: 126
     /// presets on the HX Stomp.
+    ///
+    /// Lists **bank 0**. On a device with setlists (the Helix Floor has eight) use
+    /// [`Self::list_presets_in`] — this is the flat-list case and the Stomp's only one.
     pub fn list_presets(&mut self) -> crate::Result<Vec<(u16, String)>> {
+        self.list_presets_in(0)
+    }
+
+    /// [`Self::list_presets`] for a specific **setlist** (`bank`). The index of each returned
+    /// preset is relative to that setlist, and pairs with `goto_preset(bank, index)`.
+    pub fn list_presets_in(&mut self, bank: i64) -> crate::Result<Vec<(u16, String)>> {
         // HX Edit lists on the primary channel, but our reconstructed handshake doesn't leave
         // primary browse-ready; the edit channel is browse-capable in our session. LIVE experiment.
         let chan = channel::EDIT;
@@ -1582,10 +1591,12 @@ impl Session {
         self.edit_request_txn(cmd::OPEN, tlv(edit::presets_open(txn)), txn)?;
 
         let txn = self.bump_txn();
-        let first = self.edit_request_txn(cmd::STREAM, tlv(edit::presets_stream(txn)), txn)?;
+        let first =
+            self.edit_request_txn(cmd::STREAM, tlv(edit::presets_stream(txn, bank)), txn)?;
         tracing::info!(
             arg = first.arg,
             body = first.body.len(),
+            bank,
             "preset-list stream chunk #0"
         );
 
@@ -1601,7 +1612,11 @@ impl Session {
             }
         }
         self.transport.drain();
-        tracing::info!(bytes = payload.len(), "reassembled preset-list stream");
+        tracing::info!(
+            bytes = payload.len(),
+            bank,
+            "reassembled preset-list stream"
+        );
         Ok(fretwire_data::stream::parse_preset_list(&payload)?)
     }
 

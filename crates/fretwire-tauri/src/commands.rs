@@ -606,16 +606,35 @@ pub async fn rename_snapshot(state: State<'_, AppState>, index: i64, name: Strin
     .await
 }
 
+/// List the presets in one **setlist**. `bank` defaults to 0 — the HX Stomp's only list, and
+/// Factory 1 on the Helix Floor.
 #[tauri::command]
-pub async fn list_presets(state: State<'_, AppState>) -> R<Vec<PresetListItem>> {
-    run(&state, |s| s.list_presets()).await.map(|v| {
-        v.into_iter()
-            .map(|(index, name)| PresetListItem {
-                index: index as i64,
-                name,
-            })
-            .collect()
+pub async fn list_presets(state: State<'_, AppState>, bank: Option<i64>) -> R<Vec<PresetListItem>> {
+    let bank = bank.unwrap_or(0);
+    run(&state, move |s| s.list_presets_in(bank))
+        .await
+        .map(|v| {
+            v.into_iter()
+                .map(|(index, name)| PresetListItem {
+                    index: index as i64,
+                    name,
+                })
+                .collect()
+        })
+}
+
+/// The connected device's setlist names, in bank order. One entry ("Presets") on a device with a
+/// flat preset list, eight on the Helix Floor. Empty when nothing is connected.
+#[tauri::command]
+pub async fn setlists(state: State<'_, AppState>) -> R<Vec<String>> {
+    run(&state, |s| {
+        Ok(s.device()
+            .setlist_names()
+            .iter()
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>())
     })
+    .await
 }
 
 /// Resolve a user-typed backup path: `~/` and bare relative paths land in `$HOME`.

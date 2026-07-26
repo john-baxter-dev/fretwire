@@ -585,6 +585,55 @@ Removing the param-commit read would mean patching the param into `last_raw` loc
 risk for a latency win the user mostly can't feel, since dragging never hits it. Not worth it; this
 is now a settled decision, not a deferral.
 
+## INCIDENT 2026-07-26: contributor's Helix Floor locked up, presets lost
+
+**What happened.** The tester opened the **TEMPLATES** setlist in the new build, picked a preset,
+and the Helix locked up hard enough to need a reboot. He then ran a footswitch factory reset
+(7+8) to recover, after which FACTORY 1 held an older preset set, all USER setlists were empty, and
+the unit showed "003 new preset" — persisting across reboots. He has Thursday's `.hxb` backup and is
+restoring from it; the backup file parses cleanly here (363 presets across 8 setlists).
+
+**The lockup is ours.** The preset-list browse numbers presets **globally**
+(`bank * setlist_size + slot`) while `goto_preset`/`save_preset`/`rename_preset` take the
+**bank-relative** slot, and the GUI passed the browse number straight through. Selecting a template
+sent `goto_preset(bank = 7, preset = 906)` — 906 = 7x128+10, far past the end of a 128-slot setlist.
+Confirmed against his own backup: browse index 906 is exactly bank 7 slot 10, "Wet-Dry-Wet Amps".
+**Bank 0 hid this completely**, since there global == relative, which is why every earlier test
+passed.
+
+**The preset loss is very probably not ours, but that is not the same as proven.** Audited every
+flash-write path: `save_preset` (op 71), `rename_preset` (op 6) and `restore_preset` are reachable
+only from explicit button presses; `write_preset` (op 21) targets the edit buffer, not flash.
+Browsing and navigating never write, and no path we have can empty a setlist. The observed pattern
+(factory list rolled back + user setlists cleared + survives reboot) is what a device-level factory
+restore does. But we did wedge the device, and a hard lockup is not a risk-free state to leave
+firmware in — so "we sent no write command" is the strongest claim supportable.
+
+**Fixed.** `Device::setlist_size` (128 on the Floor); `list_presets_in` normalises the browse's
+global index to a slot; `Session::check_preset_addr` rejects an out-of-range bank or slot in
+goto/save/rename **before it reaches the wire**.
+
+**Withheld.** Cross-setlist browsing is now off unless `FRETWIRE_SETLISTS=1`
+(`commands::setlists_enabled`). The sidebar still tracks whichever setlist the device is in; what is
+withheld is switching between them, because of the open item below. The mock keeps the picker so the
+UI can still be developed - it cannot touch hardware.
+
+**Still open - the numbering is not fully reconciled.** Even in bank 0, where the global/relative
+bug cannot apply, the listing has been seen offset from the same device's backup:
+
+| preset | his `.hxb` | pre-fix build | this build |
+|---|---|---|---|
+| FELIX MARK IV | 61 | 061 | **070** |
+| BMBLFOOT PRINCE | 67 | 067 | **076** |
+| SHEEHAN PEARCE | 68 | **069** | **077** |
+
+A drifting offset, already present (+1) before this build and +9 now. It is why a screenshot shows
+`076 BMBLFOOT PRINCE` highlighted while the header reads `SHEEHAN PEARCE #76` - we asked for one
+preset and the device loaded its neighbour. Indices come from the device's own map keys
+(`parse_preset_list`), not our positions, so this needs a captured stream:
+`fretwire dump-list <bank> <out.bin>` (new) fetches one. **Do not re-enable setlists until this is
+explained.**
+
 ## Prioritized next steps
 > **The path to live control is in `docs/next-steps.md`.** TL;DR: (1) **on Windows now** — capture a
 > dozen single-knob edits, decode with `fretwire decode-edit`, find out if param keys generalize (the

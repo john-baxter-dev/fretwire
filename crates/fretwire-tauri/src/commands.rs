@@ -623,11 +623,38 @@ pub async fn list_presets(state: State<'_, AppState>, bank: Option<i64>) -> R<Ve
         })
 }
 
-/// The connected device's setlist names, in bank order. One entry ("Presets") on a device with a
-/// flat preset list, eight on the Helix Floor. Empty when nothing is connected.
+/// Whether cross-setlist browsing is exposed in the UI. **Off unless `FRETWIRE_SETLISTS=1`.**
+///
+/// Switching setlists is withheld because the browse's preset numbering is not fully reconciled
+/// with the device's own: it numbers globally (`bank * setlist_size + slot`) where the rest of the
+/// protocol uses the bank-relative slot, and even within bank 0 a listing has been observed offset
+/// from the same device's `.hxb` backup. `Session::check_preset_addr` now blocks the specific
+/// mistake that locked a Helix Floor up (an out-of-range slot reaching the wire), but "we do not
+/// fully understand this numbering" plus a **Save** button one click away is not something to hand
+/// a tester with real presets on the line. Re-enable once a captured list stream (`dump-list`)
+/// explains the offset.
+fn setlists_enabled() -> bool {
+    matches!(
+        std::env::var("FRETWIRE_SETLISTS").as_deref(),
+        Ok("1") | Ok("true")
+    )
+}
+
+/// The connected device's setlist names, in bank order — eight on the Helix Floor.
+///
+/// Returns **empty** unless [`setlists_enabled`], which collapses the sidebar's picker (it renders
+/// only for more than one setlist). The preset list itself still tracks whichever setlist the
+/// device is actually in; what's withheld is switching between them from the app.
 #[tauri::command]
 pub async fn setlists(state: State<'_, AppState>) -> R<Vec<String>> {
+    if !setlists_enabled() {
+        return Ok(Vec::new());
+    }
     run(&state, |s| {
+        tracing::warn!(
+            "FRETWIRE_SETLISTS is set — cross-setlist browsing is enabled, and its preset \
+             numbering is not fully verified. Avoid Save/Save As outside the device's own setlist."
+        );
         Ok(s.device()
             .setlist_names()
             .iter()

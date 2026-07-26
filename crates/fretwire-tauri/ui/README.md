@@ -77,6 +77,12 @@ The picker is hidden on a one-setlist device on purpose — HX Edit shows no set
 Stomp either. Floor mode leaves User 3–5 empty, which is what a stock unit looks like and exercises
 the empty-list state.
 
+> **The mock shows the setlist picker; the real app currently does not.** Against hardware it is
+> gated behind `FRETWIRE_SETLISTS=1` because the browse's preset numbering isn't fully understood —
+> it numbered a TEMPLATES preset 906 (global) where the device wanted slot 10, which locked a Helix
+> Floor up. The mock keeps it enabled so the UI can still be worked on. Don't treat the mock as
+> evidence of shipped behaviour here.
+
 ### Simulating live device pushes
 
 To exercise live-follow (changes the UI mirrors when they originate on the hardware, e.g. a

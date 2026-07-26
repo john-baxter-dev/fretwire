@@ -899,6 +899,11 @@ const HANDLERS = {
   list_presets: ({ bank = currentBank } = {}) =>
     bankOf(bank).map((p) => ({ index: p.index, name: p.name })),
   // The connected device's setlist names. One entry on a Stomp, so the UI hides the picker.
+  //
+  // NOTE: against *real hardware* this is gated off unless FRETWIRE_SETLISTS=1 — the browse's
+  // preset numbering isn't fully reconciled and it locked a Helix Floor up (see commands.rs
+  // `setlists_enabled`). The mock keeps it on because it can't hurt a device and the feature still
+  // needs UI work; just don't read the mock as proof of what ships.
   setlists: () => setlistNames().slice(),
 
   // ---- backup / restore -----------------------------------------------------------------------

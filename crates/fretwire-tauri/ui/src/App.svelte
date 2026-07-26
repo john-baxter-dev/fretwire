@@ -1,5 +1,5 @@
 <script>
-  import { invoke, listen } from "./lib/ipc.js";
+  import { invoke, listen, IS_MOCK } from "./lib/ipc.js";
   import { onMount } from "svelte";
   import Chain from "./lib/Chain.svelte";
   import ParamPanel from "./lib/ParamPanel.svelte";
@@ -442,6 +442,25 @@
     selectedSlot = null;
     status = "Disconnected — pedal back to standalone.";
   }
+
+  // ---- mock-only device switch ----
+  // Which unit the mock backend is pretending to be. Only ever rendered under IS_MOCK; in a real
+  // Tauri build `window.fretwireMock` doesn't exist and none of this runs.
+  let mockDevice = $state(IS_MOCK ? (window.fretwireMock?.device() ?? "floor") : "floor");
+
+  // Switching device rebuilds the mock's setlists and current preset, so the open session's state
+  // (setlist names, preset, grids) is stale afterwards. Reconnect for the user rather than leaving
+  // a half-updated UI behind — that footgun is the whole reason this control exists.
+  async function onPickMockDevice(mode) {
+    if (mode === mockDevice) return;
+    mockDevice = window.fretwireMock?.device(mode) ?? mode;
+    if (connected) {
+      await disconnect();
+      await connect();
+    } else {
+      status = `Mock is now a ${mode === "floor" ? "Helix Floor" : "HX Stomp"}. Connect to see it.`;
+    }
+  }
 </script>
 
 {#if dataStatus && !dataReady}
@@ -465,6 +484,16 @@
 <header>
   <h1>fretwire</h1>
   <span class="spacer"></span>
+  {#if IS_MOCK}
+    <!-- Mock builds only: which unit to pretend to be. Never present in a real Tauri build. -->
+    <label class="mockdev" title="Mock backend only — which device to simulate">
+      <span>Mock</span>
+      <select value={mockDevice} onchange={(e) => onPickMockDevice(e.currentTarget.value)}>
+        <option value="floor">Helix Floor</option>
+        <option value="stomp">HX Stomp</option>
+      </select>
+    </label>
+  {/if}
   <button class="secondary" onclick={detect}>Detect</button>
   {#if connected}
     <button
@@ -771,6 +800,32 @@
   }
   .spacer {
     flex: 1;
+  }
+  /* Mock-only device switch. Deliberately understated and dashed — it must never read as a real
+     control of the hardware. */
+  .mockdev {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px 3px 10px;
+    border: 1px dashed #3a4050;
+    border-radius: 6px;
+  }
+  .mockdev span {
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #7a8296;
+  }
+  .mockdev select {
+    font: inherit;
+    font-size: 12px;
+    background: #23262e;
+    color: #c8cdd8;
+    border: 1px solid #2a2e37;
+    border-radius: 5px;
+    padding: 3px 5px;
+    cursor: pointer;
   }
   button {
     font: inherit;

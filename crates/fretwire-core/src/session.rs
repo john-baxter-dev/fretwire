@@ -1676,15 +1676,35 @@ impl Session {
         // provenance is unknown — report it and let `read_preset` decide. Failure here is
         // non-fatal: fall back to the pre-stream identity rather than turn a good read into an
         // error.
+        // Log the outcome either way: this is the one step that adds a wire operation to a sequence
+        // that was byte-for-byte HX Edit's, so "it silently fell back" and "it worked" must be
+        // distinguishable in a field log.
         let txn = self.bump_txn();
-        let after = self
-            .edit_request_txn(
-                cmd::STREAM,
-                Tlv::command(op::PARAM_SET, edit::read_info(txn)).to_bytes(),
-                txn,
-            )
-            .ok()
-            .and_then(|r| fretwire_data::stream::parse_preset_info(&r.body));
+        let after = match self.edit_request_txn(
+            cmd::STREAM,
+            Tlv::command(op::PARAM_SET, edit::read_info(txn)).to_bytes(),
+            txn,
+        ) {
+            Ok(r) => {
+                let parsed = fretwire_data::stream::parse_preset_info(&r.body);
+                if parsed.is_none() {
+                    tracing::warn!(
+                        body = r.body.len(),
+                        "post-stream read-info did not parse — falling back to the pre-stream identity"
+                    );
+                }
+                parsed
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "post-stream read-info failed — falling back to the pre-stream identity \
+                     (the preset name and active snapshot may lag by one preset change)"
+                );
+                None
+            }
+        };
+        tracing::debug!(?after, "post-stream read-info reply");
         let settled = match (&preset_info, &after) {
             (Some(before), Some(after))
                 if before.index != after.index || before.bank != after.bank =>

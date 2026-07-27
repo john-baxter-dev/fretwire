@@ -272,6 +272,15 @@ block/param changes. Parser: `fretwire_data::stream::parse_status_push` → `Sta
 collected by `Session::poll_events` (same heartbeat as `keepalive`, but returns the pushes); the GUI
 applies them on its tick (live-follow), no manual Refresh needed.
 
+**Coalesce the pushes before reacting.** A single preset change emits a *flurry* — the preset push,
+then the snapshot and per-block bypass mirrors as the new preset settles — spread over roughly a
+second, and the heartbeat delivers them in 250 ms batches. Reading on every batch cost about three
+full preset streams plus a preset-list re-read per knob turn (~530 KB across 21 preset changes in
+the 2026-07-26 Floor session), aimed at a unit that was still reconfiguring both DSPs; it stopped
+responding twice. The GUI now waits for ~300 ms of quiet (capped at 1.2 s) and reads once. Bypass
+pushes are applied in place and trigger **no** read at all — the push fully describes the change,
+and the device's readable stream lags its own push anyway.
+
 ## Resolved vs. still open
 - [x] Endpoints / framing / channels / sequence.
 - [x] Value encoding = **big-endian f32**.
@@ -313,6 +322,20 @@ Amp". This is how the host learns which preset is loaded at connect (the streame
 carries **no** index/name). Parsed by `fretwire_data::stream::parse_preset_info`; surfaced as
 `EditorPreset::current` (filled by `Session::read_preset`). The same reply also rides every
 `read_preset`, so a post-navigation read reports the device's authoritative current preset for free.
+
+> **The op-23 identity lags the blob by one preset change [solid].** The first read after the preset
+> changes serves the **new** preset's stream under the **previous** preset's identity; the next read
+> reports both consistently. Evidence — Sean's Helix Floor session of 2026-07-26: 19 of the 21
+> distinct stream lengths in that log were reported under exactly two *consecutive* identities, and
+> in every case the later of the two is the one all subsequent stable reads keep (e.g. a 7233-byte
+> stream reported first as `DUSTED` (index 53) and then three times as `BMBLFOOT PRINCE` (index 67),
+> while `DUSTED`'s own stream is 7297 bytes).
+>
+> This matters beyond the displayed name: the **live snapshot rides the same reply** (key 92), so an
+> uncorrected read paints the previous preset's active snapshot. `read_preset_inner` therefore
+> re-issues op 23 **after** the stream and reports whether the identity moved across the read; when
+> it did, the blob can't be attributed to either preset and `Session::read_preset` re-reads. Asking
+> again afterwards leaves the proven open/prep/info/stream sequence untouched.
 
 `open_two_presets_one_after_another.pcapng` is HX Edit **selecting** presets (op 20) — that's why an
 earlier draft mistook op 20 for "open for read". The **non-destructive read** is what HX Edit does on

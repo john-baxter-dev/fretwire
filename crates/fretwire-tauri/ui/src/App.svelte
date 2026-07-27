@@ -125,6 +125,7 @@
     return () => {
       unlisten.then((f) => f());
       unProgress.then((f) => f());
+      clearTimeout(pushTimer); // don't let a coalesced refresh fire into a torn-down session
     };
   });
 
@@ -171,43 +172,114 @@
     }
   }
 
-  async function handlePushes(pushes) {
-    if (!preset || !connected) return;
-    let presetChanged = false;
-    const bypasses = new Map(); // slot → bypassed, from footswitch pushes
-    for (const p of pushes) {
-      if (p.kind === "Snapshot") activeSnapshot = p.index; // read-back lags; trust the push
-      else if (p.kind === "Preset") presetChanged = true;
-      else if (p.kind === "Bypass") bypasses.set(p.slot, !p.enabled);
+  // ---- device-push coalescing ----
+  //
+  // One turn of the preset knob emits a *flurry* of pushes — the preset change, then snapshot and
+  // bypass pushes as the new preset settles — spread over about a second, and the heartbeat hands
+  // them to us in 250 ms batches. Refreshing on every batch cost ~3 full preset streams plus a
+  // preset-list re-read per knob turn (~530 KB across 21 preset changes in Sean's 2026-07-26
+  // session), all fired at a Helix Floor that was still reconfiguring both DSPs — and twice it
+  // stopped answering. So fold the batches together and read *once*, after the device goes quiet.
+  const PUSH_QUIET_MS = 300; // no pushes for this long → treat the device as settled
+  const PUSH_MAX_WAIT_MS = 1200; // ...but never defer a refresh longer than this
+  let pushTimer = null;
+  let pushDeadline = 0;
+  let flushing = false; // a refresh is mid-flight; don't start a second
+  let flushAgain = false; // ...and pushes arrived while it was, so re-arm afterwards
+  let pendingPresetChange = false;
+  const pendingBypasses = new Map(); // slot → bypassed, from footswitch pushes
+
+  // A footswitch bypass is fully described by its own push, so apply it directly. This is also why
+  // the re-read can't be trusted for it: the device's readable stream lags its own push, so a fresh
+  // read can still carry the pre-toggle state. Overlaying wins either way.
+  function applyBypasses() {
+    if (!preset || !pendingBypasses.size) return;
+    const patch = (b) =>
+      b && pendingBypasses.has(b.slot) ? { ...b, bypassed: pendingBypasses.get(b.slot) } : b;
+    preset = {
+      ...preset,
+      blocks: preset.blocks.map(patch),
+      split_node: patch(preset.split_node),
+      mixer_node: patch(preset.mixer_node),
+    };
+    pendingBypasses.clear();
+  }
+
+  function scheduleFlush() {
+    // A flush is already talking to the device — let it finish and re-arm on the way out, rather
+    // than firing a second read on top of the first. Overlapping them would reintroduce exactly the
+    // read pile-up this whole mechanism exists to prevent.
+    if (flushing) {
+      flushAgain = true;
+      return;
     }
-    // Any device-side change (bypass, snapshot, preset) is reflected by re-reading the preset —
-    // reassigning `preset` is a clean reactive update (nested in-place mutation wasn't refreshing).
-    if (presetChanged) {
-      selectedSlot = null;
-      addTarget = null;
-      bypasses.clear(); // those pushes belonged to the preset we just left
+    const now = Date.now();
+    if (!pushDeadline) pushDeadline = now + PUSH_MAX_WAIT_MS;
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(flushPushes, Math.max(0, Math.min(PUSH_QUIET_MS, pushDeadline - now)));
+  }
+
+  async function flushPushes() {
+    pushTimer = null;
+    pushDeadline = 0;
+    const presetChanged = pendingPresetChange;
+    pendingPresetChange = false;
+    if (!connected) return;
+    flushing = true;
+    try {
+      await runFlush(presetChanged);
+    } finally {
+      flushing = false;
     }
+    if (flushAgain) {
+      flushAgain = false;
+      scheduleFlush();
+    }
+  }
+
+  async function runFlush(presetChanged) {
     await refreshPreset();
     if (presetChanged) {
       activeSnapshot = preset?.active_snapshot ?? 0;
       // Follow the device into whichever setlist it landed in — switching presets from the panel
       // can cross setlists, and the sidebar would otherwise keep listing the old one with nothing
-      // highlighted. Re-list even within the same bank, since names may have changed.
+      // highlighted. Only re-list when the bank actually changed: moving *within* a setlist can't
+      // alter that setlist's contents, and the listing is a second multi-KB stream off the device.
       const bank = preset?.bank ?? 0;
-      if (bank !== viewBank) viewBank = bank;
-      await refreshPresets(bank);
+      if (bank !== viewBank) {
+        viewBank = bank;
+        await refreshPresets(bank);
+      }
     }
-    // Footswitch bypass: like snapshots, the device's readable stream lags its own push, so the
-    // re-read can still carry the pre-toggle state. Overlay the pushed values onto the fresh read.
-    if (bypasses.size && preset) {
-      const patch = (b) => (b && bypasses.has(b.slot) ? { ...b, bypassed: bypasses.get(b.slot) } : b);
-      preset = {
-        ...preset,
-        blocks: preset.blocks.map(patch),
-        split_node: patch(preset.split_node),
-        mixer_node: patch(preset.mixer_node),
-      };
+    applyBypasses();
+  }
+
+  function handlePushes(pushes) {
+    if (!preset || !connected) return;
+    // Snapshot and preset changes rewrite state we can't derive from the push alone (a snapshot
+    // carries its own bypass matrix and parameter values), so they need a re-read. A bypass does
+    // not.
+    let needsRead = false;
+    for (const p of pushes) {
+      if (p.kind === "Snapshot") {
+        activeSnapshot = p.index; // read-back lags; trust the push
+        needsRead = true;
+      } else if (p.kind === "Preset") {
+        pendingPresetChange = true;
+        needsRead = true;
+      } else if (p.kind === "Bypass") {
+        pendingBypasses.set(p.slot, !p.enabled);
+      }
     }
+    if (pendingPresetChange) {
+      selectedSlot = null;
+      addTarget = null;
+      pendingBypasses.clear(); // those pushes belonged to the preset we just left
+    } else if (!needsRead) {
+      applyBypasses(); // bypass-only: nothing to read, show it now
+      return;
+    }
+    scheduleFlush();
   }
 
   // Run a command that returns the updated preset; keep the selection. Errors surface as toasts.

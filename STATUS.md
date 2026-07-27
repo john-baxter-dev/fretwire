@@ -531,9 +531,12 @@ GUI survived a long unattended session. DSP2 renders. Three new findings, all ad
    = kind 1 output): `[0=in, 1..=8 row A, 9=out, 10=split, 11..=18 row B, 19=mixer]` — **both rows
    are 8 columns**, so the column is `slot − 10`. Both split fixtures land their row-B block exactly
    at their split position under the new formula. Regression test asserts occupied row-B cells stay
-   inside `split_pos..mixer_pos` and no column leaves the grid. *Every fixture we have has only one
-   row-B block, so a `dump-raw` of a multi-B Floor preset (BMBLFOOT PRINCE, slots 13/14/15) is still
-   wanted to close it out.*
+   inside `split_pos..mixer_pos` and no column leaves the grid. *Still unconfirmed on hardware.* The
+   `bmblfoot.bin` dump Sean sent (2026-07-26) does **not** close it: it parses fine but it is the
+   restored original — 6 blocks, serial, one DSP, no Y-split at all. The multi-row-B version he had
+   been looking at was his own edit, reverted by the restore ("bmblfoot prince was originally a
+   single DSP preset"). **A `dump-raw` of any preset with 3+ blocks on the lower row of a Y remains
+   the outstanding ask.**
 2. **Setlists implemented.** The Floor has eight (Factory 1/2, User 1-5, Templates); we only ever
    browsed bank 0, so a unit in User 1 listed Factory 1's names — Sean's "the list on the left
    doesn't show the other user1 presets". Nearly everything was already plumbed (`PresetInfo.bank`,
@@ -613,26 +616,61 @@ firmware in — so "we sent no write command" is the strongest claim supportable
 global index to a slot; `Session::check_preset_addr` rejects an out-of-range bank or slot in
 goto/save/rename **before it reaches the wire**.
 
-**Withheld.** Cross-setlist browsing is now off unless `FRETWIRE_SETLISTS=1`
+**Withheld.** Cross-setlist browsing is off unless `FRETWIRE_SETLISTS=1`
 (`commands::setlists_enabled`). The sidebar still tracks whichever setlist the device is in; what is
-withheld is switching between them, because of the open item below. The mock keeps the picker so the
-UI can still be developed - it cannot touch hardware.
+withheld is switching between them. The mock keeps the picker so the UI can still be developed - it
+cannot touch hardware. The numbering blocker that originally motivated this is resolved (below), but
+the gate stays until a Floor gets through a session without locking up.
 
-**Still open - the numbering is not fully reconciled.** Even in bank 0, where the global/relative
-bug cannot apply, the listing has been seen offset from the same device's backup:
+**RESOLVED 2026-07-26 (evening) — the "index drift" was his device, not our parser.** The offset
+against his `.hxb` (+1, then +9) was real but it was *content* drift: his FACTORY 1 had diverged from
+the July-22 backup, which he spotted himself ("the Fact 1 list looks suspiciously like a 3.7-era
+list"). Three independent checks after he restored from that backup:
 
-| preset | his `.hxb` | pre-fix build | this build |
-|---|---|---|---|
-| FELIX MARK IV | 61 | 061 | **070** |
-| BMBLFOOT PRINCE | 67 | 067 | **076** |
-| SHEEHAN PEARCE | 68 | **069** | **077** |
+- **read-info indices match the backup exactly** on all 20 presets appearing in his session log —
+  3 Cali Rectifire, 15 Moo)))n Jump, 46 Stone Cold Loco, 67 BMBLFOOT PRINCE, 78 BILLY KASTODON, ...
+- **The TEMPLATES browse listing matches exactly** — `TemplateWTF.png` lists 896 Quick Start → 906
+  Wet-Dry-Wet Amps against the backup's bank 7 slots 0 → 10. Same code path, same session, **no**
+  offset, which is what clears `parse_preset_list` and the `bank * 128` normalisation.
+- The offset only ever appeared in bank 0, and only *before* the restore.
 
-A drifting offset, already present (+1) before this build and +9 now. It is why a screenshot shows
-`076 BMBLFOOT PRINCE` highlighted while the header reads `SHEEHAN PEARCE #76` - we asked for one
-preset and the device loaded its neighbour. Indices come from the device's own map keys
-(`parse_preset_list`), not our positions, so this needs a captured stream:
-`fretwire dump-list <bank> <out.bin>` (new) fetches one. **Do not re-enable setlists until this is
-explained.**
+So the numbering is understood and the blocker is lifted. Cross-setlist browsing stays gated for now
+regardless — the lockups below are the reason, and they happen in FACTORY 1 with no setlist switching
+involved.
+
+**The header/highlight mismatch had a second, real cause** — see the identity lag below. That is
+fixed independently.
+
+## INCIDENT 2026-07-26 (evening): two more lockups, no setlist involved
+
+Reading only — 66 preset reads, 14 browse listings, **zero writes** in the whole session — the Floor
+stopped responding twice, in FACTORY 1, on ordinary preset changes. Nothing we sent could alter
+stored presets, which further supports the preset loss above not being ours.
+
+**Read amplification (fixed).** The GUI refreshed on *every* push batch. One preset change emits a
+flurry of pushes over ~1 s and the heartbeat delivers them in 250 ms batches, so a single knob turn
+cost **3.1 full preset streams plus a preset-list re-read** — ~530 KB across 21 preset changes —
+fired at a unit still reconfiguring both DSPs. Both lockups show the same shape: a read completes,
+then ~3 s later **`read-open` itself** fails, i.e. the device had already gone quiet before we
+noticed; the old code then retried immediately, adding load. Fixed by coalescing pushes (300 ms
+quiet, 1.2 s cap), re-listing the browse only when the *bank* changes, applying bypass pushes in
+place with no read at all, and backing off (150/400/800 ms) before a retry.
+
+**Not proven.** Read pressure is a hypothesis for the lockups, not a demonstrated cause — the two
+Wireshark captures he sent are empty (both zips contain a single empty directory). A real pcap of a
+freeze is the outstanding ask; it reproduces for him.
+
+**Identity lags the blob by one preset (fixed).** The first read after a preset change serves the new
+preset's stream under the *previous* preset's identity — 19 of 21 distinct stream lengths in his log
+are reported under exactly two consecutive identities. Since the live snapshot rides the same reply
+(key 92), this also painted the previous preset's snapshot. `read_preset_inner` now re-issues op 23
+after the stream and reports whether the identity moved; `read_preset` re-reads when it did. See
+`docs/protocol.md`.
+
+**Stream reassembly (hardened).** A spurious mid-stream chunk was appended to the payload *before*
+being classified as spurious — safe only because every observed case was zero-length. The decision is
+now `session::classify_chunk`, unit-tested: empty replies before the declared end are dropped, short
+*non-empty* chunks are kept and do not terminate the read.
 
 ## Prioritized next steps
 > **The path to live control is in `docs/next-steps.md`.** TL;DR: (1) **on Windows now** — capture a

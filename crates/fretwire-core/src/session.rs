@@ -1343,11 +1343,20 @@ impl Session {
     pub fn read_preset(&mut self) -> crate::Result<EditorPreset> {
         // The txn-matched structured steps pin chunk #0, but the raw pagination chunks (cmd 0x08)
         // carry no txn — so a state-push interleaved mid-stream could still corrupt the blob. If the
-        // decode fails, drain harder and re-read once; transient interleaving clears on the retry.
+        // decode fails, back off and re-read; transient interleaving clears on the retry.
         let mut last_err: Option<crate::Error> = None;
-        for attempt in 0..2 {
+        for attempt in 0..3 {
             match self.read_preset_inner() {
-                Ok((payload, info)) => match self.catalog.load_preset(&payload) {
+                // The read spanned a preset change, so the blob can't be attributed to either
+                // preset. Re-read rather than decode it — but only while attempts remain, so a
+                // device the user is actively scrolling still yields *something* rather than an
+                // error.
+                Ok((_, _, false)) if attempt < 2 => {
+                    tracing::debug!(attempt, "identity moved across the read; re-reading");
+                    self.backoff_before_retry(attempt);
+                    continue;
+                }
+                Ok((payload, info, _)) => match self.catalog.load_preset(&payload) {
                     Ok(mut preset) => {
                         // The blob's `10 → 8` is the snapshot that was *stored* with the preset, not
                         // the one the pedal is on: an HX Stomp parked on SNAPSHOT 3 reported 0.
@@ -1384,11 +1393,31 @@ impl Session {
                 },
                 Err(e) => last_err = Some(e),
             }
-            tracing::warn!(attempt, "preset read/decode failed; draining and retrying");
-            self.transport
-                .drain_wire(std::time::Duration::from_millis(60), 256);
+            tracing::warn!(
+                attempt,
+                "preset read/decode failed; backing off and retrying"
+            );
+            self.backoff_before_retry(attempt);
         }
         Err(last_err.expect("loop runs at least once"))
+    }
+
+    /// Pause, then clear the wire, before re-attempting a failed or unsettled read.
+    ///
+    /// The pause is the point. A failed read usually means the device is *busy*, not that a frame
+    /// was dropped — loading a preset reconfigures both DSPs, and Sean's Helix Floor stopped
+    /// answering entirely during it. Re-issuing immediately (as this did) put a fresh ~7.5 KB
+    /// stream request into a unit that was already behind. Backing off first gives it room to
+    /// finish; the drain then clears whatever it queued while we waited.
+    fn backoff_before_retry(&mut self, attempt: usize) {
+        let pause = std::time::Duration::from_millis(match attempt {
+            0 => 150,
+            1 => 400,
+            _ => 800,
+        });
+        std::thread::sleep(pause);
+        self.transport
+            .drain_wire(std::time::Duration::from_millis(60), 256);
     }
 
     /// [`Self::read_preset`] for the read-back after a **structural edit** (model swap, add block):
@@ -1447,13 +1476,13 @@ impl Session {
         let listing = self.list_presets()?;
         let total = listing.len();
         // Note where we are so the sweep can put the user back afterwards.
-        let (_, start) = self.read_preset_inner()?;
+        let (_, start, _) = self.read_preset_inner()?;
 
         let mut presets = Vec::with_capacity(total);
         for (done, (index, listed_name)) in listing.iter().enumerate() {
             let index = *index as i64;
             self.goto_preset(0, index)?;
-            let (raw, info) = self.read_preset_inner()?;
+            let (raw, info, _) = self.read_preset_inner()?;
             // The stream must parse (it's what restore replays), and the op-23 identity must be
             // the slot we selected — a mismatch means the sweep desynced; stop rather than save
             // mislabeled blobs.
@@ -1508,9 +1537,14 @@ impl Session {
 
     /// The read sequence, returning both the reassembled stream and the current preset's identity
     /// (parsed from the op-23 read-info reply that the sequence issues anyway).
+    /// Returns `(payload, identity, settled)`. `settled` is false when the device's reported
+    /// identity changed between the start and the end of the stream — the blob may then belong to
+    /// either preset, so a caller that needs coherent state should re-read.
+    ///
+    /// The per-chunk decision is [`classify_chunk`].
     fn read_preset_inner(
         &mut self,
-    ) -> crate::Result<(Vec<u8>, Option<fretwire_data::stream::PresetInfo>)> {
+    ) -> crate::Result<(Vec<u8>, Option<fretwire_data::stream::PresetInfo>, bool)> {
         // Start aligned: clear any frames left on the wire from a prior edit's fire-and-forget
         // follow-up or, crucially, the device's **unsolicited state pushes** (a footswitch bypass or
         // panel knob/snapshot change). Mid-session those would otherwise be mis-matched as this
@@ -1588,30 +1622,37 @@ impl Session {
             let chunk = self.edit_request(cmd::CHUNK, Vec::new())?;
             let n = chunk.body.len();
             tracing::debug!(arg = chunk.arg, body = n, "chunk reply");
-            payload.extend_from_slice(&chunk.body);
-            if n < full_chunk {
-                match target {
-                    // No declared length: fall back to "short chunk ends the stream".
-                    None => break,
-                    // A short/empty chunk that completes the declared payload is the real terminator.
-                    Some(t) if payload.len() >= t => break,
-                    // A short/empty chunk *before* the declared end is spurious — skip it and keep
-                    // reading. Bound consecutive empties so a wedged device still errors out.
-                    Some(t) => {
-                        empties += 1;
-                        tracing::warn!(
-                            got = payload.len(),
-                            want = t,
-                            empties,
-                            "short chunk before declared stream end — skipping, continuing read",
-                        );
-                        if empties >= 8 {
-                            break;
-                        }
+            match classify_chunk(n, full_chunk, payload.len(), target) {
+                ChunkVerdict::Skip => {
+                    empties += 1;
+                    tracing::warn!(
+                        got = payload.len(),
+                        want = target,
+                        empties,
+                        "empty chunk before declared stream end — skipping, continuing read",
+                    );
+                    // Bound consecutive empties so a wedged device still errors out.
+                    if empties >= 8 {
+                        break;
                     }
                 }
-            } else {
-                empties = 0;
+                ChunkVerdict::Keep => {
+                    payload.extend_from_slice(&chunk.body);
+                    if n < full_chunk {
+                        tracing::warn!(
+                            got = payload.len(),
+                            want = target,
+                            len = n,
+                            "short chunk before declared stream end — keeping it, continuing read",
+                        );
+                    } else {
+                        empties = 0;
+                    }
+                }
+                ChunkVerdict::Last => {
+                    payload.extend_from_slice(&chunk.body);
+                    break;
+                }
             }
         }
 
@@ -1621,7 +1662,45 @@ impl Session {
             declared = target,
             "reassembled preset stream",
         );
-        Ok((payload, preset_info))
+
+        // Re-ask who we're on. The op-23 identity **lags the blob by one preset**: the first read
+        // after a preset change serves the new preset's stream under the *previous* preset's
+        // identity. Sean's 2026-07-26 session shows it unambiguously — 19 of the 21 distinct stream
+        // lengths were reported under exactly two consecutive identities, and the later of the two
+        // is the one every subsequent stable read keeps. Left uncorrected this mislabels the header
+        // and, since the snapshot comes from the same reply (key 92), paints the previous preset's
+        // active snapshot.
+        //
+        // Asking again *after* the stream gives a fresher answer without touching the proven
+        // open/prep/info/stream sequence. A mismatch means the device moved under us, so the blob's
+        // provenance is unknown — report it and let `read_preset` decide. Failure here is
+        // non-fatal: fall back to the pre-stream identity rather than turn a good read into an
+        // error.
+        let txn = self.bump_txn();
+        let after = self
+            .edit_request_txn(
+                cmd::STREAM,
+                Tlv::command(op::PARAM_SET, edit::read_info(txn)).to_bytes(),
+                txn,
+            )
+            .ok()
+            .and_then(|r| fretwire_data::stream::parse_preset_info(&r.body));
+        let settled = match (&preset_info, &after) {
+            (Some(before), Some(after))
+                if before.index != after.index || before.bank != after.bank =>
+            {
+                tracing::warn!(
+                    before = ?(before.bank, before.index, &before.name),
+                    after = ?(after.bank, after.index, &after.name),
+                    "preset identity moved across the stream read — blob provenance is ambiguous",
+                );
+                false
+            }
+            _ => true,
+        };
+        // Prefer the post-stream identity when we got one: it is never staler than the pre-stream
+        // one, and when they agree the choice is moot.
+        Ok((payload, after.or(preset_info), settled))
     }
 
     /// List all presets on the device as `(index, name)` pairs (non-destructive). Drives the
@@ -1904,6 +1983,108 @@ fn plan_insert_right_end(
     // Shift the run down by one (ascending order, each destination free when it runs).
     let moves: Vec<(usize, usize)> = (run_start..=target).map(|s| (s, s - 1)).collect();
     Some((moves, target))
+}
+
+/// What to do with one paginated-stream chunk reply. See [`classify_chunk`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChunkVerdict {
+    /// Real payload, and the stream continues.
+    Keep,
+    /// Real payload, and this reply ends the stream.
+    Last,
+    /// Not payload — discard it and keep reading.
+    Skip,
+}
+
+/// Decide what a chunk reply of `n` bytes means, given the chunk size established by chunk #0
+/// (`full`), how much payload is already in hand (`have`), and the length the stream's envelope
+/// declared (`target`, `None` when it couldn't be read).
+///
+/// The declared length is the authority for "done". The older rule — "the first chunk shorter than
+/// chunk #0 ends the stream" — is only a heuristic: on the Floor an **empty** chunk reply can
+/// arrive mid-stream (a batched keepalive/state-push landing in a chunk slot), and treating it as
+/// the terminator truncated the payload at an exact chunk boundary and then desynced the wire.
+/// Every truncated read Sean captured landed on a multiple of 256 while every good read ended
+/// mid-chunk. So an empty reply before the declared end is [`ChunkVerdict::Skip`] — dropped, not
+/// appended. A short but *non-empty* chunk is real payload and is always kept; discarding it would
+/// silently corrupt the blob. Without a declared length the short-chunk heuristic still governs.
+fn classify_chunk(n: usize, full: usize, have: usize, target: Option<usize>) -> ChunkVerdict {
+    match target {
+        // No declared length: fall back to "a short chunk ends the stream".
+        None => {
+            if n < full {
+                ChunkVerdict::Last
+            } else {
+                ChunkVerdict::Keep
+            }
+        }
+        Some(t) => {
+            if n == 0 && have < t {
+                ChunkVerdict::Skip
+            } else if have + n >= t {
+                ChunkVerdict::Last // the declared payload is now whole
+            } else {
+                // Still short of the declared length — keep reading, even if this chunk was
+                // shorter than chunk #0. With a declared length the short-chunk heuristic is not
+                // just unnecessary, it is actively wrong: acting on it here is what truncated
+                // reads at an exact chunk boundary.
+                ChunkVerdict::Keep
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod chunk_tests {
+    use super::{ChunkVerdict::*, classify_chunk};
+
+    const FULL: usize = 256;
+
+    #[test]
+    fn a_full_chunk_mid_stream_continues() {
+        assert_eq!(classify_chunk(FULL, FULL, 512, Some(7398)), Keep);
+    }
+
+    #[test]
+    fn the_chunk_that_completes_the_declared_length_ends_the_stream() {
+        // 7398 = 28 full chunks (7168) + 230.
+        assert_eq!(classify_chunk(230, FULL, 7168, Some(7398)), Last);
+    }
+
+    /// The Floor's mid-stream empty replies. Regression: these used to be appended to the payload
+    /// *before* being classified as spurious — harmless only because they were zero-length. They
+    /// must never contribute bytes, and must not end the stream.
+    #[test]
+    fn an_empty_chunk_before_the_declared_end_is_dropped_not_appended() {
+        // Sean's 2026-07-26 session: got=2560 want=7527, got=3072 want=7508, got=256 want=7193 —
+        // every one an exact multiple of the chunk size, i.e. a zero-length reply.
+        for (have, want) in [(2560, 7527), (3072, 7508), (4352, 7344), (256, 7193)] {
+            assert_eq!(classify_chunk(0, FULL, have, Some(want)), Skip);
+        }
+    }
+
+    /// The other half of that fix: a short chunk carrying real bytes must be kept — and must not
+    /// end the stream — when it lands before the declared end. Dropping it would corrupt the blob;
+    /// stopping on it would truncate the blob, which is the original bug the declared length was
+    /// introduced to kill.
+    #[test]
+    fn a_short_nonempty_chunk_before_the_declared_end_keeps_reading() {
+        assert_eq!(classify_chunk(100, FULL, 1000, Some(7398)), Keep);
+    }
+
+    /// An empty reply that arrives once the declared payload is already whole is the terminator,
+    /// not a spurious frame — otherwise the loop would keep asking a finished stream for more.
+    #[test]
+    fn an_empty_chunk_at_the_declared_end_terminates() {
+        assert_eq!(classify_chunk(0, FULL, 7398, Some(7398)), Last);
+    }
+
+    #[test]
+    fn without_a_declared_length_a_short_chunk_still_ends_the_stream() {
+        assert_eq!(classify_chunk(FULL, FULL, 512, None), Keep);
+        assert_eq!(classify_chunk(12, FULL, 512, None), Last);
+        assert_eq!(classify_chunk(0, FULL, 512, None), Last);
+    }
 }
 
 #[cfg(test)]

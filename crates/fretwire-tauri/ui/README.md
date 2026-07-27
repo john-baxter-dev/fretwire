@@ -95,6 +95,12 @@ fretwireMock.preset(1)          // panel switches to preset #1
 fretwireMock.state()            // inspect the current in-memory preset
 ```
 
+Pushes are **coalesced**: the panel waits for ~300 ms of quiet (capped at 1.2 s) before re-reading,
+so a change takes a beat to land and a rapid burst produces one refresh rather than one each. That
+is deliberate — refreshing per push was pulling ~530 KB off a real Helix Floor per handful of preset
+changes and appears to have contributed to lockups. A `bypass()` push needs no read at all and shows
+up immediately.
+
 ### Where the seam is
 
 - `src/lib/ipc.js` — the single seam. Everything imports `invoke`/`listen` from here. It picks the

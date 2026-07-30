@@ -234,6 +234,11 @@ fn grid_maps_slots_to_rows_and_columns() {
 // disagree, blocks on the parallel path render *outside* the bracket that is supposed to contain
 // them — which is exactly what a `slot − split_idx + 1` row-B column did on Helix Floor presets,
 // where it shifted every B block one column right of where the device put it.
+//
+// The bracket invariant holds only when **both** ends of the split are on the same DSP, which is
+// true of every fixture here. It is not universal: a Floor split can open on DSP1 and rejoin on
+// DSP2 (`pullmeunder`: DSP1 split=2/mixer=0, DSP2 split=0/mixer=9), and the absent end reads back
+// as 0. See `PresetStream::dsp_structural_node_pos`.
 #[test]
 fn row_b_cells_sit_inside_the_split_bracket() {
     use fretwire_data::stream::slot_kind;

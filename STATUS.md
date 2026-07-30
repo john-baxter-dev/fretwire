@@ -462,7 +462,7 @@ survey in **`docs/helix-floor.md`**. Headlines:
 - 8 new tests, including one asserting **every** table entry has a matching udev rule — a device
   without one silently fails with EACCES on a normal desktop. Suite: **148 passing**.
 
-**FIRST HARDWARE RUN on a real Helix Floor (2026-07-24, the contributor "Sean"):** fretwire ran
+**FIRST HARDWARE RUN on a real Helix Floor (2026-07-24, a contributor):** fretwire ran
 against a physical Floor for the first time — via the Tauri GUI (`cargo tauri dev`). **It works.**
 Interface claim, handshake, and the whole read path succeed; the GUI shows the live preset with the
 correct **15-block** Pull Me Under decode, `device P21`, `fw 7d01f5e`, 8 snapshots, and combined DSP
@@ -517,7 +517,7 @@ converted to wire space too on 2026-07-26, so they no longer silently plan again
 dev-mode Svelte console warnings (Dialog role, ParamPanel labels, ModelPicker initial-value lint)
 that cluttered the tester's logs are cleared. Suite **156**.
 
-**Second hardware run (2026-07-26).** The reassembly fix holds: every read in Sean's logs now
+**Second hardware run (2026-07-26).** The reassembly fix holds: every read in the tester's logs now
 reports `reassembled preset stream bytes=N declared=N`, including one that skipped a premature short
 chunk mid-stream (`short chunk before declared stream end — skipping, continuing read got=7168
 want=7373`) and completed correctly. No truncation, no wedged wire, no reconnect prompts, and the
@@ -531,14 +531,12 @@ GUI survived a long unattended session. DSP2 renders. Three new findings, all ad
    = kind 1 output): `[0=in, 1..=8 row A, 9=out, 10=split, 11..=18 row B, 19=mixer]` — **both rows
    are 8 columns**, so the column is `slot − 10`. Both split fixtures land their row-B block exactly
    at their split position under the new formula. Regression test asserts occupied row-B cells stay
-   inside `split_pos..mixer_pos` and no column leaves the grid. *Still unconfirmed on hardware.* The
-   `bmblfoot.bin` dump Sean sent (2026-07-26) does **not** close it: it parses fine but it is the
-   restored original — 6 blocks, serial, one DSP, no Y-split at all. The multi-row-B version he had
-   been looking at was his own edit, reverted by the restore ("bmblfoot prince was originally a
-   single DSP preset"). **A `dump-raw` of any preset with 3+ blocks on the lower row of a Y remains
-   the outstanding ask.**
+   inside `split_pos..mixer_pos` and no column leaves the grid. The `bmblfoot.bin` dump the tester
+   sent (2026-07-26) did **not** close it — it parses fine but it is the restored original (6
+   blocks, serial, one DSP, no Y-split at all); the multi-row-B version he had been looking at was
+   his own edit, reverted by the restore. **Closed 2026-07-29 by `pullmeunder.bin`** — see below.
 2. **Setlists implemented.** The Floor has eight (Factory 1/2, User 1-5, Templates); we only ever
-   browsed bank 0, so a unit in User 1 listed Factory 1's names — Sean's "the list on the left
+   browsed bank 0, so a unit in User 1 listed Factory 1's names — the tester's "the list on the left
    doesn't show the other user1 presets". Nearly everything was already plumbed (`PresetInfo.bank`,
    `goto/save/rename_preset(bank, …)`); the one defect was `edit::presets_stream` hardcoding the
    bank to 0. Now parameterised, `Device::setlists` names them, `Session::list_presets_in(bank)`,
@@ -638,6 +636,13 @@ So the numbering is understood and the blocker is lifted. Cross-setlist browsing
 regardless — the lockups below are the reason, and they happen in FACTORY 1 with no setlist switching
 involved.
 
+**Confirmed exhaustively 2026-07-29.** He sent `dump-list` output for all eight banks. All 1024
+entries parse, every index decodes to its own bank under `global = bank × 128 + slot`, and against
+the July-22 `.hxb` they agree on **1021 of 1024** — the three exceptions being presets he has since
+*moved* (`InSTANtgH0St/24` 101→68, `Parallel Muffs` 108→107, `BAS:FunkIfIKnow` 84→95), each showing
+up in a sequence diff as one insert + one delete with every other run equal. USER 1 (63/63), USER 2
+(1/1) and TEMPLATES (43/43) match slot-for-slot. Nothing left open here.
+
 **The header/highlight mismatch had a second, real cause** — see the identity lag below. That is
 fixed independently.
 
@@ -671,6 +676,41 @@ after the stream and reports whether the identity moved; `read_preset` re-reads 
 being classified as spurious — safe only because every observed case was zero-length. The decision is
 now `session::classify_chunk`, unit-tested: empty replies before the declared end are dropped, short
 *non-empty* chunks are kept and do not terminate the read.
+
+## Third round (2026-07-29): eight bank listings + `pullmeunder.bin`
+
+The tester answered both outstanding asks in one email. Full write-up in `docs/helix-floor.md`;
+the short version:
+
+- **Preset numbering: closed.** 1024 entries across all eight banks, 1021 matching the `.hxb`
+  exactly, the three exceptions being presets he moved. See the RESOLVED block above.
+- **Row-B rendering: closed.** `pullmeunder` (FACTORY 1 slot 45) is the multi-row-B preset we asked
+  for — six blocks on DSP2's row B (wire 33..=38 → columns 3..=8) plus two on DSP1's (11/12 →
+  columns 1/2). The `slot − 10` column mapping holds per DSP and everything stays inside the
+  8-column grid.
+- **Bug found and fixed: the browse listing is not sorted.** A moved preset keeps its old *stream
+  position* while carrying its new *index*, so the sidebar drew three presets in the wrong row under
+  correct numbers. `Session::list_presets_in` now sorts after normalising
+  (`normalise_preset_list`, unit-tested) and logs `reordered=true` when the device's order differed.
+- **Bug found and fixed: the snapshot bypass matrix is a flat 40-entry array** indexed by wire slot,
+  not one 20-entry array per DSP. `show-preset`'s scene diagnosis was indexing by the per-DSP index,
+  so every DSP2 block reported DSP1's state — all eight snapshots looked alike and none matched the
+  live scene. Fixed; the snapshots now read as coherent scenes (Intro = clean delay/verb on, gain
+  path off; Solo = the reverse) with exactly one match. Regression test in `multi_dsp.rs` uses a
+  synthetic preset with different states at wire 13 and wire 33, which per-DSP indexing cannot pass.
+- **Second independent confirmation of the key-92 fix.** `pullmeunder`'s blob stores active snapshot
+  **4**; its live scene is unambiguously snapshot **0**. Same disagreement the `Dual Amp` capture
+  showed, on a different preset and a different device state.
+- **New, unresolved: a Y-split can span both DSPs.** `pullmeunder` splits after a common Volume+Comp
+  on DSP1 and rejoins at the end of DSP2. Both DSPs report `is_split()`, and the bracket ends are
+  split across them — DSP1 `split=2, mixer=0`, DSP2 `split=0, mixer=9` — so the
+  "common-before / path A / common-after" rule and the `split_pos ≤ column < mixer_pos` invariant
+  do not hold for such a preset. Tagged `[hypothesis]` off one sample. **Deliberately not acted
+  on**: guessing ahead of data is what produced the original row-B bug. Needs a screenshot of this
+  preset's grid in HX Edit, or a second cross-DSP preset.
+
+**Still outstanding:** a real pcap of a Floor freeze (his two zips were empty). That remains the only
+thing gating `FRETWIRE_SETLISTS=1`.
 
 ## Prioritized next steps
 > **The path to live control is in `docs/next-steps.md`.** TL;DR: (1) **on Windows now** — capture a

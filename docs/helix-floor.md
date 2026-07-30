@@ -463,10 +463,11 @@ position, which is where the glyphs are drawn. The 20-slot array is
 `[0=in, 1..=8 row A, 9=out, 10=split, 11..=18 row B, 19=mixer]`: **both rows are 8 columns**, so a
 row-B column is `slot − 10`, in the same absolute space as row A.
 
-> **Still needs confirming on hardware.** The fix is forced by the 20-slot arithmetic and matches
-> both split fixtures, but every fixture we have holds only *one* row-B block. A `dump-raw` of a
-> Floor preset with several (e.g. `BMBLFOOT PRINCE`, row B at slots 13/14/15) would close it out.
-> Those are Line 6 factory presets — keep any such dump local and gitignored, diagnosis only.
+> **Confirmed on hardware 2026-07-29** by the tester's `pullmeunder` dump — the first preset we
+> have with more than one block on a parallel path. It puts six on DSP2's row B (wire slots
+> 33..=38 → columns 3..=8) and two on DSP1's (11/12 → columns 1/2), all inside the 8-column grid,
+> and its snapshots only read as coherent scenes under this mapping. The `slot − 10` arithmetic
+> holds per DSP. See "A split can span both DSPs" below for the part it does *not* settle.
 
 ### Setlists — IMPLEMENTED
 
@@ -492,7 +493,7 @@ measurement.** Each snapshot stores one `[_, enabled]` pair per slot — the sce
 `preset1_stream` the live blocks match snapshot 0's row and key `8` says 0, so both agree. In
 `dual_amp_stream` key `8` says **1**, but the live block state is snapshot **0**'s scene. So the
 stored index and the stored scene genuinely disagree in a fixture we already had, offline, with no
-hardware involved — the same failure mode Sean saw. Both facts are pinned by tests
+hardware involved — the same failure mode the tester saw. Both facts are pinned by tests
 (`snapshot_matrix_matches_the_live_block_state`, `dual_amp_stored_active_snapshot_disagrees_with_its_scene`).
 
 **Resolved: the device tells us, and we were discarding it.** An HX Stomp parked on SNAPSHOT 3
@@ -513,3 +514,89 @@ independent signals now agreeing.
 `PresetInfo::snapshot` carries it, and `Session::read_preset` overrides the blob's stored value with
 it (falling back to the blob for offline decodes, which have no device to ask). Keys `117` (bool)
 and `83` (`[u32, 0]`) in that reply are still unidentified.
+
+## Second hardware round (2026-07-29): eight bank listings + a multi-row-B preset
+
+The tester sent a `dump-list` of all eight banks and a `dump-raw` of `Pull Me Under` (FACTORY 1
+slot 45), which between them close two of the three questions that were open.
+
+### Preset numbering is settled  [solid]
+
+All eight listings parse: 128 entries each, 1024 total, every index decoding to its own bank under
+`global = bank × 128 + slot`. Cross-checked against the same unit's 2026-07-22 `.hxb` backup, the
+listings agree on **1021 of 1024** slots — and the three exceptions are not a numbering error at
+all but presets the tester has since *moved*:
+
+| bank | preset | backup slot | device slot |
+|---|---|---|---|
+| 0 FACTORY 1 | `InSTANtgH0St/24` | 101 | 68 |
+| 0 FACTORY 1 | `Parallel Muffs` | 108 | 107 |
+| 1 FACTORY 2 | `BAS:FunkIfIKnow` | 84 | 95 |
+
+A `difflib` sequence diff of each bank against the backup reports exactly one insert + one delete
+per move and "equal" for every other run. USER 1 (63/63), USER 2 (1/1) and TEMPLATES (43/43) match
+the backup **exactly** — those are the banks a base offset would have exposed, so the earlier
+"index drift" is now conclusively closed as the tester's own device state, not our parser.
+
+> This retires the *numbering* half of the `FRETWIRE_SETLISTS=1` gate. The gate stays on: the
+> other half is the Floor lockups, still unexplained (see the INCIDENT entries in `STATUS.md`), and
+> nothing here bears on those.
+
+### The device does not list presets in slot order  [solid] — FIXED
+
+A moved preset keeps its **old position in the stream** while carrying its **new index**: bank 0
+emits slot 68 at stream position 101, bank 1 emits slot 95 at position 84. The other six banks
+arrive strictly ascending, which is why this went unnoticed.
+
+`parse_preset_list` returns stream order and the sidebar renders positionally, so on the tester's
+unit three presets drew in the wrong row under a correct number — a plausible contributor to the
+"the numbers don't line up" reports. `Session::list_presets_in` now sorts by slot after
+normalising, and logs `reordered=true` when the device's order differed
+(`normalise_preset_list`, unit-tested).
+
+### The snapshot bypass matrix is one flat 40-entry array  [solid] — FIXED
+
+`10 → 10 → [i] → 3` spans the **whole device**, indexed by wire slot (`dsp × 20 + index`), not one
+20-entry array per DSP. `pullmeunder` reports `block_enabled.len() == 40`.
+
+`show-preset`'s snapshot diagnosis was indexing it by the per-DSP index, so every DSP2 block
+silently reported DSP1's state — which made all eight of this preset's snapshots look nearly
+identical and the live scene match none of them. Indexed by wire slot they resolve cleanly:
+
+```
+[0] Intro   1+ 2+ 3+ 4+ 5+ 11- 12+ 27+ 28+ 33+ 34+ 35+ 36- 37- 38-   <- matches the live scene
+[2] Solo    1+ 2- 3+ 4- 5+ 11- 12+ 27- 28- 33+ 34+ 35+ 36+ 37+ 38+
+```
+
+— i.e. Intro runs the clean path's delay/reverb (27/28) with the gain path's (37/38) off, and Solo
+the reverse. Musically coherent, and unique: exactly one snapshot matches.
+
+**This is also a second, independent confirmation of the key-92 finding.** The blob stores active
+index **4**; the live scene is unambiguously snapshot **0**. Different preset, different device
+state, same disagreement the `Dual Amp` capture showed — so overriding the blob with the op-23
+reply's key 92 is right.
+
+### A split can span both DSPs  [hypothesis]
+
+`pullmeunder` is one Y-loop stretched across the whole unit: common Volume + Deluxe Comp, then a
+clean leg (Jazz Rivet 120 → 70s Chorus → cab, continuing onto DSP2 as Clean Delay + Clean Verb) in
+parallel with a gain leg (Weeper → Scream 808 on DSP1's row B, continuing as Cali Rectifire → Cali
+Q → 4×12 → Gain → Gain Delay + Gain Verb on DSP2's row B), rejoining at the end.
+
+Both DSPs report `is_split() == true`, and the bracket ends split across them:
+
+| DSP | split pos (kind 2) | mixer pos (kind 3) |
+|---|---|---|
+| 1 | 2 | **0** |
+| 2 | **0** | 9 |
+
+The `0` appears on whichever side does not hold that end of the bracket. So the
+"common-before / path A / common-after" rule on `structural_node_pos` — which assumes both ends are
+on the same DSP — does **not** hold here, and neither does the
+`split_pos ≤ column < mixer_pos` invariant asserted by `row_b_cells_sit_inside_the_split_bracket`
+(all our fixtures are single-DSP-bracket presets, so it still passes).
+
+Tagged `[hypothesis]`: one preset, and a `0` could equally be an absent-value default rather than a
+sentinel. **Nothing has been changed in the grid code on the strength of it** — reasoning ahead of
+data is what produced the original row-B column bug. What would settle it is a screenshot of this
+preset's routing grid in HX Edit next to ours, or a second cross-DSP preset to compare.

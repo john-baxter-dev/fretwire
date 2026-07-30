@@ -325,7 +325,7 @@ carries **no** index/name). Parsed by `fretwire_data::stream::parse_preset_info`
 
 > **The op-23 identity lags the blob by one preset change [solid].** The first read after the preset
 > changes serves the **new** preset's stream under the **previous** preset's identity; the next read
-> reports both consistently. Evidence — Sean's Helix Floor session of 2026-07-26: 19 of the 21
+> reports both consistently. Evidence — the tester's Helix Floor session of 2026-07-26: 19 of the 21
 > distinct stream lengths in that log were reported under exactly two *consecutive* identities, and
 > in every case the later of the two is the one all subsequent stable reads keep (e.g. a 7233-byte
 > stream reported first as `DUSTED` (index 53) and then three times as `BMBLFOOT PRINCE` (index 67),
@@ -336,6 +336,23 @@ carries **no** index/name). Parsed by `fretwire_data::stream::parse_preset_info`
 > re-issues op 23 **after** the stream and reports whether the identity moved across the read; when
 > it did, the blob can't be attributed to either preset and `Session::read_preset` re-reads. Asking
 > again afterwards leaves the proven open/prep/info/stream sequence untouched.
+
+> **The browse listing is numbered globally and is *not* sorted [solid].** A listing reply numbers
+> presets `bank × setlist_size + slot` (a TEMPLATES listing on a Floor starts at 896 = 7 × 128),
+> whereas a preset's own identity (key 108), `goto_preset` and `save_preset` all use the
+> bank-relative slot — passing a global index through as a slot is what reached the device as
+> `goto_preset(7, 906)` and locked it up.
+>
+> Separately, the entries **do not arrive in slot order**. A preset the user has *moved* keeps its
+> old position in the stream while carrying its new index. In the tester's 2026-07-29 dump of all
+> eight banks (1024 entries), bank 0 emits slot 68 at stream position 101 and bank 1 emits slot 95
+> at position 84; the other six banks are strictly ascending, which is why it went unnoticed.
+> `Session::list_presets_in` normalises to slots **and** sorts, since callers render the array
+> positionally.
+>
+> Those same 1024 entries otherwise match the unit's own `.hxb` backup slot-for-slot — the three
+> exceptions are exactly the three moved presets — which is what finally closed the "browse index
+> drift" question as device state rather than a parser bug. See `docs/helix-floor.md`.
 
 `open_two_presets_one_after_another.pcapng` is HX Edit **selecting** presets (op 20) — that's why an
 earlier draft mistook op 20 for "open for read". The **non-destructive read** is what HX Edit does on

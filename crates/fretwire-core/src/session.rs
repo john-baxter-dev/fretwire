@@ -1405,7 +1405,7 @@ impl Session {
     /// Pause, then clear the wire, before re-attempting a failed or unsettled read.
     ///
     /// The pause is the point. A failed read usually means the device is *busy*, not that a frame
-    /// was dropped — loading a preset reconfigures both DSPs, and Sean's Helix Floor stopped
+    /// was dropped — loading a preset reconfigures both DSPs, and the tester's Helix Floor stopped
     /// answering entirely during it. Re-issuing immediately (as this did) put a fresh ~7.5 KB
     /// stream request into a unit that was already behind. Backing off first gives it room to
     /// finish; the drain then clears whatever it queued while we waited.
@@ -1605,7 +1605,7 @@ impl Session {
         // the stream" — is only a heuristic: on the Floor a single **empty** chunk reply can arrive
         // mid-stream (a batched keepalive/state-push mistaken for a chunk, or a zero-length packet),
         // and treating it as the terminator truncated the payload at an exact 256-byte boundary,
-        // then desynced the wire. Live evidence: every truncated read Sean captured landed on a
+        // then desynced the wire. Live evidence: every truncated read the tester captured landed on a
         // multiple of 256 while every good read ended mid-chunk. With the declared length we skip a
         // premature short/empty chunk and keep reading until the payload is actually whole; the
         // heuristic still governs when the envelope length can't be read (fallback below).
@@ -1665,7 +1665,7 @@ impl Session {
 
         // Re-ask who we're on. The op-23 identity **lags the blob by one preset**: the first read
         // after a preset change serves the new preset's stream under the *previous* preset's
-        // identity. Sean's 2026-07-26 session shows it unambiguously — 19 of the 21 distinct stream
+        // identity. The tester's 2026-07-26 session shows it unambiguously — 19 of the 21 distinct stream
         // lengths were reported under exactly two consecutive identities, and the later of the two
         // is the one every subsequent stable read keeps. Left uncorrected this mislabels the header
         // and, since the snapshot comes from the same reply (key 92), paints the previous preset's
@@ -1747,11 +1747,15 @@ impl Session {
         // global index through as a slot is how `goto_preset(7, 906)` reached the device and
         // locked it up.
         let base = bank * self.device().setlist_stride();
-        let out: Vec<(u16, String)> = fretwire_data::stream::parse_preset_list(&payload)?
-            .into_iter()
-            .map(|(global, name)| ((global as i64 - base).max(0) as u16, name))
-            .collect();
-        tracing::debug!(bank, base, n = out.len(), "preset list normalised to slots");
+        let raw = fretwire_data::stream::parse_preset_list(&payload)?;
+        let (out, reordered) = normalise_preset_list(raw, base);
+        tracing::debug!(
+            bank,
+            base,
+            n = out.len(),
+            reordered,
+            "preset list normalised to slots"
+        );
         Ok(out)
     }
 
@@ -2024,7 +2028,7 @@ enum ChunkVerdict {
 /// chunk #0 ends the stream" — is only a heuristic: on the Floor an **empty** chunk reply can
 /// arrive mid-stream (a batched keepalive/state-push landing in a chunk slot), and treating it as
 /// the terminator truncated the payload at an exact chunk boundary and then desynced the wire.
-/// Every truncated read Sean captured landed on a multiple of 256 while every good read ended
+/// Every truncated read the tester captured landed on a multiple of 256 while every good read ended
 /// mid-chunk. So an empty reply before the declared end is [`ChunkVerdict::Skip`] — dropped, not
 /// appended. A short but *non-empty* chunk is real payload and is always kept; discarding it would
 /// silently corrupt the blob. Without a declared length the short-chunk heuristic still governs.
@@ -2054,6 +2058,85 @@ fn classify_chunk(n: usize, full: usize, have: usize, target: Option<usize>) -> 
     }
 }
 
+/// Turn a browse listing's **global** indices into bank-relative slots, and put the list in slot
+/// order. Returns the list and whether the device's own order needed changing.
+///
+/// Two separate corrections, both load-bearing:
+///
+/// * **Numbering.** The browse numbers presets globally (`bank * stride + slot`) while a preset's
+///   own identity, `goto_preset` and `save_preset` all use the bank-relative slot. Passing a global
+///   index through as a slot is how `goto_preset(7, 906)` reached the device and locked it up.
+/// * **Order.** The device does not emit the listing in slot order. A preset the user has *moved*
+///   keeps its old position in the stream while carrying its new index — the tester's 2026-07-29
+///   eight-bank dump emits bank 0's slot 68 at stream position 101 and bank 1's slot 95 at position
+///   84, with all 1024 entries otherwise in order. [solid] Callers render this array positionally,
+///   so a moved preset would draw in the wrong row under a correct number.
+fn normalise_preset_list(raw: Vec<(u16, String)>, base: i64) -> (Vec<(u16, String)>, bool) {
+    let mut out: Vec<(u16, String)> = raw
+        .into_iter()
+        .map(|(global, name)| ((global as i64 - base).max(0) as u16, name))
+        .collect();
+    let reordered = out.windows(2).any(|w| w[0].0 > w[1].0);
+    // Stable, so if the device ever does repeat a slot the duplicates keep their relative order
+    // rather than being shuffled arbitrarily.
+    out.sort_by_key(|&(slot, _)| slot);
+    (out, reordered)
+}
+
+#[cfg(test)]
+mod preset_list_tests {
+    use super::normalise_preset_list;
+
+    fn named(entries: &[(u16, &str)]) -> Vec<(u16, String)> {
+        entries
+            .iter()
+            .map(|(i, n)| (*i, (*n).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn global_indices_become_bank_relative_slots() {
+        // TEMPLATES (bank 7) lists from 896 = 7 × 128.
+        let (out, reordered) = normalise_preset_list(
+            named(&[(896, "Quick Start"), (897, "Parallel Spans")]),
+            7 * 128,
+        );
+        assert_eq!(out, named(&[(0, "Quick Start"), (1, "Parallel Spans")]));
+        assert!(!reordered, "an in-order listing is left alone");
+    }
+
+    #[test]
+    fn a_moved_preset_is_put_back_in_slot_order() {
+        // The shape bank 0 of the tester's Floor really sends: slot 68 arrives late, after 100.
+        let (out, reordered) = normalise_preset_list(
+            named(&[
+                (67, "BMBLFOOT PRINCE"),
+                (69, "SHEEHAN PEARCE"),
+                (100, "REUTER LEAD"),
+                (68, "InSTANtgH0St/24"),
+            ]),
+            0,
+        );
+        assert_eq!(
+            out,
+            named(&[
+                (67, "BMBLFOOT PRINCE"),
+                (68, "InSTANtgH0St/24"),
+                (69, "SHEEHAN PEARCE"),
+                (100, "REUTER LEAD"),
+            ]),
+        );
+        assert!(reordered, "the device's order differed and we say so");
+    }
+
+    #[test]
+    fn an_index_below_the_bank_base_clamps_rather_than_wrapping() {
+        // Defensive: `as u16` on a negative would wrap to ~65k and address nothing.
+        let (out, _) = normalise_preset_list(named(&[(5, "Stray")]), 7 * 128);
+        assert_eq!(out, named(&[(0, "Stray")]));
+    }
+}
+
 #[cfg(test)]
 mod chunk_tests {
     use super::{ChunkVerdict::*, classify_chunk};
@@ -2076,7 +2159,7 @@ mod chunk_tests {
     /// must never contribute bytes, and must not end the stream.
     #[test]
     fn an_empty_chunk_before_the_declared_end_is_dropped_not_appended() {
-        // Sean's 2026-07-26 session: got=2560 want=7527, got=3072 want=7508, got=256 want=7193 —
+        // The tester's 2026-07-26 session: got=2560 want=7527, got=3072 want=7508, got=256 want=7193 —
         // every one an exact multiple of the chunk size, i.e. a zero-length reply.
         for (have, want) in [(2560, 7527), (3072, 7508), (4352, 7344), (256, 7193)] {
             assert_eq!(classify_chunk(0, FULL, have, Some(want)), Skip);

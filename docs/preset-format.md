@@ -135,6 +135,11 @@ of a `Map{7}` node:
     discriminates nothing. Proven against `preset1_stream`: its live blocks (2/3/4/7 bypassed,
     5/6 active) are exactly snapshot 0's row, and `8` reports 0. Parsed by
     `PresetStream::snapshot_details`.
+    - **Indexed by wire slot (`dsp × 20 + index`), as one flat array across the whole device**
+      — `Array[20]` on the Stomp but **`Array[40]` on a two-DSP Floor**, not one array per DSP.
+      [solid — the tester's `pullmeunder` Floor dump, 2026-07-29.] Reading it at the per-DSP index
+      makes every DSP2 block report DSP1's state, which is silent and looks like "all the
+      snapshots are the same"; it is what `show-preset`'s scene diagnosis did until 2026-07-29.
   - **`8` is not reliably the *live* snapshot.** `dual_amp_stream` stores `8 = 1`, yet its live
     block state matches snapshot **0** (snapshots 1/2 there are pristine "everything on"). Both
     facts are locked in by tests. This is the standing lead on the GUI highlighting the wrong

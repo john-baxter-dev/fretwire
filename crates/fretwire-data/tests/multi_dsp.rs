@@ -424,3 +424,75 @@ fn read_info_reply_carries_the_live_snapshot() {
         "key 92 is the device's live active snapshot"
     );
 }
+
+/// A snapshot's bypass matrix (`10 → 10 → [i] → 3`) is **one flat array over the whole device**,
+/// indexed by wire slot — 40 entries on a two-DSP Floor, not one 20-entry array per DSP.
+///
+/// [solid] — the contributor's `pullmeunder` Floor dump reports `block_enabled.len() == 40`, and
+/// only the wire-slot reading makes its snapshots coherent: "Intro" has the clean path's delay and
+/// reverb (wire 27/28) on with the gain path's (wire 37/38) off, and "Solo" the reverse. Read at
+/// the per-DSP index instead, DSP2's blocks report DSP1's scene and every snapshot looks alike —
+/// which is what `show-preset` printed before this was pinned down.
+///
+/// The fixture is synthetic (the real dump is a contributor's, and Line 6's, so it stays out of the
+/// repo) and puts *different* states at wire 13 and wire 33 — both "index 13" — so an implementation
+/// that indexes per-DSP cannot pass.
+#[test]
+fn the_snapshot_bypass_matrix_is_indexed_by_wire_slot() {
+    // Everything on, except wire 33 (DSP2's index 13). Wire 13 (DSP1's index 13) stays on, so the
+    // two collide only if the reader drops the DSP.
+    let mut enabled = vec![true; 2 * DSP_SLOT_STRIDE as usize];
+    enabled[33] = false;
+    let matrix = Value::Array(
+        enabled
+            .iter()
+            .map(|&on| Value::Array(vec![Value::from(false), Value::from(on)]))
+            .collect(),
+    );
+    let snapshot = Value::Map(vec![
+        (Value::from(0), Value::from(true)),
+        (Value::from(4), Value::from("Solo\0")),
+        (Value::from(5), Value::from(120)),
+        (Value::from(3), matrix),
+    ]);
+
+    let dsp0 = dsp_group(2, vec![(13, effect(101, true, &[0.05]))]);
+    let dsp1 = dsp_group(3, vec![(13, effect(18, false, &[0.68]))]);
+    let raw = stream(Value::Map(vec![
+        (Value::from(0), dsp0),
+        (Value::from(1), dsp1),
+        (
+            Value::from(7),
+            Value::Map(vec![(Value::from(36), Value::from("P21\0"))]),
+        ),
+        (
+            Value::from(10),
+            Value::Map(vec![(Value::from(10), Value::Array(vec![snapshot]))]),
+        ),
+    ]));
+
+    let ps = PresetStream::parse(&raw).unwrap();
+    let snaps = ps.snapshot_details();
+    assert_eq!(snaps.len(), 1);
+    assert_eq!(
+        snaps[0].block_enabled.len(),
+        2 * DSP_SLOT_STRIDE as usize,
+        "the matrix spans both DSPs as one array"
+    );
+
+    // The point of the test: each block's live bypass state is looked up at its wire slot, and
+    // agrees. At the per-DSP index, DSP2's block would read wire 13 (`true`) and disagree.
+    for b in ps.blocks().iter().filter(|b| b.is_block()) {
+        let want = !b.bypassed.unwrap();
+        assert_eq!(
+            snaps[0].block_enabled[b.wire_slot() as usize],
+            want,
+            "block at wire slot {} (dsp {} index {})",
+            b.wire_slot(),
+            b.dsp,
+            b.index,
+        );
+    }
+    assert!(snaps[0].block_enabled[13], "DSP1 index 13 is on");
+    assert!(!snaps[0].block_enabled[33], "DSP2 index 13 is off");
+}

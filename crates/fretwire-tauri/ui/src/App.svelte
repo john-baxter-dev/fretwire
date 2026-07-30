@@ -177,7 +177,7 @@
   // One turn of the preset knob emits a *flurry* of pushes — the preset change, then snapshot and
   // bypass pushes as the new preset settles — spread over about a second, and the heartbeat hands
   // them to us in 250 ms batches. Refreshing on every batch cost ~3 full preset streams plus a
-  // preset-list re-read per knob turn (~530 KB across 21 preset changes in Sean's 2026-07-26
+  // preset-list re-read per knob turn (~530 KB across 21 preset changes in the tester's 2026-07-26
   // session), all fired at a Helix Floor that was still reconfiguring both DSPs — and twice it
   // stopped answering. So fold the batches together and read *once*, after the device goes quiet.
   const PUSH_QUIET_MS = 300; // no pushes for this long → treat the device as settled

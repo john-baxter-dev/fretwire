@@ -683,6 +683,16 @@ impl PresetStream {
     }
 
     /// [`Self::structural_node_pos`] for a specific DSP.
+    ///
+    /// **A Floor's split can span both DSPs, and then one end of the bracket is not on this DSP.**
+    /// The `pullmeunder` dump splits after a common Volume+Comp on DSP1 and rejoins at the end of
+    /// DSP2: DSP1 reports `split = 2, mixer = 0` and DSP2 reports `split = 0, mixer = 9`, with
+    /// both DSPs `is_split()`. Read a `0` on the side that has no bracket end as "the path is
+    /// already open here / closes downstream", not as column 0 — the "common-before / path A /
+    /// common-after" rule on [`Self::structural_node_pos`] assumes both ends are present and does
+    /// **not** hold for such a preset. [hypothesis — one observed preset; the `0` could equally be
+    /// an absent-value default, and no screenshot of this preset's grid has been seen, so how the
+    /// device *draws* the row-B columns across the boundary is still unconfirmed.]
     pub fn dsp_structural_node_pos(&self, dsp: usize, kind: i64) -> Option<i64> {
         let slots = self.dsp_slots(dsp)?;
         let slot = slots
@@ -787,9 +797,12 @@ pub struct SnapshotInfo {
     /// use (key `3`: one `[_, enabled]` pair per slot). `true` = block active, `false` = bypassed
     /// — the inverse of [`Block::bypassed`].
     ///
-    /// The array is as long as the device's slot array (20 on the Stomp, key `9`). A Floor's
-    /// two-DSP layout has not been observed here — no captured Floor preset stream — so treat
-    /// indices past the first DSP as unverified.
+    /// The array spans the device's **whole** slot space, indexed by [`Block::wire_slot`]
+    /// (`dsp * 20 + index`) — 20 entries on the Stomp, **40 on a two-DSP Floor**, as one flat
+    /// array rather than one per DSP. [solid — the `pullmeunder` Floor dump: 40 entries, and its
+    /// DSP2 entries (27/28 clean delay+reverb, 36..=38 gain delay+reverb) are what make its
+    /// snapshots read as coherent scenes.] Index this by wire slot, never by the per-DSP index:
+    /// a DSP2 block looked up at its local index silently reports DSP1's state.
     pub block_enabled: Vec<bool>,
 }
 
@@ -930,7 +943,9 @@ pub struct LoadedBlock {
     pub node_kind: Option<i64>,
     /// Footswitch this block's bypass is bound to (= layout position + 1); `0` = not on a switch.
     pub footswitch: i64,
-    /// Signal row: 0 = main (top), 1 = parallel (B). [hypothesis: slot index ≥ 16 ⇒ row B]
+    /// Signal row **within this block's DSP**: 0 = main (top), 1 = parallel (B). Derived from the
+    /// split node — a slot after this DSP's split (index 10) is row B. [solid — the `pullmeunder`
+    /// Floor dump puts DSP1 11/12 and DSP2 33..=38 on row B, DSP2 27/28 on row A.]
     pub row: u8,
 }
 

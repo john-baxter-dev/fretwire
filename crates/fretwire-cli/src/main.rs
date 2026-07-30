@@ -869,11 +869,14 @@ fn print_snapshot_diagnosis(stream: &[u8]) {
     if snaps.is_empty() {
         return;
     }
+    // Index by the **wire slot**, not the per-DSP index: `block_enabled` is one flat array over the
+    // device's whole slot space (40 entries on a two-DSP Floor — [solid], pullmeunder dump), so on
+    // DSP2 the per-DSP index reads 20 slots too low and reports DSP1's scene for a DSP2 block.
     let live: Vec<(usize, bool)> = ps
         .blocks()
         .iter()
         .filter(|b| b.is_block())
-        .filter_map(|b| b.bypassed.map(|byp| (b.index, !byp)))
+        .filter_map(|b| b.bypassed.map(|byp| (b.wire_slot() as usize, !byp)))
         .collect();
     let matches: Vec<usize> = snaps
         .iter()

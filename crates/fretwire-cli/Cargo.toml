@@ -23,5 +23,6 @@ fretwire-data = { path = "../fretwire-data" }
 fretwire-usb = { path = "../fretwire-usb" }
 rmpv.workspace = true
 anyhow.workspace = true
+clap.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

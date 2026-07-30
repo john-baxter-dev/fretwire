@@ -44,3 +44,7 @@ futures-timer = "3"
 flate2 = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# CLI argument parsing. The derive API keeps `--help` generated from the command definitions
+# rather than hand-maintained (it had already drifted), and makes a bad numeric argument an error
+# instead of a silent default — which on `save`/`rename` meant writing to the wrong setlist.
+clap = { version = "4", features = ["derive"] }

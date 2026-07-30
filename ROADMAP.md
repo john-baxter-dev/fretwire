@@ -290,18 +290,20 @@ libusb C dependency, clean on Linux; falls back fine for dev on Windows. Workspa
       conversion. Its setlist order is what promoted `Device::setlists` to [solid].
 
 ## Phase 7.5 — Tooling / developer experience
-- [ ] **Move the CLI to `clap`.** `fretwire-cli` hand-rolls a `match` over `std::env::args` for ~35
-      subcommands, with hand-maintained `eprintln!` help. Two concrete problems, both observed rather
-      than theoretical:
-      1. **The help drifts.** Editing one `eprintln!` during the 2026-07-26 session silently dropped
-         `set` and `snapshot` from the listing; it was caught by re-reading, not by any check.
+- [x] **Move the CLI to `clap`.** (2026-07-29) `fretwire-cli` hand-rolled a `match` over
+      `std::env::args` for ~35 subcommands, with hand-maintained `eprintln!` help. Both motivating
+      problems were observed rather than theoretical, and both are now structurally impossible:
+      1. **The help drifted.** Editing one `eprintln!` during the 2026-07-26 session silently dropped
+         `set` and `snapshot` from the listing. The migration found three *more* commands missing from
+         it — `tree`, `move-to-row`, `before-split` — which nobody had noticed. `--help` is now
+         generated from the command definitions, so it cannot disagree with them.
       2. **Silent bad-argument fallbacks.** `args.next().map(|s| s.parse().unwrap_or(0)).unwrap_or(0)`
-         means `fretwire goto 5 banana` quietly targets bank 0 — and on `save`, that is a persistent
-         write to the wrong setlist.
-      Do it as a focused standalone pass (derive API, every current invocation kept working verbatim
-      so a tester's instructions don't break, and the silent-parse family fixed as part of it).
-      **Deliberately not done mid-flight** — the CLI is how the hardware tester runs `dump-raw`, so it
-      shouldn't churn right before a test build goes out.
+         meant `fretwire goto 5 banana` quietly targeted bank 0 — and on `save`/`rename`, that was a
+         persistent write to the wrong setlist. Every numeric argument now errors instead.
+      `bypass`/`move-to-row` became `ValueEnum`s: the old parser read *any* unrecognised word, and a
+      *missing* argument, as `off`/series — so a typo silently did the opposite of the request.
+      Every documented invocation was smoke-tested unchanged (parsing happens before `connect`, so
+      argument acceptance is checkable without hardware).
 
 ## Phase 8 — Publishing 
 - [x] `fretwire import-data <installer>` — extract Line 6's reference data from the user's own HX Edit

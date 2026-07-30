@@ -350,6 +350,11 @@
   let setlists = $state([]);
   let viewBank = $state(0);
   const presetBank = $derived(preset?.bank ?? 0);
+  // Writing into a setlist the device isn't in is gated on the backend (FRETWIRE_SETLISTS=1) until
+  // a Helix Floor gets through a session cleanly. Mirror it here so Save As greys out with a reason
+  // rather than failing at the wire after the user has typed a name.
+  let crossSetlistWrite = $state(true);
+  const foreignSetlist = $derived(!crossSetlistWrite && viewBank !== presetBank);
 
   async function refreshPresets(bank = viewBank) {
     try {
@@ -383,7 +388,17 @@
     status = `Saved to slot ${preset.index}.`;
   }
 
-  const onSaveAs = () => preset && (saveAsDlg = { slot: preset.index, name: preset.name ?? "" });
+  const onSaveAs = () => {
+    if (!preset) return;
+    if (foreignSetlist) {
+      toast(
+        `Save As is limited to ${setlists[presetBank] ?? "the device's setlist"} — writing into ` +
+          `another setlist is untested on this hardware. Set FRETWIRE_SETLISTS=1 to allow it.`,
+      );
+      return;
+    }
+    saveAsDlg = { slot: preset.index, name: preset.name ?? "" };
+  };
   // What the chosen Save As slot currently holds — shown so overwriting is always a visible choice.
   const saveAsTarget = $derived(
     saveAsDlg ? presets.find((p) => p.index === saveAsDlg.slot) : null,
@@ -484,6 +499,11 @@
         setlists = await invoke("setlists");
       } catch (e) {
         setlists = [];
+      }
+      try {
+        crossSetlistWrite = await invoke("cross_setlist_write_allowed");
+      } catch (e) {
+        crossSetlistWrite = true; // the mock has no such command; it can't touch hardware anyway
       }
       viewBank = preset.bank ?? 0;
       await refreshPresets(viewBank);
@@ -592,7 +612,7 @@
 <main>
   {#if preset}
     <div class="workspace">
-      <PresetList {presets} currentIndex={preset.index} dirty={preset.dirty} {setlists} {viewBank} currentBank={presetBank} {onPickSetlist} {onGoto} {onSave} {onSaveAs} {onRename} {onBackup} {onRestore} />
+      <PresetList {presets} currentIndex={preset.index} dirty={preset.dirty} {setlists} {viewBank} currentBank={presetBank} writeBlocked={foreignSetlist} {onPickSetlist} {onGoto} {onSave} {onSaveAs} {onRename} {onBackup} {onRestore} />
       <div class="content">
         <div class="meta">
           <span>

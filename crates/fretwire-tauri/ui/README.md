@@ -77,11 +77,13 @@ The picker is hidden on a one-setlist device on purpose — HX Edit shows no set
 Stomp either. Floor mode leaves User 3–5 empty, which is what a stock unit looks like and exercises
 the empty-list state.
 
-> **The mock shows the setlist picker; the real app currently does not.** Against hardware it is
-> gated behind `FRETWIRE_SETLISTS=1` because the browse's preset numbering isn't fully understood —
-> it numbered a TEMPLATES preset 906 (global) where the device wanted slot 10, which locked a Helix
-> Floor up. The mock keeps it enabled so the UI can still be worked on. Don't treat the mock as
-> evidence of shipped behaviour here.
+> **Setlist browsing is on everywhere; cross-setlist *writing* is not.** The numbering that
+> originally gated browsing is settled (a browse index is global, `bank × 128 + slot`, verified
+> across all 1024 slots of a real Floor against its own backup), so the picker and `goto` ship
+> unguarded. **Save As into a setlist the device isn't in** still needs `FRETWIRE_SETLISTS=1` — that
+> path has never run against a Floor, and overwriting someone's preset is the one action here that
+> can't be undone. The mock allows it (it can't touch hardware), so don't treat the mock as evidence
+> of shipped behaviour. See the INCIDENT entries in `STATUS.md`.
 
 ### Simulating live device pushes
 

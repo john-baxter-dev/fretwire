@@ -538,9 +538,11 @@ per move and "equal" for every other run. USER 1 (63/63), USER 2 (1/1) and TEMPL
 the backup **exactly** — those are the banks a base offset would have exposed, so the earlier
 "index drift" is now conclusively closed as the tester's own device state, not our parser.
 
-> This retires the *numbering* half of the `FRETWIRE_SETLISTS=1` gate. The gate stays on: the
-> other half is the Floor lockups, still unexplained (see the INCIDENT entries in `STATUS.md`), and
-> nothing here bears on those.
+> This retires the *numbering* half of the `FRETWIRE_SETLISTS=1` gate, and the gate was split to
+> match: **browsing setlists is now ungated**, while a flash write into a setlist the device isn't
+> in still needs the flag. The remaining reason is the Floor lockups, still unexplained (see the
+> INCIDENT entries in `STATUS.md`) — nothing here bears on those, and the cross-setlist *write* path
+> has still never run against a Floor.
 
 ### The device does not list presets in slot order  [solid] — FIXED
 

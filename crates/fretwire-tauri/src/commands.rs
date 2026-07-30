@@ -580,7 +580,11 @@ pub async fn save_preset(
     slot: i64,
     name: String,
 ) -> R<PresetDto> {
-    mutate(&state, move |s| s.save_preset(bank, slot, &name)).await
+    mutate(&state, move |s| {
+        check_cross_setlist_write(s, bank, "save_preset")?;
+        s.save_preset(bank, slot, &name)
+    })
+    .await
 }
 
 /// Rename a preset in flash, name-only (op 6) — does not commit the edit buffer.
@@ -591,7 +595,11 @@ pub async fn rename_preset(
     slot: i64,
     name: String,
 ) -> R<()> {
-    run(&state, move |s| s.rename_preset(bank, slot, &name)).await
+    run(&state, move |s| {
+        check_cross_setlist_write(s, bank, "rename_preset")?;
+        s.rename_preset(bank, slot, &name)
+    })
+    .await
 }
 
 /// Rename a snapshot of the current preset (op 89). An ordinary buffer edit — undoable, and
@@ -623,38 +631,73 @@ pub async fn list_presets(state: State<'_, AppState>, bank: Option<i64>) -> R<Ve
         })
 }
 
-/// Whether cross-setlist browsing is exposed in the UI. **Off unless `FRETWIRE_SETLISTS=1`.**
+/// Whether a **flash write** may target a setlist other than the one the device is in.
+/// **Off unless `FRETWIRE_SETLISTS=1`.**
 ///
-/// Switching setlists is withheld because the browse's preset numbering is not fully reconciled
-/// with the device's own: it numbers globally (`bank * setlist_size + slot`) where the rest of the
-/// protocol uses the bank-relative slot, and even within bank 0 a listing has been observed offset
-/// from the same device's `.hxb` backup. `Session::check_preset_addr` now blocks the specific
-/// mistake that locked a Helix Floor up (an out-of-range slot reaching the wire), but "we do not
-/// fully understand this numbering" plus a **Save** button one click away is not something to hand
-/// a tester with real presets on the line. Re-enable once a captured list stream (`dump-list`)
-/// explains the offset.
-fn setlists_enabled() -> bool {
+/// Browsing other setlists is no longer gated — the numbering that originally motivated the gate is
+/// settled (a browse index is global, `bank * setlist_size + slot`; verified across all 1024 slots
+/// of a Helix Floor against that unit's own `.hxb`, see `docs/helix-floor.md`), and browsing writes
+/// nothing.
+///
+/// What stays gated is the one irreversible thing: **Save As into a setlist the device isn't in.**
+/// Reading and navigating are recoverable; overwriting someone's preset is not, and the cross-setlist
+/// write path has never run against a Helix Floor — the only device with setlists, and one that has
+/// already been wedged once (`STATUS.md`, INCIDENT 2026-07-26). Lift this once a Floor gets through
+/// a session cleanly.
+fn cross_setlist_write_enabled() -> bool {
     matches!(
         std::env::var("FRETWIRE_SETLISTS").as_deref(),
         Ok("1") | Ok("true")
     )
 }
 
+/// Reject a flash write aimed at a setlist the device isn't currently in, unless
+/// [`cross_setlist_write_enabled`].
+///
+/// The device's own last-read identity is the reference, not anything the frontend tracks — the
+/// point is to be a guard, and a guard that trusts its caller isn't one.
+fn check_cross_setlist_write(s: &Session, bank: i64, what: &str) -> fretwire_core::Result<()> {
+    if cross_setlist_write_enabled() {
+        return Ok(());
+    }
+    // No read yet: nothing to compare against, and `check_preset_addr` still bounds the address.
+    let Some(here) = s.last_identity().map(|i| i.bank) else {
+        return Ok(());
+    };
+    if bank == here {
+        return Ok(());
+    }
+    let name = |b: i64| {
+        s.device()
+            .setlist_names()
+            .get(b as usize)
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| format!("bank {b}"))
+    };
+    Err(fretwire_core::fretwire_data::Error::Stream(format!(
+        "{what}: refusing to write into {} while the device is in {} — writing across setlists \
+         is untested on this hardware. Set FRETWIRE_SETLISTS=1 to allow it.",
+        name(bank),
+        name(here),
+    ))
+    .into())
+}
+
+/// Whether the app may write into a setlist the device isn't in — so the UI can *show* the limit
+/// (grey out Save As while browsing elsewhere) instead of letting the write fail at the wire.
+#[tauri::command]
+pub async fn cross_setlist_write_allowed() -> bool {
+    cross_setlist_write_enabled()
+}
+
 /// The connected device's setlist names, in bank order — eight on the Helix Floor.
 ///
-/// Returns **empty** unless [`setlists_enabled`], which collapses the sidebar's picker (it renders
-/// only for more than one setlist). The preset list itself still tracks whichever setlist the
-/// device is actually in; what's withheld is switching between them from the app.
+/// Browsing between them is **enabled**; only cross-setlist *writes* are gated, see
+/// [`cross_setlist_write_enabled`]. The picker renders only for more than one setlist, so a Stomp
+/// still shows none.
 #[tauri::command]
 pub async fn setlists(state: State<'_, AppState>) -> R<Vec<String>> {
-    if !setlists_enabled() {
-        return Ok(Vec::new());
-    }
     run(&state, |s| {
-        tracing::warn!(
-            "FRETWIRE_SETLISTS is set — cross-setlist browsing is enabled, and its preset \
-             numbering is not fully verified. Avoid Save/Save As outside the device's own setlist."
-        );
         Ok(s.device()
             .setlist_names()
             .iter()

@@ -50,6 +50,8 @@ pub struct Session {
     /// the flash copy), moved by [`Self::save_preset`], `None` when the saved state fell off the
     /// timeline (truncated redo branch / history cap). Drives [`Self::dirty`].
     saved_cursor: Option<usize>,
+    /// The device's own identity as of the last [`Self::read_preset`] — see [`Self::last_identity`].
+    last_info: Option<fretwire_data::stream::PresetInfo>,
 }
 
 /// One state on the edit-history timeline: the op-21-writable preset blob plus the label of the
@@ -86,6 +88,7 @@ impl Session {
                 cursor: 0,
                 pending: None,
                 saved_cursor: Some(0),
+                last_info: None,
             };
             // Clear any frames a previous session left on the wire so the handshake starts aligned.
             s.transport
@@ -351,6 +354,18 @@ impl Session {
     /// the device up hard enough to need a reboot**. An out-of-range slot must never be sent again:
     /// there is no reason to believe the firmware handles one gracefully, and `save_preset` with a
     /// bogus slot would be a persistent write to who-knows-where.
+    /// The device's own reported identity as of the last [`Self::read_preset`] — bank, slot and
+    /// name, straight from the op-23 reply. `None` before the first read.
+    ///
+    /// This is the authority on *which setlist the pedal is actually in*, which a caller needs to
+    /// tell an in-place overwrite from a write into a different setlist. Note it is only as fresh
+    /// as the last read, and that the op-23 identity lags a preset change by one read (see
+    /// `docs/protocol.md`) — `read_preset` resolves that lag before this is set, but a caller
+    /// making a **destructive** decision on it should still be reading first.
+    pub fn last_identity(&self) -> Option<&fretwire_data::stream::PresetInfo> {
+        self.last_info.as_ref()
+    }
+
     fn check_preset_addr(&self, bank: i64, slot: i64, what: &str) -> crate::Result<()> {
         let d = self.device();
         let banks = d.setlist_names().len() as i64;
@@ -1373,6 +1388,7 @@ impl Session {
                             }
                             preset.active_snapshot = Some(live);
                         }
+                        self.last_info = info.clone();
                         preset.current = info;
                         self.last_raw = Some(payload);
                         // Seed the edit-history timeline with the loaded state (entry 0) the first

@@ -614,11 +614,14 @@ firmware in — so "we sent no write command" is the strongest claim supportable
 global index to a slot; `Session::check_preset_addr` rejects an out-of-range bank or slot in
 goto/save/rename **before it reaches the wire**.
 
-**Withheld.** Cross-setlist browsing is off unless `FRETWIRE_SETLISTS=1`
-(`commands::setlists_enabled`). The sidebar still tracks whichever setlist the device is in; what is
-withheld is switching between them. The mock keeps the picker so the UI can still be developed - it
-cannot touch hardware. The numbering blocker that originally motivated this is resolved (below), but
-the gate stays until a Floor gets through a session without locking up.
+**Withheld — narrowed 2026-07-29.** Cross-setlist *browsing* is now **on**: the numbering that
+motivated the gate is settled (see the 2026-07-29 round below — 1024 slots verified against the
+unit's own `.hxb`), and browsing writes nothing. What stays behind `FRETWIRE_SETLISTS=1` is the one
+irreversible action: **a flash write into a setlist the device isn't in**
+(`commands::cross_setlist_write_enabled`, enforced in `check_cross_setlist_write` against
+`Session::last_identity()` — the device's own reported bank, not anything the frontend tracks).
+Save As greys out with a reason while browsing elsewhere; plain Save always targets the preset's own
+bank and is unaffected. Lift it once a Floor gets through a session without locking up.
 
 **RESOLVED 2026-07-26 (evening) — the "index drift" was his device, not our parser.** The offset
 against his `.hxb` (+1, then +9) was real but it was *content* drift: his FACTORY 1 had diverged from
@@ -709,8 +712,12 @@ the short version:
   on**: guessing ahead of data is what produced the original row-B bug. Needs a screenshot of this
   preset's grid in HX Edit, or a second cross-DSP preset.
 
-**Still outstanding:** a real pcap of a Floor freeze (his two zips were empty). That remains the only
-thing gating `FRETWIRE_SETLISTS=1`.
+**Gate split as a result.** Setlist browsing + `goto` now ship ungated; only cross-setlist flash
+writes still need `FRETWIRE_SETLISTS=1`. See the Withheld note above.
+
+**Still outstanding:** a real pcap of a Floor freeze (his two zips were empty), and one clean
+read-only Floor session exercising the setlist picker — nothing on that path has run against
+hardware since any of the fixes.
 
 ## Prioritized next steps
 > **The path to live control is in `docs/next-steps.md`.** TL;DR: (1) **on Windows now** — capture a

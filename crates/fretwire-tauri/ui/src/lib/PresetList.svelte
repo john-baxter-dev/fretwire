@@ -9,6 +9,8 @@
     setlists = [],
     viewBank = 0,
     currentBank = 0,
+    // True while browsing a setlist the app may not write into — see `foreignSetlist` in App.svelte.
+    writeBlocked = false,
     onPickSetlist,
     onGoto,
     onSave,
@@ -45,7 +47,12 @@
   {/if}
   <div class="tools">
     <button onclick={onSave} title="Overwrite the current preset">Save</button>
-    <button onclick={onSaveAs} title="Save to a chosen slot / copy / overwrite">Save As…</button>
+    <button
+      onclick={onSaveAs}
+      disabled={writeBlocked}
+      title={writeBlocked
+        ? `Writing into ${setlists[viewBank] ?? "another setlist"} is untested on this hardware — switch back to ${setlists[currentBank] ?? "the device's setlist"}, or set FRETWIRE_SETLISTS=1`
+        : "Save to a chosen slot / copy / overwrite"}>Save As…</button>
     <button onclick={onRename} title="Rename the current preset (name only)">Rename…</button>
   </div>
   <div class="tools sub">

@@ -370,7 +370,7 @@ function floorSetlists() {
     // Factory 2
     bank(serialPreset("Bumble Acoustic", 0, [{ sym: "comp_deluxe" }, { sym: "eq_graphic" }]),
       serialPreset("The Blue Agave", 0, [{ sym: "wah_teardrop" }, { sym: "amp_jazz", cab: "cab_112" }])),
-    // User 1 — where Sean's "Sludge" lives.
+    // User 1 — where the tester's "Sludge" lives.
     bank(serialPreset("Sludge", 0, [
       { sym: "gate" }, { sym: "drive_minotaur" }, { sym: "amp_placater", cab: "cab_412", label: "Amp" },
       { sym: "delay_simple" },
@@ -899,12 +899,12 @@ const HANDLERS = {
   list_presets: ({ bank = currentBank } = {}) =>
     bankOf(bank).map((p) => ({ index: p.index, name: p.name })),
   // The connected device's setlist names. One entry on a Stomp, so the UI hides the picker.
-  //
-  // NOTE: against *real hardware* this is gated off unless FRETWIRE_SETLISTS=1 — the browse's
-  // preset numbering isn't fully reconciled and it locked a Helix Floor up (see commands.rs
-  // `setlists_enabled`). The mock keeps it on because it can't hurt a device and the feature still
-  // needs UI work; just don't read the mock as proof of what ships.
   setlists: () => setlistNames().slice(),
+  // Browsing setlists is ungated everywhere now; only *writing* into one the device isn't in is
+  // held back on real hardware (FRETWIRE_SETLISTS=1 — see commands.rs `cross_setlist_write_enabled`).
+  // The mock allows it: it can't touch a device, and the Save As path still needs to be workable in
+  // the browser. Don't read the mock as proof of what ships against hardware.
+  cross_setlist_write_allowed: () => true,
 
   // ---- backup / restore -----------------------------------------------------------------------
   // The real backend sweeps the device and writes a `fretwire-backup` JSON file at `path`. The mock

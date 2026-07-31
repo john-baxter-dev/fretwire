@@ -923,6 +923,30 @@ the device parses msgpack.)" It now checks the invariant that matters.
 **Still needs hardware.** The offline evidence is strong but nobody has yet moved a mixer on a real
 pedal with this build.
 
+## Tenth round (2026-07-31): `fretwire12.log` — still pre-fix, and the parallel path is silent
+
+The log ends 30 seconds before `813cae3` was committed, so it is the old build.
+
+**Three op-21 writes completed on it** — 6809 bytes each, deficit 0, no freeze. So a corrupt offset
+table is not *always* fatal; it depends where the bad offsets land. Every trace so far splits by
+size: 6809-byte writes complete, 6817-byte writes freeze. The 8 bytes are the mixer-move mutation.
+Correlation, not mechanism.
+
+**New symptom, open:** a block on the parallel row makes no sound. Mixer enabled, levels sane,
+reproduced with two different models. The same drag worked in `fretwire8.log`, so it is a regression
+within the session rather than something that never worked.
+
+Leading hypothesis: the three whole-preset writes earlier in that session damaged the stored preset.
+On this preset the stale offsets addressed keys **5, 6 and 10** — settings, focused block, and the
+snapshots, whose per-snapshot `3` field is per-slot state for every block. Garbage there yields a
+correct-looking chain with wrong per-block state. He saved afterwards, so it is in flash.
+[hypothesis] The alternative — our row-B routing being wrong — isn't excluded, but has to explain
+`fretwire8.log` working.
+
+**Next:** on the fixed build, rebuild the preset from scratch in a fresh slot rather than trying to
+repair `fretwireTest2`. Also decoded this round: preset keys 5, 6 and 10, previously "TBD" — see
+`docs/preset-format.md`.
+
 ## Prioritized next steps
 > **The path to live control is in `docs/next-steps.md`.** TL;DR: (1) **on Windows now** — capture a
 > dozen single-knob edits, decode with `fretwire decode-edit`, find out if param keys generalize (the

@@ -36,6 +36,13 @@ buffer it had been given. It stopped draining its endpoint mid-transfer and need
 what each slot addressed at parse time; the offsets are re-derived on write). Byte-identity with the
 device's own encoding is not achievable through rmpv and is not required — **self-consistency is**.
 
+**Which sections the stale offsets pointed at matters.** On `fretwireTest2` the three wrong interior
+slots addressed keys **5, 6 and 10** — preset settings, the focused block, and *the snapshots*, whose
+`3` field is per-slot state for every block. A device reading those from wrong offsets keeps a
+plausible-looking block layout while its per-snapshot block state is garbage, which is a route to
+"the chain looks right and makes no sound". The offsets before the first shifted integer (the slot
+arrays, key 0/1) stayed correct, which is why the block list always survived. [hypothesis]
+
 ## Preset map (integer keys)
 | key | value | meaning (inferred) |
 |----:|-------|--------------------|
@@ -45,9 +52,9 @@ device's own encoding is not achievable through rmpv and is not required — **s
 | 2 | Map `{0: Array[13], 1: Array[13×Array[7]]}` | snapshot/controller matrices (13 = snapshots? all zero here) |
 | 3 | Map `{7: 0, 8: Array[5]}` | **footswitch / stomp layout** — bound blocks only; see below |
 | 4 | Array[10] (all nil) | **parameter-controller** assignments (separate from `3 → 8`; empty here) |
-| 5 | Map{15} | TBD |
-| 6 | Map{2} | TBD |
-| 10 | Map{6} | TBD |
+| 5 | Map{15} `{16: f32, 45..56: …, 30, 134}` | **preset-level settings**. Byte-identical across all three captures (all at defaults), so the fields aren't separable yet; `16` = f32 80 is most likely the preset tempo. [hypothesis] |
+| 6 | Map{2} `{98: <slot>, 26: 0}` | **the focused block** — key `98` is the same slot number the edit commands address, and it differs per capture (5, 7, 12), matching the block last selected. [solid] |
+| 10 | Map{6} `{6,7,8, 9: 20, 10: Array[n], 13: Array[20]}` | **snapshots**: `10` is the snapshot array (3 on a Stomp, 8 on a Floor), `9` = the slot count, `13` = a per-slot array. Each snapshot is `{0: enabled, 1: Array[11], 2: Array[64], 3: Array[20], 4: name, 5: f32 tempo, 12, 14}` — note `3` is **per-slot state**, one entry per block slot. [solid] |
 
 ### Block slots (`0 → 22`, Array of 20 — and `1 → 22` for the second DSP)
 Each slot is `{19: type, 20: content}`:

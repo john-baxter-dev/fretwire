@@ -1044,3 +1044,54 @@ is the bug restated as a requirement; its byte-identity check was an `eprintln!`
 
 1. The mixer drag, once more. This is the first build where the blob we send describes itself
    correctly. If it still freezes, the offset table was not the whole story and I want the log.
+
+## Tenth round (2026-07-31): `fretwire12.log` — pre-fix, and a new symptom
+
+**This log predates the offset-table fix.** It ends 06:05:36Z; `813cae3` was committed 06:06:06Z,
+thirty seconds later. Everything below is the old build.
+
+### Three op-21 writes completed  [solid] — narrows the previous claim
+
+```
+write-preset sent bytes=6809 acked=false
+write-preset sent bytes=6809 acked=true
+write-preset sent bytes=6809 acked=true
+```
+
+All fourteen chunks, **deficit 0 throughout**, no freeze, ~9 minutes, clean close. So a corrupt
+offset table is *not* always fatal — the device survives it when the bad offsets happen to land
+somewhere it tolerates. Across every trace so far the split is by size: **6809-byte writes complete,
+6817-byte writes freeze** (fw8, fw9, fw10 all froze at 6817; fw10 and fw12 completed at 6809). The
+8-byte difference is the mixer-move mutation. That is a correlation, not a mechanism.
+
+### The parallel path is silent  [open]
+
+The tester, on the preset built in this session:
+
+> fretwireTest2h shows that the mixer is not disabled levels are good, but no rotary goodness […]
+> I'm gonna try changing it to an obvious delay […] saved, but no delay sounds.
+
+So: block sits on row B, mixer enabled, levels sane, **no audio from the parallel path** — confirmed
+twice, with two different models. Note he reported the *same* drag working earlier ("dragged the
+rotary down, worked a treat", `fretwire8.log`), so this is a regression within the session, not a
+feature that never worked.
+
+**Leading hypothesis: the earlier op-21 writes damaged the stored preset.** The three whole-preset
+writes at 05:57:20, 05:57:32 and 05:58:15 all carried the stale offset table, and on this preset the
+wrong slots addressed keys **5, 6 and 10** — preset settings, focused block, and the snapshots, whose
+per-snapshot `3` field is per-slot state for every block. Garbage there gives a correct-looking chain
+with wrong per-block state. He then saved (op 71) at 05:58:30, 06:03:20 and 06:04:49, so **the damage
+is in flash**. The drag at 06:04:46 was op 43 — surgical, computed by the device from its own already
+damaged state. [hypothesis]
+
+The alternative — that our row-B routing is simply wrong — is not excluded, but it has to explain why
+the same action worked in `fretwire8.log`.
+
+**Cheap test:** on the fixed build, build the preset again *from scratch* in a fresh slot. Repairing
+`fretwireTest2` is not worth it; if its stored state is damaged, every later edit inherits it.
+
+### Minor, recovered on its own
+
+Right after a model swap (op 40, 05:57:47) three consecutive reads failed with
+`envelope key 104 missing or not bytes`, backing off and retrying, then succeeded. The retry loop did
+its job; worth watching whether a swap needs a settle delay before the read.

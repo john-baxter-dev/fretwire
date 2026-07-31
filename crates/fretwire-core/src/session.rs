@@ -173,6 +173,17 @@ impl Session {
                 .drain_wire(std::time::Duration::from_millis(120), 64);
             match s.handshake() {
                 Ok(()) => return Ok(s),
+                // A *write* timeout means the pedal never took the bytes. Releasing and retrying
+                // cannot fix a stalled OUT endpoint — it only spends another ~6 s of the user's time
+                // per attempt — so stop and say what actually clears it.
+                Err(crate::Error::Usb(fretwire_usb::Error::WriteTimeout)) => {
+                    tracing::error!(
+                        attempt,
+                        "the pedal is not accepting data — it needs a power cycle"
+                    );
+                    drop(s);
+                    return Err(fretwire_usb::Error::WriteTimeout.into());
+                }
                 Err(e) => {
                     tracing::warn!(
                         attempt,
@@ -382,7 +393,9 @@ impl Session {
         match self.transport.send_frame(&frame) {
             Ok(()) => Ok(()),
             Err(e) => {
-                if matches!(e, fretwire_usb::Error::Timeout) {
+                // Only a *write* timeout means the pedal stopped taking bytes. A read timeout on a
+                // heartbeat is ordinary — the device owes us no reply to an idle frame.
+                if matches!(e, fretwire_usb::Error::WriteTimeout) {
                     self.device_lost = true;
                 }
                 Err(e.into())

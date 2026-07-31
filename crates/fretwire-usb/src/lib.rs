@@ -51,6 +51,11 @@ pub enum Error {
     Unmatched { dst: u16, seq: u8 },
     #[error("timed out waiting for a bulk IN")]
     Timeout,
+    /// A bulk **OUT** timed out — the device has stopped draining its endpoint. Distinct from
+    /// [`Error::Timeout`], which is a missing *reply*: this one means the pedal never took the bytes,
+    /// which no amount of waiting fixes and which a caller should treat as "device gone".
+    #[error("timed out sending a bulk OUT — the pedal stopped accepting data (power-cycle it)")]
+    WriteTimeout,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -137,7 +142,7 @@ impl Transport {
     /// unbounded `bulk_out` then blocks **forever** — observed twice in the field on 2026-07-31,
     /// where a whole-preset write hung the editor with the last log line reading "Submitted URB on
     /// ep 1" and nothing after it. Racing a timer the way [`Transport::recv_timeout`] does turns
-    /// that permanent hang into an [`Error::Timeout`] the caller can report.
+    /// that permanent hang into an [`Error::WriteTimeout`] the caller can report.
     pub fn send(&self, bytes: Vec<u8>) -> Result<()> {
         tracing::trace!(len = bytes.len(), "bulk OUT {:02x?}", bytes);
         let transfer = self.iface.bulk_out(EP_OUT, bytes);
@@ -153,7 +158,7 @@ impl Transport {
             Some(Err(e)) => Err(e.into()),
             None => {
                 tracing::error!("bulk OUT timed out — the device stopped draining its endpoint");
-                Err(Error::Timeout)
+                Err(Error::WriteTimeout)
             }
         }
     }

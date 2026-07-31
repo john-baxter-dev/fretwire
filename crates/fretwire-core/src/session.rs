@@ -691,6 +691,23 @@ impl Session {
         let tlv = Tlv::command(op::PARAM_SET, edit::write_preset(&blob, txn)).to_bytes();
         let (src, dst) = channel::EDIT;
 
+        // Diagnostic: `FRETWIRE_DUMP_WRITES=<dir>` saves the exact blob we are about to send before
+        // the first byte goes out, so a write that wedges the pedal can be reproduced offline from
+        // the bytes that did it. Off unless the variable is set; failures here never block the write.
+        if let Some(dir) = std::env::var_os("FRETWIRE_DUMP_WRITES") {
+            let dir = std::path::PathBuf::from(dir);
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            let path = dir.join(format!("write-{stamp}-txn{txn}.bin"));
+            match std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, &blob)) {
+                Ok(()) => tracing::info!(path = %path.display(), bytes = blob.len(),
+                    "dumped the op-21 blob before sending"),
+                Err(e) => tracing::warn!("could not dump the op-21 blob: {e}"),
+            }
+        }
+
         self.transport.drain();
         // arg stays at the channel cursor for the whole transfer (the capture barely advances it,
         // and small edits via `send_edit` don't advance per frame). LIVE: advance per chunk if the

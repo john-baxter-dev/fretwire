@@ -998,7 +998,10 @@ teardown is instant instead of 6 s.
    on. That lets the killing op-21 body be rebuilt offline and diffed against the rotary-move body
    that writes fine — the only way to get at the content question without another lockup.
 
-## Ninth round (2026-07-31): root cause — the offset table we were invalidating
+## Ninth round (2026-07-31): a real bug — the offset table we were invalidating
+
+> **Correction (twelfth round, below):** filed at the time as *the* root cause of the lockups. It
+> was not — a mixer drag still wedges a pedal with this fixed. Real bug, real fix, wrong verdict.
 
 He sent `dump-raw` of `fretwireTest2` (7023 bytes, serial, 5 blocks — the state before the drag).
 That was enough; the rest was offline.
@@ -1206,3 +1209,42 @@ Mute path A at the mixer — set `A Level` to −60 dB — and listen.
   cab before the split so both paths share it, or raise `B Level`).
 - **Still silent** → the routing really is dead, and the cause is somewhere we cannot see in the
   preset data, which would be a genuinely new lead.
+
+## Thirteenth round (2026-07-31): the freeze survives the offset fix — reproduced on a Stomp
+
+Reproduced by the maintainer on an **HX Stomp**, on the build with the offset-table fix in it,
+dragging the mixer to sit right after the "US Princess" amp (before the reverb) on the A path. The
+pedal wedged; the next connect could not complete a handshake until it was power-cycled.
+
+Two things follow.
+
+**The offset table was not the cause.** It was a real bug and it is really fixed — the blob we send
+now describes itself correctly, verified on every capture. But a self-consistent blob still wedges
+the device, so the ninth round's verdict was wrong and is corrected there. What the fix did buy is
+that the failure is now *contained*: the write aborts instead of hanging the editor.
+
+**It is not Floor-specific.** Same failure on a Stomp, same operation. Every lockup we have on record
+is an op-21 whole-preset write, and nothing else has ever done it.
+
+### The next hypothesis: our re-encoding itself  [hypothesis]
+
+`to_blob` rebuilds the preset map with rmpv, which writes integers minimally; the device writes
+plenty of `d1 00 00` (int16 zero). Our blob is therefore 117–216 bytes shorter than the device's for
+the *same* preset — a different byte sequence describing the same tree. We have been assuming the
+device just parses MessagePack. It demonstrably does more than that (the offset table), so it may
+also care about widths, or about the exact length it was told to expect.
+
+### The experiment that separates encoding from geometry
+
+`fretwire write-roundtrip` reads the current preset and writes it straight back **unchanged** via
+op 21. No mutation, no geometry change — the only difference between what the device sent and what it
+gets back is our re-encoding.
+
+- **It wedges** → the op-21 path is unsafe for *any* preset, the mixer position is irrelevant, and the
+  fix is to stop re-encoding: splice the mutated value into the device's own bytes and leave the rest
+  untouched.
+- **It survives** → the encoding is fine and something about the mixer *position* is what the device
+  cannot take, which points back at `set_node_pos`'s guards.
+
+Run it on a scratch preset, with `FRETWIRE_DUMP_WRITES=<dir>` set so the exact blob is on disk either
+way. Worst case is a power cycle, which this operation already costs.

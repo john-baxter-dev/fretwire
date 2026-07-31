@@ -881,7 +881,11 @@ the session, and emits `device-lost`; the frontend falls back to the disconnecte
 "power-cycle the HX device, then reconnect". `close()` skips the wire entirely when the device is
 gone.
 
-## Ninth round (2026-07-31): **root cause — we were corrupting the preset's offset table**
+## Ninth round (2026-07-31): **a real bug — we were corrupting the preset's offset table**
+
+> **Correction (thirteenth round):** this was written up as *the* root cause of the lockups. It is
+> not. The offset table was genuinely corrupt and is genuinely fixed, but a mixer drag still wedges
+> a pedal on the fixed build. See the thirteenth round.
 
 He sent the `dump-raw` of `fretwireTest2`, and the bug was reproducible offline in minutes.
 
@@ -991,6 +995,26 @@ non-routing reason for "no rotary goodness" / "no delay sounds".
 **Next, and it needs no dump:** mute path A (`A Level` → −60 dB) and listen. Audible ⇒ routing works
 and it is a mix/placement issue (put the cab before the split, or raise `B Level`). Still silent ⇒ the
 routing really is dead and the cause is outside the preset data, which would be a new lead.
+
+## Thirteenth round (2026-07-31): the freeze survives the offset fix
+
+Reproduced by the maintainer on an **HX Stomp**, on the fixed build, dragging the mixer to sit just
+after the amp on the A path. Pedal wedged; handshake failed until it was power-cycled.
+
+- **The offset table was not the cause.** Real bug, really fixed, wrong verdict — corrected in the
+  ninth round above. What the fix bought is containment: the write now aborts instead of hanging the
+  editor.
+- **Not Floor-specific.** Same failure on a Stomp. Every lockup on record is an op-21 whole-preset
+  write; nothing else has ever done it.
+- **Next hypothesis:** our re-encoding. `to_blob` rebuilds the map with rmpv (minimal integers) while
+  the device writes `d1 00 00` freely, so our blob is 117–216 bytes shorter for the same tree. We
+  assumed the device just parses MessagePack; it demonstrably does more than that. [hypothesis]
+- **The experiment:** `fretwire write-roundtrip` — read a preset and write it straight back unchanged.
+  No mutation, no geometry. If it wedges, op-21 is unsafe for any preset and the fix is to splice the
+  changed value into the device's own bytes rather than re-encode. If it survives, the mixer
+  *position* is the problem and `set_node_pos`'s guards are the place to look.
+- `FRETWIRE_DUMP_WRITES=<dir>` now saves the exact blob before it is sent, so whichever way it goes
+  the bytes are on disk.
 
 ## Prioritized next steps
 > **The path to live control is in `docs/next-steps.md`.** TL;DR: (1) **on Windows now** — capture a

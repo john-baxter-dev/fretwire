@@ -823,7 +823,7 @@ Two more bugs, both fixed:
   separating the refused 56-byte frames from the 52-byte frames of the two adds that worked. The
   saved preset is the proof: amp and cab as two separate, *unpaired* blocks — the fallback after
   two refusals. **Fix:** add the amp bare, then op-40 the cab onto it, which is HX Edit's order and
-  the byte-exact path the capture tests cover. Needs a hardware retest.
+  the byte-exact path the capture tests cover. **Confirmed working on hardware 2026-07-31.**
 
 ## Seventh round (2026-07-31): the freeze reproduced, and it is the whole-preset write
 

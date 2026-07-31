@@ -876,7 +876,8 @@ The behaviour confirms it: after two refusals he added the amp alone (index 14) 
 
 **Fix:** `Session::add_block` sends op 39 with no cab and follows it with op 40 carrying the pair,
 which is HX Edit's own order and the op-40-with-pair path the capture tests already cover byte-exact.
-Needs a hardware retest — it is a fix for a refusal we can now at least *see*.
+**Confirmed working on hardware 2026-07-31** — picking an amp from the Amp+Cab category now lands
+both blocks, paired.
 
 ### Smaller things, noted not acted on
 
@@ -936,4 +937,6 @@ a byte the firmware rejects — but that is inference. Needs hardware.
 
 1. The mixer drag again, on the fixed build. Expected either "it works" or a clean *"the pedal
    stopped responding N of M bytes into a preset write"* — **not** a hang. Either answer is useful.
-2. The Amp+Cab add from the sixth round, still outstanding.
+
+The sixth round's Amp+Cab fix is **confirmed working on hardware** (2026-07-31), so that one is
+closed.

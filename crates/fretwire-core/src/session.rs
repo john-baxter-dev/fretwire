@@ -570,7 +570,8 @@ impl Session {
     /// device (`{103:255, 104:{111:-21}}`), so the pair is realized the way HX Edit does it: add the
     /// amp bare, then op-40 the cab onto it — and op 40 with a paired index is the byte-exact path
     /// the capture tests cover. [solid — 2026-07-30 Floor log: two paired adds refused, nothing
-    /// applied; the tester fell back to adding the amp and a cab as separate blocks]
+    /// applied; the tester fell back to adding the amp and a cab as separate blocks. Verified on
+    /// hardware 2026-07-31: the two-command form lands both blocks, paired.]
     pub fn add_block(
         &mut self,
         slot: i64,

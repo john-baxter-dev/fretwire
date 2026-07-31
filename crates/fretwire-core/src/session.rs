@@ -52,6 +52,10 @@ pub struct Session {
     saved_cursor: Option<usize>,
     /// The device's own identity as of the last [`Self::read_preset`] — see [`Self::last_identity`].
     last_info: Option<fretwire_data::stream::PresetInfo>,
+    /// `(bank, index)` we last asked the device to load via [`Self::goto_preset`], pending
+    /// confirmation. Consumed by the next [`Self::read_preset`], which re-reads until the identity
+    /// catches up to it. See `read_preset_inner`'s staleness check for why asking twice isn't enough.
+    expect_identity: Option<(i64, i64)>,
 }
 
 /// One state on the edit-history timeline: the op-21-writable preset blob plus the label of the
@@ -71,6 +75,23 @@ const MAX_HISTORY: usize = 50;
 /// which is the point: without it, a wedged-but-still-enumerated pedal costs ~36 chunks × the
 /// bulk-IN timeout before we notice, and `read_preset` retries three times on top of that.
 const READ_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Does the identity the device reported (`got`) confirm the one we asked [`Session::goto_preset`]
+/// for (`want`)?
+///
+/// `want == None` means nothing is pending — any identity is fine, including none. Otherwise the
+/// bank **and** the index must both match: after a preset change the device can serve the new
+/// preset's stream while still reporting the old identity, and either field alone can be the one
+/// that lags. See the call site in [`Session::read_preset`] for the log this came from.
+fn identity_confirms(
+    want: Option<(i64, i64)>,
+    got: Option<&fretwire_data::stream::PresetInfo>,
+) -> bool {
+    match want {
+        None => true,
+        Some((bank, index)) => got.is_some_and(|g| (g.bank, g.index) == (bank, index)),
+    }
+}
 
 impl Session {
     /// Open the device, claim the interface, and run the session handshake.
@@ -97,6 +118,7 @@ impl Session {
                 pending: None,
                 saved_cursor: Some(0),
                 last_info: None,
+                expect_identity: None,
             };
             // Clear any frames a previous session left on the wire so the handshake starts aligned.
             s.transport
@@ -402,6 +424,9 @@ impl Session {
         let txn = self.bump_txn();
         let body = edit::select_preset(bank, preset, txn);
         self.send_edit(body)?;
+        // Remember what we asked for: the identity the device reports after a switch can lag its own
+        // edit buffer by longer than a read takes, and we can only tell because we know the answer.
+        self.expect_identity = Some((bank, preset));
         Ok(())
     }
 
@@ -1418,54 +1443,75 @@ impl Session {
         // The txn-matched structured steps pin chunk #0, but the raw pagination chunks (cmd 0x08)
         // carry no txn — so a state-push interleaved mid-stream could still corrupt the blob. If the
         // decode fails, back off and re-read; transient interleaving clears on the retry.
+        // Consume any pending `goto_preset` expectation: this read is the one that confirms it, and
+        // taking it here bounds the extra re-reads to a single call. If the user moves the pedal by
+        // hand in the meantime the expectation simply never matches, costs this one read its retries,
+        // and is gone.
+        let expect = self.expect_identity.take();
         let mut last_err: Option<crate::Error> = None;
         for attempt in 0..3 {
             match self.read_preset_inner() {
-                // The read spanned a preset change, so the blob can't be attributed to either
-                // preset. Re-read rather than decode it — but only while attempts remain, so a
-                // device the user is actively scrolling still yields *something* rather than an
-                // error.
-                Ok((_, _, false)) if attempt < 2 => {
-                    tracing::debug!(attempt, "identity moved across the read; re-reading");
-                    self.backoff_before_retry(attempt);
-                    continue;
-                }
-                Ok((payload, info, _)) => match self.catalog.load_preset(&payload) {
-                    Ok(mut preset) => {
-                        // The blob's `10 → 8` is the snapshot that was *stored* with the preset, not
-                        // the one the pedal is on: an HX Stomp parked on SNAPSHOT 3 reported 0.
-                        // The read-info reply's key 92 *is* the live value (same key the snapshot
-                        // status-push uses), so prefer it and keep the stored one only as a
-                        // fallback for offline decodes. See docs/protocol.md.
-                        if let Some(live) = info.as_ref().and_then(|i| i.snapshot) {
-                            if preset.active_snapshot != Some(live) {
-                                tracing::debug!(
-                                    stored = ?preset.active_snapshot,
-                                    live,
-                                    "preset blob's stored snapshot disagrees with the device; using the device's"
-                                );
-                            }
-                            preset.active_snapshot = Some(live);
-                        }
-                        self.last_info = info.clone();
-                        preset.current = info;
-                        self.last_raw = Some(payload);
-                        // Seed the edit-history timeline with the loaded state (entry 0) the first
-                        // time a preset is read after connect / preset switch — so the history pane
-                        // exists (and A/B against "as loaded" works) before any edit is made.
-                        if self.history.is_empty()
-                            && let Some(blob) = self.current_blob()
-                        {
-                            self.history.push(HistoryEntry {
-                                label: "Loaded".into(),
-                                blob,
-                            });
-                            self.cursor = 0;
-                        }
-                        return Ok(preset);
+                Ok((payload, info, settled)) => {
+                    // Two ways the blob and the identity can disagree. `settled == false` means the
+                    // identity moved *across* the stream, so the blob belongs to neither preset.
+                    // `stale` is the other direction, and the one a field log caught: after a preset
+                    // change the device serves the **new** preset's stream while still reporting the
+                    // **old** identity — before *and* after the stream, so asking twice can't see it.
+                    // Only the address we asked `goto_preset` for can. [solid — 2026-07-30 Floor log:
+                    // a 8118-byte Pull Me Under stream reported as `WATERS IN HELL #56` on both
+                    // reads, correct 370 ms later]
+                    let stale = !identity_confirms(expect, info.as_ref());
+                    // Re-read rather than decode it — but only while attempts remain, so a device
+                    // the user is actively scrolling still yields *something* rather than an error.
+                    if (!settled || stale) && attempt < 2 {
+                        tracing::debug!(
+                            attempt,
+                            settled,
+                            stale,
+                            want = ?expect,
+                            got = ?info.as_ref().map(|i| (i.bank, i.index)),
+                            "preset identity doesn't match the blob yet; re-reading"
+                        );
+                        self.backoff_before_retry(attempt);
+                        continue;
                     }
-                    Err(e) => last_err = Some(e),
-                },
+                    match self.catalog.load_preset(&payload) {
+                        Ok(mut preset) => {
+                            // The blob's `10 → 8` is the snapshot that was *stored* with the preset, not
+                            // the one the pedal is on: an HX Stomp parked on SNAPSHOT 3 reported 0.
+                            // The read-info reply's key 92 *is* the live value (same key the snapshot
+                            // status-push uses), so prefer it and keep the stored one only as a
+                            // fallback for offline decodes. See docs/protocol.md.
+                            if let Some(live) = info.as_ref().and_then(|i| i.snapshot) {
+                                if preset.active_snapshot != Some(live) {
+                                    tracing::debug!(
+                                        stored = ?preset.active_snapshot,
+                                        live,
+                                        "preset blob's stored snapshot disagrees with the device; using the device's"
+                                    );
+                                }
+                                preset.active_snapshot = Some(live);
+                            }
+                            self.last_info = info.clone();
+                            preset.current = info;
+                            self.last_raw = Some(payload);
+                            // Seed the edit-history timeline with the loaded state (entry 0) the first
+                            // time a preset is read after connect / preset switch — so the history pane
+                            // exists (and A/B against "as loaded" works) before any edit is made.
+                            if self.history.is_empty()
+                                && let Some(blob) = self.current_blob()
+                            {
+                                self.history.push(HistoryEntry {
+                                    label: "Loaded".into(),
+                                    blob,
+                                });
+                                self.cursor = 0;
+                            }
+                            return Ok(preset);
+                        }
+                        Err(e) => last_err = Some(e),
+                    }
+                }
                 Err(e) => last_err = Some(e),
             }
             // Log the error itself, not just that there was one: this warn is usually all a remote
@@ -2534,7 +2580,46 @@ mod reorder_tests_legacy {
 
 #[cfg(test)]
 mod tests {
-    use super::reply_txn;
+    use super::{identity_confirms, reply_txn};
+    use fretwire_data::stream::PresetInfo;
+
+    fn info(bank: i64, index: i64, name: &str) -> PresetInfo {
+        PresetInfo {
+            bank,
+            index,
+            name: name.to_string(),
+            snapshot: Some(0),
+        }
+    }
+
+    #[test]
+    fn a_lagging_identity_does_not_confirm_the_preset_we_asked_for() {
+        // The 2026-07-30 Floor log, verbatim: goto FACTORY 1 #45, and the device serves Pull Me
+        // Under's 8118-byte stream while still calling itself WATERS IN HELL #56 — on the read
+        // before the stream *and* the one after, so comparing those two can't catch it.
+        let want = Some((0, 45));
+        assert!(!identity_confirms(
+            want,
+            Some(&info(0, 56, "WATERS IN HELL"))
+        ));
+        assert!(identity_confirms(want, Some(&info(0, 45, "Pull Me Under"))));
+
+        // The same session's other case: the index had caught up but the bank had not, so checking
+        // the index alone would have called this settled.
+        assert!(!identity_confirms(
+            Some((0, 3)),
+            Some(&info(1, 3, "Cali Rectifire"))
+        ));
+
+        // No pending goto → nothing to confirm against; a missing identity is only a failure when
+        // we were waiting on a specific one.
+        assert!(identity_confirms(None, None));
+        assert!(identity_confirms(
+            None,
+            Some(&info(0, 56, "WATERS IN HELL"))
+        ));
+        assert!(!identity_confirms(want, None));
+    }
 
     fn hex(s: &str) -> Vec<u8> {
         let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();

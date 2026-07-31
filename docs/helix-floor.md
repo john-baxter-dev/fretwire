@@ -686,8 +686,8 @@ meaning "into path 2". Ours isn't wrong so much as less informative.
 > **Correction.** An earlier draft of this section read the same screenshots as showing that *every*
 > preset whose row B continues onto DSP2 renders a broken bracket. That was wrong: it treated "no
 > mixer on DSP1" as evidence of a missing node, when the hardware shows there is genuinely no mixer
-> there. `Pull Me Under` and `AUS Flood` are correct renders. Only `Waters in Hell` remains
-> unexplained (below).
+> there. `Pull Me Under` and `AUS Flood` are correct renders — and so, it turned out a day later, is
+> `Waters in Hell` (below).
 
 Node positions read off the eleven renders:
 
@@ -710,17 +710,37 @@ photo establishes — that a path's rows can leave without merging — this is p
 path 2's two rows can end at different physical outputs and never join. Unverified, but no longer
 suspicious on its face.
 
-**`Waters in Hell` is the one render still unexplained.** Its DSP2 draws a split at column 1 and a
-mixer at column 2 — a one-column bracket containing nothing — while that DSP's own row-B blocks sit
-at columns 6 and 7, outside it. A bracket that excludes every block on its own row can't be right
-whatever the topology, and it is the `split_pos ≤ column < mixer_pos` invariant failing in the wild.
-One sample, so `[hypothesis]` on the cause.
+#### `Waters in Hell` is correct too — the empty bracket is real  [solid]
 
-**Not acted on.** We can see the `Waters in Hell` render is wrong but not what
-`dsp_structural_node_pos` should return for it, and reasoning ahead of data is what produced the
-original row-B column bug — and, this round, a wrong `[solid]` claim in this very section. What
-settles it is a photo of `Waters in Hell` on the pedal's screen. That method has now proved itself
-twice, and costs the tester one picture.
+This was the last render we could not explain: DSP2 draws a split at column 1 and a mixer at column
+2 — a one-column bracket containing nothing — while that DSP's own row-B blocks sit at columns 6 and
+7, outside it. A bracket that excludes every block on its own row looked impossible, and it read as
+the `split_pos ≤ column < mixer_pos` invariant failing in the wild.
+
+The pedal photo (2026-07-30) says otherwise. Measuring the screen against its own column pitch
+(~212 px, origin at the input) puts every node exactly where we draw it:
+
+| | device | ours |
+|---|---|---|
+| DSP2 split | between col 1 and 2 | between col 1 and 2 |
+| DSP2 mixer | between col 2 and 3 | between col 2 and 3 |
+| DSP2 row A | cols 4, 5 (`Parametric` ×2) | cols 4, 5 |
+| DSP2 row B | cols 6, 7 (`Simple Delay`, `Spring`) | cols 6, 7 |
+| DSP1 split | between col 6 and 7 (after `5150`) | between col 6 and 7 |
+| DSP1 mixer | after the cabs | after col 7 |
+
+So the invariant is simply not one. **The mixer can sit to the *left* of blocks on its own row B**,
+and the device handles it by drawing a wrap-around return line: row B runs right past the mixer
+column to the end of the lane, turns up, and runs back left to the mixer. Two horizontal mid-lane
+segments in the photo — one from the split wrapping left into the start of row B, one from the mixer
+running right to meet row B's tail — are that wrap, and they are what make the bracket look empty.
+
+We render the nodes at their true columns and don't draw the wrap. That is a legibility gap, not a
+correctness one, and the same one we already have at DSP1's `OUT` cap.
+
+> **Every render the tester has sent is now confirmed correct.** No routing-layout bug remains open.
+> The `[hypothesis]` that opened this section — that a `0` node means "not on this DSP" — is closed
+> in our favour on two independent presets.
 
 ### The freeze is partly ours: reads had no wall-clock bound  [fixed]
 
@@ -746,3 +766,61 @@ not. The sort in `list_presets_in` is doing real work on this hardware.
 `preset read/decode failed` logged the attempt number but not the error, so the only line that
 matters in a remote tester's log couldn't distinguish a decode fault from a device that had stopped
 answering. It now includes the error.
+
+## Fifth round (2026-07-30, evening): two clean sessions, two new bugs
+
+Two full GUI sessions on the Floor, one on the pre-fix build and one on the build carrying the
+clamp/deadline fixes. **Neither locked up.** Both closed cleanly (`session closed — pedal returned
+to standalone`), and across ~9 minutes of connected time the pre-fix log carries *zero* `WARN` and
+*zero* `ERROR` lines while the post-fix log carries one — the already-understood benign
+`empty chunk before declared stream end … empties=1`, which the skip logic absorbed (`reassembled
+preset stream bytes=8118 declared=8118` immediately after).
+
+This is the first Floor session to survive start to finish. It does not yet clear the
+`FRETWIRE_SETLISTS` gate — no cross-setlist write was attempted — but it removes the standing doubt
+about whether a Floor can hold a session at all.
+
+Neither log fired `clamp_param` or `READ_DEADLINE`, which is expected: he did not touch a legacy DL4
+delay, and nothing wedged. The fixes are unexercised, not disproven.
+
+### The op-23 identity can lag *past* the stream, not just up to it  [solid] [fixed]
+
+The known behaviour was that the identity lags the blob by one preset, and the mitigation was to
+re-ask **after** the stream on the assumption that the second answer is fresher. The evening log
+shows the assumption is too weak. Selecting `Pull Me Under` (FACTORY 1 #45) from `WATERS IN HELL`:
+
+```
+03:44:27.790  read-info … PresetInfo { bank: 0, index: 56, name: "WATERS IN HELL", snapshot: Some(0) }
+03:44:27.890  reassembled preset stream bytes=8118 declared=8118     ← Pull Me Under's size, not #56's 7402
+03:44:27.899  post-stream read-info reply after=…{ bank: 0, index: 56, name: "WATERS IN HELL" }
+...
+03:44:28.165  read-info … PresetInfo { bank: 0, index: 45, name: "Pull Me Under", snapshot: Some(0) }
+```
+
+Both identity reads are stale, so `before == after` and the existing settled-check passes a blob
+labelled with the wrong preset. It corrected itself 370 ms later only because the GUI happened to
+read again. The earlier session has the same fault with the fields lagging *independently* — a read
+reported `bank: 1, index: 3, name: "Cali Rectifire"`, where the name belongs to FACTORY **1** slot 3
+and only the bank was stale — which rules out treating the reply as atomically old-or-new.
+
+The consequence is not cosmetic. The active snapshot comes from the same reply (key 92), so a stale
+identity paints the previous preset's snapshot onto the new preset's chain, and the header and
+sidebar highlight point at a preset the user is not editing.
+
+**Fix:** `goto_preset` now records the `(bank, index)` it asked for, and `read_preset` re-reads until
+the reported identity matches it. Comparing two device answers cannot detect this; comparing against
+the address *we chose* can. The expectation is consumed by the first `read_preset` after the goto, so
+a user turning the knob on the pedal costs one read its retries and nothing after that.
+`identity_confirms` carries the regression test, built from both log cases.
+
+### The status line never refreshes  [fixed]
+
+`Connected — N blocks. Session held for editing.` is set once at connect and then left alone, so it
+describes whatever preset happened to be loaded at the time forever after. Both rounds of
+screenshots caught it: `Waters in Hell` (9 blocks) captioned "15 blocks" on the earlier build, and
+`Pull Me Under` (15 blocks) captioned "9 blocks" on the later one — the counts are each correct for
+the *other* preset. `Saved to slot 7.` has the same problem and is worse, since it sat on screen
+over a preset in a different setlist.
+
+The status line now re-states itself whenever the loaded preset's identity changes, from whichever
+path moved it. Transient messages still persist while you stay on the preset they describe.

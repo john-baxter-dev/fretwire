@@ -29,6 +29,27 @@
   let status = $state("Ready — WebKitGTK webview is painting.");
   let statusErr = $state(false);
   let preset = $state(null);
+
+  // The status line reports the last thing that happened, which makes it a liar the moment the
+  // loaded preset changes out from under it. Both halves showed up in the tester's screenshots: a
+  // "Connected — 15 blocks" line still on screen beside a 9-block preset, and "Saved to slot 7."
+  // sitting over a preset in a different setlist. So re-state it whenever the identity moves —
+  // whichever path moved it (sidebar click, pedal knob, restore). Not $state: this is a marker for
+  // the effect below, and tracking it would re-run the effect on its own write.
+  let announced = null;
+  const presetKey = (p) => (p ? `${p.bank ?? 0}/${p.index ?? 0}` : null);
+  $effect(() => {
+    if (!preset) {
+      announced = null;
+      return;
+    }
+    const key = presetKey(preset);
+    if (key === announced) return;
+    announced = key;
+    const n = preset.blocks.length;
+    status = `${preset.name || "Preset"} — ${n} block${n === 1 ? "" : "s"}.`;
+  });
+
   let presets = $state([]);
   let splitTypes = $state([]);
   let selectedSlot = $state(null);
@@ -491,6 +512,9 @@
     statusErr = false;
     try {
       preset = await invoke("connect");
+      // Claim this one so the re-state effect doesn't race the connect message below and replace it
+      // with the plainer per-preset line. Everything after connect is fair game for the effect.
+      announced = presetKey(preset);
       connected = true;
       activeSnapshot = preset.active_snapshot ?? 0;
       // Open the sidebar on the setlist the device is actually sitting in, not always Factory 1 —

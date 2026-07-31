@@ -752,10 +752,14 @@ blob. Two of the four sessions ended with the Floor dropping off USB. Full write
   "this DSP doesn't hold that end of the bracket". Our render matches block for block, including
   bypass states and row-B columns on both DSPs. Two topologies are now confirmed against hardware
   (bracket on one DSP: RC Reincarnation; bracket across both: Pull Me Under).
-- **One render still unexplained: `Waters in Hell`.** Its DSP2 draws a one-column split/mixer
-  bracket at columns 1–2 containing nothing, while that DSP's row-B blocks sit at columns 6–7
-  outside it. `[hypothesis]` off one sample; **not acted on**. A photo of that preset settles it.
-  Table of all eleven renders in `docs/helix-floor.md`.
+- **`Waters in Hell` — the last unexplained render — is CLOSED, also in our favour.** Its DSP2 draws
+  a one-column split/mixer bracket at columns 1–2 containing nothing while that DSP's row-B blocks
+  sit at columns 6–7 outside it, which looked impossible. The pedal photo shows the hardware doing
+  exactly that: **a mixer can sit to the left of blocks on its own row B**, and the device papers
+  over it with a wrap-around return line. Measured against the screen's own column pitch, every one
+  of our nodes lands where the device puts it. So `split_pos ≤ column < mixer_pos` was never an
+  invariant. **Every render the tester has sent is now confirmed correct; no routing-layout bug is
+  open.** Table of all eleven renders in `docs/helix-floor.md`.
 - **The freeze was partly ours: reads had no wall-clock bound — fixed.** The chunk loop capped
   request *count*, not time, so a still-enumerated but unresponsive pedal cost ~36 × the 3 s
   bulk-IN timeout per attempt, times three attempts. The measured gap inside one attempt was
@@ -765,6 +769,36 @@ blob. Two of the four sessions ended with the Floor dropping off USB. Full write
 The two earlier "contributor's Floor locked up" incidents were never explained. This round gives a
 mechanism that fits them, but does not prove it — the first of this round's two lockups has the same
 signature with no echoed edit body, so which write did it is unproven.
+
+## Fifth round (2026-07-30, evening): the first clean Floor sessions
+
+Two full GUI sessions, one before the fixes and one after. **Neither locked up, and both closed
+cleanly.** ~9 minutes of connected time, zero `ERROR` lines, one `WARN` — the already-understood
+benign `empty chunk before declared stream end`, which the skip logic absorbed. This is the first
+time a Floor has held a session start to finish.
+
+Neither log fired `clamp_param` or `READ_DEADLINE`: he did not touch a legacy DL4 delay and nothing
+wedged. The lockup fixes are **unexercised, not confirmed**.
+
+Two new bugs came out of the material, both fixed:
+
+- **The op-23 identity can lag past the stream, not just up to it.** We already knew the identity
+  lags the blob by one preset, and mitigated it by re-asking *after* the stream. The log shows that
+  is not enough: an 8118-byte `Pull Me Under` stream was reported as `WATERS IN HELL #56` on the
+  read before it **and** the one after, so `before == after` and the settled-check passed a blob
+  labelled with the wrong preset. It self-corrected 370 ms later only because the GUI read again.
+  The earlier session shows the fields lagging *independently* — `bank: 1, index: 3, name: "Cali
+  Rectifire"`, where the name is FACTORY **1** slot 3 and only the bank was stale — so the reply
+  can't be treated as atomically old-or-new. Since the active snapshot rides the same reply (key
+  92), a stale identity also paints the previous preset's snapshot onto the new chain. **Fix:**
+  `goto_preset` records the address it asked for and `read_preset` re-reads until the device agrees.
+  Comparing two device answers can't see this; comparing against the address we chose can.
+  Regression test: `identity_confirms`, built from both log cases.
+- **The status line never refreshed.** `Connected — N blocks` is set once at connect and left alone,
+  so it describes whatever preset was loaded then, forever. Both screenshot rounds caught it, each
+  captioning a preset with the *other* preset's block count. `Saved to slot 7.` is the same bug and
+  worse — it sat on screen over a preset in a different setlist. It now re-states itself whenever
+  the loaded preset's identity moves, from whichever path moved it.
 
 ## Prioritized next steps
 > **The path to live control is in `docs/next-steps.md`.** TL;DR: (1) **on Windows now** — capture a

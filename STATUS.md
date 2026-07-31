@@ -719,6 +719,53 @@ writes still need `FRETWIRE_SETLISTS=1`. See the Withheld note above.
 read-only Floor session exercising the setlist picker — nothing on that path has run against
 hardware since any of the fixes.
 
+## Fourth round (2026-07-30): the lockups are ours, and they are fixed
+
+Eleven screenshots, four `RUST_LOG` captures, a photo of the pedal's screen, and a saved preset
+blob. Two of the four sessions ended with the Floor dropping off USB. Full write-up in
+`docs/helix-floor.md`; the short version:
+
+- **Root cause found: the device does not range-check parameter writes.** A `Heads 1-2` selector
+  (integer enum, `min: 0, max: 3`) on a legacy DL4 delay was sent `77`. The write was ACKed, and
+  the pedal then stopped answering and reset off the bus. This **falsifies a written assumption**
+  in `editor.rs` that "the device clamps, so an off estimate only mis-scales the slider, not the
+  sent value" — the comment has been corrected. Out-of-range integers are not survivable.
+- **Three compounding causes, fixed at each layer.** (1) `param_meta_from` keyed its table by the
+  `.models` `symbolicID` while blocks look up by the *variant-stripped* id, so the eight legacy DL4
+  delays — the only models the data names solely in suffixed form — resolved to no metadata at all.
+  (2) With no `max`, the editor invented a `0..=127` slider; on a `0..=3` param that is ~97 %
+  illegal travel. (3) Nothing below the UI checked. Now: the meta table aliases the stripped base,
+  unranged integers render read-only instead of guessed, and `Session::clamp_param` bounds every
+  write. With (1) fixed the param is a four-option dropdown, so the crash value is unreachable
+  rather than merely clamped. Regression test: `legacy_dl4_ranges_survive_the_variant_suffix`.
+- **First direct check of our routing grid against the pedal's own display.** A photo of
+  `15D RC REINCARNATION` on the Floor's screen agrees with our render on every structural point —
+  eight blocks on path 1, one parallel block under the later chain, path 2 empty.
+- **Listing order confirmed live.** `bank=0 … reordered=true`, `bank=2 … reordered=false` — exactly
+  what the 2026-07-29 dump predicted. The sort in `list_presets_in` does real work on this hardware.
+- **Logging gap closed.** `preset read/decode failed` now logs the error, not just the attempt
+  number; without it a remote log can't separate a decode fault from a device that has stopped
+  answering.
+- **The cross-DSP split `[hypothesis]` is CLOSED, in our favour.** A photo of `Pull Me Under` on the
+  pedal's own screen shows path 1's two rows each leaving into path 2, which then merges — so path 1
+  genuinely has a split and no mixer, path 2 a mixer and no split, and the `0` really does mean
+  "this DSP doesn't hold that end of the bracket". Our render matches block for block, including
+  bypass states and row-B columns on both DSPs. Two topologies are now confirmed against hardware
+  (bracket on one DSP: RC Reincarnation; bracket across both: Pull Me Under).
+- **One render still unexplained: `Waters in Hell`.** Its DSP2 draws a one-column split/mixer
+  bracket at columns 1–2 containing nothing, while that DSP's row-B blocks sit at columns 6–7
+  outside it. `[hypothesis]` off one sample; **not acted on**. A photo of that preset settles it.
+  Table of all eleven renders in `docs/helix-floor.md`.
+- **The freeze was partly ours: reads had no wall-clock bound — fixed.** The chunk loop capped
+  request *count*, not time, so a still-enumerated but unresponsive pedal cost ~36 × the 3 s
+  bulk-IN timeout per attempt, times three attempts. The measured gap inside one attempt was
+  **121 s** — that is the "GUI froze" report. `READ_DEADLINE` (10 s; a healthy full read is ~20 ms)
+  now bounds it, so a dead device errors in ~30 s instead of hanging for ~6 minutes.
+
+The two earlier "contributor's Floor locked up" incidents were never explained. This round gives a
+mechanism that fits them, but does not prove it — the first of this round's two lockups has the same
+signature with no echoed edit body, so which write did it is unproven.
+
 ## Prioritized next steps
 > **The path to live control is in `docs/next-steps.md`.** TL;DR: (1) **on Windows now** — capture a
 > dozen single-knob edits, decode with `fretwire decode-edit`, find out if param keys generalize (the

@@ -948,7 +948,7 @@ fn param_meta_from(
             continue;
         };
         for m in mf.models {
-            let params = m
+            let params: std::collections::HashMap<String, ParamMeta> = m
                 .params
                 .iter()
                 .map(|p| {
@@ -984,6 +984,18 @@ fn param_meta_from(
                     (p.symbolic_id.clone(), meta)
                 })
                 .collect();
+            // Key by the id as written *and* by its variant-stripped base. Blocks look meta up by
+            // the base (`load_preset` runs the device symbol through `split_variant` first), so a
+            // model the reference data only ever names in its suffixed form — the eight legacy DL4
+            // delays are the whole set — would otherwise resolve to no meta at all, and a param
+            // with no range falls back to a span far wider than the device accepts.
+            //
+            // The alias never overwrites: an exact entry is the better answer wherever both exist.
+            if let (base, Some(_)) = split_variant(&m.symbolic_id)
+                && !map.contains_key(base)
+            {
+                map.insert(base.to_string(), params.clone());
+            }
             map.insert(m.symbolic_id, params);
         }
     }
@@ -991,8 +1003,14 @@ fn param_meta_from(
     // The parallel routing nodes (split types + mixer/join) aren't in the `.models` files, so their
     // float params have no range → they'd be read-only. Give them best-effort ranges here so the
     // mixer A/B levels/pans and the split params are adjustable. Param names match the `Helix.sym`
-    // order (`name_params` keys meta by name). LIVE: ranges are estimates pending a range capture —
-    // the device clamps, so an off estimate only mis-scales the slider, not the sent value.
+    // order (`name_params` keys meta by name). LIVE: ranges are estimates pending a range capture.
+    //
+    // These being estimates matters more than it looks: the device does **not** clamp what it is
+    // sent. An earlier note here assumed it did, and that an off estimate could therefore only
+    // mis-scale the slider rather than the value — that is false. An out-of-range integer hung a
+    // Helix Floor hard enough to drop it off USB. [solid — 2026-07-30 Floor session]
+    // `Session::clamp_param` now bounds every write by whatever range lands here, so an estimate
+    // that is too *narrow* costs reach, while one too *wide* is what carries risk. Prefer narrow.
     let flow = |pairs: &[(&str, f64, f64)]| -> std::collections::HashMap<String, ParamMeta> {
         pairs
             .iter()
@@ -1328,6 +1346,32 @@ mod tests {
         assert_eq!(angle.stops[1].label, "45 deg");
         // Continuous floats must stay sliders.
         assert!(cab.get("Distance").unwrap().stops.is_empty());
+    }
+
+    /// A model whose `.models` id carries a `Mono`/`Stereo` suffix must still be reachable under
+    /// the **variant-stripped** id, because that is the only form a block ever asks for:
+    /// `load_preset` runs the device symbol through [`split_variant`] before looking meta up.
+    ///
+    /// The eight legacy DL4 delays are the only models in the reference data where the two forms
+    /// differ, and the miss was not cosmetic — with no meta the editor has no range, and its
+    /// fallback span (0..=127) let `Heads 1-2` (a 0..=3 enum) be set to 77, which hung the pedal
+    /// hard enough to drop it off USB. [solid — 2026-07-30 Floor session, `Massif`]
+    #[test]
+    fn legacy_dl4_ranges_survive_the_variant_suffix() {
+        let meta = dev_catalog().param_meta;
+        let dl4 = meta
+            .get("HD2_DL4Multihead")
+            .expect("legacy DL4 reachable under the stripped id the device sends");
+        let heads = dl4.get("Heads 1-2").expect("DL4 has a Heads 1-2 param");
+        assert_eq!(heads.value_type, Some(0));
+        assert_eq!(heads.min, Some(0.0));
+        assert_eq!(
+            heads.max,
+            Some(3.0),
+            "out-of-range writes here wedge the DSP"
+        );
+        // The suffixed form stays reachable too — nothing that already worked may regress.
+        assert!(meta.contains_key("HD2_DL4MultiheadStereo"));
     }
 
     // Only meaningful when the embed exists to compare against.

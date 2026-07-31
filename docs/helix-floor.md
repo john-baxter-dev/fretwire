@@ -602,3 +602,147 @@ Tagged `[hypothesis]`: one preset, and a `0` could equally be an absent-value de
 sentinel. **Nothing has been changed in the grid code on the strength of it** — reasoning ahead of
 data is what produced the original row-B column bug. What would settle it is a screenshot of this
 preset's routing grid in HX Edit next to ours, or a second cross-DSP preset to compare.
+
+## Third hardware round (2026-07-30): two lockups, both root-caused
+
+Nine emails: eleven GUI screenshots, four `RUST_LOG` captures, one photo of the pedal's own screen,
+and one saved preset blob. Two sessions ended with the Floor dropping off USB.
+
+### The device does **not** range-check parameter writes  [solid]
+
+This is the important one, and it invalidates an assumption the code had written down.
+
+Both lockups have the same shape: an edit is ACKed, the next read fails three times with growing
+gaps, and then every URB comes back `No such device` — the pedal has reset itself off the bus. The
+second is pinned exactly, because its ACK echoes the edit body back:
+
+```
+2:04:35.2281  edit ACK  {102: 65, 103: 0, 104: {98: 22, 29: true, 26: 0, 28: 3, 119: 31}}
+2:04:39.0749  edit ACK  {102: 71, 103: 0, 104: {98: 22, 29: true, 26: 0, 28: 2, 119: 77}}
+2:04:42.1061  WARN preset read/decode failed … attempt=0
+2:04:45.3478  WARN preset read/decode failed … attempt=1
+2:05:08.0670  WARN preset read/decode failed … attempt=2      <- 23 s gap; the pedal is gone
+```
+
+Wire slot 22 in that preset (`Massif`, and its saved copy `Massif2`, which is the attached blob) is
+`HD2_DL4Multihead`. Param 2 is `Heads 1-2` and param 3 is `Heads 3-4` — **integer enums with
+`min: 0, max: 3`**. They were sent `77` and `31`.
+
+So an out-of-range integer does not get clamped, ignored, or NAKed. It is ACKed, and then the DSP
+goes down hard enough to take the USB device with it. Integer params index tables in the firmware,
+which is the obvious way for this to end in an out-of-bounds read.
+
+The first lockup has the identical signature (edit → three failed reads → `No such device`), but its
+ACK carries no echoed body, so *which* write did it is unproven. Same shape, weaker evidence.
+
+### Why an out-of-range value was sendable at all  [fixed]
+
+Three compounding causes, fixed at each layer:
+
+1. **The metadata was missing.** `param_meta_from` keyed the table by the `.models` `symbolicID`,
+   but a block looks meta up by its **variant-stripped** id (`load_preset` runs the device symbol
+   through `split_variant` first). Eight models — the legacy DL4 delays, and only those — are named
+   in the reference data solely in their suffixed form (`HD2_DL4MultiheadStereo`), so they resolved
+   to *no metadata at all*: no range, no `value_type`, no enum labels. The table now also aliases
+   the stripped base, never overwriting an exact entry.
+2. **The editor invented a range.** With no `max`, `ParamPanel.svelte` fell back to a `0..=127`
+   span for integer params. On a `0..=3` selector that is ~97 % illegal travel. An integer with no
+   declared range is now shown read-only rather than guessed at — a value we cannot bound is one we
+   have no business sending.
+3. **Nothing checked below the UI.** `Session::clamp_param` now bounds every parameter write by the
+   model's declared range, on the float, paired and enum paths alike. It costs a decode we already
+   pay for edit labeling. A guard that only holds while every model resolves is not a guard.
+
+With (1) fixed, `Heads 1-2` picks up its `heads12` control from `HelixControls.json` and renders as
+a four-option dropdown (`1-2 Off / HD1 On / 1-2 On / HD2 On`), so the crash value is now unreachable
+by construction rather than merely clamped.
+
+Regression test: `editor::tests::legacy_dl4_ranges_survive_the_variant_suffix`.
+
+### Our grid matches the pedal's own screen  [solid]
+
+The photo of `15D RC REINCARNATION` on the Floor's display, next to our render of the same preset,
+agrees on every structural point: eight blocks on path 1, exactly one block on the parallel row
+positioned under the later part of the chain (we place it at wire slot 16 → row B column 6), and
+**path 2 empty** (we show DSP 2 at 0.0 %). This is the first direct check of our routing grid
+against the device's own drawing of it, rather than against another decode of the same blob.
+
+### The cross-DSP split is real, and we render it correctly  [solid]
+
+**A photo of `Pull Me Under` on the pedal's own screen settles the 2026-07-29 `[hypothesis]`, and
+in our favour.** The Floor draws four rows: path 1 row A (5 blocks) and path 1 row B (2 blocks)
+each ending in a *route-to-path-2* arrow, then path 2 row A and path 2 row B, merging into the
+output at the right. So path 1 genuinely **has a split and no mixer**, and path 2 genuinely **has a
+mixer and no split** — the `0` really is "this DSP does not hold that end of the bracket", exactly
+as the hypothesis guessed, and not an absent-value default.
+
+Our render agrees block for block: 5 on DSP1 row A, 2 on DSP1 row B (`Weeper` bypassed), `Clean
+Delay`/`Clean Verb` at DSP2 columns 7–8, `Cali Rectifire`/`Cali Q`/`4x12` at DSP2 row B columns 3–5
+with `Gain`/`Gain Delay`/`Gain Verb` bypassed at 6–8, split on DSP1, mixer on DSP2.
+
+The only cosmetic gap: we terminate DSP1's row A with an `OUT` cap, where the device shows an arrow
+meaning "into path 2". Ours isn't wrong so much as less informative.
+
+> **Correction.** An earlier draft of this section read the same screenshots as showing that *every*
+> preset whose row B continues onto DSP2 renders a broken bracket. That was wrong: it treated "no
+> mixer on DSP1" as evidence of a missing node, when the hardware shows there is genuinely no mixer
+> there. `Pull Me Under` and `AUS Flood` are correct renders. Only `Waters in Hell` remains
+> unexplained (below).
+
+Node positions read off the eleven renders:
+
+| Preset | DSP1 split / mixer | DSP2 split / mixer | row B (DSP1 / DSP2) |
+|---|---|---|---|
+| RC Reincarnation #59 | 5 / 7 | — (DSP2 empty) | 16 / — |
+| Massif2 #4 | 0 / 7 | — | 11–14 / — |
+| Trademark #41 | 1 / **none** | **none / none** | 12 / 33,34,36,37,38 |
+| Justice Fo Y'all #44 | 1 / **none** | **none / none** | 16 / 33,34,35,38 |
+| AUS Flood #42 | 3 / **none** | none / 7 | 14 / 35,36 |
+| Pull Me Under #45 | 1 / **none** | none / 9 | 11,12 / 33–38 |
+| Waters in Hell #56 | 6 / 7 | **1 / 2** | 17 / 36,37 |
+
+Two shapes are now confirmed against the device's own display: bracket entirely on DSP1
+(RC Reincarnation) and bracket split across DSPs (Pull Me Under). `AUS Flood` is the same shape as
+the latter and needs no separate confirmation.
+
+`Trademark` and `Justice Fo Y'all` draw **no mixer on either DSP**. Given what the Pull Me Under
+photo establishes — that a path's rows can leave without merging — this is plausibly correct too:
+path 2's two rows can end at different physical outputs and never join. Unverified, but no longer
+suspicious on its face.
+
+**`Waters in Hell` is the one render still unexplained.** Its DSP2 draws a split at column 1 and a
+mixer at column 2 — a one-column bracket containing nothing — while that DSP's own row-B blocks sit
+at columns 6 and 7, outside it. A bracket that excludes every block on its own row can't be right
+whatever the topology, and it is the `split_pos ≤ column < mixer_pos` invariant failing in the wild.
+One sample, so `[hypothesis]` on the cause.
+
+**Not acted on.** We can see the `Waters in Hell` render is wrong but not what
+`dsp_structural_node_pos` should return for it, and reasoning ahead of data is what produced the
+original row-B column bug — and, this round, a wrong `[solid]` claim in this very section. What
+settles it is a photo of `Waters in Hell` on the pedal's screen. That method has now proved itself
+twice, and costs the tester one picture.
+
+### The freeze is partly ours: reads had no wall-clock bound  [fixed]
+
+The chunk loop bounded the number of requests but not the time. Against a device that is still
+enumerated but no longer answering, each request burns the full 3 s bulk-IN timeout, so a ~7.4 KB
+preset costs ~36 × 3 s — and `read_preset` retries three times on top. The measured gap inside a
+single attempt was **121 s**, which is what the tester experienced as "the GUI froze": the pedal was
+already gone and we spent minutes discovering it one timeout at a time.
+
+`read_preset_inner` now carries a `READ_DEADLINE` (10 s — a healthy full read is ~20 ms, so this can
+only fire on a device that has genuinely stopped) and returns a message naming how far the stream
+got. Worst case for a dead device drops from ~6 minutes to ~30 s, with an error instead of a hang.
+
+### Listing order confirmed live  [solid]
+
+`preset list normalised to slots bank=0 base=0 n=128 reordered=true` appears in his log, with
+`bank=2 … reordered=false`. That is exactly the prediction from the 2026-07-29 dump — Factory 1
+carries moved presets whose stream position no longer matches their index, and the user setlists do
+not. The sort in `list_presets_in` is doing real work on this hardware.
+
+### Logging gap closed
+
+`preset read/decode failed` logged the attempt number but not the error, so the only line that
+matters in a remote tester's log couldn't distinguish a decode fault from a device that had stopped
+answering. It now includes the error.

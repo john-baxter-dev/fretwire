@@ -64,6 +64,14 @@ struct HistoryEntry {
 /// Edit-history length cap — blobs are ~3 KB, so this bounds history at ~150 KB.
 const MAX_HISTORY: usize = 50;
 
+/// Wall-clock ceiling on one preset read (see `read_preset_inner`).
+///
+/// A healthy read of a full Helix Floor preset takes ~20 ms end to end. This is three orders of
+/// magnitude of headroom, so it can only fire on a device that has genuinely stopped answering —
+/// which is the point: without it, a wedged-but-still-enumerated pedal costs ~36 chunks × the
+/// bulk-IN timeout before we notice, and `read_preset` retries three times on top of that.
+const READ_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
 impl Session {
     /// Open the device, claim the interface, and run the session handshake.
     ///
@@ -1308,8 +1316,55 @@ impl Session {
         Ok(())
     }
 
+    /// Clamp `value` into the range the reference data declares for this param, when it declares
+    /// one. Params we have no metadata for pass through unchanged — there is nothing to clamp to.
+    ///
+    /// This sits here, immediately above the wire, rather than in the callers, because **the device
+    /// does not range-check what it is sent**. A `Heads 1-2` selector (a 0..=3 enum on the legacy
+    /// DL4 delays) driven to 77 by a slider that had fallen back to a 0..=127 span wedged a Helix
+    /// Floor hard enough that it dropped off USB mid-session and needed a power cycle.
+    /// [solid — 2026-07-30 Floor session, `Massif`]
+    ///
+    /// The metadata miss that produced that particular 77 is fixed in `editor::param_meta_from`,
+    /// but a guard that only holds while every model resolves is not a guard: this one costs a
+    /// decode we already pay for labeling, and bounds the damage from the next gap in the data.
+    fn clamp_param(&self, slot: i64, paired: bool, param_index: i64, value: f64) -> f64 {
+        let meta = self
+            .last_raw
+            .as_ref()
+            .and_then(|raw| self.catalog.load_preset(raw).ok())
+            .and_then(|p| {
+                p.block(slot).and_then(|b| {
+                    let params = if paired { &b.paired_params } else { &b.params };
+                    params
+                        .iter()
+                        .find(|q| q.index as i64 == param_index)
+                        .map(|q| q.meta.clone())
+                })
+            });
+        let Some(meta) = meta else { return value };
+        let (Some(min), Some(max)) = (meta.min, meta.max) else {
+            return value;
+        };
+        let clamped = value.clamp(min.min(max), max.max(min));
+        if clamped != value {
+            tracing::warn!(
+                slot,
+                paired,
+                param_index,
+                requested = value,
+                sent = clamped,
+                min,
+                max,
+                "parameter value out of the model's declared range — clamping before sending"
+            );
+        }
+        clamped
+    }
+
     /// Set a knob/continuous parameter by its index in the model's device param order.
     pub fn set_param(&mut self, slot: i64, param_index: i64, value: f32) -> crate::Result<()> {
+        let value = self.clamp_param(slot, false, param_index, value as f64) as f32;
         let txn = self.bump_txn();
         let body = edit::set_value(slot, param_index, value, txn);
         self.send_edit(body)?;
@@ -1325,6 +1380,7 @@ impl Session {
         param_index: i64,
         value: f32,
     ) -> crate::Result<()> {
+        let value = self.clamp_param(slot, true, param_index, value as f64) as f32;
         let txn = self.bump_txn();
         let body = edit::set_paired_value(slot, param_index, value, txn);
         self.send_edit(body)?;
@@ -1341,6 +1397,9 @@ impl Session {
         param_index: i64,
         value: i64,
     ) -> crate::Result<()> {
+        let value = self
+            .clamp_param(slot, paired, param_index, value as f64)
+            .round() as i64;
         let txn = self.bump_txn();
         let model_sel = if paired {
             edit::MODEL_PAIRED
@@ -1409,8 +1468,12 @@ impl Session {
                 },
                 Err(e) => last_err = Some(e),
             }
+            // Log the error itself, not just that there was one: this warn is usually all a remote
+            // tester's log gives us, and "failed" alone can't distinguish a decode fault from the
+            // device having stopped answering.
             tracing::warn!(
                 attempt,
+                error = last_err.as_ref().map(|e| e.to_string()).unwrap_or_default(),
                 "preset read/decode failed; backing off and retrying"
             );
             self.backoff_before_retry(attempt);
@@ -1566,6 +1629,7 @@ impl Session {
         // panel knob/snapshot change). Mid-session those would otherwise be mis-matched as this
         // read's first reply and desync the whole sequence into a bulk-IN timeout. At connect the
         // wire is already quiet, so this just costs one short read.
+        let started = std::time::Instant::now();
         self.transport.drain();
         self.transport
             .drain_wire(std::time::Duration::from_millis(30), 128);
@@ -1634,6 +1698,22 @@ impl Session {
         for _ in 0..max_chunks {
             if target.is_some_and(|t| payload.len() >= t) {
                 break; // whole declared payload is in hand
+            }
+            // Bound the read in *wall-clock*, not just in chunks. `max_chunks` caps how many
+            // requests we make, but each one can burn the full bulk-IN timeout against a device
+            // that is enumerated yet no longer answering — for a ~7.4 KB preset that is ~36 × 3 s,
+            // and the tester's freeze measured 121 s inside a single attempt, with three attempts
+            // behind it. That is the "GUI froze" report: the pedal was already gone and we spent
+            // minutes discovering it one timeout at a time. [solid — 2026-07-30 Floor session]
+            if started.elapsed() > READ_DEADLINE {
+                return Err(fretwire_data::Error::Stream(format!(
+                    "preset read gave up after {:?} with {} of {} bytes — the device stopped \
+                     answering mid-stream",
+                    started.elapsed(),
+                    payload.len(),
+                    target.map_or("?".to_string(), |t| t.to_string()),
+                ))
+                .into());
             }
             let chunk = self.edit_request(cmd::CHUNK, Vec::new())?;
             let n = chunk.body.len();

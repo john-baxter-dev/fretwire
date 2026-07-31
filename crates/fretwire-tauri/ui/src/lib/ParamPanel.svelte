@@ -99,11 +99,17 @@
   // Which control a param needs. Enums with labels → dropdown; bools → switch; segmented floats
   // (discrete stops, e.g. cab mic Angle 0°/45°) → button group; value_type 1 or float kind →
   // slider; anything else integer → stepped slider (int wire path).
+  //
+  // An integer we have *no declared range* for is shown read-only instead of guessing one. Integer
+  // params index tables in the firmware, and the device does not range-check: the old fallback span
+  // (0..=127) let a 0..=3 head selector be set to 77, which hung the pedal hard enough to drop it
+  // off USB. A value we can't bound is one we have no business sending.
   function control(p) {
     if (p.enum_labels && p.enum_labels.length) return "enum";
     if (p.value_type === 2 || p.kind === "bool") return "bool";
     if (p.stops && p.stops.length) return "seg";
     if (p.value_type === 1 || p.kind === "float") return "float";
+    if (p.min == null || p.max == null) return "unranged";
     return "int";
   }
 
@@ -228,6 +234,12 @@
             />
             <span>{p.value >= 0.5 ? "On" : "Off"}</span>
           </label>
+        {:else if c === "unranged"}
+          <span
+            class="val unranged"
+            title="No range for this parameter in the reference data, so fretwire won't send a value it can't bound — an out-of-range integer can hang the device."
+            >{fmt(p.value)}</span
+          >
         {:else if c === "seg"}
           {@const active = nearestStop(p)}
           <div class="seg">
@@ -377,6 +389,12 @@
   .slider input[type="range"] {
     flex: 1 1 auto;
     min-width: 0;
+  }
+  .val.unranged {
+    color: #6b7280;
+    cursor: help;
+    text-align: left;
+    border-bottom: 1px dotted #3a4150;
   }
   .val {
     flex: 0 0 auto;

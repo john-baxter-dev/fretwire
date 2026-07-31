@@ -79,13 +79,6 @@ const MAX_HISTORY: usize = 50;
 /// bulk-IN timeout before we notice, and `read_preset` retries three times on top of that.
 const READ_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// How many chunks of a whole-preset write have gone out without a matching flow-control credit.
-/// Zero when the device is keeping up (credits can run *ahead* — it batches them — which is not a
-/// surplus worth tracking, just "not behind").
-fn write_deficit(chunks_sent: usize, credits: usize) -> usize {
-    chunks_sent.saturating_sub(credits)
-}
-
 /// Read the op (key 100) and transaction (key 102) back out of an edit body we're about to send, so
 /// a log line can say which command a reply belongs to. `None` for either field when the body isn't
 /// one of the `edit::` builders' maps — the caller degrades to a less specific message.
@@ -682,10 +675,11 @@ impl Session {
         /// next to the ~7 ms a healthy chunk round-trips in: the point is to let a busy device catch
         /// up, since outrunning it is what wedges it.
         const CREDIT_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
-        /// How many chunks we may run ahead of the credits before calling the device wedged. A
-        /// healthy transfer never runs more than one behind; two consecutive silent chunks is the
-        /// device gone, not the device busy.
-        const MAX_DEFICIT: usize = 2;
+        /// How many chunks in a row may go unanswered before we call the device wedged. Measured
+        /// against the field traces: healthy transfers never go more than **one** chunk without a
+        /// credit, while both freezes went quiet and stayed quiet for four or more. Three keeps a
+        /// margin over the healthy worst case without waiting out a genuinely dead device.
+        const MAX_SILENT_CHUNKS: usize = 3;
 
         let txn = self.bump_txn();
         let tlv = Tlv::command(op::PARAM_SET, edit::write_preset(&blob, txn)).to_bytes();
@@ -714,8 +708,10 @@ impl Session {
         // device rejects a stalled offset.
         let arg = self.cur_arg(src);
         let total = tlv.len();
+        let chunks = tlv.len().div_ceil(CHUNK);
         let mut sent = 0usize;
         let mut credits = 0usize;
+        let mut silent = 0usize;
         for (n, chunk) in tlv.chunks(CHUNK).enumerate() {
             let seq = self.next_seq(src);
             self.transport.send_frame(&Frame::new(
@@ -730,24 +726,31 @@ impl Session {
             // Block for this chunk's credit, then sweep up anything else already queued so the
             // device's backlog doesn't accumulate. Waiting for the *first* frame is what paces us;
             // the second call only mops up and must not add latency.
-            credits += self.transport.drain_collect(CREDIT_WAIT, 1).len()
+            let got = self.transport.drain_collect(CREDIT_WAIT, 1).len()
                 + self
                     .transport
                     .drain_collect(std::time::Duration::from_millis(2), 8)
                     .len();
-            let deficit = write_deficit(n + 1, credits);
+            credits += got;
+            // Count *consecutive* unanswered chunks, not the running total. The device batches its
+            // credits — a healthy transfer can be several behind and catch up in one sweep — so a
+            // cumulative deficit says "busy" as often as it says "dead". Going quiet and staying
+            // quiet is the signature that actually distinguishes them.
+            silent = if got == 0 { silent + 1 } else { 0 };
             tracing::debug!(
                 arg,
                 len = chunk.len(),
                 sent,
                 total,
                 credits,
-                deficit,
+                silent,
                 "write-preset chunk"
             );
-            if deficit > MAX_DEFICIT {
-                // Stop here. The remaining chunks would go into a device that has stopped reading,
-                // and the terminator would leave it holding a half-written preset.
+            // Only worth aborting while there is still data to withhold. Past the last chunk the
+            // whole blob is already in the device and stopping early would just deny it the
+            // terminator, leaving it waiting for the end of a transfer that never comes — which is
+            // its own way to wedge a pedal.
+            if silent >= MAX_SILENT_CHUNKS && n + 1 < chunks {
                 tracing::error!(
                     sent,
                     total,
@@ -760,10 +763,9 @@ impl Session {
                 self.last_raw = None;
                 return Err(crate::Error::WriteStalled(format!(
                     "the pedal stopped responding {sent} of {total} bytes into a preset write \
-                     (only {credits} of {} chunks acknowledged); the transfer was aborted. \
+                     (no reply to the last {silent} frames); the transfer was aborted. \
                      The edit buffer may be inconsistent — reload the preset, and power-cycle \
-                     the pedal if it is unresponsive",
-                    n + 1
+                     the pedal if it is unresponsive"
                 )));
             }
         }
@@ -1574,11 +1576,41 @@ impl Session {
 
     /// Set a knob/continuous parameter by its index in the model's device param order.
     pub fn set_param(&mut self, slot: i64, param_index: i64, value: f32) -> crate::Result<()> {
+        // The four split models are the only ones in the whole catalog that carry a `bypass`
+        // *parameter*, and the device will not write it with op 30 — it answers `{103:255,
+        // 104:{111:-3}}` and applies nothing. Bypass has its own op; send that instead.
+        // [solid — 2026-07-31: two op-30 writes to a Split Y's bypass, both refused with code -3]
+        if self.param_is_split_bypass(slot, param_index) {
+            // Param semantics are "bypassed"; `set_enabled` takes the opposite.
+            return self.set_enabled(slot, value < 0.5);
+        }
         let value = self.clamp_param(slot, false, param_index, value as f64) as f32;
         let txn = self.bump_txn();
         let body = edit::set_value(slot, param_index, value, txn);
         self.send_edit(body)?;
         Ok(())
+    }
+
+    /// Whether `(slot, param_index)` names the `bypass` pseudo-parameter that only the split models
+    /// carry. Deliberately scoped to the structural split/mixer nodes: no ordinary effect model in
+    /// the catalog has a `bypass` param, so this can never divert a real parameter write.
+    fn param_is_split_bypass(&self, slot: i64, param_index: i64) -> bool {
+        let Some(raw) = self.last_raw.as_ref() else {
+            return false;
+        };
+        let Ok(p) = self.catalog.load_preset(raw) else {
+            return false;
+        };
+        let is_bypass = |b: &crate::EditorBlock| {
+            b.slot == slot
+                && b.params
+                    .iter()
+                    .any(|q| q.index as i64 == param_index && q.name.eq_ignore_ascii_case("bypass"))
+        };
+        p.dsps.iter().any(|d| {
+            d.split_node.as_ref().is_some_and(&is_bypass)
+                || d.mixer_node.as_ref().is_some_and(&is_bypass)
+        })
     }
 
     /// Set a knob/continuous parameter on the block's **paired cab/IR** (the second model fused into
@@ -2772,7 +2804,7 @@ mod reorder_tests_legacy {
 
 #[cfg(test)]
 mod tests {
-    use super::{edit_op_txn, identity_confirms, op_name, reply_txn, write_deficit};
+    use super::{edit_op_txn, identity_confirms, op_name, reply_txn};
     use fretwire_data::stream::{PresetInfo, parse_edit_rejection};
 
     fn info(bank: i64, index: i64, name: &str) -> PresetInfo {
@@ -2784,40 +2816,56 @@ mod tests {
         }
     }
 
+    /// The longest run of consecutive chunks drawing no flow-control credit — the same rule
+    /// `write_preset` applies incrementally, restated over a whole recorded trace so the threshold
+    /// can be checked against real transfers.
+    fn longest_silence(per_chunk: &[usize]) -> usize {
+        let (mut run, mut worst) = (0usize, 0usize);
+        for &c in per_chunk {
+            run = if c == 0 { run + 1 } else { 0 };
+            worst = worst.max(run);
+        }
+        worst
+    }
+
     #[test]
-    fn the_write_pacing_rule_separates_a_busy_device_from_a_dead_one() {
-        // Per-chunk flow-control credits counted off three real whole-preset writes (Floor logs,
-        // 2026-07-31). Each entry is the credits that arrived in that chunk's window; the guard in
-        // `write_preset` aborts once the running deficit exceeds 2.
-        const MAX_DEFICIT: usize = 2;
-        let worst = |per_chunk: &[usize]| {
-            let (mut credits, mut worst) = (0usize, 0usize);
-            for (n, c) in per_chunk.iter().enumerate() {
-                credits += c;
-                worst = worst.max(write_deficit(n + 1, credits));
-            }
-            worst
-        };
+    fn the_write_pacing_threshold_separates_a_busy_device_from_a_dead_one() {
+        // Per-chunk flow-control credits counted off real whole-preset writes. Each entry is the
+        // credits that arrived in that chunk's window; `write_preset` aborts after
+        // `MAX_SILENT_CHUNKS` consecutive zeroes, and only while chunks remain unsent.
+        const MAX_SILENT_CHUNKS: usize = 3;
 
-        // The write that landed: 14 chunks, ~1 credit each, never more than one behind. The guard
-        // must not fire here — a false abort would leave a half-written preset for no reason.
-        let healthy = [0, 3, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1];
-        assert_eq!(worst(&healthy), 1);
-        assert!(worst(&healthy) <= MAX_DEFICIT);
+        // The writes that landed. The device batches credits, so a chunk drawing none is ordinary —
+        // what matters is that it never goes quiet for long. A false abort here would deny the
+        // device its terminator and strand a complete transfer, so this margin is the important one.
+        assert_eq!(
+            longest_silence(&[0, 3, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1]),
+            1
+        );
+        assert_eq!(
+            longest_silence(&[1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]),
+            0
+        );
 
-        // Freeze #1: the device answered chunk 1 and then went silent. We sent four more chunks
-        // into it and blocked forever on the fifth. The guard trips while chunk 6 is still unsent.
+        // Freeze #1: the device answered chunk 1 and then went silent. We sent four more chunks into
+        // it and blocked forever on the fifth. The guard trips with chunks still unsent.
         let froze_early = [2, 0, 0, 0, 0];
-        assert_eq!(worst(&froze_early), 3);
-        assert!(worst(&froze_early) > MAX_DEFICIT);
+        assert_eq!(longest_silence(&froze_early), 4);
+        assert!(longest_silence(&froze_early) >= MAX_SILENT_CHUNKS);
 
         // Freeze #2: healthy for seven chunks, then flat zero — the same ending, later on.
         let froze_late = [1, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0];
-        assert_eq!(worst(&froze_late), 3);
-        assert!(worst(&froze_late) > MAX_DEFICIT);
+        assert_eq!(longest_silence(&froze_late), 4);
+        assert!(longest_silence(&froze_late) >= MAX_SILENT_CHUNKS);
 
-        // Credits arriving in a burst ahead of the chunks is not a deficit.
-        assert_eq!(write_deficit(1, 5), 0);
+        // A device that batches hard — a couple of chunks unanswered, then a burst — is *not* dead.
+        // The old cumulative-deficit rule aborted on exactly this shape (2026-07-31: a 6-chunk Stomp
+        // write that had already sent every byte, `sent=2688 total=2688`).
+        let bursty = [1, 0, 0, 2, 0, 0, 3];
+        assert_eq!(longest_silence(&bursty), 2);
+        assert!(longest_silence(&bursty) < MAX_SILENT_CHUNKS);
+
+        assert_eq!(longest_silence(&[]), 0);
     }
 
     #[test]

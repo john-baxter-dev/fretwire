@@ -218,10 +218,22 @@ refusal:
 A refusal is silent in every other respect: no error frame, no state change, and the next read
 returns the preset byte-identical. Observed twice in one session — `{102:44, 103:255, 104:{111:-21}}`
 and the same again at `102:60` — while the 6778-byte stream stayed 6778 across both. The meaning of
-the code itself (`-21`) is unmapped [hypothesis]; only the fact of the refusal is decoded.
 `fretwire_data::stream::parse_edit_rejection` reads it, and `Session::send_edit` turns it into
 `Error::Rejected` — before this, `send_edit` logged the reply and returned `Ok`, so the GUI reported
 success for edits the pedal had thrown away.
+
+Two refusal codes are observed so far. Both are refusals of an op that is *valid in general* but not
+for that target, so the code looks like "wrong shape for this thing" rather than a transport error:
+
+| code | seen on | meaning [hypothesis] |
+|---:|---|---|
+| `-21` | op 39 `add_block` carrying a `paired_index` | a paired model-ref is not accepted by add; pair with op 40 afterwards |
+| `-3` | op 30 `set_value` writing a split node's `bypass` param | that parameter is not writable this way — bypass has its own op (41) |
+
+The `-3` case is worth knowing about because `bypass` **is** a real entry in the split's stored param
+array, and the four split models are the only ones in the whole catalog (4 of 681) that carry it. So
+the editor will happily offer it as a knob; `Session::set_param` now recognises it and sends op 41
+instead. [solid — 2026-07-31, two op-30 writes to a Split Y's bypass, both refused with `-3`]
 
 ### op 39 will not add a paired cab; add then swap [solid] — same log
 `add_block` (op 39) is refused whenever the model-ref carries a real `paired_index` — i.e. every pick

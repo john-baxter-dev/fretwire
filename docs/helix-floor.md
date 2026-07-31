@@ -1149,3 +1149,60 @@ cargo run -p fretwire-cli -- dump-raw parallel-after.bin
 
 That dump answers all five fields at once, and tells us whether this is a missing activation on our
 side or a routing detail on the device's.
+
+## Twelfth round (2026-07-31): the dump clears our code — the preset is correct
+
+`fretwireTest3.bin`, taken straight after a drag to the parallel row, plus `fretwire15.log` (op 78 +
+op 43, then op 71 save — nothing else, no errors).
+
+### The device sets all five topology fields  [solid] — suspect exonerated
+
+| field | after our op-43 drag | device-authored `split_preset` |
+|---|---|---|
+| DSP group `21` | **1** | 1 |
+| split `18` / column | **true / 2** | true / 2 |
+| mixer `18` / column | **true / 9** | true / 9 |
+| row-B block | **slot 12** | slot 12 |
+
+Identical. `move_block_to_row` sending op 43 alone is correct, and the doc comment I flagged as the
+prime suspect was right after all. `show-preset` agrees: *"split (parallel) topology"*, block at slot
+12 marked `(row B)`, enabled in the live scene and in all eight snapshots.
+
+### The node parameters are sane too
+
+Resolved against the catalog (`Enabled` is content key `18`, not a param, so the stored arrays are
+one shorter than the model's list — the bool in each pins the alignment):
+
+```
+SPLIT  Split Y   Balance A = 0.5   Balance B = 0.5   bypass = false      (both at the .models default)
+MIXER  Mixer     A Level = 0 dB    A Pan = 0.5       B Level = 0 dB
+                 B Pan = 0.5       B Polarity = false  Level = +3 dB
+```
+
+Nothing here mutes path B. The only deviation from default is the mixer's master `Level` at +3 dB,
+which is *louder*. `B Level` is at unity.
+
+**So the preset we produce is correct**, and this is not a data bug we can see. Every field we can
+compare matches a working device-authored preset.
+
+### What the chain actually is
+
+```
+10 Band Graphic (common)  →  ⋔  →  A: Line 6 2204 Mod → 2x12 Match H30 → Cave
+                                   B: Alpaca Rouge
+                                                        →  ⋉  →  out
+```
+
+Path B is a **bare distortion with no cab**, summed against a full amp→cab→reverb path. A cab is a
+steep low-pass; without one, path B is thin fizz sitting under a cab'd amp at equal mixer level. That
+is a plausible reason for "no rotary goodness" / "no delay sounds" that is not a routing failure —
+and it is consistent with him hearing nothing useful from a rotary and a delay placed the same way.
+
+### The test that separates the two, and needs no dump
+
+Mute path A at the mixer — set `A Level` to −60 dB — and listen.
+
+- **Path B audible** → routing works; this is a mix/placement issue, and the fix is musical (put the
+  cab before the split so both paths share it, or raise `B Level`).
+- **Still silent** → the routing really is dead, and the cause is somewhere we cannot see in the
+  preset data, which would be a genuinely new lead.

@@ -59,8 +59,24 @@ Everything else is identical — a serial preset already carries the Y-split mod
 the mixer model (`17 → 8 = 151`), both with `10 => true`. So "make this preset parallel" is not about
 creating nodes; it is about **enabling the two that are already there and giving them columns**.
 
-None of those five fields has a known surgical op — the column is documented as op-21-only — which
-makes `move_block_to_row` (op 43 alone) worth auditing against a real post-move dump.
+None of those five fields has a known surgical op — the column is documented as op-21-only. **The
+device sets all five itself on an op-43 move into a row-B slot** — verified 2026-07-31 against a dump
+taken straight after a drag, which came back structurally identical to a device-authored parallel
+preset (`key21=1`, both nodes `18: true`, columns 2 and 9, block at slot 12). So `move_block_to_row`
+sending op 43 alone is correct, and the doc comment claiming the device activates the split was right.
+
+### The split and mixer node parameters  [solid — 2026-07-31]
+Their param arrays live at `20 → <holder> → 7 → 4` (holder `15` for the split, `17` for the mixer),
+and the **`Enabled` param is not in that array** — it is the node content's key `18`. So the stored
+array is always one shorter than the model's param list:
+
+| node | model | stored params |
+|---|---|---|
+| Split Y | 257 `HD2_AppDSPFlowSplitY` | `Balance A` (def 0.5), `Balance B` (def 0.5), `bypass` |
+| Split A/B | 256 `HD2_AppDSPFlowSplitAB` | `Route To` (def 0.5), `bypass` |
+| Mixer | 151 `HD2_AppDSPFlowJoin` | `A Level` (def 0, −60..12 dB), `A Pan` (0.5), `B Level` (0), `B Pan` (0.5), `B Polarity` (false), `Level` (0) |
+
+The bool in each array (`bypass` / `B Polarity`) pins the alignment, so the mapping is not guesswork.
 
 ## Preset map (integer keys)
 | key | value | meaning (inferred) |

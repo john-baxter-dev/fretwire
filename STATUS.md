@@ -971,6 +971,27 @@ now the prime suspect.
 taken straight after a drag answers all five fields at once. Asked for; nothing further to do until
 it lands.
 
+## Twelfth round (2026-07-31): the dump clears our code
+
+`fretwireTest3.bin`, dumped straight after a drag to the parallel row. **The device sets all five
+topology fields itself** on the op-43 move: `key21=1`, both nodes `18: true`, columns 2 and 9, block
+at slot 12 — structurally identical to the device-authored `split_preset` fixture. `move_block_to_row`
+sending op 43 alone is correct and the doc comment I had flagged as the prime suspect was right.
+
+The node parameters are sane too: Split Y at `Balance A/B = 0.5/0.5` (both `.models` defaults), mixer
+at `A Level 0 dB`, `B Level 0 dB`, master `Level +3 dB`. Nothing mutes path B; the one non-default is
+*louder*. Also decoded on the way: the split/mixer param layouts, and that `Enabled` is content key
+`18` rather than an entry in the param array — see `docs/preset-format.md`.
+
+**So the preset we produce is correct and this is not a data bug we can see.** What the chain actually
+is, though: path A is `amp → cab → reverb` and path B is a **bare distortion with no cab**, summed at
+equal level. A cab is a steep low-pass, so path B is thin fizz under a cab'd amp — a plausible
+non-routing reason for "no rotary goodness" / "no delay sounds".
+
+**Next, and it needs no dump:** mute path A (`A Level` → −60 dB) and listen. Audible ⇒ routing works
+and it is a mix/placement issue (put the cab before the split, or raise `B Level`). Still silent ⇒ the
+routing really is dead and the cause is outside the preset data, which would be a new lead.
+
 ## Prioritized next steps
 > **The path to live control is in `docs/next-steps.md`.** TL;DR: (1) **on Windows now** — capture a
 > dozen single-knob edits, decode with `fretwire decode-edit`, find out if param keys generalize (the

@@ -947,6 +947,30 @@ correct-looking chain with wrong per-block state. He saved afterwards, so it is 
 repair `fretwireTest2`. Also decoded this round: preset keys 5, 6 and 10, previously "TBD" — see
 `docs/preset-format.md`.
 
+## Eleventh round (2026-07-31): offset fix is in; the parallel path is still silent
+
+First session on `813cae3` (`fretwire14.log`). Fresh preset built from scratch, **no op-21 writes at
+all**, zero errors, clean close — and a block moved to the parallel row still makes no sound.
+
+**The corruption hypothesis is withdrawn.** No whole-preset write happened in that session, so
+nothing we sent carried an offset table; the row moves are surgical and the device performs them
+itself. This is its own bug.
+
+**What a parallel path requires** (diffing the split captures against the serial ones — new, and
+worth having regardless): the split and mixer nodes are **always present**, at slot indices 10 and
+19, even on a serial preset, already carrying the Y-split model and the mixer model. Exactly five
+fields differ: DSP group key `21`, and `18` (enabled) + `13` (column) on each of the two nodes. So
+going parallel means **enabling two nodes that already exist and giving them columns** — and none of
+those five fields has a known surgical op.
+
+`move_block_to_row` sends op 43 and nothing else, resting on a doc comment that claims "the device
+activates/retires the split as needed". That claim has never been checked against a dump, and it is
+now the prime suspect.
+
+**This cannot be settled from a log** — logs carry ops and sizes, not preset contents. One `dump-raw`
+taken straight after a drag answers all five fields at once. Asked for; nothing further to do until
+it lands.
+
 ## Prioritized next steps
 > **The path to live control is in `docs/next-steps.md`.** TL;DR: (1) **on Windows now** — capture a
 > dozen single-knob edits, decode with `fretwire decode-edit`, find out if param keys generalize (the

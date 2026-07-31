@@ -43,6 +43,25 @@ plausible-looking block layout while its per-snapshot block state is garbage, wh
 "the chain looks right and makes no sound". The offsets before the first shifted integer (the slot
 arrays, key 0/1) stayed correct, which is why the block list always survived. [hypothesis]
 
+### Serial vs parallel: what actually differs  [solid — 2026-07-31]
+The split (kind 2) and mixer (kind 3) nodes are **always present**, at slot-array indices **10 and
+19**, even on a fully serial preset. Only four fields distinguish the two topologies:
+
+| field | serial | parallel |
+|---|---|---|
+| DSP group key `21` (split type) | `0` | non-zero (`1` on both Stomp captures; `2`/`3` seen on a Floor) |
+| split node `20 → 18` | `false` | **`true`** |
+| split node `20 → 15 → 13` (column) | `0` | the split's column (2, 5) |
+| mixer node `20 → 18` | `false` | **`true`** |
+| mixer node `20 → 17 → 13` (column) | `0` | the mixer's column (7, 9) |
+
+Everything else is identical — a serial preset already carries the Y-split model (`15 → 8 = 257`) and
+the mixer model (`17 → 8 = 151`), both with `10 => true`. So "make this preset parallel" is not about
+creating nodes; it is about **enabling the two that are already there and giving them columns**.
+
+None of those five fields has a known surgical op — the column is documented as op-21-only — which
+makes `move_block_to_row` (op 43 alone) worth auditing against a real post-move dump.
+
 ## Preset map (integer keys)
 | key | value | meaning (inferred) |
 |----:|-------|--------------------|

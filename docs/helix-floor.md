@@ -1095,3 +1095,57 @@ the same action worked in `fretwire8.log`.
 Right after a model swap (op 40, 05:57:47) three consecutive reads failed with
 `envelope key 104 missing or not bytes`, backing off and retrying, then succeeded. The retry loop did
 its job; worth watching whether a swap needs a settle delay before the read.
+
+## Eleventh round (2026-07-31): `fretwire14.log` — offset fix is in, parallel path still silent
+
+First session on `813cae3`. Fresh preset (`fretwireTest3`), built from scratch: op-39 adds and op-71
+saves, then two op-43 row moves. **No op-21 writes at all**, zero errors, clean close.
+
+That is decisive on one point: **the silent parallel path is not the offset-table bug.** No
+whole-preset write happened, so nothing we sent could have carried a stale table; the moves are
+surgical and the device performs them itself. The corruption hypothesis from the tenth round is
+withdrawn.
+
+### What a parallel path actually requires  [solid]
+
+Diffing the two split captures against the two serial ones (see `docs/preset-format.md`): the split
+and mixer nodes are **always present**, at slot indices 10 and 19, on serial presets too. Five fields
+differ, and no more:
+
+| field | serial | parallel |
+|---|---|---|
+| DSP group `21` | 0 | non-zero |
+| split `20 → 18` | false | **true** |
+| split `20 → 15 → 13` (column) | 0 | 2 or 5 |
+| mixer `20 → 18` | false | **true** |
+| mixer `20 → 17 → 13` (column) | 0 | 7 or 9 |
+
+A serial preset already carries the Y-split model (257) and the mixer model (151). So going parallel
+is **enabling two nodes that already exist and giving them columns** — and none of those five fields
+has a known surgical op.
+
+`move_block_to_row` sends op 43 and nothing else, on the strength of a doc comment asserting "the
+device activates/retires the split as needed". That assertion has never been checked against a dump.
+
+### Why this can't be settled from a log
+
+The logs carry frame sizes, ops and identities — no preset contents. Both readings survive it:
+
+- the device sets all five fields and something *else* is silencing path B (mixer B-level, or the
+  block landing at a column outside the split→mixer bracket); or
+- the device sets some but not all, and the row-B slot is simply not in the signal path.
+
+There is indirect evidence for the first — `set_node_pos` refuses unless `dsp_is_split` is true, and
+it ran (and froze) on `fretwireTest2` in the sixth round, so key `21` was non-zero there after a
+row-B move. But that is one preset, inferred, and it does not cover the other four fields.
+
+### Retest ask — one artifact settles it
+
+On the fixed build: drag a block to the parallel row, then **close the GUI** and
+
+```
+cargo run -p fretwire-cli -- dump-raw parallel-after.bin
+```
+
+That dump answers all five fields at once, and tells us whether this is a missing activation on our
+side or a routing detail on the device's.

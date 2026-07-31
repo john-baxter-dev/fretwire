@@ -825,6 +825,40 @@ Two more bugs, both fixed:
   two refusals. **Fix:** add the amp bare, then op-40 the cab onto it, which is HX Edit's order and
   the byte-exact path the capture tests cover. Needs a hardware retest.
 
+## Seventh round (2026-07-31): the freeze reproduced, and it is the whole-preset write
+
+**The first reproducible lockup, with a log through it.** Build a parallel path, then drag the mixer
+(the ⋈ join) to a column between two blocks: the pedal stops responding and needs a power cycle. He
+hit it twice, either side of a reboot, on the same action.
+
+Both freezes are a **whole-preset write (op 21) that the device stopped accepting mid-transfer**, and
+the mechanism is ours:
+
+- Each 496-byte data frame earns an empty `cmd 0x08` frame back. That is a **flow-control credit**,
+  not decoration — a healthy write earns ≈1 per chunk and never runs more than one behind. We were
+  treating them as noise: glance at the wire for 5 ms, discard whatever showed up, send the next
+  chunk regardless.
+- In both freezes the credits went to a flat zero — after chunk 1 in one, after chunk 7 in the other
+  — and we pushed four more chunks (≈2 KB) into a device that had already stopped reading.
+- Then we hung. **`Transport::send` had no timeout at all**: the last line of both logs is
+  `Submitted URB … on ep 1` with no completion. Once the device stops draining its OUT endpoint an
+  unbounded `bulk_out` blocks forever, so the editor wedged along with the pedal.
+
+Fixes:
+
+- `Transport::send` races a **2 s `WRITE_TIMEOUT`**, mirroring what `recv_timeout` already did for
+  reads. A stalled endpoint is now `Error::Timeout`, not an unkillable hang.
+- `write_preset` **waits for each chunk's credit** (250 ms) instead of glancing for 5 ms, tracks the
+  running deficit, and aborts with `Error::WriteStalled` once it runs more than 2 chunks ahead —
+  which on both field traces is the frame *before* the one we blocked on. It also drops the read
+  cache, since the edit buffer is then half-written.
+
+Honest limit: this stops fretwire hanging and stops it emptying the rest of a blob into a wedged
+pedal. Whether the gentler pacing also stops the **pedal** freezing is untested — that needs
+hardware. The two traces died at different chunks (2 and 8) on the same user action, which points at
+a pacing/buffer race rather than a byte the firmware chokes on, but that is inference, not proof.
+[hypothesis]
+
 ## Prioritized next steps
 > **The path to live control is in `docs/next-steps.md`.** TL;DR: (1) **on Windows now** — capture a
 > dozen single-knob edits, decode with `fretwire decode-edit`, find out if param keys generalize (the

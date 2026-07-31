@@ -886,3 +886,54 @@ Needs a hardware retest — it is a fix for a refusal we can now at least *see*.
   (`body=31`, `body=17`, then `body=41` after the list refresh). We skip them as non-replies while
   waiting on a request, and re-read anyway, so nothing is lost — but they look like "stored" /
   "list changed" notifications and would be a cheaper way to know a write landed.
+
+## Seventh round (2026-07-31): the freeze, reproduced with a log through it
+
+Three logs and four screenshots, on one preset (`fretwireTest2`, USER 2 slot 1: Deluxe C… → split →
+Rotary Drive on row B → Placater → 8x10 → Double T…). The tester's own account:
+
+> I dragged the rotary down, worked a treat, then when I dragged the end of the loop to be between
+> the amp and the cab, then it froze the unit […] when I rebooted the unit, and relaunched the GUI,
+> it hadn't saved when I dragged the rotary down to the loop. So I recreated that, and it defaults
+> the mixer to the endpoint of the DSP. So when I tried to place the mixer to between the amp and
+> the cab, it froze the unit again(!)
+
+Two freezes, same action, either side of a power cycle. This is the first lockup we have a log
+through — and unlike the July 26 incidents, nothing is ambiguous about it.
+
+### Both freezes are an op-21 write the device stopped accepting  [solid] [partly fixed]
+
+The mixer move has no surgical op (the position is the node holder's key 13), so it goes through the
+**whole-preset write**: ~14 frames of 496 bytes. Counting the device's empty `cmd 0x08` replies per
+chunk across the three writes in these logs:
+
+| write | outcome | credits per chunk | worst deficit |
+|---|---|---|---|
+| log 8 #1 (rotary → row B) | landed, 6809/6809 | `0 3 1 1 1 1 2 1 1 1 1 1 1 1` | **1** |
+| log 8 #2 (mixer move) | froze at 2480/6809 | `2 0 0 0 0` | 3 |
+| log 9 (mixer move, post-reboot) | froze at 5456/6809 | `1 2 1 1 1 1 1 0 0 0 0` | 3 |
+
+Those replies are flow control, which we had documented as something to "drain". A healthy write
+earns about one per chunk and never runs more than one ahead. Both freezes go to a flat zero and stay
+there, while we kept sending — four more chunks, ≈2 KB, into a device that had stopped reading.
+
+Then the editor hung with it. The last line of both logs is `Submitted URB … on ep 1` with no
+completion: `Transport::send` was an **unbounded** `block_on(bulk_out(…))`, so a device that stops
+draining its OUT endpoint blocks the host forever. The IN path had raced a timer since the beginning;
+the OUT path never did.
+
+**Fixes:** `Transport::send` now races a 2 s `WRITE_TIMEOUT`; `write_preset` waits 250 ms for each
+chunk's credit, tracks the deficit, and aborts with `Error::WriteStalled` once it is more than 2
+chunks ahead — on both traces that is the frame *before* the one we blocked on — dropping the read
+cache on the way out, since the edit buffer is half-written at that point.
+
+**What this does not fix:** the pedal still freezes, as far as we know. This stops fretwire hanging
+and stops it pushing the rest of a preset into a wedged unit. The pacing change may also prevent the
+freeze — the two traces dying at different chunks (2 and 8) on the same action looks like a race, not
+a byte the firmware rejects — but that is inference. Needs hardware.
+
+### Retest ask
+
+1. The mixer drag again, on the fixed build. Expected either "it works" or a clean *"the pedal
+   stopped responding N of M bytes into a preset write"* — **not** a hang. Either answer is useful.
+2. The Amp+Cab add from the sixth round, still outstanding.

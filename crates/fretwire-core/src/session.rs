@@ -76,6 +76,13 @@ const MAX_HISTORY: usize = 50;
 /// bulk-IN timeout before we notice, and `read_preset` retries three times on top of that.
 const READ_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// How many chunks of a whole-preset write have gone out without a matching flow-control credit.
+/// Zero when the device is keeping up (credits can run *ahead* — it batches them — which is not a
+/// surplus worth tracking, just "not behind").
+fn write_deficit(chunks_sent: usize, credits: usize) -> usize {
+    chunks_sent.saturating_sub(credits)
+}
+
 /// Read the op (key 100) and transaction (key 102) back out of an edit body we're about to send, so
 /// a log line can say which command a reply belongs to. `None` for either field when the body isn't
 /// one of the `edit::` builders' maps — the caller degrades to a less specific message.
@@ -613,14 +620,31 @@ impl Session {
     ///
     /// Transport: the large edit TLV is sent across `cmd 0x04` frames on the edit channel (the device
     /// reassembles by the TLV's declared length), then a terminating `cmd 0x08`, mirroring the
-    /// chunked-read in reverse. The device interleaves `cmd 0x08` flow-control ACKs, which we drain.
+    /// chunked-read in reverse. The device answers each data frame with an empty `cmd 0x08` frame —
+    /// **that is a flow-control credit, not decoration.** We used to fire all fourteen chunks with a
+    /// 5 ms glance at the wire between them and push on regardless of what came back; when the device
+    /// fell behind it stopped answering altogether and the transfer wedged it hard enough to need a
+    /// power cycle. So the loop now spends a real timeout waiting for each chunk's credit and gives
+    /// up while the pedal is still recoverable rather than emptying the rest of the blob into it.
     ///
-    /// LIVE: the exact chunk size and `arg` cadence are reconstructed from `move_EQ_right_two_slots`
-    /// and need first-contact tuning — every frame is logged at debug to diff the trace against the
-    /// capture. The device's `{103:1}` apply-ACK is best-effort (logged, not required); the caller
-    /// confirms by re-reading.
+    /// [solid — 2026-07-31 Floor logs: two freezes mid-write. Healthy transfer earns ≈1 credit per
+    /// chunk and never runs more than one behind; both freezes went to a flat zero (after chunk 1 and
+    /// after chunk 7) and we sent 4 more chunks into a device that was already gone.]
+    ///
+    /// LIVE: the exact chunk size and `arg` cadence are reconstructed from `move_EQ_right_two_slots`.
+    /// The device's `{103:1}` apply-ACK is best-effort (logged, not required); the caller confirms by
+    /// re-reading.
     pub fn write_preset(&mut self, blob: Vec<u8>) -> crate::Result<()> {
         const CHUNK: usize = 496; // ≤ one 512-byte bulk packet incl. the 16-byte frame header
+        /// How long to wait for a chunk's flow-control credit before counting it missing. Generous
+        /// next to the ~7 ms a healthy chunk round-trips in: the point is to let a busy device catch
+        /// up, since outrunning it is what wedges it.
+        const CREDIT_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
+        /// How many chunks we may run ahead of the credits before calling the device wedged. A
+        /// healthy transfer never runs more than one behind; two consecutive silent chunks is the
+        /// device gone, not the device busy.
+        const MAX_DEFICIT: usize = 2;
+
         let txn = self.bump_txn();
         let tlv = Tlv::command(op::PARAM_SET, edit::write_preset(&blob, txn)).to_bytes();
         let (src, dst) = channel::EDIT;
@@ -632,7 +656,8 @@ impl Session {
         let arg = self.cur_arg(src);
         let total = tlv.len();
         let mut sent = 0usize;
-        for chunk in tlv.chunks(CHUNK) {
+        let mut credits = 0usize;
+        for (n, chunk) in tlv.chunks(CHUNK).enumerate() {
             let seq = self.next_seq(src);
             self.transport.send_frame(&Frame::new(
                 src,
@@ -643,11 +668,45 @@ impl Session {
                 chunk.to_vec(),
             ))?;
             sent += chunk.len();
-            tracing::debug!(arg, len = chunk.len(), sent, total, "write-preset chunk");
-            // Consume the device's interleaved flow-control ACKs so neither side's queue backs up.
-            let _ = self
-                .transport
-                .drain_collect(std::time::Duration::from_millis(5), 8);
+            // Block for this chunk's credit, then sweep up anything else already queued so the
+            // device's backlog doesn't accumulate. Waiting for the *first* frame is what paces us;
+            // the second call only mops up and must not add latency.
+            credits += self.transport.drain_collect(CREDIT_WAIT, 1).len()
+                + self
+                    .transport
+                    .drain_collect(std::time::Duration::from_millis(2), 8)
+                    .len();
+            let deficit = write_deficit(n + 1, credits);
+            tracing::debug!(
+                arg,
+                len = chunk.len(),
+                sent,
+                total,
+                credits,
+                deficit,
+                "write-preset chunk"
+            );
+            if deficit > MAX_DEFICIT {
+                // Stop here. The remaining chunks would go into a device that has stopped reading,
+                // and the terminator would leave it holding a half-written preset.
+                tracing::error!(
+                    sent,
+                    total,
+                    credits,
+                    chunks = n + 1,
+                    "device stopped acknowledging mid-write — aborting the transfer"
+                );
+                // The edit buffer holds a partial preset now, so the read cache no longer describes
+                // the device. Drop it: the next read has to come off the wire.
+                self.last_raw = None;
+                return Err(crate::Error::WriteStalled(format!(
+                    "the pedal stopped responding {sent} of {total} bytes into a preset write \
+                     (only {credits} of {} chunks acknowledged); the transfer was aborted. \
+                     The edit buffer may be inconsistent — reload the preset, and power-cycle \
+                     the pedal if it is unresponsive",
+                    n + 1
+                )));
+            }
         }
         // Terminate the transfer (empty cmd 0x08), as HX Edit does after the last data frame.
         let seq = self.next_seq(src);
@@ -2647,7 +2706,7 @@ mod reorder_tests_legacy {
 
 #[cfg(test)]
 mod tests {
-    use super::{edit_op_txn, identity_confirms, op_name, reply_txn};
+    use super::{edit_op_txn, identity_confirms, op_name, reply_txn, write_deficit};
     use fretwire_data::stream::{PresetInfo, parse_edit_rejection};
 
     fn info(bank: i64, index: i64, name: &str) -> PresetInfo {
@@ -2657,6 +2716,42 @@ mod tests {
             name: name.to_string(),
             snapshot: Some(0),
         }
+    }
+
+    #[test]
+    fn the_write_pacing_rule_separates_a_busy_device_from_a_dead_one() {
+        // Per-chunk flow-control credits counted off three real whole-preset writes (Floor logs,
+        // 2026-07-31). Each entry is the credits that arrived in that chunk's window; the guard in
+        // `write_preset` aborts once the running deficit exceeds 2.
+        const MAX_DEFICIT: usize = 2;
+        let worst = |per_chunk: &[usize]| {
+            let (mut credits, mut worst) = (0usize, 0usize);
+            for (n, c) in per_chunk.iter().enumerate() {
+                credits += c;
+                worst = worst.max(write_deficit(n + 1, credits));
+            }
+            worst
+        };
+
+        // The write that landed: 14 chunks, ~1 credit each, never more than one behind. The guard
+        // must not fire here — a false abort would leave a half-written preset for no reason.
+        let healthy = [0, 3, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1];
+        assert_eq!(worst(&healthy), 1);
+        assert!(worst(&healthy) <= MAX_DEFICIT);
+
+        // Freeze #1: the device answered chunk 1 and then went silent. We sent four more chunks
+        // into it and blocked forever on the fifth. The guard trips while chunk 6 is still unsent.
+        let froze_early = [2, 0, 0, 0, 0];
+        assert_eq!(worst(&froze_early), 3);
+        assert!(worst(&froze_early) > MAX_DEFICIT);
+
+        // Freeze #2: healthy for seven chunks, then flat zero — the same ending, later on.
+        let froze_late = [1, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0];
+        assert_eq!(worst(&froze_late), 3);
+        assert!(worst(&froze_late) > MAX_DEFICIT);
+
+        // Credits arriving in a burst ahead of the chunks is not a deficit.
+        assert_eq!(write_deficit(1, 5), 0);
     }
 
     #[test]

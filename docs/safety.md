@@ -12,6 +12,17 @@
 | Persistent writes: save preset/setlist, global settings | 🟡 low (data, not device) | risks corrupting *your data*; recoverable by factory reset / restoring a backup |
 | **Firmware update / flash / bootloader / DFU** | 🔴 **brick risk** | **do not capture, replay, or transmit. If seen in captures: document and avoid.** |
 
+### Known lockup: the whole-preset write (op 21)
+A chunked op-21 write can wedge the device — reproduced twice in the field 2026-07-31 by dragging the
+mixer node, needing a power cycle each time. It is 🟡 (transient, flash untouched, no data lost), but
+it is the one operation we know can take the pedal out mid-session.
+
+The device grants one flow-control credit per 496-byte chunk; **outrunning them is not safe**. Since
+2026-07-31 `write_preset` waits for each credit and aborts once it is more than 2 chunks ahead, and
+`Transport::send` has a 2 s timeout so a stalled endpoint can no longer hang the host. If you touch
+that path, keep both properties. Never make the OUT path unbounded again — a device that stops
+draining its endpoint will otherwise block the editor forever.
+
 ## Guardrails (follow before transmitting anything)
 1. **Back up the device first** — full HX Edit backup (`.hxb`: all setlists/presets/IRs/globals).
    Makes any data mishap fully reversible.

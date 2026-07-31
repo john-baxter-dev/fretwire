@@ -26,6 +26,12 @@ const IN_BUF: usize = 1024;
 /// gaps well under a second; 3 s turns a desync into a clean error (and keeps connect-retry snappy).
 const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// How long to wait for a bulk OUT to complete before giving up. A healthy device drains a 512-byte
+/// frame in well under a millisecond, so this only ever fires when the device has stopped reading —
+/// which, unbounded, is an unkillable hang rather than an error. Kept short: unlike a read, there is
+/// no legitimate reason for the host's write to sit in the queue.
+const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Max unsolicited frames to skip while waiting for a request's matching reply. The status
 /// channel emits meters/keepalives that interleave with our solicited replies; this bounds how
 /// many we'll discard before giving up so a chatty device can't hang us.
@@ -125,11 +131,31 @@ impl Transport {
         self.device
     }
 
-    /// Send raw bytes on the bulk OUT endpoint.
+    /// Send raw bytes on the bulk OUT endpoint, bounded by [`WRITE_TIMEOUT`].
+    ///
+    /// The bound is not a formality. A wedged device stops draining its OUT endpoint, and an
+    /// unbounded `bulk_out` then blocks **forever** — observed twice in the field on 2026-07-31,
+    /// where a whole-preset write hung the editor with the last log line reading "Submitted URB on
+    /// ep 1" and nothing after it. Racing a timer the way [`Transport::recv_timeout`] does turns
+    /// that permanent hang into an [`Error::Timeout`] the caller can report.
     pub fn send(&self, bytes: Vec<u8>) -> Result<()> {
         tracing::trace!(len = bytes.len(), "bulk OUT {:02x?}", bytes);
-        block_on(self.iface.bulk_out(EP_OUT, bytes)).into_result()?;
-        Ok(())
+        let transfer = self.iface.bulk_out(EP_OUT, bytes);
+        let outcome = block_on(future::or(
+            async move { Some(transfer.await.into_result()) },
+            async move {
+                futures_timer::Delay::new(WRITE_TIMEOUT).await;
+                None
+            },
+        ));
+        match outcome {
+            Some(Ok(_)) => Ok(()),
+            Some(Err(e)) => Err(e.into()),
+            None => {
+                tracing::error!("bulk OUT timed out — the device stopped draining its endpoint");
+                Err(Error::Timeout)
+            }
+        }
     }
 
     /// Read one bulk IN transfer (up to [`IN_BUF`] bytes), bounded by [`READ_TIMEOUT`].

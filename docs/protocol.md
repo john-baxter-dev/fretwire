@@ -235,6 +235,28 @@ blocks — the fallback you make after the paired add refuses twice.
 including a `uint16` index — so `Session::add_block` now adds the amp bare and pairs it with a
 following op 40, which is the order HX Edit uses.
 
+### The empty `cmd 0x08` frames during an op-21 write are flow-control credits [solid]
+*2026-07-31 Floor logs — two lockups reproduced on one user action.*
+
+Sending a whole preset (op 21) means ~14 OUT `cmd 0x04` data frames of 496 bytes. The device answers
+each with an **empty `cmd 0x08` frame**, and that reply is a credit: it means "I consumed that one".
+
+| write outcome | credits per chunk | worst deficit |
+|---|---|---|
+| completed (14 chunks) | `0 3 1 1 1 1 2 1 1 1 1 1 1 1` | **1** |
+| froze after chunk 1 | `2 0 0 0 0` | 3 |
+| froze after chunk 7 | `1 2 1 1 1 1 1 0 0 0 0` | 3 |
+
+A healthy transfer never runs more than **one** chunk ahead of its credits. Both lockups show the
+credits stopping dead and the host running 3+ ahead — and once the device stops draining its OUT
+endpoint, an unbounded `bulk_out` **never returns** (both logs end on `Submitted URB … on ep 1` with
+no completion). Treating the credits as noise and pacing off a fixed 5 ms delay is what produced
+that. Wait for each chunk's credit; abort the transfer while the pedal is still recoverable.
+
+Whether outrunning the credits is what *causes* the freeze, or only what lets us keep shovelling into
+one, is unproven — the two traces died at different chunks (2 and 8) on the same action, which reads
+like a race rather than a byte the firmware rejects. [hypothesis]
+
 ### Bypass is set-state, not a blind toggle [solid] — resolves prior "open"
 The two frames of one tremolo bypass press carry `101 → 59: true` then `101 → 59: false` (wire bytes
 `…3b c3` then `…3b c2`). So bypass writes an **explicit bool** at target key 59; it is not a toggle.

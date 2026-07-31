@@ -1055,6 +1055,39 @@ pub fn parse_preset_info(reply: &[u8]) -> Option<PresetInfo> {
     })
 }
 
+/// Envelope key `103` — the reply's **kind**, which we spent a long time treating as a don't-care:
+/// `0` = key 104 carries a payload (identity, stream chunk, the echo of an applied edit), `1` = a
+/// bare ack with 104 nil, `255` = the device **threw the command out** and 104 holds `{111: code}`.
+const ENVELOPE_KIND_KEY: i64 = 103;
+/// Value of [`ENVELOPE_KIND_KEY`] meaning the device refused the command.
+const KIND_REJECTED: i64 = 255;
+/// Key holding the refusal's numeric reason, inside key 104 of a rejection reply.
+const REJECT_CODE_KEY: i64 = 111;
+
+/// The device's refusal code if `reply` is a rejection, `None` if it is an ordinary ack or payload.
+///
+/// The device answers a command it won't apply with `{102: txn, 103: 255, 104: {111: code}}` and
+/// otherwise carries on as if nothing happened — no error frame, no state change, and the very next
+/// read returns the unmodified preset. Nothing in the reply says which command it is about beyond
+/// the echoed transaction, so the caller must match `txn` itself.
+///
+/// [solid — 2026-07-30 Floor log: two `add_block` commands answered `{102:44/60, 103:255,
+/// 104:{111:-21}}`, with the preset stream byte-identical before and after each]
+pub fn parse_edit_rejection(reply: &[u8]) -> Option<(u16, i64)> {
+    let root = locate_root(reply, 32)?;
+    if map_get(&root.value, ENVELOPE_KIND_KEY).and_then(Value::as_i64)? != KIND_REJECTED {
+        return None;
+    }
+    let txn = map_get(&root.value, 102)
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as u16;
+    let code = map_get(&root.value, ENVELOPE_PRESET_KEY)
+        .and_then(|p| map_get(p, REJECT_CODE_KEY))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    Some((txn, code))
+}
+
 /// A state-change the device pushes **unsolicited** on the status channel when something changes on
 /// the pedal itself (footswitch, panel knob, snapshot/preset switch). The wire shape is
 /// `{105: type, 106: payload}`; `parse_status_push` distills it to these typed events so the editor

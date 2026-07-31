@@ -800,6 +800,31 @@ Two new bugs came out of the material, both fixed:
   worse — it sat on screen over a preset in a different setlist. It now re-states itself whenever
   the loaded preset's identity moves, from whichever path moved it.
 
+## Sixth round (2026-07-30, later): a preset built and saved on the Floor
+
+Still the pre-fix build, so it tests none of the above. It tests **writing**, for the first time in
+the field: 7 minutes, zero `ERROR`, browse out of FACTORY 1 into USER 2, build a preset in slot 0,
+`save` — and the identity comes back `bank: 3, index: 0, name: "fretwireTest1"`. He mailed the blob
+and our own decoder reads it cleanly (`Brit P75 Nrm` + `2x12 Silver Bell`, all params, snapshots
+consistent), matching his screenshot. The **browse/write setlist split** is confirmed working: he
+browsed and loaded across setlists and saved in place. Cross-setlist *writing* is still gated.
+
+Two more bugs, both fixed:
+
+- **We never checked whether the device accepted an edit.** Envelope key 103 is the reply's kind,
+  not a don't-care: `0` = payload, `1` = ack, **`255` = refused**, with `104: {111: code}`. Two
+  commands in this session came back `{103:255, 104:{111:-21}}` and the preset stream was
+  byte-identical across both — nothing applied — while `send_edit` logged the reply at `DEBUG` and
+  returned `Ok`, so the GUI reported success. Now `Error::Rejected`. The log also couldn't say
+  *which* command was refused, so `send_edit` logs the op and txn it sent.
+- **Adding an amp with its cab has never worked.** The refused command was `add_block` (op 39)
+  carrying a `paired_index` — i.e. every pick from the synthetic **Amp+Cab** category, since each
+  amp's linked cab sits at `Helix.sym` 687–829 and needs a `uint16`, which is exactly the 2 bytes
+  separating the refused 56-byte frames from the 52-byte frames of the two adds that worked. The
+  saved preset is the proof: amp and cab as two separate, *unpaired* blocks — the fallback after
+  two refusals. **Fix:** add the amp bare, then op-40 the cab onto it, which is HX Edit's order and
+  the byte-exact path the capture tests cover. Needs a hardware retest.
+
 ## Prioritized next steps
 > **The path to live control is in `docs/next-steps.md`.** TL;DR: (1) **on Windows now** — capture a
 > dozen single-knob edits, decode with `fretwire decode-edit`, find out if param keys generalize (the

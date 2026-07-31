@@ -204,6 +204,37 @@ Decoded structure (confirmed across many single-knob captures, `captures/param_m
 - Builders `fretwire_protocol::edit::bypass()` / `set_value()` regenerate these bytes exactly.
 - The `f003` status channel echoes the same msgpack back (state mirror) — useful for reading state.
 
+### The reply's key 103 is a status, and `255` means refused [solid] — from the 2026-07-30 Floor log
+Every reply envelope is `{102: txn, 103: kind, 104: payload}`, and until now we read key 103 as a
+don't-care (`103:_` in the notes below). It is the **kind of answer**, and one of its values is a
+refusal:
+
+| 103 | 104 | meaning |
+|---|---|---|
+| `0` | the payload | data reply — the read-info identity, a stream chunk, the echo of an applied edit |
+| `1` | `nil` | plain ack (bypass, whole-preset write) |
+| `255` | `{111: code}` | **the device refused the command** |
+
+A refusal is silent in every other respect: no error frame, no state change, and the next read
+returns the preset byte-identical. Observed twice in one session — `{102:44, 103:255, 104:{111:-21}}`
+and the same again at `102:60` — while the 6778-byte stream stayed 6778 across both. The meaning of
+the code itself (`-21`) is unmapped [hypothesis]; only the fact of the refusal is decoded.
+`fretwire_data::stream::parse_edit_rejection` reads it, and `Session::send_edit` turns it into
+`Error::Rejected` — before this, `send_edit` logged the reply and returned `Ok`, so the GUI reported
+success for edits the pedal had thrown away.
+
+### op 39 will not add a paired cab; add then swap [solid] — same log
+`add_block` (op 39) is refused whenever the model-ref carries a real `paired_index` — i.e. every pick
+from the synthetic **Amp+Cab** category, since each amp's `amp.models` `ircablink` cab sits at
+`Helix.sym` index 687–829. The refused frames are 56 bytes on the wire, which is op 39's 51-byte
+frame plus the two bytes a `uint16` paired index costs; both successful adds in the same session
+carried `26: -1`, and the preset the tester saved has the amp and a cab as two separate, unpaired
+blocks — the fallback you make after the paired add refuses twice.
+
+`swap_model` (op 40) *does* take a paired index — that path is byte-exact against the capture tests,
+including a `uint16` index — so `Session::add_block` now adds the amp bare and pairs it with a
+following op 40, which is the order HX Edit uses.
+
 ### Bypass is set-state, not a blind toggle [solid] — resolves prior "open"
 The two frames of one tremolo bypass press carry `101 → 59: true` then `101 → 59: false` (wire bytes
 `…3b c3` then `…3b c2`). So bypass writes an **explicit bool** at target key 59; it is not a toggle.

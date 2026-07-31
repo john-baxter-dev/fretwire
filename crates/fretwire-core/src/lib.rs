@@ -27,6 +27,8 @@ pub enum Error {
     Protocol(#[from] fretwire_protocol::Error),
     #[error("usb: {0}")]
     Usb(#[from] fretwire_usb::Error),
+    #[error("the pedal refused the {0}")]
+    Rejected(String),
     #[error("backup file: {0}")]
     Backup(String),
     #[error("reference data: {0}")]

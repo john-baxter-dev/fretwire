@@ -824,3 +824,65 @@ over a preset in a different setlist.
 
 The status line now re-states itself whenever the loaded preset's identity changes, from whichever
 path moved it. Transient messages still persist while you stay on the preset they describe.
+
+## Sixth round (2026-07-30, later): the first preset built and saved on the Floor
+
+Still the pre-fix build ("here we go before we do another pull"), so nothing here tests the identity
+or status-line fixes above. What it does test is **writing**, for the first time in the field:
+
+```
+03:56:12  connect → Pull Me Under (FACTORY 1 #45), 8118 bytes
+03:56:19  browse bank 3 (USER 2) → 3347-byte listing
+03:56:22  identity moves to bank 3 #0 "New Preset", 6690 bytes
+   ...    add / undo / add amp / add cab / set params
+04:00:14  edit ACK reply=[]  →  identity now bank 3 #0 "fretwireTest1"
+04:03:28  session closed — pedal returned to standalone
+```
+
+7 minutes, zero `ERROR`, two `WARN` (both the benign `empty chunk before declared stream end`, both
+absorbed). The saved preset came back as an attachment and our own decoder reads it cleanly:
+`Brit P75 Nrm` in slot 1 with all twelve params, `2x12 Silver Bell` in slot 2 with six, snapshots
+consistent — matching his screenshot of the same preset exactly. The **cross-setlist browse-and-load
+split** (browsing and loading out of another setlist is allowed, writing across is not) is confirmed
+working: he was in FACTORY 1, browsed and loaded out of USER 2, and saved in place there.
+
+### The device refuses commands and we said "done" anyway  [solid] [fixed]
+
+Twice in the middle of that session the device answered an edit with
+
+```
+edit ACK reply=[…, 131, 102, 205,0,44, 103, 204,255, 104, 129, 111, 235]   → {102:44, 103:255, 104:{111:-21}}
+edit ACK reply=[…, 131, 102, 205,0,60, 103, 204,255, 104, 129, 111, 235]   → {102:60, 103:255, 104:{111:-21}}
+```
+
+and the preset stream stayed 6778 bytes across both — nothing was applied. `send_edit` logged the
+reply at `DEBUG` and returned `Ok`, so the GUI announced both edits as done. See
+`docs/protocol.md` for the key-103 status decode; `Error::Rejected` now carries it out.
+
+The log also could not say *which* command was refused — we logged only what came back — so the op
+had to be recovered from the frame length. `send_edit` now logs the op and transaction it sent.
+
+### What was refused: adding an amp **with its cab**  [solid] [fixed]
+
+The two refused frames are 56 bytes. Frames are zero-padded to 4 bytes, so that is a 53–56 byte
+frame; `add_block` builds 51 with both model indices as fixints and 53 with a `uint16` paired index,
+and no other builder in the session's vocabulary lands in that window. Every amp in `amp.models`
+links to a cab at `Helix.sym` index **687–829** (Brit P75 → `HD2_CabMicIr_4x12BlackbackH30`, 691), so
+*every* pick from the synthetic **Amp+Cab** category produces exactly that 53-byte body.
+
+The behaviour confirms it: after two refusals he added the amp alone (index 14) and a plain cab
+(index 58) as separate blocks, and that is what the saved preset contains — two blocks, both
+`23:false, 26:-1`, no pairing. The Amp+Cab category has never worked on hardware.
+
+**Fix:** `Session::add_block` sends op 39 with no cab and follows it with op 40 carrying the pair,
+which is HX Edit's own order and the op-40-with-pair path the capture tests already cover byte-exact.
+Needs a hardware retest — it is a fix for a refusal we can now at least *see*.
+
+### Smaller things, noted not acted on
+
+- `drained stale wire frames at connect` fires on every read-open, not just at connect. The message
+  is wrong; the behaviour is right.
+- The device pushes unsolicited `cmd=4` frames on both `0x03f0` and `0x03ed` around a save
+  (`body=31`, `body=17`, then `body=41` after the list refresh). We skip them as non-replies while
+  waiting on a request, and re-read anyway, so nothing is lost — but they look like "stored" /
+  "list changed" notifications and would be a cheaper way to know a write landed.

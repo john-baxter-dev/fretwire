@@ -76,6 +76,43 @@ const MAX_HISTORY: usize = 50;
 /// bulk-IN timeout before we notice, and `read_preset` retries three times on top of that.
 const READ_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Read the op (key 100) and transaction (key 102) back out of an edit body we're about to send, so
+/// a log line can say which command a reply belongs to. `None` for either field when the body isn't
+/// one of the `edit::` builders' maps — the caller degrades to a less specific message.
+fn edit_op_txn(body: &[u8]) -> (Option<i64>, Option<u16>) {
+    use fretwire_data::stream::{locate_root, map_get};
+    let Some(root) = locate_root(body, 4) else {
+        return (None, None);
+    };
+    (
+        map_get(&root.value, edit::K_OP).and_then(|v| v.as_i64()),
+        map_get(&root.value, edit::K_TXN)
+            .and_then(|v| v.as_u64())
+            .map(|t| t as u16),
+    )
+}
+
+/// Human name for an edit op id, for error messages the GUI shows verbatim. Unknown ids get a bare
+/// "edit" — the numeric op rides alongside it at the call site.
+fn op_name(op: i64) -> &'static str {
+    match op {
+        edit::OP_SET_VALUE => "parameter change",
+        edit::OP_BYPASS => "bypass toggle",
+        edit::OP_SELECT => "preset change",
+        edit::OP_SAVE_PRESET => "save",
+        edit::OP_RENAME_PRESET => "rename",
+        edit::OP_RENAME_SNAPSHOT => "snapshot rename",
+        edit::OP_SWITCH_SNAPSHOT => "snapshot change",
+        edit::OP_SWAP_MODEL => "model swap",
+        edit::OP_ADD_BLOCK => "block add",
+        edit::OP_DELETE_BLOCK => "block delete",
+        edit::OP_MOVE_BLOCK => "block move",
+        edit::OP_WRITE_PRESET => "preset write",
+        edit::OP_SETTING => "setting change",
+        _ => "edit",
+    }
+}
+
 /// Does the identity the device reported (`got`) confirm the one we asked [`Session::goto_preset`]
 /// for (`want`)?
 ///
@@ -352,9 +389,30 @@ impl Session {
         // Clear any frames buffered since the last heartbeat so the edit's reply is the next one we
         // read (the device interleaves keepalives/meters on a held session).
         self.transport.drain();
+        // Pull the op and transaction back out of the body we're about to send. Every `edit::`
+        // builder puts them at keys 100/102, and a log that says only what came *back* is what made
+        // the 2026-07-30 rejection take frame-size archaeology to identify.
+        let (sent_op, sent_txn) = edit_op_txn(&body);
         let tlv = Tlv::command(op::PARAM_SET, body);
         let ack = self.edit_request(cmd::OPEN, tlv.to_bytes())?;
-        tracing::debug!(reply = ?ack.body, "edit ACK");
+        tracing::debug!(op = ?sent_op, txn = ?sent_txn, reply = ?ack.body, "edit ACK");
+        // The ACK is not always an ack. Key 103 is the reply's kind, and `255` means the device
+        // threw the command away — it applies nothing, reports nothing else, and the next read comes
+        // back unchanged. We used to log this line and `Ok(())` on top of it, so the GUI cheerfully
+        // announced edits the pedal had refused. Only trust the verdict when it is answering the
+        // transaction we just sent.
+        if let Some((txn, code)) = fretwire_data::stream::parse_edit_rejection(&ack.body)
+            && sent_txn.is_none_or(|s| s == txn)
+        {
+            let what = sent_op.map_or_else(
+                || "command".to_string(),
+                |o| format!("{} (op {o})", op_name(o)),
+            );
+            tracing::warn!(op = ?sent_op, txn, code, "the pedal rejected the edit");
+            return Err(crate::Error::Rejected(format!(
+                "{what} — device code {code}"
+            )));
+        }
         // Flush HX Edit sends after each edit — fire-and-forget: the edit is already ACKed/applied,
         // and it gets no distinct reply of its own (only keepalives follow), so don't wait on one.
         let (src, dst) = channel::EDIT;
@@ -500,6 +558,12 @@ impl Session {
     /// Add a block at `slot` with model `model_index` (its `Helix.sym` index) and `paired_index`
     /// (`-1` = no paired cab/IR), enabled (op 39). The device fills the new block's params with the
     /// model's defaults; re-read to see them. Rides the edit channel.
+    ///
+    /// **A paired add is two commands, not one.** Op 39 carrying a cab is refused outright by the
+    /// device (`{103:255, 104:{111:-21}}`), so the pair is realized the way HX Edit does it: add the
+    /// amp bare, then op-40 the cab onto it — and op 40 with a paired index is the byte-exact path
+    /// the capture tests cover. [solid — 2026-07-30 Floor log: two paired adds refused, nothing
+    /// applied; the tester fell back to adding the amp and a cab as separate blocks]
     pub fn add_block(
         &mut self,
         slot: i64,
@@ -507,8 +571,11 @@ impl Session {
         paired_index: i64,
     ) -> crate::Result<()> {
         let txn = self.bump_txn();
-        let body = edit::add_block(slot, model_index, paired_index, txn);
+        let body = edit::add_block(slot, model_index, -1, txn);
         self.send_edit(body)?;
+        if paired_index >= 0 {
+            self.swap_model(slot, model_index, paired_index)?;
+        }
         Ok(())
     }
 
@@ -2580,8 +2647,8 @@ mod reorder_tests_legacy {
 
 #[cfg(test)]
 mod tests {
-    use super::{identity_confirms, reply_txn};
-    use fretwire_data::stream::PresetInfo;
+    use super::{edit_op_txn, identity_confirms, op_name, reply_txn};
+    use fretwire_data::stream::{PresetInfo, parse_edit_rejection};
 
     fn info(bank: i64, index: i64, name: &str) -> PresetInfo {
         PresetInfo {
@@ -2590,6 +2657,65 @@ mod tests {
             name: name.to_string(),
             snapshot: Some(0),
         }
+    }
+
+    #[test]
+    fn a_refused_edit_is_read_out_of_the_ack_the_device_sends() {
+        // Verbatim off the wire (2026-07-30 Floor log): the reply to a paired `add_block`, twice.
+        // `{102: 44, 103: 255, 104: {111: -21}}` — the device refused, applied nothing, and said so
+        // in the one field we were treating as a don't-care.
+        let refused = [
+            0, 0, 6, 0, 12, 0, 0, 0, // TLV header
+            0x83, 102, 0xcd, 0, 44, 103, 0xcc, 255, 104, 0x81, 111, 0xeb,
+        ];
+        assert_eq!(parse_edit_rejection(&refused), Some((44, -21)));
+
+        // The two shapes that are *not* refusals, from the same session: a bare ack with 104 nil,
+        // and a payload reply echoing the parameter the device just applied.
+        let acked = [
+            0, 0, 6, 0, 9, 0, 0, 0, //
+            0x83, 102, 0xcd, 0, 12, 103, 1, 104, 0xc0,
+        ];
+        assert_eq!(parse_edit_rejection(&acked), None);
+        let echoed = [
+            0, 0, 6, 0, 23, 0, 0, 0, //
+            0x83, 102, 0xcd, 0, 71, 103, 0, 104, 0x85, 98, 1, 29, 0xc3, 26, 0, 28, 0, 119, 0xca,
+            63, 122, 225, 72,
+        ];
+        assert_eq!(parse_edit_rejection(&echoed), None);
+        // Several ops ACK with nothing at all (the save is one); that is not a refusal either.
+        assert_eq!(parse_edit_rejection(&[]), None);
+    }
+
+    #[test]
+    fn an_outgoing_edit_body_names_its_own_op_and_transaction() {
+        // So the log line can say which command a refusal belongs to — the 2026-07-30 rejection
+        // took frame-size arithmetic to identify precisely because it couldn't.
+        let body = fretwire_protocol::edit::add_block(1, 14, -1, 44);
+        assert_eq!(edit_op_txn(&body), (Some(39), Some(44)));
+        assert_eq!(op_name(39), "block add");
+
+        let body = fretwire_protocol::edit::save_preset(3, 0, "fretwireTest1", 128);
+        assert_eq!(edit_op_txn(&body), (Some(71), Some(128)));
+        assert_eq!(op_name(71), "save");
+
+        assert_eq!(edit_op_txn(&[]), (None, None));
+    }
+
+    #[test]
+    fn a_paired_add_never_puts_the_cab_in_the_add_command() {
+        // The device refuses op 39 carrying a cab, so `Session::add_block` sends the amp bare and
+        // pairs with op 40. Guard the builder call the same way: whatever `paired_index` the picker
+        // hands us, the add body must be the unpaired one (and byte-identical to it).
+        let bare = fretwire_protocol::edit::add_block(1, 14, -1, 44);
+        let paired = fretwire_protocol::edit::add_block(1, 14, 691, 44);
+        assert_ne!(
+            bare, paired,
+            "the builder still encodes the pair when asked"
+        );
+        // 691 is `HD2_CabMicIr_4x12BlackbackH30`, the cab `amp.models` links to Brit P75 — every
+        // amp's linked cab index is >= 256, which is why every paired add grew the frame to 56.
+        assert_eq!(paired.len(), bare.len() + 2);
     }
 
     #[test]

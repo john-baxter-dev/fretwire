@@ -935,8 +935,65 @@ a byte the firmware rejects — but that is inference. Needs hardware.
 
 ### Retest ask
 
-1. The mixer drag again, on the fixed build. Expected either "it works" or a clean *"the pedal
-   stopped responding N of M bytes into a preset write"* — **not** a hang. Either answer is useful.
-
 The sixth round's Amp+Cab fix is **confirmed working on hardware** (2026-07-31), so that one is
-closed.
+closed. The mixer retest came back the same night — see below.
+
+## Eighth round (2026-07-31, same night): the abort holds; the freeze is not ours
+
+Same action, rebuilt on the fixed code. `fretwire10.log`, three screenshots.
+
+### The guard did its job  [solid]
+
+```
+ERROR device stopped acknowledging mid-write — aborting the transfer
+      sent=2480 total=6817 credits=2 chunks=5
+```
+
+No hang. The app stayed responsive through the failure instead of blocking forever on a URB that
+never completes, and the two writes in this session read cleanly off the log:
+
+| write | outcome | credits per chunk | worst deficit |
+|---|---|---|---|
+| rotary → row B | landed, 6809/6809 | `1 2 1 1 1 1 1 1 1 1 1 1 1 1` | **0** |
+| mixer move | aborted at 2480/6817 | `1 1 0 0 0` | 3 |
+
+The healthy write is now at deficit **0** across all fourteen chunks, against a worst of 1 on the
+same write before the fix — waiting for credits improved the good path as well as catching the bad
+one.
+
+### The freeze is not a pacing race  [solid] — corrects the seventh round
+
+Last round's guess was that outrunning the credits might be what wedged the device. It isn't. With
+the host waiting properly for every one, the same action kills it at the same place: credits stop
+after chunk 2, abort at 2,480 of 6,817. The credits are how you *detect* a wedged device, not how you
+avoid wedging one.
+
+What is left is content. The device is ~1 KB into the blob when it dies, so it is reacting to bytes
+it has already consumed rather than to a finished preset it has parsed. We still cannot reproduce it
+offline — there has never been a dump of `fretwireTest2`.
+
+### The aftermath was its own bug  [solid] [fixed]
+
+After the abort the log runs another 50 seconds of:
+
+```
+ERROR bulk OUT timed out — the device stopped draining its endpoint
+```
+
+every ~2.25 s, twenty times, then three more at exactly 2.0 s and a close. That is the GUI heartbeat
+(250 ms) beating into a dead pedal, each beat now burning the full 2 s write timeout — and since the
+beat holds the session lock, the entire UI was stuck behind it until he disconnected by hand. The
+final three are `close()`, sending teardown frames on all three channels to a device that was not
+listening.
+
+**Fix:** the heartbeat gives up after 3 consecutive failures — or immediately when
+`Session::device_lost` is latched, which a stalled OUT endpoint does on the first miss — drops the
+session, and emits `device-lost`; the frontend falls back to the disconnected view with "power-cycle
+the HX device, then reconnect". `close()` skips the wire entirely once the device is gone, so
+teardown is instant instead of 6 s.
+
+### Retest ask
+
+1. A `dump-raw` of `fretwireTest2` **before** the mixer drag, plus which column he drops the mixer
+   on. That lets the killing op-21 body be rebuilt offline and diffed against the rotary-move body
+   that writes fine — the only way to get at the content question without another lockup.

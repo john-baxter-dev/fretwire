@@ -30,33 +30,78 @@ pub struct AppState {
 ///
 /// Device-originated changes (footswitch bypass, panel snapshot/preset switch) are forwarded to the
 /// frontend as a `device-pushes` event so the GUI follows the hardware live.
+///
+/// If the pedal stops answering, the beat **gives up** rather than retrying forever: a wedged device
+/// makes every send burn the full write timeout, and since each beat holds the session lock, the
+/// whole GUI hangs behind it. Observed 2026-07-31 — a stalled preset write left the heartbeat
+/// failing every 2.25 s for the ~50 s until the user disconnected by hand. After
+/// [`LOST_AFTER_BEATS`] consecutive failures the session is dropped and the frontend told via
+/// `device-lost`.
 pub fn spawn_heartbeat(app: tauri::AppHandle, session: Arc<Mutex<Option<Session>>>) {
+    /// Consecutive failed beats before we declare the device gone. More than one so a single
+    /// transient error can't disconnect a healthy session; small because each failure now costs a
+    /// two-second timeout, and `Session::device_lost` short-circuits this on the first stall anyway.
+    const LOST_AFTER_BEATS: u32 = 3;
+
     std::thread::spawn(move || {
+        let mut failures = 0u32;
         loop {
             std::thread::sleep(std::time::Duration::from_millis(250));
             // Poll under the lock, then release it before emitting.
+            let mut lost = None;
             let pushes = {
                 let Ok(mut guard) = session.lock() else {
                     continue;
                 };
                 match guard.as_mut() {
-                    Some(s) => {
-                        let pushes = s.poll_events().unwrap_or_default();
-                        // A panel-side preset switch changes the editing context, same as goto_preset —
-                        // the history belongs to the old preset. (The frontend's follow-up read reseeds.)
-                        if pushes.iter().any(|p| {
-                            matches!(
-                                p,
-                                fretwire_core::fretwire_data::stream::StatusPush::Preset(_)
-                            )
-                        }) {
-                            s.clear_history();
+                    Some(s) => match s.poll_events() {
+                        Ok(pushes) => {
+                            failures = 0;
+                            // A panel-side preset switch changes the editing context, same as
+                            // goto_preset — the history belongs to the old preset. (The frontend's
+                            // follow-up read reseeds.)
+                            if pushes.iter().any(|p| {
+                                matches!(
+                                    p,
+                                    fretwire_core::fretwire_data::stream::StatusPush::Preset(_)
+                                )
+                            }) {
+                                s.clear_history();
+                            }
+                            pushes
                         }
-                        pushes
+                        Err(e) => {
+                            failures += 1;
+                            tracing::warn!(%e, failures, "keepalive failed");
+                            // `device_lost` means the OUT endpoint has stalled, which no amount of
+                            // waiting fixes — don't sit through the full failure count for it.
+                            if s.device_lost() || failures >= LOST_AFTER_BEATS {
+                                tracing::error!(
+                                    "device stopped responding — dropping the session; the pedal \
+                                     needs a power cycle"
+                                );
+                                failures = 0;
+                                // Drops the `Session`, which closes and releases the interface.
+                                *guard = None;
+                                lost = Some(
+                                    "The pedal stopped responding and the session was closed. \
+                                     Power-cycle the HX device, then reconnect.",
+                                );
+                            }
+                            Vec::new()
+                        }
+                    },
+                    None => {
+                        failures = 0;
+                        continue;
                     }
-                    None => continue,
                 }
             };
+            if let Some(msg) = lost
+                && let Err(e) = app.emit("device-lost", msg)
+            {
+                tracing::warn!("failed to emit device-lost: {e}");
+            }
             let dtos = crate::dto::push_dtos(&pushes);
             if !dtos.is_empty()
                 && let Err(e) = app.emit("device-pushes", dtos)

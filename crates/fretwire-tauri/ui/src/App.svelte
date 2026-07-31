@@ -143,9 +143,13 @@
   onMount(() => {
     const unlisten = listen("device-pushes", (e) => handlePushes(e.payload));
     const unProgress = listen("backup-progress", (e) => (backupProgress = e.payload));
+    // The pedal stopped answering and the backend closed the session out from under us. Fall back
+    // to the disconnected view rather than leaving a UI whose every button will fail.
+    const unLost = listen("device-lost", (e) => onDeviceLost(e.payload));
     return () => {
       unlisten.then((f) => f());
       unProgress.then((f) => f());
+      unLost.then((f) => f());
       clearTimeout(pushTimer); // don't let a coalesced refresh fire into a torn-down session
     };
   });
@@ -557,6 +561,20 @@
     viewBank = 0;
     selectedSlot = null;
     status = "Disconnected — pedal back to standalone.";
+  }
+
+  // The backend dropped the session because the pedal went unresponsive. Same teardown as an
+  // explicit disconnect, but the status says what happened and what to do about it — there is no
+  // "reconnect" that works here until the unit is power-cycled.
+  function onDeviceLost(message) {
+    connected = false;
+    preset = null;
+    presets = [];
+    setlists = [];
+    viewBank = 0;
+    selectedSlot = null;
+    status = message ?? "The pedal stopped responding. Power-cycle it, then reconnect.";
+    toast(status);
   }
 
   // ---- mock-only device switch ----

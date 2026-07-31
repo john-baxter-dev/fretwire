@@ -246,16 +246,20 @@ each with an **empty `cmd 0x08` frame**, and that reply is a credit: it means "I
 | completed (14 chunks) | `0 3 1 1 1 1 2 1 1 1 1 1 1 1` | **1** |
 | froze after chunk 1 | `2 0 0 0 0` | 3 |
 | froze after chunk 7 | `1 2 1 1 1 1 1 0 0 0 0` | 3 |
+| completed, *after* the pacing fix | `1 2 1 1 1 1 1 1 1 1 1 1 1 1` | **0** |
+| froze after chunk 2, *after* the pacing fix | `1 1 0 0 0` | 3 |
 
-A healthy transfer never runs more than **one** chunk ahead of its credits. Both lockups show the
-credits stopping dead and the host running 3+ ahead — and once the device stops draining its OUT
-endpoint, an unbounded `bulk_out` **never returns** (both logs end on `Submitted URB … on ep 1` with
-no completion). Treating the credits as noise and pacing off a fixed 5 ms delay is what produced
-that. Wait for each chunk's credit; abort the transfer while the pedal is still recoverable.
+A healthy transfer never runs more than **one** chunk ahead of its credits, and none at all once the
+host waits for them. Every lockup shows the credits stopping dead and the host running 3+ ahead — and
+once the device stops draining its OUT endpoint, an unbounded `bulk_out` **never returns** (the
+pre-fix logs end on `Submitted URB … on ep 1` with no completion). Wait for each chunk's credit;
+abort the transfer while the pedal is still recoverable.
 
-Whether outrunning the credits is what *causes* the freeze, or only what lets us keep shovelling into
-one, is unproven — the two traces died at different chunks (2 and 8) on the same action, which reads
-like a race rather than a byte the firmware rejects. [hypothesis]
+**Pacing is not the cause.** [solid] With the host waiting properly for every credit, the same action
+still kills the device at the same place — 2,480 of 6,817 bytes, credits stopping after chunk 2. So
+the credits are how you *detect* a wedged device, not how you avoid wedging one. What actually
+triggers it is still open; the blob that does it is ~1 KB in by then, so the device is reacting to
+something it has already consumed rather than to the finished preset. [hypothesis]
 
 ### Bypass is set-state, not a blind toggle [solid] — resolves prior "open"
 The two frames of one tremolo bypass press carry `101 → 59: true` then `101 → 59: false` (wire bytes

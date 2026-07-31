@@ -35,6 +35,9 @@ pub struct Session {
     txn: u16,
     /// Set once the channels have been closed, so [`Drop`] doesn't double-close.
     closed: bool,
+    /// Latched when a heartbeat send times out — the device has stopped draining its OUT endpoint
+    /// and will not resume without a power cycle. See [`Session::device_lost`].
+    device_lost: bool,
     /// The last reassembled preset read-stream — every read refreshes it, so edit-history snapshots
     /// cost no extra USB round-trip.
     last_raw: Option<Vec<u8>>,
@@ -156,6 +159,7 @@ impl Session {
                 arg: HashMap::new(),
                 txn: 0,
                 closed: false,
+                device_lost: false,
                 last_raw: None,
                 history: Vec::new(),
                 cursor: 0,
@@ -358,14 +362,39 @@ impl Session {
         for (src, dst) in [channel::STATUS, channel::EDIT, channel::PRIMARY] {
             let seq = self.next_seq(src);
             let arg = self.cur_arg(src);
-            self.transport
-                .send_frame(&Frame::new(src, dst, seq, cmd::IDLE, arg, Vec::new()))?;
+            self.beat_channel(src, dst, seq, arg)?;
         }
         // Drain the device's queued keepalives/meters so they don't sit in front of the next edit's
         // reply. Short per-frame quiet window; bounded so a chatty device can't stall the tick.
         self.transport
             .drain_wire(std::time::Duration::from_millis(15), 64);
         Ok(())
+    }
+
+    /// Send one channel's idle beat, latching [`Self::device_lost`] if the endpoint has stalled.
+    ///
+    /// A heartbeat send that times out is not a hiccup: the OUT endpoint only stops draining when the
+    /// device has stopped reading, and it will not start again without a power cycle. Recording that
+    /// lets `close()` skip a teardown handshake nobody is listening to, and lets the caller stop
+    /// beating instead of retrying every 250 ms forever.
+    fn beat_channel(&mut self, src: u16, dst: u16, seq: u8, arg: u32) -> crate::Result<()> {
+        let frame = Frame::new(src, dst, seq, cmd::IDLE, arg, Vec::new());
+        match self.transport.send_frame(&frame) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                if matches!(e, fretwire_usb::Error::Timeout) {
+                    self.device_lost = true;
+                }
+                Err(e.into())
+            }
+        }
+    }
+
+    /// Whether the device has stopped accepting frames — latched by a heartbeat send that timed out.
+    /// Once true it stays true: only a power cycle clears it, so the caller should tear the session
+    /// down rather than keep polling.
+    pub fn device_lost(&self) -> bool {
+        self.device_lost
     }
 
     /// Heartbeat **and** collect the device's unsolicited state-pushes (footswitch bypass, panel
@@ -376,8 +405,7 @@ impl Session {
         for (src, dst) in [channel::STATUS, channel::EDIT, channel::PRIMARY] {
             let seq = self.next_seq(src);
             let arg = self.cur_arg(src);
-            self.transport
-                .send_frame(&Frame::new(src, dst, seq, cmd::IDLE, arg, Vec::new()))?;
+            self.beat_channel(src, dst, seq, arg)?;
         }
         let frames = self
             .transport
@@ -2104,6 +2132,13 @@ impl Session {
             return Ok(());
         }
         self.closed = true;
+        if self.device_lost {
+            // Nothing is reading the other end. Each close frame would burn the full write timeout
+            // before failing (three channels — six seconds of teardown on a pedal that is going to
+            // be power-cycled anyway), and the panel unlocks on the power cycle regardless.
+            tracing::info!("skipping session close — the device stopped responding");
+            return Ok(());
+        }
         for (src, dst) in [channel::STATUS, channel::EDIT, channel::PRIMARY] {
             let seq = self.next_seq(src);
             let arg = self.cur_arg(src);

@@ -854,10 +854,36 @@ Fixes:
   cache, since the edit buffer is then half-written.
 
 Honest limit: this stops fretwire hanging and stops it emptying the rest of a blob into a wedged
-pedal. Whether the gentler pacing also stops the **pedal** freezing is untested — that needs
-hardware. The two traces died at different chunks (2 and 8) on the same user action, which points at
-a pacing/buffer race rather than a byte the firmware chokes on, but that is inference, not proof.
-[hypothesis]
+pedal. It does not stop the pedal freezing — see below.
+
+## Eighth round (2026-07-31, same night): the fix holds, the freeze is not ours to pace away
+
+He rebuilt on the fixed code and ran the same action. Two results.
+
+**The abort works.** The mixer move produced exactly the intended failure — `device stopped
+acknowledging mid-write — aborting the transfer sent=2480 total=6817 credits=2 chunks=5` — and the
+app stayed alive instead of hanging on a URB that never completes. The healthy write in the same
+session (the rotary drag) now runs at **deficit 0 for all 14 chunks**, where before the fix the same
+write ran a chunk behind; waiting for credits measurably improved the good path too.
+
+**The freeze is not a pacing race.** [solid] That was the hypothesis last round and it is wrong. With
+the host waiting properly for every credit, the device still dies in the same place — credits stop
+after chunk 2, at 2,480 of 6,817 bytes, the same signature as the pre-fix trace. Whatever kills it,
+outrunning it is not the trigger. It is ~1 KB into the blob when it goes, so it is reacting to bytes
+it has already consumed, not to the assembled preset. Still open. [hypothesis]
+
+**One more bug, found in the aftermath and fixed.** Once the pedal was wedged, the GUI heartbeat kept
+beating into it every 250 ms — each beat now burning the full 2 s write timeout, each holding the
+session lock, so the whole UI was stuck behind it — for the ~50 s until he disconnected by hand. Then
+`close()` spent 6 s more sending teardown frames to a device that was not listening. The heartbeat
+now gives up after 3 consecutive failures (or immediately on a latched `Session::device_lost`), drops
+the session, and emits `device-lost`; the frontend falls back to the disconnected view with
+"power-cycle the HX device, then reconnect". `close()` skips the wire entirely when the device is
+gone.
+
+**Next diagnostic:** we cannot reproduce the killing blob offline — we have never had a dump of
+`fretwireTest2`. Worth asking for `dump-raw` of the preset *before* the mixer drag plus the target
+column, so the exact op-21 body can be rebuilt and diffed against the rotary-move body that works.
 
 ## Prioritized next steps
 > **The path to live control is in `docs/next-steps.md`.** TL;DR: (1) **on Windows now** — capture a

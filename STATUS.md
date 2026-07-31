@@ -1035,6 +1035,26 @@ so this does not cover the failing case; and a no-op write cannot prove the devi
 presets generally, and the split/mixer node structures are the suspects. Survive ⇒ it is specifically
 the mixer *position value*, and `set_node_pos`'s guards are where to look.
 
+## Fifteenth round (2026-07-31): eleven op-21 writes on hardware, no freeze
+
+Driven straight against a Stomp on the guard-fixed build, using a new `fretwire node-pos
+<split|mixer> <column>` command that makes the same `set_node_pos` call the GUI's mixer drag does.
+`write-roundtrip` on a serial preset, a serial→split move, `write-roundtrip` on the split preset, a
+mixer move past the only A block, the same move landing *between* two A blocks (the exact failing
+shape), and finally **8 `set_node_pos` calls back to back in one held session** — eleven whole-preset
+writes, all survived, all verified applied by reading the column back.
+
+**The last freeze was the guard's fault.** It logged `sent=2688 total=2688 credits=3 chunks=6` —
+every byte already sent — and the old cumulative-deficit rule aborted anyway, skipping the
+terminating `cmd 0x08` and leaving the device holding a transfer it was never told had ended. Fixed
+in `0732954`, four minutes after that log.
+
+So there were two failure modes: the pre-guard one (device genuinely stopped crediting, unbounded
+`bulk_out` hung the host — still unexplained) and the guard misfiring (fixed).
+
+**Limit:** every probe was a 2.2–2.4 KB Stomp preset, 5 chunks. The Floor freezes were 6.8 KB and 14
+chunks. This does not close the first mode — a Floor retest on the current build would.
+
 ## Prioritized next steps
 > **The path to live control is in `docs/next-steps.md`.** TL;DR: (1) **on Windows now** — capture a
 > dozen single-knob edits, decode with `fretwire decode-edit`, find out if param keys generalize (the

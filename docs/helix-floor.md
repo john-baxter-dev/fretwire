@@ -1298,3 +1298,43 @@ mutation — and run `write-roundtrip` again.
   and mixer node structures in the frame rather than the position value.
 - **Survives** → the transport is fine in both topologies and it is specifically the **mixer position
   value** that kills it, which points squarely at `set_node_pos` and its guards.
+
+## Fifteenth round (2026-07-31): eleven op-21 writes on hardware, no freeze
+
+Run directly against an HX Stomp by the maintainer's agent, on the build with the guard fix
+(`0732954`). A new `fretwire node-pos <split|mixer> <column>` CLI command drives `set_node_pos` — the
+exact call the GUI's mixer drag makes — so the failing operation can be reproduced without a mouse.
+
+| probe | result |
+|---|---|
+| `write-roundtrip`, **serial** preset | survived, re-read intact |
+| `move-to-row 6 p` (serial → split, op 43) | survived, split created |
+| `write-roundtrip`, **split** preset | survived, re-read intact |
+| `node-pos mixer 6` (mixer past the only A block) | survived, **applied**: column 9 → 6 |
+| `node-pos mixer 6` with a reverb at column 7 — mixer lands *between* two A blocks, the maintainer's exact failing shape | survived, applied |
+| 8 × `set_node_pos` back to back **in one held session** | all 8 survived and applied |
+
+Eleven whole-preset writes, none of which wedged anything, all verified applied by re-reading the
+column back. The op-21 path works.
+
+### So what was freezing?
+
+The maintainer's last freeze was at 00:03:22 local; the guard fix landed at 00:07:13 — four minutes
+later. That freeze is the one whose log reads `sent=2688 total=2688 credits=3 chunks=6`: **every byte
+had already gone out**, and the old cumulative-deficit guard aborted anyway, which skips the
+terminating `cmd 0x08` and leaves the device holding a complete transfer it is never told has ended.
+The guard added to prevent lockups was, in that case, causing one.
+
+Two distinct failure modes, then:
+
+1. **Pre-guard** (`fretwire8/9.log`): the device genuinely stopped crediting mid-transfer and the
+   unbounded `bulk_out` hung the host forever. Why it stopped is still unexplained.
+2. **Post-guard, pre-`0732954`**: the guard misfiring on a completed transfer and withholding the
+   terminator. Fixed.
+
+### The limit on this result
+
+Every probe here was a **2.2–2.4 KB Stomp preset — 5 chunks**. The Floor freezes were **6.8 KB, 14
+chunks**. That is nearly three times the transfer and a different device, so this does not close mode
+1; it only shows the path is sound at this size. A Floor retest on the current build is still the
+thing that would settle it.

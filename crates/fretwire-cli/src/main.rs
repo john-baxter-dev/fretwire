@@ -169,6 +169,15 @@ enum Command {
     },
     /// Move a block into the common (pre-split) section, just before the split.
     BeforeSplit { src_slot: i64 },
+    /// Move the split (⋔) or mixer (⋉) node to a signal-flow column. Goes through the **op-21
+    /// whole-preset write** — the operation that has produced every device lockup on record — so
+    /// this exists mainly to reproduce one from the CLI with a log attached.
+    NodePos {
+        /// `split` or `mixer`.
+        which: String,
+        /// Target column. The split must stay left of every row-B block; the mixer right of them.
+        pos: i64,
+    },
     /// Retype the parallel split node (op 40). Only meaningful on a split preset.
     SplitType {
         /// `y`, `ab`, `xover`, `dyn`, or a raw model index.
@@ -466,8 +475,14 @@ fn main() -> Result<()> {
             let mut s = fretwire_core::Session::connect()?;
             let preset = s.move_block_to_row(src, par, pos)?;
             println!(
-                "moved slot {src} to {} row at pos {pos}:",
-                if par { "parallel" } else { "series" }
+                "moved slot {src} to the {} row at {}:",
+                if par { "parallel" } else { "series" },
+                // `end` is carried as usize::MAX; printing that raw is just noise.
+                if pos == usize::MAX {
+                    "the end".to_string()
+                } else {
+                    format!("pos {pos}")
+                }
             );
             print_preset(&preset);
         }
@@ -475,6 +490,18 @@ fn main() -> Result<()> {
             let mut s = fretwire_core::Session::connect()?;
             let preset = s.move_before_split(src)?;
             println!("moved slot {src} before the split:");
+            print_preset(&preset);
+        }
+        Command::NodePos { which, pos } => {
+            use fretwire_core::fretwire_data::stream::slot_kind;
+            let kind = match which.to_ascii_lowercase().as_str() {
+                "split" => slot_kind::SPLIT,
+                "mixer" | "join" => slot_kind::MIXER,
+                other => anyhow::bail!("unknown node {other:?} — use `split` or `mixer`"),
+            };
+            let mut s = fretwire_core::Session::connect()?;
+            let preset = s.set_node_pos(0, kind, pos)?;
+            println!("moved the {which} node to column {pos}:");
             print_preset(&preset);
         }
         Command::SplitType { which } => {

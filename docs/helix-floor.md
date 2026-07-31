@@ -1248,3 +1248,53 @@ gets back is our re-encoding.
 
 Run it on a scratch preset, with `FRETWIRE_DUMP_WRITES=<dir>` set so the exact blob is on disk either
 way. Worst case is a power cycle, which this operation already costs.
+
+## Fourteenth round (2026-07-31): `write-roundtrip` survives — encoding is not the problem
+
+Run on an HX Stomp with `FRETWIRE_DUMP_WRITES` set. Preset `ClaudeTest`, **serial**, 2 blocks.
+
+```
+reassembled preset stream bytes=2303 declared=2303
+dumped the op-21 blob before sending  bytes=2167
+write-preset sent bytes=2188 acked=false
+reassembled preset stream bytes=2303 declared=2303   <- re-read, preset intact
+session closed — pedal returned to standalone
+```
+
+**No freeze.** The device accepted a 2167-byte blob where it had sent 2303 — our minimal integer
+encoding, 136 bytes shorter — and re-served the preset correctly. So the thirteenth round's
+hypothesis is wrong: the re-encoding is not what wedges the pedal, and splicing into the device's own
+bytes is not the fix.
+
+### The offset-table fix, verified on hardware  [solid]
+
+First check of a real emitted blob against a real device. The dump:
+
+```
+offset table: 61, 96, 514, 516, 527, 539, 662, 707, 62, 713, 2167, 2167
+   slot 0  = 61          the preset map
+   slot 10/11 = 2167     exactly the blob length
+   interior → 00 82 | 01 c0 | 03 82 | 04 9a | 02 82 | 05 8f | 06 82 | 07 83 | 0a 86
+```
+
+Every interior offset lands on a `<key><value>` boundary and nothing points past the end. The ninth
+round's fix does what it claims.
+
+### Two honest limits on this result
+
+1. **The preset was serial.** Every lockup on record has been on a **split** preset. This run does
+   not touch the failing configuration.
+2. **A no-op write cannot prove the device *applied* it.** The blob was unchanged, so an identical
+   re-read is equally consistent with the device having ignored it (`acked=false`). What this does
+   prove is that the transport survives an op-21 carrying our encoding — and the failure we are
+   chasing is a transport-level wedge, so that is the relevant half.
+
+### Next: the same probe on a split preset
+
+That is the one variable between this run and every freeze. Load a **parallel** preset — no drag, no
+mutation — and run `write-roundtrip` again.
+
+- **Freezes** → op-21 is unsafe on a split preset *regardless* of what changed, which puts the split
+  and mixer node structures in the frame rather than the position value.
+- **Survives** → the transport is fine in both topologies and it is specifically the **mixer position
+  value** that kills it, which points squarely at `set_node_pos` and its guards.

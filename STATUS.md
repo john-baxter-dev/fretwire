@@ -1016,6 +1016,25 @@ after the amp on the A path. Pedal wedged; handshake failed until it was power-c
 - `FRETWIRE_DUMP_WRITES=<dir>` now saves the exact blob before it is sent, so whichever way it goes
   the bytes are on disk.
 
+## Fourteenth round (2026-07-31): `write-roundtrip` survives — the encoding is exonerated
+
+On a Stomp, **serial** preset: the device accepted a 2167-byte blob where it had sent 2303 (our
+minimal integer encoding, 136 bytes shorter) and re-served the preset intact. No freeze. So the
+thirteenth round's hypothesis is wrong — re-encoding is not what wedges the pedal, and splicing into
+the device's own bytes is not the fix.
+
+**The offset-table fix is now verified on hardware.** The dumped blob's table: slot 0 = 61, slots
+10/11 = 2167 = exactly the blob length, every interior offset landing on a `<key><value>` boundary,
+nothing past the end.
+
+Two limits, stated plainly: the preset was **serial** and every lockup has been on a **split** preset,
+so this does not cover the failing case; and a no-op write cannot prove the device *applied* it
+(`acked=false`), only that the transport survived it — which is the half that matters for a wedge.
+
+**Next:** the same probe on a **split** preset, no mutation. Freeze ⇒ op-21 is unsafe on split
+presets generally, and the split/mixer node structures are the suspects. Survive ⇒ it is specifically
+the mixer *position value*, and `set_node_pos`'s guards are where to look.
+
 ## Prioritized next steps
 > **The path to live control is in `docs/next-steps.md`.** TL;DR: (1) **on Windows now** — capture a
 > dozen single-knob edits, decode with `fretwire decode-edit`, find out if param keys generalize (the

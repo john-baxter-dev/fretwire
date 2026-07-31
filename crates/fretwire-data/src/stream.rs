@@ -16,10 +16,37 @@ pub const PRESET_MAGIC: &str = "l6-helix";
 #[derive(Debug, Clone)]
 pub struct PresetStream {
     pub magic: String,
-    /// The second sequence value (a fixed-size header/uuid string); kept verbatim.
+    /// The second sequence value — **not opaque**: a table of little-endian `u32` byte offsets into
+    /// the blob. See [`HeaderSlot`] and [`PresetStream::header_slots`]. Kept verbatim so an
+    /// unrecognised slot survives, but [`PresetStream::to_blob`] rewrites the ones it understands.
     pub header: Vec<u8>,
     /// The preset itself — an integer-keyed MessagePack map.
     pub preset: Value,
+    /// What each 4-byte slot of `header` points at, worked out against the blob we parsed. Empty
+    /// when the header isn't a whole number of `u32`s, in which case `to_blob` emits it verbatim.
+    header_slots: Vec<HeaderSlot>,
+}
+
+/// One `u32` slot of the preset header, classified by what it addressed in the blob it came from.
+///
+/// The header is an **offset table**, which we spent a long time treating as an opaque uuid. Every
+/// entry is a byte offset into the blob: where the preset map starts, where each of a handful of
+/// top-level keys begins, and — twice, in the last two slots — the blob's total length. The device
+/// seeks with these rather than walking the MessagePack, so a blob whose bytes have moved under a
+/// stale table sends it reading into the middle of a value, or past the end of the buffer entirely.
+///
+/// [solid — 2026-07-31: `header[0]` is the map offset and `header[last]` the blob length on all four
+/// captured presets; every interior slot lands exactly on a `<fixint key><container>` boundary]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HeaderSlot {
+    /// Offset of the preset map's first byte.
+    MapStart,
+    /// The blob's total length in bytes.
+    TotalLen,
+    /// Offset of the top-level map entry with this integer key.
+    Key(i64),
+    /// Not recognised — re-emitted unchanged.
+    Raw(u32),
 }
 
 impl PresetStream {
@@ -57,11 +84,43 @@ impl PresetStream {
             .cloned()
             .ok_or_else(|| crate::Error::Stream("preset map missing".into()))?;
 
+        // Where the preset map begins in the blob we were handed: everything the first two values
+        // consumed. Needed to classify the header's offsets against the bytes they were written for.
+        let (_, map_at) = read_sequence(blob, 2);
+        let header_slots = classify_header(&header, blob, map_at);
+
         Ok(PresetStream {
             magic,
             header,
             preset,
+            header_slots,
         })
+    }
+
+    /// The header's offset table, as classified against the blob this stream was parsed from.
+    /// Diagnostic — [`Self::to_blob`] consumes it directly.
+    fn header_bytes(&self, map_at: usize, key_offsets: &[(i64, usize)], total: usize) -> Vec<u8> {
+        if self.header_slots.is_empty() {
+            return self.header.clone();
+        }
+        let mut out = Vec::with_capacity(self.header.len());
+        for slot in &self.header_slots {
+            let v = match *slot {
+                HeaderSlot::MapStart => map_at as u32,
+                HeaderSlot::TotalLen => total as u32,
+                HeaderSlot::Key(k) => match key_offsets.iter().find(|(kk, _)| *kk == k) {
+                    Some((_, off)) => *off as u32,
+                    // The key vanished (nothing we do removes top-level keys, but don't guess an
+                    // offset if it ever happens) — point at the end rather than into a value.
+                    None => total as u32,
+                },
+                HeaderSlot::Raw(v) => v,
+            };
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        // Any trailing bytes that weren't a whole u32.
+        out.extend_from_slice(&self.header[out.len().min(self.header.len())..]);
+        out
     }
 
     /// Look up a top-level preset field by its integer key.
@@ -142,26 +201,104 @@ impl PresetStream {
     /// Re-serialize to the nested blob the device round-trips: `magic ⧺ header ⧺ preset-map`, the
     /// exact byte sequence carried under read-stream key 104 and written back under op-21 key 110.
     ///
-    /// The `magic` is re-NUL-terminated (parse strips it) and emitted as a `fixstr`; the `header` is
-    /// emitted **verbatim** as a `str16` (it holds a non-UTF-8 offset table the device produced, which
-    /// rmpv can neither hold as a `Value::String` nor encode with the device's non-minimal marker —
-    /// so we hand-emit it); the preset map is re-encoded with rmpv (it preserves map key order and
-    /// the f32/int value types). Byte-identical to the device's blob for an unmutated preset (see the
-    /// round-trip test); after a structural edit only the preset section changes.
+    /// The `magic` is re-NUL-terminated (parse strips it) and emitted as a `fixstr`; the preset map
+    /// is re-encoded with rmpv (which preserves map key order and the f32/int value types); and the
+    /// **header's offset table is rebuilt** against the bytes this call actually produces.
+    ///
+    /// That last part is the whole game. rmpv encodes integers minimally and the device does not —
+    /// it writes plenty of `d1 00 00` (int16 zero) where one `00` would do — so our re-encode of an
+    /// *untouched* preset comes out 117–216 bytes shorter than the device's, with everything after
+    /// the first such integer shifted left. Copying the header verbatim across that shift left the
+    /// device seeking to offsets that no longer began anything, and to a declared total length past
+    /// the end of the buffer. Rebuilding the table makes the blob **self-consistent**, which is what
+    /// the device actually requires; byte-identity with the original is not achievable through rmpv
+    /// and isn't needed.
+    ///
+    /// [solid — 2026-07-31: a mixer drag froze a Floor twice, mid-write, with the stale table
+    /// pointing 216 bytes past the end of the blob we were sending]
     pub fn to_blob(&self) -> Vec<u8> {
         let mut out = Vec::new();
         // magic, re-NUL-terminated → fixstr (e.g. "l6-helix\0" = 0xa9 …)
         let magic_z = format!("{}\0", self.magic);
         rmpv::encode::write_value(&mut out, &Value::from(magic_z))
             .expect("msgpack encode to Vec is infallible");
-        // header, verbatim, as a str (matching the device's str16 framing)
+        // Reserve the header (its framing and length never change, so the map offset is fixed).
         push_str_header(&mut out, self.header.len());
+        let header_at = out.len();
         out.extend_from_slice(&self.header);
+        let map_at = out.len();
         // preset map
         rmpv::encode::write_value(&mut out, &self.preset)
             .expect("msgpack encode to Vec is infallible");
+
+        // Re-point the offset table at what we just wrote.
+        let key_offsets = top_level_entry_offsets(&out, map_at).unwrap_or_default();
+        let header = self.header_bytes(map_at, &key_offsets, out.len());
+        debug_assert_eq!(
+            header.len(),
+            self.header.len(),
+            "header length must be fixed"
+        );
+        out[header_at..header_at + header.len()].copy_from_slice(&header);
         out
     }
+}
+
+/// Byte offset of every top-level entry of the map that starts at `map_at`, paired with its integer
+/// key. The offset points at the entry's **key** byte, which is where the device's header table
+/// points. `None` if the bytes at `map_at` aren't a map we can walk.
+fn top_level_entry_offsets(blob: &[u8], map_at: usize) -> Option<Vec<(i64, usize)>> {
+    let mut cur = blob.get(map_at..)?;
+    // Map header: fixmap / map16 / map32. Read it by hand so we know how many entries follow and
+    // where the first one starts.
+    let (n, hdr) = match *cur.first()? {
+        b @ 0x80..=0x8f => ((b & 0x0f) as usize, 1),
+        0xde => (u16::from_be_bytes([*cur.get(1)?, *cur.get(2)?]) as usize, 3),
+        0xdf => (
+            u32::from_be_bytes([*cur.get(1)?, *cur.get(2)?, *cur.get(3)?, *cur.get(4)?]) as usize,
+            5,
+        ),
+        _ => return None,
+    };
+    let mut pos = map_at + hdr;
+    cur = blob.get(pos..)?;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let before = cur.len();
+        let key = rmpv::decode::read_value(&mut cur).ok()?;
+        // Skip the value; we only need where each entry began.
+        rmpv::decode::read_value(&mut cur).ok()?;
+        if let Some(k) = key.as_i64() {
+            out.push((k, pos));
+        }
+        pos += before - cur.len();
+    }
+    Some(out)
+}
+
+/// Work out what each `u32` slot of `header` addressed in `blob` (whose preset map starts at
+/// `map_at`), so [`PresetStream::to_blob`] can re-point them at the bytes it actually emits.
+fn classify_header(header: &[u8], blob: &[u8], map_at: usize) -> Vec<HeaderSlot> {
+    if !header.len().is_multiple_of(4) {
+        return Vec::new();
+    }
+    let entries = top_level_entry_offsets(blob, map_at).unwrap_or_default();
+    header
+        .chunks_exact(4)
+        .map(|c| {
+            let v = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+            let at = v as usize;
+            if at == blob.len() {
+                HeaderSlot::TotalLen
+            } else if at == map_at {
+                HeaderSlot::MapStart
+            } else if let Some((k, _)) = entries.iter().find(|(_, off)| *off == at) {
+                HeaderSlot::Key(*k)
+            } else {
+                HeaderSlot::Raw(v)
+            }
+        })
+        .collect()
 }
 
 /// Emit a MessagePack `str` length header for `len` bytes. Forces `str16` for the 32..65536 range
@@ -1413,6 +1550,7 @@ mod list_tests {
             magic: "l6-helix".to_string(),
             header: vec![],
             preset,
+            header_slots: Vec::new(),
         };
         let a = ps.assignments();
         assert_eq!(a.len(), 1);
@@ -1438,6 +1576,7 @@ mod list_tests {
             magic: "l6-helix".to_string(),
             header: vec![],
             preset,
+            header_slots: Vec::new(),
         };
         let (active, names) = ps.snapshots();
         assert_eq!(active, Some(1));
@@ -1500,6 +1639,7 @@ mod list_tests {
                     Value::Map(vec![(Value::from(8), Value::Array(vec![fs_node]))]),
                 ),
             ]),
+            header_slots: Vec::new(),
         };
         let lb = bound.loaded_blocks();
         assert_eq!(lb.len(), 1);
@@ -1512,6 +1652,7 @@ mod list_tests {
             magic: "l6-helix".into(),
             header: vec![],
             preset: Value::Map(vec![(Value::from(0), slot_map)]),
+            header_slots: Vec::new(),
         };
         assert_eq!(unbound.loaded_blocks()[0].footswitch, 0);
     }
@@ -1572,6 +1713,7 @@ mod list_tests {
                     Value::Map(vec![(Value::from(8), Value::Array(vec![ctrl_node]))]),
                 ),
             ]),
+            header_slots: Vec::new(),
         };
         let lb = ps.loaded_blocks();
         assert_eq!(lb.len(), 1, "the kind-6 block must still be enumerated");

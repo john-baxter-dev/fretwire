@@ -464,3 +464,89 @@ fn dual_amp_stored_active_snapshot_disagrees_with_its_scene() {
         "but the stored active index points at snapshot 1, whose scene differs"
     );
 }
+
+// The preset header is an **offset table**, not an opaque uuid, and `to_blob` has to rebuild it.
+// rmpv writes integers minimally where the device writes `d1 00 00`, so a re-encode is 4–8% shorter
+// and every offset past the first such integer is stale. Copying the device's table across that
+// shift pointed it into the middle of a value — and its total-length slot past the end of the buffer
+// entirely — which is what froze a Helix Floor twice on 2026-07-31 during an op-21 mixer move.
+//
+// Guard the invariant on every capture we have, before and after the mutation that did it: the table
+// must describe the bytes we actually emit.
+#[test]
+fn to_blob_rebuilds_the_header_offset_table() {
+    use fretwire_data::stream::slot_kind;
+
+    fn offsets(blob: &[u8]) -> Vec<u32> {
+        // fixstr "l6-helix\0" (10 bytes) + str16 marker (3) = the header starts at 13.
+        blob[13..61]
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect()
+    }
+    // Where each top-level entry of the emitted map really begins.
+    fn entry_offsets(blob: &[u8], map_at: usize) -> Vec<usize> {
+        let n = (blob[map_at] & 0x0f) as usize;
+        assert!(
+            (0x80..=0x8f).contains(&blob[map_at]),
+            "expected a fixmap header"
+        );
+        let mut pos = map_at + 1;
+        let mut cur = &blob[pos..];
+        (0..n)
+            .map(|_| {
+                let before = cur.len();
+                rmpv::decode::read_value(&mut cur).unwrap();
+                rmpv::decode::read_value(&mut cur).unwrap();
+                let at = pos;
+                pos += before - cur.len();
+                at
+            })
+            .collect()
+    }
+
+    for name in [
+        "preset1_stream.msgpack.bin",
+        "dual_amp_stream.msgpack.bin",
+        "split_preset_stream.msgpack.bin",
+    ] {
+        for mutate in [false, true] {
+            let raw = capture(name);
+            let mut ps = PresetStream::parse(&raw).unwrap();
+            if mutate && !ps.dsp_is_split(0) {
+                continue; // the mixer only exists on a split preset
+            }
+            if mutate {
+                assert!(ps.set_dsp_node_pos(0, slot_kind::MIXER, 4));
+            }
+            let blob = ps.to_blob();
+            let what = format!("{name}{}", if mutate { " [mixer moved]" } else { "" });
+
+            let offs = offsets(&blob);
+            let map_at = 61; // fixed: the magic and the 48-byte header never change length
+            let entries = entry_offsets(&blob, map_at);
+
+            assert_eq!(offs[0] as usize, map_at, "{what}: slot 0 is the map offset");
+            assert_eq!(
+                *offs.last().unwrap() as usize,
+                blob.len(),
+                "{what}: the last slot is the blob's own length"
+            );
+            for (i, &o) in offs.iter().enumerate() {
+                assert!(
+                    (o as usize) <= blob.len(),
+                    "{what}: slot {i} ({o}) points past the end of the {} byte blob",
+                    blob.len()
+                );
+                let o = o as usize;
+                if i == 0 || o == blob.len() {
+                    continue;
+                }
+                assert!(
+                    entries.contains(&o),
+                    "{what}: slot {i} ({o}) is not the start of a top-level entry"
+                );
+            }
+        }
+    }
+}

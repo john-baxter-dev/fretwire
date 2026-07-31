@@ -420,31 +420,81 @@ fn to_blob_round_trips_the_preset() {
 
     let re = ps.to_blob();
 
-    // Diagnostic: how close are we to byte-identical? (Not required — the device parses msgpack.)
-    if re == orig {
-        eprintln!(
-            "to_blob is BYTE-IDENTICAL to the device blob ({} bytes)",
-            re.len()
-        );
-    } else {
-        let at = re.iter().zip(&orig).position(|(a, b)| a != b);
-        eprintln!(
-            "to_blob differs (re={} orig={} first diff @ {:?})",
-            re.len(),
-            orig.len(),
-            at
-        );
-    }
+    // rmpv encodes integers minimally and the device does not (it writes `d1 00 00` for zero all
+    // over the preset), so our blob is legitimately shorter. What matters is that it is
+    // **self-consistent**: the header's offset table has to describe the bytes we emit, because the
+    // device seeks with it rather than walking the MessagePack. Copying the device's table across
+    // our shorter encoding is what froze a Floor twice on 2026-07-31.
+    assert!(
+        re.len() < orig.len(),
+        "expected the minimal re-encode to be shorter (re={} orig={})",
+        re.len(),
+        orig.len()
+    );
 
-    // Required: re-parsing our blob yields the same magic / header / preset tree.
+    // Required: re-parsing our blob yields the same magic / preset tree.
     let (seq, _) = read_sequence(&re, 3);
     assert_eq!(seq.len(), 3, "blob should hold 3 values");
     assert_eq!(
         value_bytes(&seq[0]).unwrap(),
         format!("{}\0", ps.magic).as_bytes()
     );
-    assert_eq!(value_bytes(&seq[1]).unwrap(), ps.header.as_slice());
     assert_eq!(&seq[2], &ps.preset, "preset map must round-trip exactly");
+
+    // Required: the rewritten offset table points at our bytes, not the device's.
+    let hdr = value_bytes(&seq[1]).unwrap();
+    assert_eq!(hdr.len(), ps.header.len(), "header length must be fixed");
+    let offs: Vec<u32> = hdr
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    let map_at = {
+        let (_, n) = read_sequence(&re, 2);
+        n
+    };
+    assert_eq!(offs[0] as usize, map_at, "slot 0 is the preset map offset");
+    assert_eq!(
+        *offs.last().unwrap() as usize,
+        re.len(),
+        "the last slot is the blob's total length"
+    );
+    for (i, &o) in offs.iter().enumerate() {
+        assert!(
+            (o as usize) <= re.len(),
+            "offset slot {i} ({o}) points past the end of our {} byte blob",
+            re.len()
+        );
+    }
+    // Every interior offset must land exactly on the first byte of a top-level entry. A stale table
+    // lands mid-value instead, which is the failure mode we are guarding against — so walk the map
+    // we emitted, collect where each entry really starts, and require the table to agree.
+    let entry_offsets: Vec<usize> = {
+        let mut cur = &re[map_at..];
+        let n = (cur[0] & 0x0f) as usize; // these fixtures are all fixmaps
+        assert!((0x80..=0x8f).contains(&cur[0]), "expected a fixmap header");
+        let mut pos = map_at + 1;
+        cur = &re[pos..];
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            let before = cur.len();
+            rmpv::decode::read_value(&mut cur).unwrap(); // key
+            rmpv::decode::read_value(&mut cur).unwrap(); // value
+            out.push(pos);
+            pos += before - cur.len();
+        }
+        out
+    };
+    for (i, &o) in offs.iter().enumerate().skip(1) {
+        let o = o as usize;
+        if o == re.len() {
+            continue; // a total-length slot
+        }
+        assert!(
+            entry_offsets.contains(&o),
+            "offset slot {i} ({o}) is not the start of a top-level entry: {:02x?}",
+            &re[o..(o + 6).min(re.len())]
+        );
+    }
 }
 
 #[test]

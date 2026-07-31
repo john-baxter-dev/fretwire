@@ -11,8 +11,30 @@ stream after a `marker/type/len` header). Key **104** is a `str`/`bin` blob = th
 
 ## Blob = a flat sequence of 3 MessagePack values
 1. `str "l6-helix\0"` — magic.
-2. `str` — a fixed header/uuid (kept verbatim, meaning TBD).
+2. `str` — the **offset table**, 48 bytes = 12 little-endian `u32`s. See below.
 3. `Map` — **the preset** (integer-keyed).
+
+### The header is an offset table, not a uuid  [solid — 2026-07-31]
+Every slot is a byte offset into the blob (offset 0 = the blob's first byte). On all four presets
+captured so far:
+
+| slot | value | points at |
+|---:|---|---|
+| 0 | 61 | the **preset map**'s first byte (always 61: 10-byte magic + 3-byte `str16` marker + 48-byte header) |
+| 1–9 | varies | the first byte of one **top-level preset entry** — the key byte, not its value. The slot→key mapping is a fixed permutation (`0,1,3,4,2,5,6,7,10` on a Floor preset), so slot 8 = 62 addresses whichever key the map happens to serialize first |
+| 10, 11 | blob length | the blob's **total size**, twice |
+
+The device seeks with this table rather than walking the MessagePack, which makes it load-bearing on
+write. **This cost us two device lockups.** `to_blob()` re-encodes the map with rmpv, which writes
+integers minimally where the device does not — the device emits `d1 00 00` (int16 zero) and `cc 00`
+freely — so an untouched preset re-serializes **117–216 bytes shorter**, with everything after the
+first such integer shifted left. We copied the header verbatim across that shift, so the device
+followed offsets that no longer began anything and a declared total length past the end of the
+buffer it had been given. It stopped draining its endpoint mid-transfer and needed a power cycle.
+
+`to_blob()` now rebuilds the table against the bytes it actually emits (`classify_header` records
+what each slot addressed at parse time; the offsets are re-derived on write). Byte-identity with the
+device's own encoding is not achievable through rmpv and is not required — **self-consistency is**.
 
 ## Preset map (integer keys)
 | key | value | meaning (inferred) |

@@ -997,3 +997,50 @@ teardown is instant instead of 6 s.
 1. A `dump-raw` of `fretwireTest2` **before** the mixer drag, plus which column he drops the mixer
    on. That lets the killing op-21 body be rebuilt offline and diffed against the rotary-move body
    that writes fine — the only way to get at the content question without another lockup.
+
+## Ninth round (2026-07-31): root cause — the offset table we were invalidating
+
+He sent `dump-raw` of `fretwireTest2` (7023 bytes, serial, 5 blocks — the state before the drag).
+That was enough; the rest was offline.
+
+### The header is an offset table  [solid]
+
+What `docs/preset-format.md` called "a fixed header/uuid (kept verbatim, meaning TBD)" is 48 bytes =
+12 little-endian `u32` offsets into the blob. Slot 0 is the preset map's offset (always 61), slots
+1–9 address individual top-level entries, slots 10 and 11 are the blob's total length. Confirmed on
+all four presets we have: slot 0 matched the map offset every time, the last slot matched the blob
+length every time, and every interior slot landed exactly on a `<key><value>` boundary.
+
+### We were shifting the bytes out from under it  [solid] [fixed]
+
+rmpv encodes integers minimally; the device does not (`d1 00 00` for zero, everywhere). So our
+re-encode of an **unmodified** preset is 117–216 bytes shorter, and everything past the first such
+integer moves. We copied the table verbatim. On `fretwireTest2`:
+
+```
+header slot 5  (949)  dev: 02 82 ...   ours: 02 82 ...     ok — before the first shift
+header slot 6 (1391)  dev: 05 de ...   ours: cd 01 13 ...  mid-value
+header slot 7 (1814)  dev: 06 82 ...   ours: 00 00 00 ...  mid-value
+header slot 10 (7004) = the blob's length   →  our blob is 6788 bytes
+```
+
+The device was told "7004 bytes, sections here", handed 6788 shifted bytes, and followed a pointer
+216 bytes past the end of its buffer. It stopped reading ~1 KB in — which is where the flow-control
+credits stopped in all three field traces.
+
+**Not a Floor bug and not about the mixer.** Both HX Stomp captures round-trip just as wrong. Every
+op-21 write fretwire has ever sent carried a corrupt table; the mixer drag was simply the first edit
+with no surgical op behind it, so it was the first one that had to use op 21.
+
+**Fix:** `to_blob()` rebuilds the table from the bytes it emits. Self-consistency, not byte-identity
+with the device — the latter isn't reachable through rmpv and isn't what the device needs. Verified
+across all four captures, with and without the mixer mutation.
+
+The regression test that should have caught this asserted the header came back **unchanged**, which
+is the bug restated as a requirement; its byte-identity check was an `eprintln!` annotated
+"(Not required — the device parses msgpack.)" Both now assert the real invariant.
+
+### Retest ask
+
+1. The mixer drag, once more. This is the first build where the blob we send describes itself
+   correctly. If it still freezes, the offset table was not the whole story and I want the log.

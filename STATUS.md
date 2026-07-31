@@ -881,9 +881,47 @@ the session, and emits `device-lost`; the frontend falls back to the disconnecte
 "power-cycle the HX device, then reconnect". `close()` skips the wire entirely when the device is
 gone.
 
-**Next diagnostic:** we cannot reproduce the killing blob offline — we have never had a dump of
-`fretwireTest2`. Worth asking for `dump-raw` of the preset *before* the mixer drag plus the target
-column, so the exact op-21 body can be rebuilt and diffed against the rotary-move body that works.
+## Ninth round (2026-07-31): **root cause — we were corrupting the preset's offset table**
+
+He sent the `dump-raw` of `fretwireTest2`, and the bug was reproducible offline in minutes.
+
+**The preset header is an offset table, not the "fixed header/uuid, meaning TBD" we had it down as.**
+48 bytes = 12 LE `u32`s: slot 0 is the preset map's offset, slots 1–9 are the offsets of individual
+top-level entries, and slots 10 and 11 are the blob's total length. The device seeks with it instead
+of walking the MessagePack.
+
+`to_blob()` re-encodes the map with rmpv, which writes integers **minimally**, and the device does
+not — it emits `d1 00 00` for a zero all over the preset. So our re-serialization of an *untouched*
+preset comes out **117–216 bytes shorter**, with everything after the first such integer shifted
+left. And we copied the header across verbatim. On `fretwireTest2`:
+
+| header slot | points at, in the device's blob | …applied to ours |
+|---|---|---|
+| 5 (949) | `02 82` — key 2, a map | `02 82` ✓ (before the first shift) |
+| 6 (1391) | `05 de` — key 5, a map | `cd 01 13` — **mid-value** |
+| 7 (1814) | `06 82` — key 6, a map | `00 00 00` — **mid-value** |
+| 10/11 (7004) | the blob's length | **216 bytes past the end of our 6788-byte blob** |
+
+That is what killed the pedal: it was told its data was 7004 bytes with sections at those offsets,
+handed 6788 shifted bytes, and followed a pointer off the end. It stopped draining its endpoint
+~1 KB in, which is exactly where the credits stopped in all three field traces.
+
+**This was never a Floor bug, and never about the mixer.** Every one of the four presets we have —
+including the two HX Stomp captures — round-trips wrong, by 117–216 bytes. Any op-21 write we have
+ever sent carried a corrupt offset table. The mixer drag was just the first edit with no surgical op
+behind it, so it was the first to *need* op 21.
+
+**Fix:** `to_blob()` rebuilds the table against the bytes it actually emits. Byte-identity with the
+device's encoding isn't reachable through rmpv and isn't needed; self-consistency is. Verified on all
+four captures, before and after the mutation that froze the unit — total-length slot correct, every
+interior offset landing exactly on a top-level entry, nothing past the end.
+
+The test that was supposed to catch this asserted the header survived **unchanged** — i.e. it
+asserted the bug — and its byte-identity check was a `eprintln!` with the comment "(Not required —
+the device parses msgpack.)" It now checks the invariant that matters.
+
+**Still needs hardware.** The offline evidence is strong but nobody has yet moved a mixer on a real
+pedal with this build.
 
 ## Prioritized next steps
 > **The path to live control is in `docs/next-steps.md`.** TL;DR: (1) **on Windows now** — capture a

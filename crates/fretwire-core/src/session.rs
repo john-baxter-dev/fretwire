@@ -670,24 +670,26 @@ impl Session {
     /// **a flow-control credit.** We wait a real timeout for each one, because outrunning the device
     /// is what wedged it back when we fired all fourteen chunks with a 5 ms glance between them.
     ///
-    /// **We do not abort when the credits stop.** That guard existed from 2026-07-31 to 08-01. Its
-    /// stated job — "stop feeding a device that is already gone" — is already done by
-    /// `fretwire_usb::WRITE_TIMEOUT`, which fails a send in 2 s once the pedal stops draining; the
-    /// guard was written before that existed, when an unbounded `bulk_out` could hang the host
-    /// forever. What it added on top was a *guess* about which credit patterns mean death, and
-    /// `fretwire24.log` shows the guess doesn't hold: three writes of the same 6816-byte preset to
-    /// the same Floor, and the one that opened `credits=3,5,6,…` ran all 14 chunks and completed,
-    /// while the two that opened `1,2,2,2,2` were aborted at chunk 5. A 14-chunk Floor write is
-    /// clearly *possible*; the credit trace is what varies, and three consecutive quiet chunks is
-    /// not a reliable death certificate. An HX Stomp credits every chunk (1,2,4,5,6 on a 5-chunk
-    /// write) and 90 reads' worth of channel history didn't change that, so it is unaffected either
-    /// way.
+    /// **Three consecutive unanswered chunks means the pedal is gone, and this was tested.** For
+    /// half a day the guard was removed on the theory that it might be aborting writes that would
+    /// otherwise have finished — `fretwire24.log` had shown the same Floor complete a 14-chunk write
+    /// of the same preset, so the credit stall looked like something a transfer might recover from.
+    /// `fretwire26.log` is that experiment: with nothing stopping it, the write pushed on past the
+    /// three quiet chunks and the very next send timed out — the device had stopped draining its
+    /// endpoint entirely. It does not recover. Aborting is not what wedges the pedal, and it is
+    /// already wedged by the time we notice.
     ///
-    /// [solid — 2026-08-01, `fretwire22b`/`23`/`24`: four aborts, every one at exactly
-    /// `sent=2480`, which is our own 5 × 496 rather than anything the device chose. **Open:** what
-    /// separates a Floor write that credits from one that doesn't. The one completed write began at
-    /// channel offset `arg=22079` and all four aborts at `arg ≥ 47311`, which is a lead, not a
-    /// finding — n = 5, and driving `arg` up over 90 reads on a Stomp reproduced nothing.]
+    /// So the guard is back, purely as a faster and more legible failure: it reports
+    /// `sent`/`total`/`credits` after ~0.75 s instead of surfacing a bare USB write timeout after
+    /// 2 s. It never fires on a healthy transfer — an HX Stomp credits every chunk (1,2,4,5,6 on a
+    /// 5-chunk write, unchanged across 90 reads of channel history), and the one Floor write on
+    /// record that completed credited all 14.
+    ///
+    /// [solid — 2026-08-01, `fretwire22b`/`23`/`24`/`26`: six Floor writes, five wedged. **Open:**
+    /// what makes the device stop consuming after ~2 chunks. The only thing separating the six is
+    /// the edit channel's running offset when the write starts — the single completed write began
+    /// at `arg=22079`, all five failures at `arg ≥ 47311` — but n = 6, it is confounded with
+    /// session length, and driving `arg` up over 90 reads on a Stomp reproduced nothing.]
     ///
     /// LIVE: the exact chunk size and `arg` cadence are reconstructed from `move_EQ_right_two_slots`.
     /// The device's `{103:1}` apply-ACK is best-effort (logged, not required); the caller confirms by
@@ -703,6 +705,8 @@ impl Session {
         /// if the device keeps taking bytes but never finishes. Generous: 14 chunks that each wait
         /// out `CREDIT_WAIT` is ~3.5 s, so 30 s cannot be reached by mere slowness.
         const WRITE_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
+        /// Consecutive unanswered chunks before we call the device wedged and stop.
+        const MAX_SILENT_CHUNKS: usize = 3;
 
         let txn = self.bump_txn();
         let tlv = Tlv::command(op::PARAM_SET, edit::write_preset(&blob, txn)).to_bytes();
@@ -731,6 +735,7 @@ impl Session {
         // device rejects a stalled offset.
         let arg = self.cur_arg(src);
         let total = tlv.len();
+        let chunks = tlv.len().div_ceil(CHUNK);
         let started = std::time::Instant::now();
         let mut sent = 0usize;
         let mut credits = 0usize;
@@ -769,6 +774,23 @@ impl Session {
                 silent,
                 "write-preset chunk"
             );
+            // Only worth stopping while there is still data to withhold: past the last chunk the
+            // blob is already in the device and quitting would just deny it the terminator.
+            if silent >= MAX_SILENT_CHUNKS && n + 1 < chunks {
+                tracing::error!(
+                    sent,
+                    total,
+                    credits,
+                    chunks = n + 1,
+                    "device stopped acknowledging mid-write — abandoning the transfer"
+                );
+                self.last_raw = None;
+                return Err(crate::Error::WriteStalled(format!(
+                    "the pedal stopped responding {sent} of {total} bytes into a preset write \
+                     (no reply to the last {silent} frames). The edit buffer may be inconsistent — \
+                     reload the preset, and power-cycle the pedal if it is unresponsive"
+                )));
+            }
             if started.elapsed() > WRITE_BUDGET {
                 tracing::error!(
                     sent,
@@ -2932,10 +2954,10 @@ mod tests {
     }
 
     #[test]
-    fn credit_silence_does_not_distinguish_a_live_device_from_a_dead_one() {
+    fn three_quiet_chunks_separates_the_recorded_writes() {
         // Per-chunk flow-control credits counted off real whole-preset writes: each entry is how
-        // many credits arrived in that chunk's window. `write_preset` used to abort after three
-        // consecutive zeroes. These traces are why it no longer does.
+        // many credits arrived in that chunk's window. `write_preset` stops after three consecutive
+        // zeroes; these are the traces that threshold has to sit between.
 
         // An HX Stomp credits essentially every chunk, and its presets fit in five. Measured
         // 2026-08-01 on a 2211-byte write that landed: credits 1,2,4,5,6 cumulative.
@@ -2948,9 +2970,8 @@ mod tests {
         assert_eq!(longest_silence(&floor_stalled), 3);
 
         // And the same 6816-byte preset, same Floor, minutes apart in `fretwire24.log`: all 14
-        // chunks credited and the transfer completed. So a large Floor write is possible and it is
-        // the credit trace that varies — which is why three quiet chunks cannot be read as a death
-        // certificate, and why the threshold was removed rather than retuned.
+        // chunks credited and the transfer completed. So a large Floor write is possible, and the
+        // threshold has to clear this trace by a wide margin or it would abort a healthy one.
         let floor_completed = [3, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
         assert_eq!(floor_completed.len(), 14);
         assert_eq!(longest_silence(&floor_completed), 0);

@@ -1529,3 +1529,44 @@ on a Stomp by driving `arg` up over 90 reads in one session changed nothing — 
 **The next Floor round should answer it directly:** with the guard gone, does a stalling write now
 recover and finish, or does `WRITE_TIMEOUT` fire? And does an op-21 write immediately after connect
 behave differently from one late in a session?
+
+
+## Round 18 (2026-08-01, later): the experiment ran, and the answer is no
+
+`fretwire26.log` — the tester on a build with the credit guard removed, dragging a block into the
+loop on a rebuilt preset (`Cali400test1`).
+
+**The guard was not what stopped those writes.** The write goes quiet after chunk 2 exactly as
+before, reaches three silent chunks at chunk 5 — and with nothing to stop it, pushes on. The next
+send times out after the full two seconds: the device has stopped draining its endpoint altogether.
+It does not recover. So aborting never caused the lockup, and the pedal is already gone by the time
+the credits stop.
+
+The guard is restored. Its value is not prevention, it is a legible failure: `sent`/`total`/
+`credits` after ~0.75 s rather than a bare USB write timeout after 2 s. It cannot fire on a healthy
+transfer — a Stomp credits every chunk, and the one Floor write on record that completed credited
+all fourteen.
+
+### Where that leaves the freeze
+
+Six Floor whole-preset writes are now on record:
+
+| log | arg at start | total | chunks sent | outcome |
+|---|---:|---:|---:|---|
+| 24 | 22079 | 6816 | 14 | **completed** |
+| 24 | 47311 | 6816 | 5 | wedged |
+| 23 | 94976 | 6844 | 5 | wedged |
+| 24 | 112962 | 6816 | 5 | wedged |
+| 26 | 203731 | 6883 | 5 | wedged |
+| 22b | 220292 | 6844 | 5 | wedged |
+
+The mechanism is now clear even if the cause isn't: the device credits a chunk or two, stops
+consuming, keeps accepting into a buffer for another three chunks, and then blocks. Five chunks is
+~2560 bytes on the wire including framing, which is a plausible receive buffer.
+
+**The only thing separating the six** is the edit channel's running `arg` offset when the write
+begins — the single completed write started at 22079, every failure at 47311 or above, and the
+completed one was the first write after a reconnect. That matches the tester's own observation that
+a reconnect let a mixer move through. It stays a **lead, not a finding**: n = 6, `arg` is confounded
+with session length, and driving `arg` up over 90 reads in one Stomp session reproduced nothing
+(though a Stomp write is 5 chunks, so it never reaches the region where the Floor dies).

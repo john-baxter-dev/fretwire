@@ -704,9 +704,16 @@
               <button
                 class="snap"
                 class:active={i === activeSnapshot}
-                title="Click to switch — double-click to rename"
+                title="Click to switch — right-click (or double-click) to rename"
                 onclick={() => onSnapshot(i)}
                 ondblclick={() => onSnapRename(i)}
+                oncontextmenu={(e) => {
+                  // The webview would otherwise pop its own menu (Reload/Inspect), which is both
+                  // useless here and hides ours. Double-click still works; right-click is what
+                  // people reach for, and it was undiscoverable behind a tooltip.
+                  e.preventDefault();
+                  onSnapRename(i);
+                }}
               >
                 {name || `SS${i + 1}`}
               </button>

@@ -1238,13 +1238,13 @@ fn type_token(symbolic_id: &str) -> &str {
 /// The 46 `HD2_CabMicIr_*WithPan` symbols each shadow a plain `HD2_CabMicIr_*` single cab of the
 /// same display name, so a flat category listing shows every cab twice. The twins are not
 /// interchangeable: they are a different block type, and the pedal **refuses an in-place swap** to
-/// one — device code `-306` on the Stomp, `-21` on the Floor. Selecting a duplicate therefore did
+/// one — device code `-306`, and `-21` in some states. Selecting a duplicate therefore did
 /// nothing and the block snapped back to what it was. Editing a dual cab is not supported yet
 /// (it needs two model refs and the pan params), so keep them out of the swap list rather than
 /// offering a choice that cannot be taken. Name resolution is deliberately left alone — a preset
 /// that already contains one must still read back with its own name and params.
 ///
-/// [solid — 2026-08-01: reproduced on the HX Stomp, two swaps refused with `-306`; matches the
+/// [solid — 2026-08-01: reproduced on the HX Stomp, every dual twin refused; matches the
 /// field report and the shipped `HX_ModelCatalog.json` `Cab › Dual` grouping.]
 fn is_dual_cab(symbol: &str) -> bool {
     symbol.starts_with("HD2_CabMicIr_") && symbol.ends_with("WithPan")

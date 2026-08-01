@@ -371,7 +371,7 @@ fn io_nodes_resolve_named_params() {
 /// look alike — a duplicate row is unusable by definition, since the user cannot tell which is
 /// which. Both failed in the field on 2026-08-01: the Cab (Mic+IR) list carried all 46 cabs twice
 /// (the second copy being HX Edit's `Cab › Dual` twin, `*WithPan`), and picking a duplicate was
-/// refused by the device — `-306` on the Stomp, `-21` on the Floor — so the block snapped back.
+/// refused by the device — codes `-306` and `-21` both seen — so the block snapped back.
 #[test]
 fn the_picker_never_offers_a_model_the_device_refuses() {
     let cat = catalog();

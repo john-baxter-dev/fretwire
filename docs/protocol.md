@@ -261,9 +261,9 @@ for that target, so the code looks like "wrong shape for this thing" rather than
 
 | code | seen on | meaning [hypothesis] |
 |---:|---|---|
-| `-21` | op 39 `add_block` carrying a `paired_index`; op 40 swapping a cab to a `*WithPan` twin (Floor) | a model-ref the op will not take for that target |
+| `-21` | op 39 `add_block` carrying a `paired_index`; op 40 swapping to a `*WithPan` twin | a model-ref the op will not take for that target |
 | `-3` | op 30 `set_value` writing a split node's `bypass` param | that parameter is not writable this way — bypass has its own op (41) |
-| `-306` | op 40 swapping a single Cab (Mic+IR) block to a `*WithPan` twin (Stomp) | that model is a different **block type** (HX Edit's `Cab › Dual`), not an in-place swap target |
+| `-306` | op 40 swapping any block to a `*WithPan` dual-cab twin | that model is a different **block type** (HX Edit's `Cab › Dual`), not an in-place swap target. The same swap also answers `-21` in some device states, so treat the refusal, not the code, as the signal |
 
 The `-3` case is worth knowing about because `bypass` **is** a real entry in the split's stored param
 array, and the four split models are the only ones in the whole catalog (4 of 681) that carry it. So

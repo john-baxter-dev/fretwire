@@ -170,8 +170,14 @@ where
     run(state, move |s| {
         let label = label(s);
         s.edit_begin(&label);
-        f(s)?;
-        let p = s.read_preset()?;
+        // Close the history entry on the failure path too, or a refused edit leaves it dangling.
+        let p = match f(s).and_then(|()| s.read_preset()) {
+            Ok(p) => p,
+            Err(e) => {
+                s.edit_abort();
+                return Err(e);
+            }
+        };
         s.edit_commit();
         Ok(dto(s, &p))
     })
@@ -201,7 +207,13 @@ where
     run(state, move |s| {
         let label = label(s);
         s.edit_begin(&label);
-        let p = f(s)?;
+        let p = match f(s) {
+            Ok(p) => p,
+            Err(e) => {
+                s.edit_abort();
+                return Err(e);
+            }
+        };
         s.edit_commit();
         Ok(dto(s, &p))
     })

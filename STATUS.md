@@ -1087,8 +1087,8 @@ retest would settle it.
 - *Every Cab (Mic+IR) listed twice, and the second copy would not load.* The 46
   `HD2_CabMicIr_*WithPan` symbols are HX Edit's **`Cab › Dual`** subcategory — a two-cab block with
   per-cab pan, not an alternative single cab. They share the plain cab's display name, so the picker
-  showed 92 rows for 46 cabs, and the pedal refuses an in-place swap to one: **`-306`** on the Stomp,
-  `-21` in the tester's Floor log. Selecting a duplicate did nothing and the block snapped back.
+  showed 92 rows for 46 cabs, and the pedal refuses an in-place swap to one — **`-306`**, and `-21`
+  in some states (both reproduced on a Stomp; the tester's Floor log shows `-21`). Selecting a duplicate did nothing and the block snapped back.
   They are now kept out of the swap list (name resolution is untouched, so a preset that already
   contains one still reads back correctly). 46 rows, and all 46 verified accepted on hardware.
 - *A "Synth" category holding one model, and the 3 Osc Synth missing from Pitch/Synth.*

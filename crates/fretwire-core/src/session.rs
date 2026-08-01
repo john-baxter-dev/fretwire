@@ -886,12 +886,18 @@ impl Session {
                 }
             }
         }
-        self.history.truncate(self.cursor + 1);
-        // If the flash-saved state lived in the discarded redo branch, no cursor matches it now.
-        if self.saved_cursor.is_some_and(|i| i > self.cursor) {
-            self.saved_cursor = None;
-        }
         self.pending = Some(label.to_string());
+    }
+
+    /// Abandon the edit [`Self::edit_begin`] opened, leaving the timeline exactly as it was. Call
+    /// this when the edit failed — a refusal from the pedal, or a read that wouldn't settle.
+    ///
+    /// This matters more than it used to: until edit ACKs were correlated by transaction id, a
+    /// refused edit usually arrived as some other frame and was reported as success, so the failure
+    /// path here was rarely taken. Now that refusals actually surface, every one of them would
+    /// otherwise leave a stale `pending` label behind.
+    pub fn edit_abort(&mut self) {
+        self.pending = None;
     }
 
     /// Finish an undoable edit: snapshot the (re-read) post-edit state as a new timeline entry and
@@ -904,6 +910,13 @@ impl Session {
             tracing::warn!("edit history: no post-edit state to snapshot");
             return;
         };
+        // Discard the redo branch here rather than in `edit_begin`, so an edit that fails between
+        // the two leaves the timeline untouched instead of eating the user's redo stack.
+        self.history.truncate(self.cursor + 1);
+        // If the flash-saved state lived in the discarded redo branch, no cursor matches it now.
+        if self.saved_cursor.is_some_and(|i| i > self.cursor) {
+            self.saved_cursor = None;
+        }
         self.history.push(HistoryEntry { label, blob });
         if self.history.len() > MAX_HISTORY {
             self.history.remove(0);

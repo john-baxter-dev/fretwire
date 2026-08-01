@@ -1395,8 +1395,9 @@ load — the block reverts, or stays empty if it was empty.
 The 46 `HD2_CabMicIr_*WithPan` symbols are the **dual** cab model (two cabs, per-cab pan), and
 `HX_ModelCatalog.json` groups them under `Cab › Dual` while the plain symbols sit in `Cab › Single`.
 Both carry the same display `name`, so a flat per-category listing shows 92 rows for 46 cabs. The
-pedal refuses an in-place swap to one: **`-306`** on the Stomp, and `-21` in the Floor log
-(`fretwire18.log`, six op-40 refusals while the tester was working through the cab list).
+pedal refuses an in-place swap to one. Two codes turn up — **`-306`** most of the time and `-21`
+in some states (both seen on the Stomp; the Floor log `fretwire18.log` has six op-40 `-21`
+refusals from the tester working through the cab list). The refusal is the invariant, not the code.
 
 They are now excluded from the swap list — editing a dual cab needs two model refs and the pan
 params, which is a feature, not this fix. Name resolution is deliberately untouched so a preset that
@@ -1454,3 +1455,21 @@ the next round means something:
 - **short chunk mid-stream** — a 256-byte chunk arriving as two frames. The halves always sum back
   to 256 (207+49, 46+210, 12+244, 251+5 across these logs) and every read that logged it still
   reassembled to exactly its declared length. Fragmentation, not truncation.
+
+### Loose ends closed before handing the build back
+
+- **Every edit op re-checked on hardware, timed.** ops 6/20/25/28/30/39/41/43/71/78/88/89 each
+  matched their own transaction, 1–229 ms, no skipped frames. This mattered because op 28
+  (`delete_block`) never correlated once in the field logs (3 samples, 2 empty + 1 lagged), which
+  would have meant delete now burning the full 3 s match window and failing. It correlates fine —
+  those samples were victims of the desync, not evidence that op 28 is different.
+- **A refused edit no longer eats the undo timeline.** `edit_begin` truncated the redo branch and
+  set a `pending` label; if the edit then failed, `edit_commit` never ran and both were left behind.
+  That path was rarely taken while refusals were being swallowed — now that they surface, every one
+  hits it. Truncation moved to `edit_commit`, `Session::edit_abort()` added, and both GUI helpers
+  (`mutate_edit`, `returning_edit`) call it on the error path. Verified live: two edits, one undo,
+  then a refused swap — timeline still `["Loaded", "Set 0.4", "Set 0.6"]` with the redo intact.
+- **The GUI already handles a surfaced refusal correctly**: `apply()` leaves `preset` untouched and
+  raises a toast, which matches the device, since a refused edit changes nothing.
+- **`set_setting` is refused** (`op 25`, code `-3`) — found only because refusals now surface. Not
+  in the GUI's command surface, CLI-only, so it is a lead rather than a regression.

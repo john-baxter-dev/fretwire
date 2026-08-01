@@ -157,13 +157,16 @@
             <button class="act" onclick={() => { swappingCab = !swappingCab; swapping = false; }}>Change cab ▾</button>
           {/if}
           <button class="act" onclick={() => onCopyBlock(block.slot)} title="Copy this block, with all its settings">Copy</button>
+          <!-- The copied block's name lives in the tooltip, not the label: this row sits opposite
+               the block title in a `space-between` header, and a long model name in a button
+               pushes the title out of shape. -->
           <button
             class="act"
             disabled={!blockClip}
             onclick={() => onPasteBlock(block.slot)}
-            title={blockClip ? `Replace this block with the copied ${blockClip}` : "Copy a block first"}
+            title={blockClip ? `Replace this block with the copied "${blockClip}"` : "Copy a block first"}
           >
-            Paste{blockClip ? ` ${blockClip}` : ""}
+            Paste
           </button>
           <button class="act danger" onclick={() => onDelete(block.slot)}>Delete</button>
         {/if}
@@ -329,9 +332,13 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    /* Six buttons is enough to crowd a narrow panel — wrap rather than overflow. */
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
   .act {
     font: inherit;
+    white-space: nowrap;
     border: 1px solid #3a4150;
     background: #232833;
     color: #c3c9d4;

@@ -62,8 +62,13 @@
   <div class="tools sub">
     <button onclick={onBackup} title="Save every preset to a file (reads only)">Backup…</button>
     <button onclick={onRestore} title="Restore a preset from a backup file into a slot">Restore…</button>
+  </div>
+  <div class="tools sub last">
     <button onclick={onCopyPreset} title="Copy the loaded preset, to paste onto another slot">Copy</button>
+    <!-- Carries the copied preset's name, so it gets the wider share of the row and its own line;
+         a name still longer than that ellipsises rather than pushing out of the sidebar. -->
     <button
+      class="wide"
       onclick={onPastePreset}
       disabled={!presetClip || writeBlocked}
       title={presetClip ? `Replace the loaded preset with "${presetClip}" (edit buffer — Save to keep it)` : "Copy a preset first"}
@@ -126,6 +131,12 @@
     font: inherit;
     font-size: 12px;
     flex: 1;
+    /* Without `min-width: 0` a flex item refuses to shrink below its content, so one long label
+       (the Paste button carries a preset name) pushes the whole row out of the sidebar. */
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     background: #2b7de0;
     color: #fff;
     border: 0;
@@ -133,16 +144,25 @@
     padding: 6px 4px;
     cursor: pointer;
   }
+  .tools button.wide {
+    flex: 2;
+  }
   .tools button:nth-child(n + 2) {
     background: #363b46;
   }
-  /* The two tool rows read as one group: the separator lives under the second row only. */
-  .tools:not(.sub) {
+  /* The tool rows read as one group: the separator lives under the last row only. */
+  .tools:not(.last) {
     border-bottom: 0;
+  }
+  .tools:not(.sub) {
     padding-bottom: 4px;
   }
   .tools.sub {
     padding-top: 0;
+    padding-bottom: 4px;
+  }
+  .tools.sub.last {
+    padding-bottom: 10px;
   }
   .tools.sub button {
     background: #2a2f3a;

@@ -14,9 +14,7 @@ use tauri::Manager;
 fn main() {
     // Logs go to the terminal; run with `RUST_LOG=trace cargo run -p fretwire-tauri` to trace USB I/O.
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
+        .with_env_filter(fretwire_log_filter())
         .init();
 
     // WebKitGTK's default dmabuf renderer hits a fatal Wayland protocol error on this GPU/compositor
@@ -98,4 +96,23 @@ fn main() {
                 }
             }
         });
+}
+
+/// The log filter, with `nusb` damped unless the user asked for it by name.
+///
+/// `RUST_LOG=debug` turns on nusb's per-URB tracing, which is **94% of a bug-report log** by volume
+/// (7.2 MB of a Floor session's 7.7 MB) and buries the protocol lines a report is actually about.
+/// An explicit `nusb=…` directive still wins, so `RUST_LOG=debug,nusb=debug` gets the URBs back.
+fn fretwire_log_filter() -> tracing_subscriber::EnvFilter {
+    match std::env::var("RUST_LOG") {
+        Ok(v) if !v.is_empty() => {
+            let damped = if v.contains("nusb") {
+                v
+            } else {
+                format!("{v},nusb=warn")
+            };
+            tracing_subscriber::EnvFilter::new(damped)
+        }
+        _ => tracing_subscriber::EnvFilter::new("info,nusb=warn"),
+    }
 }

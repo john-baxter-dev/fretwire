@@ -1102,6 +1102,32 @@ retest would settle it.
 it right ("2x12 Match G25"), so the fix is to prefer catalog names; left for later since it is one
 cosmetic label and wiring in a new name source is its own change.
 
+**A second real bug: `read_preset_raw` ignored the provenance check.** `read_preset` retries when the
+preset identity moves across the stream read (`settled == false`) and, as a last resort, decodes the
+blob anyway — fine, because the worst case is showing the user a stale view. But `read_preset_raw`
+just called `read_preset_inner()` and threw the flag away, and *it* is the input to every op-21
+read-modify-write (`set_node_pos`, `delete_block`, `reorder_block`, `move_block_to_row`,
+`insert_block`). So a structural edit made while the device was mid preset-change would read a blob
+belonging to neither preset, mutate it, and write it back over whatever the pedal is on now. 21
+"provenance is ambiguous" warnings across these logs, and the tester's resaved `fretwireTest3` came
+back **with no blocks at all** — which matches his note that the preset contents vanished and he
+saved over them. It now retries and fails rather than guessing. (`backup_setlist` already had an
+equivalent identity guard, so backups were never exposed to this.)
+
+**Log noise.** `nusb`'s per-URB debug is **94% of a bug-report log by volume** (7.2 MB of one 7.7 MB
+session) and buries the protocol lines. Both binaries now damp `nusb` to `warn` unless `RUST_LOG`
+names it explicitly — measured on hardware: the same `pull` goes from 407 KB to 8 KB, and
+`RUST_LOG=debug,nusb=debug` still gets the URBs back. Two read-path warnings were also downgraded to
+debug after checking they are benign: the empty chunk is the device's `cmd 0x08` credit landing
+between stream chunks, and the "short chunk" is a 256-byte chunk arriving as two frames — the halves
+always sum to 256 (207+49, 46+210, 12+244, 251+5) and every read still reassembled to its declared
+length.
+
+**Also checked, no bug:** `spacedirt.bin` decodes correctly including its DSP2 blocks (slots 24–26 =
+DSP2 indices 4–6, the documented `dsp × 20 + index` framing), and it contains a real
+`HD2_CabMicIr_1x15AmpegB15WithPan` — confirming that dropping the dual cabs from the *picker* while
+leaving name resolution alone was the right split.
+
 **Still open from these logs:** `fretwire17.log` froze genuinely mid-write — `sent=2480 total=6911`,
 credits flat from chunk 3 of 14 — but it is a `deficit=` log line, i.e. the pre-`0732954` build. The
 tester needs the current build before that datapoint means anything.

@@ -1811,9 +1811,36 @@ impl Session {
     /// Read the current preset stream and return the raw reassembled bytes (before decoding).
     /// Useful for diffing two device states to decode stream fields.
     pub fn read_preset_raw(&mut self) -> crate::Result<Vec<u8>> {
-        let raw = self.read_preset_inner()?.0;
-        self.last_raw = Some(raw.clone());
-        Ok(raw)
+        // Unlike [`Self::read_preset`], which may decode a provenance-ambiguous blob rather than
+        // show the user nothing, this one is the input to a **read-modify-write**: every op-21 path
+        // (`set_node_pos`, `delete_block`, `reorder_block`, `move_block_to_row`, `insert_block`)
+        // reads here, edits the tree, and writes it straight back to whatever preset the device is
+        // sitting on now. If the identity moved across the read, the blob belongs to neither preset
+        // and writing it back overwrites the current one with someone else's signal chain — or with
+        // an empty one. So retry, and fail rather than guess. [2026-08-01: 21 "provenance is
+        // ambiguous" warnings across the field logs, and a `fretwireTest3` resave that came back
+        // with no blocks at all.]
+        for attempt in 0..3 {
+            let (raw, info, settled) = self.read_preset_inner()?;
+            if settled {
+                self.last_raw = Some(raw.clone());
+                return Ok(raw);
+            }
+            tracing::debug!(
+                attempt,
+                got = ?info.as_ref().map(|i| (i.bank, i.index)),
+                "raw read straddled a preset change; re-reading before any write"
+            );
+            self.backoff_before_retry(attempt);
+        }
+        // Don't leave a stale blob behind for a caller that falls back to it.
+        self.last_raw = None;
+        Err(fretwire_data::Error::Stream(
+            "the preset changed under every read attempt — refusing to edit a blob whose \
+             provenance is ambiguous (try again once the device settles)"
+                .to_string(),
+        )
+        .into())
     }
 
     /// Back up every preset in the setlist to a [`crate::backup::Backup`]. Walks the whole list
@@ -1994,11 +2021,15 @@ impl Session {
             match classify_chunk(n, full_chunk, payload.len(), target) {
                 ChunkVerdict::Skip => {
                     empties += 1;
-                    tracing::warn!(
+                    // Expected, not alarming: an empty body here is the device's `cmd 0x08`
+                    // flow-control credit — the same frame it interleaves during an op-21 write —
+                    // landing between two stream chunks. Skipping it is the whole point; the run is
+                    // still bounded below in case the device goes quiet for real.
+                    tracing::debug!(
                         got = payload.len(),
                         want = target,
                         empties,
-                        "empty chunk before declared stream end — skipping, continuing read",
+                        "credit frame between stream chunks — skipping, continuing read",
                     );
                     // Bound consecutive empties so a wedged device still errors out.
                     if empties >= 8 {
@@ -2008,11 +2039,16 @@ impl Session {
                 ChunkVerdict::Keep => {
                     payload.extend_from_slice(&chunk.body);
                     if n < full_chunk {
-                        tracing::warn!(
+                        // Also expected: the device sometimes splits one 256-byte chunk across two
+                        // frames, and the halves always sum back to 256 (207+49, 46+210, 12+244,
+                        // 251+5 in the field logs). Every read that logged this still reassembled
+                        // to exactly its declared length, so it is fragmentation, not truncation —
+                        // keep it and move on. Kept at debug so it doesn't drown a real anomaly.
+                        tracing::debug!(
                             got = payload.len(),
                             want = target,
                             len = n,
-                            "short chunk before declared stream end — keeping it, continuing read",
+                            "stream chunk arrived fragmented — keeping it, continuing read",
                         );
                     } else {
                         empties = 0;

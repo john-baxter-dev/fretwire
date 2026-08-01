@@ -1421,3 +1421,36 @@ the UI" is consistent with the ACK desync above rather than anything about the s
 `fretwire17.log` froze genuinely mid-write — `sent=2480 total=6911`, credits flat from chunk 3 of
 14 — but the log line reads `deficit=`, so it is the pre-`0732954` build. It needs re-running on the
 current one before it says anything new.
+
+### A read-modify-write could run on the wrong preset
+
+`read_preset` already handles the case where the preset identity moves across a stream read: it
+retries, and only as a last resort decodes the blob anyway, on the grounds that showing a stale view
+beats showing nothing. `read_preset_raw` did not — it called the same inner read and discarded the
+flag. And that is the function every op-21 whole-preset write reads from (`set_node_pos`,
+`delete_block`, `reorder_block`, `move_block_to_row`, `insert_block`): read the blob, edit the tree,
+write it straight back to whatever preset the pedal is on *now*.
+
+So a structural edit made while the device was mid preset-change would write a blob belonging to
+neither preset over the current one. These logs carry 21 `provenance is ambiguous` warnings, and the
+tester's resaved `fretwireTest3` came back with **no blocks at all** — matching his note that the
+preset contents disappeared and he then saved over them. `read_preset_raw` now retries and errors
+rather than guessing. `backup_setlist` already had an equivalent identity guard, so backups were
+never exposed.
+
+### Making the next log readable
+
+`nusb`'s per-URB debug lines are **94% of a bug-report log by volume** — 7.2 MB of one 7.7 MB
+session — and they bury the protocol lines a report is actually about. Both binaries now damp `nusb`
+to `warn` unless `RUST_LOG` names it explicitly. Measured on hardware, the same `pull` drops from
+407 KB to 8 KB; `RUST_LOG=debug,nusb=debug` still gets the URBs back when a transport question needs
+them.
+
+Two read-path warnings were downgraded to debug after checking they are benign, so that a WARN in
+the next round means something:
+
+- **empty chunk mid-stream** — the device's `cmd 0x08` flow-control credit, the same frame it
+  interleaves during an op-21 write, landing between two stream chunks.
+- **short chunk mid-stream** — a 256-byte chunk arriving as two frames. The halves always sum back
+  to 256 (207+49, 46+210, 12+244, 251+5 across these logs) and every read that logged it still
+  reassembled to exactly its declared length. Fragmentation, not truncation.

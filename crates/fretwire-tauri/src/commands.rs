@@ -20,6 +20,33 @@ use tauri::{Emitter, State};
 #[derive(Default)]
 pub struct AppState {
     pub session: Arc<Mutex<Option<Session>>>,
+    /// Copy/paste buffer for whole presets: the raw stream as read off the device, plus the name it
+    /// had. Kept here rather than handed to the frontend because it is ~7 KB of binary that the UI
+    /// has no use for — the JS side only ever sees the name, for the button's label.
+    pub clipboard: Arc<Mutex<Option<PresetClip>>>,
+    /// Copy/paste buffer for a single block.
+    pub block_clipboard: Arc<Mutex<Option<BlockClip>>>,
+}
+
+/// A copied preset: the raw stream exactly as read off the device, and the name it had.
+#[derive(Clone)]
+pub struct PresetClip {
+    pub raw: Vec<u8>,
+    pub name: String,
+}
+
+/// A copied block: enough to rebuild it in another slot without touching the preset blob.
+#[derive(Clone)]
+pub struct BlockClip {
+    pub name: String,
+    pub model_index: i64,
+    /// The paired cab/IR for an amp+cab block; `-1` when there isn't one, matching `swap_model`.
+    pub paired_index: i64,
+    pub bypassed: bool,
+    /// `(param index, value)` for the main model and, separately, the paired sub-model. Captured as
+    /// typed values so each one goes back on the wire as the type it came off as.
+    pub params: Vec<(i64, fretwire_core::fretwire_data::stream::ParamValue)>,
+    pub paired_params: Vec<(i64, fretwire_core::fretwire_data::stream::ParamValue)>,
 }
 
 /// Spawn the keepalive heartbeat. While a session is open, this beats every 250 ms — same cadence as
@@ -856,6 +883,153 @@ pub async fn restore_preset(
         Ok(dto(s, &p))
     })
     .await
+}
+
+/// Copy the currently-loaded preset into the app's paste buffer. Reads only. Returns the name, so
+/// the UI can say what is on the clipboard.
+#[tauri::command]
+pub async fn copy_preset(state: State<'_, AppState>) -> R<String> {
+    let clipboard = state.clipboard.clone();
+    run(&state, move |s| {
+        let raw = s.read_preset_raw()?;
+        let name = s
+            .last_identity()
+            .map(|i| i.name.clone())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| "preset".to_string());
+        if let Ok(mut c) = clipboard.lock() {
+            *c = Some(PresetClip {
+                raw,
+                name: name.clone(),
+            });
+        }
+        Ok(name)
+    })
+    .await
+}
+
+/// Paste the copied preset over the currently-loaded one — **into the edit buffer, not flash**, the
+/// same as every other structural edit. The user saves when they mean to, and undo steps back out
+/// of it. Mirrors HX Edit's copy-preset / paste-onto-a-slot, which is otherwise a manual rebuild.
+#[tauri::command]
+pub async fn paste_preset(state: State<'_, AppState>) -> R<PresetDto> {
+    let Some(PresetClip { raw, name }) = state.clipboard.lock().ok().and_then(|c| c.clone()) else {
+        return Err("nothing copied yet — use Copy on a preset first".into());
+    };
+    mutate_edit(
+        &state,
+        move |_| format!("Paste {name}"),
+        move |s| {
+            let ps = fretwire_core::fretwire_data::stream::PresetStream::parse(&raw)?;
+            // A Floor preset carries two DSPs' worth of slots and a Stomp preset one, so pasting
+            // across device models would write a shape the pedal cannot hold. Catch it here rather
+            // than let op 21 find out.
+            if let Ok(p) = s.catalog().load_preset(&raw)
+                && s.device_matches_preset(&p) == Some(false)
+            {
+                return Err(fretwire_core::Error::Rejected(format!(
+                    "that preset came from a {} — this is a {}",
+                    p.device_model.as_deref().unwrap_or("different device"),
+                    s.device().name,
+                )));
+            }
+            s.write_preset(ps.to_blob())
+        },
+    )
+    .await
+}
+
+/// Whether anything is on the paste buffer, and what it is called — so the UI can label/enable the
+/// Paste button. No device needed.
+#[tauri::command]
+pub fn clipboard_preset(state: State<'_, AppState>) -> Option<String> {
+    state
+        .clipboard
+        .lock()
+        .ok()
+        .and_then(|c| c.as_ref().map(|p| p.name.clone()))
+}
+
+/// Copy one block — its model, paired cab, bypass state and every parameter value. Reads only.
+#[tauri::command]
+pub async fn copy_block(state: State<'_, AppState>, slot: i64) -> R<String> {
+    let clip = state.block_clipboard.clone();
+    run(&state, move |s| {
+        let preset = s.read_preset()?;
+        let b = preset.block(slot).ok_or_else(|| {
+            fretwire_core::Error::Rejected(format!("slot {slot} has no block to copy"))
+        })?;
+        let model_index = b.model_index.ok_or_else(|| {
+            fretwire_core::Error::Rejected(format!(
+                "{} has no model reference to copy (it is a routing node, not a block)",
+                b.model_name
+            ))
+        })?;
+        let clipped = BlockClip {
+            name: b.user_label.clone().unwrap_or_else(|| b.model_name.clone()),
+            model_index,
+            paired_index: b.paired_index.unwrap_or(-1),
+            bypassed: b.bypassed.unwrap_or(false),
+            params: b.params.iter().map(|p| (p.index as i64, p.value)).collect(),
+            paired_params: b
+                .paired_params
+                .iter()
+                .map(|p| (p.index as i64, p.value))
+                .collect(),
+        };
+        let name = clipped.name.clone();
+        if let Ok(mut c) = clip.lock() {
+            *c = Some(clipped);
+        }
+        Ok(name)
+    })
+    .await
+}
+
+/// Paste the copied block into `slot`, replacing whatever is there.
+///
+/// Built from the **surgical** ops — one `swap_model` then one `set_value` per parameter — rather
+/// than splicing the blob and doing an op-21 whole-preset write. Slower on the wire (a couple of
+/// hundred ms) and worth it: op 21 is the operation every device lockup on record has come from,
+/// and a convenience feature has no business going near it while that is unexplained.
+#[tauri::command]
+pub async fn paste_block(state: State<'_, AppState>, slot: i64) -> R<PresetDto> {
+    let Some(clip) = state.block_clipboard.lock().ok().and_then(|c| c.clone()) else {
+        return Err("no block copied yet — use Copy on a block first".into());
+    };
+    let label = clip.name.clone();
+    mutate_edit(
+        &state,
+        move |_| format!("Paste {label}"),
+        move |s| {
+            // The swap resets the block to the new model's defaults, so every value has to be
+            // replayed afterwards — that ordering is not optional.
+            s.swap_model(slot, clip.model_index, clip.paired_index)?;
+            // …and the re-read is not optional either. `set_param` clamps to the param's declared
+            // range, which it looks up in the *cached* preset, and the swap leaves that cache
+            // describing the model that was there before. Without this, pasting a cab clamped its
+            // Mic index 11 to 1 and its High Cut 20100 Hz to 1.0 — against the old block's ranges.
+            s.read_preset()?;
+            for (index, value) in clip.params {
+                s.set_param_value(slot, false, index, value)?;
+            }
+            for (index, value) in clip.paired_params {
+                s.set_param_value(slot, true, index, value)?;
+            }
+            s.set_enabled(slot, !clip.bypassed)
+        },
+    )
+    .await
+}
+
+/// What is on the block paste buffer, if anything. No device needed.
+#[tauri::command]
+pub fn clipboard_block(state: State<'_, AppState>) -> Option<String> {
+    state
+        .block_clipboard
+        .lock()
+        .ok()
+        .and_then(|c| c.as_ref().map(|b| b.name.clone()))
 }
 
 /// The split types available for the split node (Y / A-B / Crossover / Dynamic). Static catalog

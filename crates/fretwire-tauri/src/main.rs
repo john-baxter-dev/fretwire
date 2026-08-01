@@ -82,6 +82,12 @@ fn main() {
             commands::split_types,
             commands::categories,
             commands::models_in_category,
+            commands::copy_preset,
+            commands::paste_preset,
+            commands::clipboard_preset,
+            commands::copy_block,
+            commands::paste_block,
+            commands::clipboard_block,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

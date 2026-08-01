@@ -18,6 +18,10 @@
     onRename,
     onBackup,
     onRestore,
+    onCopyPreset,
+    onPastePreset,
+    // Name of the preset on the paste buffer, or null when it's empty.
+    presetClip = null,
   } = $props();
 
   const pad = (n) => String(n).padStart(3, "0");
@@ -58,6 +62,12 @@
   <div class="tools sub">
     <button onclick={onBackup} title="Save every preset to a file (reads only)">Backup…</button>
     <button onclick={onRestore} title="Restore a preset from a backup file into a slot">Restore…</button>
+    <button onclick={onCopyPreset} title="Copy the loaded preset, to paste onto another slot">Copy</button>
+    <button
+      onclick={onPastePreset}
+      disabled={!presetClip || writeBlocked}
+      title={presetClip ? `Replace the loaded preset with "${presetClip}" (edit buffer — Save to keep it)` : "Copy a preset first"}
+    >Paste{presetClip ? ` "${presetClip}"` : ""}</button>
   </div>
   <div class="list">
     {#each presets as p (p.index)}

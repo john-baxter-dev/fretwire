@@ -17,6 +17,10 @@
     onSwap,
     onSplitType,
     onDelete,
+    onCopyBlock,
+    onPasteBlock,
+    // Display name of whatever block is on the paste buffer, or null when it's empty.
+    blockClip = null,
   } = $props();
 
   // Routing nodes (split/mixer) and controller assignments aren't category-swappable or deletable
@@ -152,6 +156,15 @@
           {#if block.paired_index != null && block.model_index != null}
             <button class="act" onclick={() => { swappingCab = !swappingCab; swapping = false; }}>Change cab ▾</button>
           {/if}
+          <button class="act" onclick={() => onCopyBlock(block.slot)} title="Copy this block, with all its settings">Copy</button>
+          <button
+            class="act"
+            disabled={!blockClip}
+            onclick={() => onPasteBlock(block.slot)}
+            title={blockClip ? `Replace this block with the copied ${blockClip}` : "Copy a block first"}
+          >
+            Paste{blockClip ? ` ${blockClip}` : ""}
+          </button>
           <button class="act danger" onclick={() => onDelete(block.slot)}>Delete</button>
         {/if}
       </div>

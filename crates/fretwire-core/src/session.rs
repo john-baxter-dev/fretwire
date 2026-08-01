@@ -19,6 +19,7 @@
 //! and per-block edits were already DSP-agnostic; this makes the planning layer so too.
 
 use crate::editor::{Catalog, EditorPreset};
+use fretwire_data::stream::ParamValue;
 use fretwire_protocol::{EditValue, Frame, Tlv, channel, cmd, edit, op};
 use fretwire_usb::Transport;
 use std::collections::HashMap;
@@ -1570,6 +1571,10 @@ impl Session {
     /// The metadata miss that produced that particular 77 is fixed in `editor::param_meta_from`,
     /// but a guard that only holds while every model resolves is not a guard: this one costs a
     /// decode we already pay for labeling, and bounds the damage from the next gap in the data.
+    /// **Caveat:** the range comes from the *cached* preset, so a caller that changes a block's
+    /// model and then writes its params without re-reading will be clamped against the model that
+    /// used to be there. `swap_model` does not refresh the cache (the GUI's re-read normally does),
+    /// so any swap-then-set sequence inside one operation has to read in between.
     fn clamp_param(&self, slot: i64, paired: bool, param_index: i64, value: f64) -> f64 {
         let meta = self
             .last_raw
@@ -1657,6 +1662,38 @@ impl Session {
         let body = edit::set_paired_value(slot, param_index, value, txn);
         self.send_edit(body)?;
         Ok(())
+    }
+
+    /// Set a parameter to a [`ParamValue`] as read back off the device, dispatching on its type.
+    ///
+    /// The typed setters each hard-code one wire type, which is right when the caller knows what it
+    /// is editing (a knob, an enum selector). Replaying a *captured* block is the other case: its
+    /// params are a mix of floats, enum ints and bools, and sending a bool as a float is how you
+    /// turn `TempoSync1 = false` into `0.0` and get an edit the pedal either refuses or misapplies.
+    pub fn set_param_value(
+        &mut self,
+        slot: i64,
+        paired: bool,
+        param_index: i64,
+        value: ParamValue,
+    ) -> crate::Result<()> {
+        match value {
+            ParamValue::Float(v) if paired => self.set_paired_param(slot, param_index, v),
+            ParamValue::Float(v) => self.set_param(slot, param_index, v),
+            ParamValue::Int(v) => self.set_param_enum(slot, paired, param_index, v),
+            ParamValue::Bool(v) => {
+                let txn = self.bump_txn();
+                let model_sel = if paired {
+                    edit::MODEL_PAIRED
+                } else {
+                    edit::MODEL_MAIN
+                };
+                let body =
+                    edit::set_value_on(slot, model_sel, param_index, EditValue::Bool(v), txn);
+                self.send_edit(body)?;
+                Ok(())
+            }
+        }
     }
 
     /// Set an **integer/enum** parameter (e.g. the cab `Mic` selector) by its param index. `paired`

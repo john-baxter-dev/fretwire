@@ -356,6 +356,32 @@
   // between common / path A / common-after without moving any block.
   const onMoveNode = (node, pos, dsp = 0) => apply(invoke("set_node_pos", { node, pos, dsp }));
   const onDelete = (slot) => (deleteDlg = slot);
+
+  // ---- copy/paste ----
+  // HX Edit can copy a preset (or a block) and paste it onto another slot; without it a tester
+  // rebuilding a case by hand does it click by click. The blobs live in the Rust side — the UI only
+  // learns the name, for the button label.
+  let presetClip = $state(null);
+  let blockClip = $state(null);
+  async function onCopyPreset() {
+    try {
+      presetClip = await invoke("copy_preset");
+      toast(`Copied preset "${presetClip}"`, "info");
+    } catch (e) {
+      toast(e);
+    }
+  }
+  // Paste lands in the edit buffer, like every other edit — Save commits it.
+  const onPastePreset = () => apply(invoke("paste_preset"));
+  async function onCopyBlock(slot) {
+    try {
+      blockClip = await invoke("copy_block", { slot });
+      toast(`Copied block "${blockClip}"`, "info");
+    } catch (e) {
+      toast(e);
+    }
+  }
+  const onPasteBlock = (slot) => apply(invoke("paste_block", { slot }));
   function confirmDelete() {
     const slot = deleteDlg;
     deleteDlg = null;
@@ -659,7 +685,7 @@
 <main>
   {#if preset}
     <div class="workspace">
-      <PresetList {presets} currentIndex={preset.index} dirty={preset.dirty} {setlists} {viewBank} currentBank={presetBank} writeBlocked={foreignSetlist} {onPickSetlist} {onGoto} {onSave} {onSaveAs} {onRename} {onBackup} {onRestore} />
+      <PresetList {presets} currentIndex={preset.index} dirty={preset.dirty} {setlists} {viewBank} currentBank={presetBank} writeBlocked={foreignSetlist} {onPickSetlist} {onGoto} {onSave} {onSaveAs} {onRename} {onBackup} {onRestore} {onCopyPreset} {onPastePreset} {presetClip} />
       <div class="content">
         <div class="meta">
           <span>
@@ -733,6 +759,9 @@
             {onSwap}
             {onSplitType}
             {onDelete}
+            {onCopyBlock}
+            {onPasteBlock}
+            {blockClip}
           />
         {:else}
           <p class="hint">Click a block to edit its parameters.</p>

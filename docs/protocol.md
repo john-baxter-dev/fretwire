@@ -204,6 +204,40 @@ Decoded structure (confirmed across many single-knob captures, `captures/param_m
 - Builders `fretwire_protocol::edit::bypass()` / `set_value()` regenerate these bytes exactly.
 - The `f003` status channel echoes the same msgpack back (state mirror) — useful for reading state.
 
+### An edit ACK must be matched by its transaction id, not by arrival order [solid] — 2026-08-01
+"The next non-keepalive frame on the edit channel" is **not** the reply to the edit you just sent.
+The device interleaves two other things on that channel: empty `cmd 0x08` credit frames, and — after
+a browse/list read — leftover chunks of the previous stream. Take one of those as the ACK and two
+things go wrong at once: the edit is reported applied on the strength of a frame that says nothing
+about it, and every later reply is off by one, so a refusal is attributed to the wrong command. The
+mismatch then *suppresses* the refusal check (`sent_txn == txn` fails), which is how an edit the
+pedal threw away reached the GUI as a success.
+
+Measured over the 2026-07-30/31 field logs — 353 edit ACKs across ops 20/28/30/39/40/41/43/71/78:
+
+| | count | |
+|---|---:|---|
+| correlated (reply echoes the txn we sent) | 233 | |
+| **empty body** | 86 | a `cmd 0x08` credit taken as an ACK |
+| **echoes an earlier txn** | 50 | the desync, lag 1–5 |
+| cross-stream | 1 | an op-20 reply carrying preset-*list* bytes |
+
+Per op, the structural path was the worst affected: **op 43 `move_block` never once correlated**
+(0 of 21) and op 78 `begin_structural` managed 6 of 24, while op 30 `set_value` — the slider drag —
+ran about 63% correct. op 71 `save_preset` was 0 of 21: every save we have ever "confirmed" was
+confirmed by a credit frame. Its real ACK is `{102: txn, 103: 0, 104: nil}` and arrives right after,
+so it was being read one frame too early.
+
+`Session::send_edit` now correlates every edit by the txn echoed at key 102
+(`Transport::request_matching`), skipping credit and cross-stream frames instead of consuming them.
+Verified on an HX Stomp 2026-08-01: 46 consecutive op-40 swaps plus ops 30/39/41/43/71 all matched
+their own transaction, save included.
+
+> This is a plausible mechanism for the op-21 write freezes, though not proof: a structural drag is
+> `op 78 → op 43 → op 21`, and 78 and 43 are exactly the two ops we almost never correlated, so the
+> 14-chunk write could begin against a device that had not actually acknowledged the structural edit.
+> A Floor retest on the fixed build is what would settle it.
+
 ### The reply's key 103 is a status, and `255` means refused [solid] — from the 2026-07-30 Floor log
 Every reply envelope is `{102: txn, 103: kind, 104: payload}`, and until now we read key 103 as a
 don't-care (`103:_` in the notes below). It is the **kind of answer**, and one of its values is a
@@ -227,8 +261,9 @@ for that target, so the code looks like "wrong shape for this thing" rather than
 
 | code | seen on | meaning [hypothesis] |
 |---:|---|---|
-| `-21` | op 39 `add_block` carrying a `paired_index` | a paired model-ref is not accepted by add; pair with op 40 afterwards |
+| `-21` | op 39 `add_block` carrying a `paired_index`; op 40 swapping a cab to a `*WithPan` twin (Floor) | a model-ref the op will not take for that target |
 | `-3` | op 30 `set_value` writing a split node's `bypass` param | that parameter is not writable this way — bypass has its own op (41) |
+| `-306` | op 40 swapping a single Cab (Mic+IR) block to a `*WithPan` twin (Stomp) | that model is a different **block type** (HX Edit's `Cab › Dual`), not an in-place swap target |
 
 The `-3` case is worth knowing about because `bypass` **is** a real entry in the split's stored param
 array, and the four split models are the only ones in the whole catalog (4 of 681) that carry it. So

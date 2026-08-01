@@ -366,3 +366,52 @@ fn io_nodes_resolve_named_params() {
     assert_eq!(p.block(0).map(|b| b.model_name.as_str()), Some("Input"));
     assert_eq!(p.block(9).map(|b| b.model_name.as_str()), Some("Output"));
 }
+
+/// Every model the picker offers must be one the pedal will actually accept, and no two rows may
+/// look alike — a duplicate row is unusable by definition, since the user cannot tell which is
+/// which. Both failed in the field on 2026-08-01: the Cab (Mic+IR) list carried all 46 cabs twice
+/// (the second copy being HX Edit's `Cab › Dual` twin, `*WithPan`), and picking a duplicate was
+/// refused by the device — `-306` on the Stomp, `-21` on the Floor — so the block snapped back.
+#[test]
+fn the_picker_never_offers_a_model_the_device_refuses() {
+    let cat = catalog();
+    for (id, name) in cat.categories() {
+        let choices = cat.models_in_category(id, None);
+        assert!(
+            !choices.is_empty(),
+            "category {name:?} ({id}) is listed but offers nothing"
+        );
+        assert!(
+            !choices
+                .iter()
+                .any(|c| c.symbolic_id.starts_with("HD2_CabMicIr_")
+                    && c.symbolic_id.ends_with("WithPan")),
+            "category {name:?} offers a dual-cab twin the device refuses to swap to"
+        );
+        // One row per model, and (Match G25/H30 aside — Line 6's own `HelixModelDefs.bin` gives
+        // both the same `name`) one model per visible label.
+        let mut ids: Vec<&str> = choices.iter().map(|c| c.symbolic_id.as_str()).collect();
+        ids.sort_unstable();
+        let n = ids.len();
+        ids.dedup();
+        assert_eq!(ids.len(), n, "category {name:?} lists a model twice");
+    }
+}
+
+/// The 3 Osc Synth is the only model the shipped `.models` files put in category 5, which surfaced
+/// as a "Synth" picker entry holding one model while the Pitch/Synth list — where HX Edit files it
+/// (`Pitch/Synth › Stereo`) and where a user looks — was missing it.
+#[test]
+fn the_three_osc_synth_lives_with_the_other_synths() {
+    let cat = catalog();
+    let names: Vec<&str> = cat.categories().iter().map(|(_, n)| *n).collect();
+    assert!(!names.contains(&"Synth"), "category 5 should fold into 7");
+    assert!(names.contains(&"Pitch/Synth"));
+    let pitch = cat.models_in_category(7, None);
+    assert!(
+        pitch
+            .iter()
+            .any(|c| c.symbolic_id == "HD2_SynthSubtractive"),
+        "3 Osc Synth should be listed under Pitch/Synth"
+    );
+}

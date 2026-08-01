@@ -1055,6 +1055,57 @@ So there were two failure modes: the pre-guard one (device genuinely stopped cre
 **Limit:** every probe was a 2.2–2.4 KB Stomp preset, 5 chunks. The Floor freezes were 6.8 KB and 14
 chunks. This does not close the first mode — a Floor retest on the current build would.
 
+## Sixteenth round (2026-08-01): **we were reading the wrong frame as every edit's ACK**
+
+Six more logs (`fretwire16`–`21`) and two `.bin`s. The headline is not in the freezes — it is that
+our edit ACKs were largely not ACKs at all.
+
+**The bug.** `send_edit` took "the next non-keepalive frame on the edit channel" as the reply. The
+device also puts empty `cmd 0x08` credit frames on that channel, and leftover chunks of a finished
+browse stream. Across the field logs, of 353 edit ACKs only **233 actually echoed the transaction we
+sent**: 86 had an empty body, 50 echoed an *earlier* txn (lag 1–5), and one op-20 reply carried
+preset-*list* bytes. Per op the structural path was worst — **op 43 `move_block` never once
+correlated** (0 of 21), op 78 `begin_structural` 6 of 24, and op 71 `save_preset` 0 of 21. Two
+consequences, both bad: an edit is reported applied on the strength of a frame that says nothing
+about it, and once shifted, a refusal lands on the wrong command — where the `sent_txn == txn` guard
+then *suppresses* it. `fretwire19.log` shows the end state: a select whose reply was list bytes,
+then every request timing out while the pedal stayed perfectly healthy. That is the tester's "the UI
+pretends to let you do something, but nah — and strangely, not the unit".
+
+`send_edit` now correlates by the txn at key 102 (`edit_request_txn`, which already existed and was
+used only for rename). Verified on a Stomp: 46 consecutive op-40 swaps plus ops 30/39/41/43/71 each
+matched their own transaction. **Save has a real ACK** — `{102: txn, 103: 0, 104: nil}` — we were
+just reading one frame too early and calling a credit frame the confirmation.
+
+Whether this also explains the op-21 freezes is **[hypothesis]**: a structural drag is
+`op 78 → op 43 → op 21`, and 78/43 are precisely the ops we almost never correlated, so the 14-chunk
+write may have started against a device that had not acknowledged the structural edit. A Floor
+retest would settle it.
+
+**Two catalog bugs, both reported from the field and both reproduced offline.**
+
+- *Every Cab (Mic+IR) listed twice, and the second copy would not load.* The 46
+  `HD2_CabMicIr_*WithPan` symbols are HX Edit's **`Cab › Dual`** subcategory — a two-cab block with
+  per-cab pan, not an alternative single cab. They share the plain cab's display name, so the picker
+  showed 92 rows for 46 cabs, and the pedal refuses an in-place swap to one: **`-306`** on the Stomp,
+  `-21` in the tester's Floor log. Selecting a duplicate did nothing and the block snapped back.
+  They are now kept out of the swap list (name resolution is untouched, so a preset that already
+  contains one still reads back correctly). 46 rows, and all 46 verified accepted on hardware.
+- *A "Synth" category holding one model, and the 3 Osc Synth missing from Pitch/Synth.*
+  `HD2_SynthSubtractive` is the only model the shipped `.models` put in category 5; HX Edit files it
+  under **Pitch/Synth › Stereo**. Category 5 now folds into 7. Swapping a block to it works on
+  hardware, so the reported "loading a synth locks up the UI" is consistent with the ACK desync
+  above rather than anything synth-specific.
+
+**Also confirmed, not fixed:** `HD2_CabMicIr_2x12MatchG25` displays as "2x12 Match H30" because
+`HelixModelDefs.bin` — Line 6's own file — gives both cabs that `name`. `HX_ModelCatalog.json` has
+it right ("2x12 Match G25"), so the fix is to prefer catalog names; left for later since it is one
+cosmetic label and wiring in a new name source is its own change.
+
+**Still open from these logs:** `fretwire17.log` froze genuinely mid-write — `sent=2480 total=6911`,
+credits flat from chunk 3 of 14 — but it is a `deficit=` log line, i.e. the pre-`0732954` build. The
+tester needs the current build before that datapoint means anything.
+
 ## Prioritized next steps
 > **The path to live control is in `docs/next-steps.md`.** TL;DR: (1) **on Windows now** — capture a
 > dozen single-knob edits, decode with `fretwire decode-edit`, find out if param keys generalize (the

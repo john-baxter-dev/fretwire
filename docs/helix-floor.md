@@ -1338,3 +1338,86 @@ Every probe here was a **2.2–2.4 KB Stomp preset — 5 chunks**. The Floor fre
 chunks**. That is nearly three times the transfer and a different device, so this does not close mode
 1; it only shows the path is sound at this size. A Floor retest on the current build is still the
 thing that would settle it.
+
+## Round 16 (2026-08-01): the edit ACKs were mostly not ACKs
+
+Six logs (`fretwire16`–`21`) and two more `.bin`s. The freezes are not the interesting part of this
+batch — the reply correlation is.
+
+### We took credit frames as edit acknowledgements
+
+`send_edit` matched a reply as "the next non-keepalive frame on the edit channel". The device also
+sends empty `cmd 0x08` credit frames there, and after a browse read, leftover chunks of the finished
+stream. Counting every `edit ACK` line in the field logs — 353 of them, ops
+20/28/30/39/40/41/43/71/78 — against the transaction each one was answering:
+
+| | count |
+|---|---:|
+| echoed the txn we sent | 233 |
+| empty body (a credit frame) | 86 |
+| echoed an **earlier** txn (lag 1–5) | 50 |
+| cross-stream (an op-20 reply holding preset-list bytes) | 1 |
+
+By op, the structural path is the one that never worked:
+
+| op | correlated | total |
+|---|---:|---:|
+| 43 `move_block` | **0** | 21 |
+| 71 `save_preset` | **0** | 21 |
+| 78 `begin_structural` | 6 | 24 |
+| 30 `set_value` | 115 | 183 |
+| 40 `swap_model` | 46 | 67 |
+
+Both failure shapes are harmful. An empty frame accepted as an ACK means we report an edit applied
+on the strength of a frame that says nothing about it. And once a stray frame is consumed, every
+later reply is one behind — so a refusal is attributed to the wrong command, and the
+`sent_txn == txn` check then quietly *suppresses* the rejection rather than reporting it.
+
+`fretwire19.log` catches the end state: an op-20 select whose reply body is preset-*list* text, then
+every subsequent request timing out for ~60 s while the pedal itself stays healthy and answers its
+own keepalives. That is exactly the tester's "it locks up the UI, but strangely, not the unit — the
+UI pretends to let you do something, but nah."
+
+Fixed by correlating on the txn echoed at key 102. Verified on a Stomp: 46 consecutive op-40 swaps
+and ops 30/39/41/43/71 all matched their own transaction. Note **save does have a real ACK** —
+`{102: txn, 103: 0, 104: nil}` — arriving just after the credit frame we had been mistaking for it.
+
+Whether this also explains the op-21 freezes is **[hypothesis]**, not a claim: a structural drag is
+`op 78 → op 43 → op 21`, and 78 and 43 are the two ops we almost never correlated, so a 14-chunk
+write could begin against a device that never acknowledged the structural edit. A Floor retest on
+the current build is what would tell us.
+
+### The duplicate cabs are HX Edit's `Cab › Dual`
+
+Reported from the field: the Cab (Mic+IR) list shows every cab twice and the second copy will not
+load — the block reverts, or stays empty if it was empty.
+
+The 46 `HD2_CabMicIr_*WithPan` symbols are the **dual** cab model (two cabs, per-cab pan), and
+`HX_ModelCatalog.json` groups them under `Cab › Dual` while the plain symbols sit in `Cab › Single`.
+Both carry the same display `name`, so a flat per-category listing shows 92 rows for 46 cabs. The
+pedal refuses an in-place swap to one: **`-306`** on the Stomp, and `-21` in the Floor log
+(`fretwire18.log`, six op-40 refusals while the tester was working through the cab list).
+
+They are now excluded from the swap list — editing a dual cab needs two model refs and the pan
+params, which is a feature, not this fix. Name resolution is deliberately untouched so a preset that
+already contains one still reads back with its own name and params. All 46 remaining entries were
+swapped onto a real block on hardware: **0 refused**.
+
+One genuine duplicate label survives: `HD2_CabMicIr_2x12MatchG25` and `..._2x12MatchH30` are
+different cabs that `HelixModelDefs.bin` gives the same `name`, "2x12 Match H30".
+`HX_ModelCatalog.json` has the right one ("2x12 Match G25"), so preferring catalog names would fix
+it. Line 6's data, not ours.
+
+### The 3 Osc Synth was filed under a category of its own
+
+`HD2_SynthSubtractive` is the only model the shipped `.models` files put in category 5, so the
+picker grew a "Synth" entry containing exactly one model while the **Pitch/Synth** list — where HX
+Edit files it (`Pitch/Synth › Stereo`) and where anyone would look — did not have it. Category 5 now
+folds into 7. Swapping a block to it works on hardware, so the reported "loading a synth locks up
+the UI" is consistent with the ACK desync above rather than anything about the synth.
+
+### Not yet closed
+
+`fretwire17.log` froze genuinely mid-write — `sent=2480 total=6911`, credits flat from chunk 3 of
+14 — but the log line reads `deficit=`, so it is the pre-`0732954` build. It needs re-running on the
+current one before it says anything new.

@@ -435,7 +435,17 @@ impl Session {
         // the 2026-07-30 rejection take frame-size archaeology to identify.
         let (sent_op, sent_txn) = edit_op_txn(&body);
         let tlv = Tlv::command(op::PARAM_SET, body);
-        let ack = self.edit_request(cmd::OPEN, tlv.to_bytes())?;
+        // Correlate the ACK by the transaction id it echoes, not by "next non-keepalive frame on the
+        // channel". The device interleaves empty `cmd 0x08` credit frames and other channels' traffic
+        // on the edit channel, and the loose match happily takes one of those as the verdict: across
+        // the field logs 86 "ACKs" had an empty body and 50 more echoed a *previous* transaction —
+        // op 43 (move-block) never once correlated. Each miss both invents a success the pedal never
+        // reported and shifts every later reply by one, so a refusal lands on the wrong command and
+        // the mismatch silently suppresses the rejection check below.
+        let ack = match sent_txn {
+            Some(txn) => self.edit_request_txn(cmd::OPEN, tlv.to_bytes(), txn)?,
+            None => self.edit_request(cmd::OPEN, tlv.to_bytes())?,
+        };
         tracing::debug!(op = ?sent_op, txn = ?sent_txn, reply = ?ack.body, "edit ACK");
         // The ACK is not always an ack. Key 103 is the reply's kind, and `255` means the device
         // threw the command away — it applies nothing, reports nothing else, and the next read comes

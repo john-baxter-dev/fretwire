@@ -349,16 +349,31 @@ pub const SPLIT_TYPES: &[(i64, &str, &str)] = &[
     (563, "HD2_AppDSPFlowSplitDyn", "Dynamic"),
 ];
 
+/// Fold `.models` category ids that HX Edit presents as one picker entry.
+///
+/// Category **5** holds exactly one model — `HD2_SynthSubtractive`, the 3 Osc Synth — while every
+/// other synth sits in 7. HX Edit files it under **Pitch/Synth › Stereo**
+/// (`HX_ModelCatalog.json` `categories[7].subcategories[1]`), so a separate "Synth" entry is ours,
+/// not the device's: it showed up as a category containing one model, with the 3 Osc Synth missing
+/// from the Pitch/Synth list where a user would look for it. [solid — 2026-08-01, from the shipped
+/// catalog; reported from the field the same day.]
+fn canonical_category(id: i64) -> i64 {
+    match id {
+        5 => 7,
+        other => other,
+    }
+}
+
 /// Human name for a `.models` `category` id. This is the **device effect-type** enum (distinct from
 /// `HX_ModelCatalog.json`'s ids), derived from the shipped `.models` files: each id maps to one
 /// effect type. Unknown ids fall back to `None`.
 pub fn category_name(id: i64) -> Option<&'static str> {
+    let id = canonical_category(id);
     Some(match id {
         1 => "Amp",
         2 => "Cab",
         3 => "Distortion",
         4 => "Dynamics",
-        5 => "Synth",
         6 => "Filter",
         7 => "Pitch/Synth",
         8 => "Modulation",
@@ -587,7 +602,7 @@ impl Catalog {
             if let Some(id) = self.models.id_by_symbolic_id(base)
                 && let Some(cat) = self.models.category(id)
             {
-                seen.insert(cat);
+                seen.insert(canonical_category(cat));
             }
         }
         // The synthetic Amp+Cab list exists whenever there are amps to pair.
@@ -635,7 +650,10 @@ impl Catalog {
             let Some(id) = self.models.id_by_symbolic_id(base) else {
                 continue;
             };
-            if self.models.category(id) != Some(category) {
+            if self.models.category(id).map(canonical_category) != Some(category) {
+                continue;
+            }
+            if is_dual_cab(base) {
                 continue;
             }
             let name = self
@@ -907,7 +925,11 @@ impl Catalog {
             .map(str::to_string)
             .or_else(|| symbolic_id.map(str::to_string))
             .unwrap_or_else(|| "<unknown>".to_string());
-        (name, id.and_then(|id| self.models.category(id)))
+        (
+            name,
+            id.and_then(|id| self.models.category(id))
+                .map(canonical_category),
+        )
     }
 }
 
@@ -1210,6 +1232,24 @@ fn type_token(symbolic_id: &str) -> &str {
 
 /// Split a device symbol into its `symbolicID` base and `Mono`/`Stereo` variant (some models —
 /// e.g. amps — carry no suffix, giving `None`).
+/// Whether `symbol` is the **dual** twin of a Cab (Mic+IR) model — HX Edit's `Cab › Dual`
+/// subcategory, a two-cab block with per-cab pan.
+///
+/// The 46 `HD2_CabMicIr_*WithPan` symbols each shadow a plain `HD2_CabMicIr_*` single cab of the
+/// same display name, so a flat category listing shows every cab twice. The twins are not
+/// interchangeable: they are a different block type, and the pedal **refuses an in-place swap** to
+/// one — device code `-306` on the Stomp, `-21` on the Floor. Selecting a duplicate therefore did
+/// nothing and the block snapped back to what it was. Editing a dual cab is not supported yet
+/// (it needs two model refs and the pan params), so keep them out of the swap list rather than
+/// offering a choice that cannot be taken. Name resolution is deliberately left alone — a preset
+/// that already contains one must still read back with its own name and params.
+///
+/// [solid — 2026-08-01: reproduced on the HX Stomp, two swaps refused with `-306`; matches the
+/// field report and the shipped `HX_ModelCatalog.json` `Cab › Dual` grouping.]
+fn is_dual_cab(symbol: &str) -> bool {
+    symbol.starts_with("HD2_CabMicIr_") && symbol.ends_with("WithPan")
+}
+
 fn split_variant(symbol: &str) -> (&str, Option<&'static str>) {
     if let Some(base) = symbol.strip_suffix("Mono") {
         (base, Some("Mono"))

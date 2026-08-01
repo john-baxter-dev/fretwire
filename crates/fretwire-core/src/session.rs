@@ -666,15 +666,27 @@ impl Session {
     /// Transport: the large edit TLV is sent across `cmd 0x04` frames on the edit channel (the device
     /// reassembles by the TLV's declared length), then a terminating `cmd 0x08`, mirroring the
     /// chunked-read in reverse. The device answers each data frame with an empty `cmd 0x08` frame —
-    /// **that is a flow-control credit, not decoration.** We used to fire all fourteen chunks with a
-    /// 5 ms glance at the wire between them and push on regardless of what came back; when the device
-    /// fell behind it stopped answering altogether and the transfer wedged it hard enough to need a
-    /// power cycle. So the loop now spends a real timeout waiting for each chunk's credit and gives
-    /// up while the pedal is still recoverable rather than emptying the rest of the blob into it.
+    /// **a flow-control credit.** We wait a real timeout for each one, because outrunning the device
+    /// is what wedged it back when we fired all fourteen chunks with a 5 ms glance between them.
     ///
-    /// [solid — 2026-07-31 Floor logs: two freezes mid-write. Healthy transfer earns ≈1 credit per
-    /// chunk and never runs more than one behind; both freezes went to a flat zero (after chunk 1 and
-    /// after chunk 7) and we sent 4 more chunks into a device that was already gone.]
+    /// **We do not abort when the credits stop.** That guard existed from 2026-07-31 to 08-01. Its
+    /// stated job — "stop feeding a device that is already gone" — is already done by
+    /// `fretwire_usb::WRITE_TIMEOUT`, which fails a send in 2 s once the pedal stops draining; the
+    /// guard was written before that existed, when an unbounded `bulk_out` could hang the host
+    /// forever. What it added on top was a *guess* about which credit patterns mean death, and
+    /// `fretwire24.log` shows the guess doesn't hold: three writes of the same 6816-byte preset to
+    /// the same Floor, and the one that opened `credits=3,5,6,…` ran all 14 chunks and completed,
+    /// while the two that opened `1,2,2,2,2` were aborted at chunk 5. A 14-chunk Floor write is
+    /// clearly *possible*; the credit trace is what varies, and three consecutive quiet chunks is
+    /// not a reliable death certificate. An HX Stomp credits every chunk (1,2,4,5,6 on a 5-chunk
+    /// write) and 90 reads' worth of channel history didn't change that, so it is unaffected either
+    /// way.
+    ///
+    /// [solid — 2026-08-01, `fretwire22b`/`23`/`24`: four aborts, every one at exactly
+    /// `sent=2480`, which is our own 5 × 496 rather than anything the device chose. **Open:** what
+    /// separates a Floor write that credits from one that doesn't. The one completed write began at
+    /// channel offset `arg=22079` and all four aborts at `arg ≥ 47311`, which is a lead, not a
+    /// finding — n = 5, and driving `arg` up over 90 reads on a Stomp reproduced nothing.]
     ///
     /// LIVE: the exact chunk size and `arg` cadence are reconstructed from `move_EQ_right_two_slots`.
     /// The device's `{103:1}` apply-ACK is best-effort (logged, not required); the caller confirms by
@@ -685,11 +697,11 @@ impl Session {
         /// next to the ~7 ms a healthy chunk round-trips in: the point is to let a busy device catch
         /// up, since outrunning it is what wedges it.
         const CREDIT_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
-        /// How many chunks in a row may go unanswered before we call the device wedged. Measured
-        /// against the field traces: healthy transfers never go more than **one** chunk without a
-        /// credit, while both freezes went quiet and stayed quiet for four or more. Three keeps a
-        /// margin over the healthy worst case without waiting out a genuinely dead device.
-        const MAX_SILENT_CHUNKS: usize = 3;
+        /// Wall-clock ceiling on the whole transfer. A pure backstop against looping forever — each
+        /// individual send is already bounded by `fretwire_usb::WRITE_TIMEOUT`, so this only fires
+        /// if the device keeps taking bytes but never finishes. Generous: 14 chunks that each wait
+        /// out `CREDIT_WAIT` is ~3.5 s, so 30 s cannot be reached by mere slowness.
+        const WRITE_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
 
         let txn = self.bump_txn();
         let tlv = Tlv::command(op::PARAM_SET, edit::write_preset(&blob, txn)).to_bytes();
@@ -718,7 +730,7 @@ impl Session {
         // device rejects a stalled offset.
         let arg = self.cur_arg(src);
         let total = tlv.len();
-        let chunks = tlv.len().div_ceil(CHUNK);
+        let started = std::time::Instant::now();
         let mut sent = 0usize;
         let mut credits = 0usize;
         let mut silent = 0usize;
@@ -756,24 +768,19 @@ impl Session {
                 silent,
                 "write-preset chunk"
             );
-            // Only worth aborting while there is still data to withhold. Past the last chunk the
-            // whole blob is already in the device and stopping early would just deny it the
-            // terminator, leaving it waiting for the end of a transfer that never comes — which is
-            // its own way to wedge a pedal.
-            if silent >= MAX_SILENT_CHUNKS && n + 1 < chunks {
+            if started.elapsed() > WRITE_BUDGET {
                 tracing::error!(
                     sent,
                     total,
                     credits,
                     chunks = n + 1,
-                    "device stopped acknowledging mid-write — aborting the transfer"
+                    "preset write exceeded its wall-clock budget — abandoning the transfer"
                 );
                 // The edit buffer holds a partial preset now, so the read cache no longer describes
                 // the device. Drop it: the next read has to come off the wire.
                 self.last_raw = None;
                 return Err(crate::Error::WriteStalled(format!(
-                    "the pedal stopped responding {sent} of {total} bytes into a preset write \
-                     (no reply to the last {silent} frames); the transfer was aborted. \
+                    "a preset write ran past {WRITE_BUDGET:?} with {sent} of {total} bytes sent. \
                      The edit buffer may be inconsistent — reload the preset, and power-cycle \
                      the pedal if it is unresponsive"
                 )));
@@ -2888,41 +2895,33 @@ mod tests {
     }
 
     #[test]
-    fn the_write_pacing_threshold_separates_a_busy_device_from_a_dead_one() {
-        // Per-chunk flow-control credits counted off real whole-preset writes. Each entry is the
-        // credits that arrived in that chunk's window; `write_preset` aborts after
-        // `MAX_SILENT_CHUNKS` consecutive zeroes, and only while chunks remain unsent.
-        const MAX_SILENT_CHUNKS: usize = 3;
+    fn credit_silence_does_not_distinguish_a_live_device_from_a_dead_one() {
+        // Per-chunk flow-control credits counted off real whole-preset writes: each entry is how
+        // many credits arrived in that chunk's window. `write_preset` used to abort after three
+        // consecutive zeroes. These traces are why it no longer does.
 
-        // The writes that landed. The device batches credits, so a chunk drawing none is ordinary —
-        // what matters is that it never goes quiet for long. A false abort here would deny the
-        // device its terminator and strand a complete transfer, so this margin is the important one.
-        assert_eq!(
-            longest_silence(&[0, 3, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1]),
-            1
-        );
-        assert_eq!(
-            longest_silence(&[1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]),
-            0
-        );
+        // An HX Stomp credits essentially every chunk, and its presets fit in five. Measured
+        // 2026-08-01 on a 2211-byte write that landed: credits 1,2,4,5,6 cumulative.
+        assert_eq!(longest_silence(&[1, 1, 2, 1, 1]), 0);
 
-        // Freeze #1: the device answered chunk 1 and then went silent. We sent four more chunks into
-        // it and blocked forever on the fifth. The guard trips with chunks still unsent.
-        let froze_early = [2, 0, 0, 0, 0];
-        assert_eq!(longest_silence(&froze_early), 4);
-        assert!(longest_silence(&froze_early) >= MAX_SILENT_CHUNKS);
+        // A Helix Floor write that stalls: credits for chunks 1 and 2, then flat. Every 2026-08-01
+        // abort traced this and stopped at chunk 5 — `sent=2480`, i.e. 5 × 496, our own constant
+        // rather than anything the device chose.
+        let floor_stalled = [1, 1, 0, 0, 0];
+        assert_eq!(longest_silence(&floor_stalled), 3);
 
-        // Freeze #2: healthy for seven chunks, then flat zero — the same ending, later on.
-        let froze_late = [1, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0];
-        assert_eq!(longest_silence(&froze_late), 4);
-        assert!(longest_silence(&froze_late) >= MAX_SILENT_CHUNKS);
+        // And the same 6816-byte preset, same Floor, minutes apart in `fretwire24.log`: all 14
+        // chunks credited and the transfer completed. So a large Floor write is possible and it is
+        // the credit trace that varies — which is why three quiet chunks cannot be read as a death
+        // certificate, and why the threshold was removed rather than retuned.
+        let floor_completed = [3, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+        assert_eq!(floor_completed.len(), 14);
+        assert_eq!(longest_silence(&floor_completed), 0);
 
-        // A device that batches hard — a couple of chunks unanswered, then a burst — is *not* dead.
-        // The old cumulative-deficit rule aborted on exactly this shape (2026-07-31: a 6-chunk Stomp
-        // write that had already sent every byte, `sent=2688 total=2688`).
-        let bursty = [1, 0, 0, 2, 0, 0, 3];
-        assert_eq!(longest_silence(&bursty), 2);
-        assert!(longest_silence(&bursty) < MAX_SILENT_CHUNKS);
+        // A device that batches hard — a couple of chunks unanswered, then a burst — was never dead
+        // either. The even earlier cumulative-deficit rule aborted on exactly this shape
+        // (2026-07-31: a 6-chunk Stomp write that had already sent every byte, sent=2688 total=2688).
+        assert_eq!(longest_silence(&[1, 0, 0, 2, 0, 0, 3]), 2);
 
         assert_eq!(longest_silence(&[]), 0);
     }

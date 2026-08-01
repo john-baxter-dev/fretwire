@@ -1473,3 +1473,59 @@ the next round means something:
   raises a toast, which matches the device, since a refused edit changes nothing.
 - **`set_setting` is refused** (`op 25`, code `-3`) — found only because refusals now surface. Not
   in the GUI's command surface, CLI-only, so it is a lead rather than a regression.
+
+## Round 17 (2026-08-01, evening): the abort was ours, and a 14-chunk Floor write does work
+
+`fretwire22b`, `23`, `24` — the first logs from a build carrying the ACK-correlation, provenance and
+history fixes (and the nusb damping: three sessions in 267 KB total, against 7.7 MB for one before).
+
+**The ACK fix works.** ops 78/43/41/30/20/71 all echo their own transaction in these logs.
+
+**It did not stop the freezes**, so the "structural edit never really acknowledged" hypothesis from
+round 16 is dead. Four more lockups here, and every one of them aborted at exactly `sent=2480`:
+
+| log | preset | credits per chunk | outcome |
+|---|---|---|---|
+| 22b | 6844 B | 1, 2, –, –, – | abort at chunk 5 |
+| 23 | 6844 B | 1, 1, –, –, – | abort at chunk 5 |
+| 24 #0 | 6816 B | 1, 1, –, –, – | abort at chunk 5 |
+| **24 #1** | **6816 B** | **3, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1** | **all 14 chunks, completed** |
+| 24 #2 | 6816 B | 1, 1, –, –, – | abort at chunk 5 |
+
+2480 is 5 × 496 — **our** number, `MAX_SILENT_CHUNKS = 3` firing on the third quiet chunk. The
+device never chose it. And write #1 settles the question the guard was hiding: **the same Floor
+writes the same 6816-byte preset over all 14 chunks and completes it.** So a large op-21 write is
+not inherently beyond the Floor, and a three-chunk silence is not a death certificate.
+
+The guard is removed. Its stated job — stop feeding a device that is already gone — belongs to
+`WRITE_TIMEOUT`, which fails a send in 2 s once the pedal stops draining, and which did not exist
+when the guard was written. What the guard added was a guess about credit patterns, and the guess is
+wrong. Credit *pacing* stays (outrunning the device is a real failure mode); only the abort goes,
+with a 30 s wall-clock backstop so nothing can loop forever.
+
+An HX Stomp is unaffected: it credits every chunk (1,2,4,5,6 on a 5-chunk write), and six writes
+spread across 90 reads in one held session all landed.
+
+### The open question, and one lead
+
+What separates a Floor write that credits from one that doesn't is **not yet known**. The one thing
+that separates them in the data is the edit channel's running `arg` offset at the moment the write
+starts:
+
+| arg at write start | outcome |
+|---:|---|
+| 22079 | completed |
+| 47311 | abort |
+| 94976 | abort |
+| 112962 | abort |
+| 220292 | abort |
+
+The completed write was the first one after a reconnect — which matches the tester's own note that
+"after a reboot/reconnect, the mixer could be moved between cab and reverb / saved". That is a
+**lead, not a finding**: n = 5, and it is confounded with session length. An attempt to reproduce it
+on a Stomp by driving `arg` up over 90 reads in one session changed nothing — but Stomp presets are
+5 chunks, so that test never reaches the region where the Floor fails.
+
+**The next Floor round should answer it directly:** with the guard gone, does a stalling write now
+recover and finish, or does `WRITE_TIMEOUT` fire? And does an op-21 write immediately after connect
+behave differently from one late in a session?

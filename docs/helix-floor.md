@@ -1570,3 +1570,43 @@ completed one was the first write after a reconnect. That matches the tester's o
 a reconnect let a mixer move through. It stays a **lead, not a finding**: n = 6, `arg` is confounded
 with session length, and driving `arg` up over 90 reads in one Stomp session reproduced nothing
 (though a Stomp write is 5 chunks, so it never reaches the region where the Floor dies).
+
+
+## Round 19 (2026-08-01, night): nine writes, and one variable separates them
+
+`fretwire27.log` adds three more Floor writes, and one of them is the cleanest control yet: **two
+writes of the same preset, in the same session, seven minutes apart — the early one completed all 14
+chunks, the late one wedged at 5.** No reconnect between them, nothing else different.
+
+Every recorded Floor whole-preset write, by the edit channel's running `arg` offset when it started:
+
+| arg | outcome |
+|---:|---|
+| 22079 | completed |
+| 42264 | completed |
+| 47311 | wedged |
+| 72189 | wedged |
+| 93106 | wedged |
+| 94976 | wedged |
+| 112962 | wedged |
+| 203731 | wedged |
+| 220292 | wedged |
+
+Nine for nine, split between 42264 and 47311. `arg` is a running count of the bytes we have
+*received* on that channel, so it climbs ~7 KB per preset read and tracks how much a session has
+done — which means it is also a proxy for session age, and the two cannot be separated from the logs
+alone.
+
+So: **`FRETWIRE_WRITE_ARG=<n>`** sends the write's chunks with a fixed `arg` instead of the channel
+cursor. Off unless set; verified on a Stomp that the default path is byte-identical to before and
+the override reaches the wire.
+
+    # late in a session, on the drag that reliably wedges it:
+    FRETWIRE_WRITE_ARG=0 RUST_LOG=debug cargo run -p fretwire-tauri 2>&1 | tee log.txt
+
+If the write completes where it otherwise wedges, the device is doing something with that field and
+we have the bug. If it wedges anyway, `arg` was only ever a proxy for session age and the cause is
+elsewhere — which is equally worth knowing, and rules out the one lead we have.
+
+Unchanged across all of these: the stall is always at `sent=2480` (5 × 496), on presets from 6816 to
+8430 bytes, and the device stops draining entirely one chunk later.

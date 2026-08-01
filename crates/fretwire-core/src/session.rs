@@ -734,6 +734,32 @@ impl Session {
         // and small edits via `send_edit` don't advance per frame). LIVE: advance per chunk if the
         // device rejects a stalled offset.
         let arg = self.cur_arg(src);
+        // Diagnostic: `FRETWIRE_WRITE_ARG=<n>` sends the chunks with a fixed `arg` instead of the
+        // channel cursor. Off unless set.
+        //
+        // The cursor is a running count of the bytes we have *received* on this channel, so it
+        // climbs by ~7 KB with every preset read and is far larger late in a session than early.
+        // Across nine recorded Floor writes it is the only thing that separates the two outcomes:
+        // completed at 22079 and 42264, wedged at 47311, 72189, 93106, 94976, 112962, 203731 and
+        // 220292 — including two writes of the same preset in the *same session*, 7 minutes apart,
+        // where the early one landed and the late one did not. If the device is doing something
+        // with this field on a write, pinning it low should show up immediately; if the split is
+        // really about session age and `arg` is just a proxy for it, this will change nothing.
+        // Either answer is worth having. [hypothesis — 2026-08-01]
+        let arg = match std::env::var("FRETWIRE_WRITE_ARG")
+            .ok()
+            .and_then(|v| v.parse().ok())
+        {
+            Some(forced) => {
+                tracing::warn!(
+                    cursor = arg,
+                    forced,
+                    "FRETWIRE_WRITE_ARG overriding the write's arg"
+                );
+                forced
+            }
+            None => arg,
+        };
         let total = tlv.len();
         let chunks = tlv.len().div_ceil(CHUNK);
         let started = std::time::Instant::now();

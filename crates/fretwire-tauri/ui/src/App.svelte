@@ -64,10 +64,15 @@
   let toasts = $state([]);
   let toastSeq = 0;
   const dismissToast = (id) => (toasts = toasts.filter((t) => t.id !== id));
+  // Errors linger: they carry device refusal codes and byte counts a tester has to copy down by
+  // hand, and 6 s is not enough to transcribe one. Confirmations ("Backed up 12 presets") are
+  // read at a glance, so they keep the shorter life. Temporary — asked for while the Floor
+  // lockups are being chased; revisit once the errors stop being the interesting part.
+  const TOAST_MS = { error: 18000, info: 6000 };
   function toast(msg, kind = "error") {
     const id = ++toastSeq;
     toasts = [...toasts, { id, msg: String(msg), kind }];
-    setTimeout(() => dismissToast(id), 6000);
+    setTimeout(() => dismissToast(id), TOAST_MS[kind] ?? TOAST_MS.error);
   }
   let saveAsDlg = $state(null); // { slot, name }
   let renameDlg = $state(null); // { name }

@@ -413,7 +413,7 @@ is usually nested under an inner key `106`. Decoded:
 | **preset** | `{105:4 (and 8), 106:{…, 106:{107:bank, 108:index}}}` | `108` = new preset index |
 | **panel parameter** | `{105:30, 106:{82:_,68:_,121:_, 106:{98:slot, 29:true, 26:_, 28:index, 119:value}}}` | slot + param index + value |
 | global setting | `{105:22, 106:{…, 106:{118:id, 119:value}}}` | `118`/`119` (mostly global settings) |
-| idle mirror | `{105:22, 106:{82:0, 68:10, 121:27, 106:nil}}` | none — sent continuously while idle |
+| **idle mirror** | `{105:22, 106:{82:0, 68:10, 121:27, 106:nil}}` | none — `StatusPush::Idle`, sent continuously |
 | footswitch press | `{105:41, 106:{70:fs_index, 63:bool, 66:int}}` | key 70 = **footswitch**, 63 = new state |
 | snapshot committed | `{105:23, 106:{23:0}}` | none — payload is constant |
 | block added | `{105:39, 106:{82:1, …, 106:{98:slot, 26:_}}}` | (not decoded further) |
@@ -494,8 +494,14 @@ nothing (4075 → 4040, inside the noise), so the ack is the request, not the cu
 [solid — 2026-08-02, HX Stomp, `fretwire watch`]
 
 Type 22 also arrives continuously while nothing is happening (`{82:0, 68:10, 121:27, 106:nil}`, 154
-identical copies in a two-minute idle capture), so it must stay classified as "undecoded" rather
-than be read as a change. The idle copy and the carrying one differ in their **outer** keys, which
+identical copies in a two-minute idle capture, 100 in 30 seconds of an untouched pedal). It must
+never be read as a change — but it isn't "undecoded" either, and filing it there had a cost: it was
+**100% of a debug session's push log**, ~3.3 lines a second once the push window is paged properly,
+which would have buried the write-stall evidence in the next field log. It parses to
+`StatusPush::Idle` now, distinct from `Other`, so logging the genuinely undecoded pushes stays worth
+doing. `fretwire watch` counts them instead of printing them, and still reports the count — a live
+channel going quiet is exactly what the ~4 KiB stall looked like, so "0 idle" and "75 idle" mean
+very different things. The idle copy and the carrying one differ in their **outer** keys, which
 looks like a sub-type: idle is `68:10, 121:27, 106:nil`, while a real notification is
 `68:9, 121:25, 106:{118:id, 119:value}`. In a 90-second session, 492 idle copies and 4 carrying
 `{118: 21, 119: 0..3}` — 1, 2 and 3 in that order while the tester was working the pedal's footswitch

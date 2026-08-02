@@ -44,7 +44,7 @@ pub fn push_dtos(pushes: &[StatusPush]) -> Vec<PushDto> {
                     }
                 }),
             }),
-            StatusPush::Other(_) => None,
+            StatusPush::Idle | StatusPush::Other(_) => None,
         })
         .collect()
 }

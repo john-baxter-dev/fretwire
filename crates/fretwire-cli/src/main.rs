@@ -309,14 +309,24 @@ fn main() -> Result<()> {
             let until = std::time::Instant::now() + std::time::Duration::from_secs(secs);
             let start = std::time::Instant::now();
             let mut seen = 0usize;
+            let mut idle = 0usize;
             while std::time::Instant::now() < until {
                 for p in s.poll_events()? {
+                    // The idle mirror arrives ~3 times a second and says nothing changed, so it is
+                    // counted rather than printed — otherwise it buries the one event you started
+                    // this command to see. The count still earns its place: a live channel that
+                    // goes quiet is what the ~4 KiB push-window stall looked like, and "0 idle"
+                    // tells you the difference between a still pedal and a dead channel.
+                    if matches!(p, fretwire_data::stream::StatusPush::Idle) {
+                        idle += 1;
+                        continue;
+                    }
                     seen += 1;
                     println!("  [{:>6.2}s] {p:?}", start.elapsed().as_secs_f32());
                 }
                 std::thread::sleep(std::time::Duration::from_millis(250));
             }
-            println!("{seen} push(es) seen");
+            println!("{seen} push(es) seen ({idle} idle mirrors, not shown)");
             s.close()?;
         }
         Command::Pull => {

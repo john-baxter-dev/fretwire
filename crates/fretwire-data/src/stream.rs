@@ -1275,6 +1275,10 @@ pub enum StatusPush {
         param: i64,
         value: ParamValue,
     },
+    /// The device's idle mirror (`type 22` with a nil payload) — "nothing changed", sent
+    /// continuously. Distinct from [`StatusPush::Other`] so logging the undecoded pushes doesn't
+    /// mean logging this several times a second.
+    Idle,
     /// A recognized push `type` we don't decode further (kept so callers can log/ignore).
     Other(i64),
 }
@@ -1290,6 +1294,15 @@ pub fn parse_status_push(frame_body: &[u8]) -> Option<StatusPush> {
     // Snapshot pushes carry {92: index} directly in the payload.
     if let Some(idx) = map_get(payload, 92).and_then(Value::as_i64) {
         return Some(StatusPush::Snapshot(idx));
+    }
+    // The idle mirror: type 22 whose inner payload is nil. The device sends it continuously while
+    // nothing is happening — 100 identical copies in 30 seconds of an untouched pedal — so it is
+    // not "a push we haven't decoded", it is a push that says nothing, and callers that log the
+    // undecoded ones would otherwise drown a session's log in it. Scoped to type 22 on purpose: a
+    // nil payload under a type we *haven't* seen is a discovery, and must stay visible as `Other`.
+    // [solid — 2026-08-02, HX Stomp; the carrying form of type 22 has a map here instead]
+    if typ == 22 && matches!(map_get(payload, 106), Some(Value::Nil)) {
+        return Some(StatusPush::Idle);
     }
     // Everything else nests the actual change under an inner key 106.
     let inner = map_get(payload, 106).unwrap_or(payload);
@@ -1662,16 +1675,28 @@ mod list_tests {
 
     /// The type-22 frame the Stomp emits continuously while idle. It is a `{105,106}` mirror like
     /// the ones we decode, so it must stay classified as `Other` rather than be mistaken for a
-    /// change — 154 identical copies of it arrived in a two-minute capture.
+    /// change — 154 identical copies of it arrived in a two-minute capture, and 100 in 30 seconds
+    /// of an untouched pedal. It gets its own variant so that logging the *undecoded* pushes stays
+    /// useful: as `Other(22)` it was 100% of a session's push log.
     #[test]
-    fn the_idle_status_mirror_stays_undecoded() {
+    fn the_idle_status_mirror_is_idle_not_undecoded() {
         let frame = [
             0, 0, 4, 0, 13, 0, 0, 0, 130, 105, 22, 106, 132, 82, 0, 68, 10, 121, 27, 106, 192,
         ];
-        assert!(matches!(
-            parse_status_push(&frame),
-            Some(StatusPush::Other(22))
-        ));
+        assert_eq!(parse_status_push(&frame), Some(StatusPush::Idle));
+    }
+
+    /// The other type 22: same outer key, a real payload under the inner 106, and different
+    /// discriminators (`68:9, 121:25` where the idle mirror has `68:10, 121:27`). This one carries
+    /// something, so it must stay visible as `Other` rather than be filed away as idle.
+    /// Captured 2026-08-02 while the tester worked the pedal's footswitch modes.
+    #[test]
+    fn a_type_22_that_carries_a_payload_is_not_idle() {
+        let frame = [
+            0, 0, 4, 0, 19, 0, 0, 0, 130, 105, 22, 106, 132, 82, 0, 68, 9, 121, 25, 106, 130, 118,
+            205, 0, 21, 119, 2,
+        ];
+        assert_eq!(parse_status_push(&frame), Some(StatusPush::Other(22)));
     }
 
     #[test]

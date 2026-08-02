@@ -69,6 +69,13 @@ impl PresetStream {
         let blob = map_get(&root.value, ENVELOPE_PRESET_KEY)
             .and_then(value_bytes)
             .ok_or_else(|| {
+                // A refusal is well-formed, not corrupt — say so rather than accusing the decoder.
+                // See `parse_preset_list` for the same check and the evidence behind it.
+                if let Some((_, code)) = parse_edit_rejection(reassembled) {
+                    return crate::Error::Stream(format!(
+                        "the device refused to serve this preset (code {code})"
+                    ));
+                }
                 crate::Error::Stream(format!(
                     "envelope key {ENVELOPE_PRESET_KEY} missing or not bytes"
                 ))
@@ -1129,7 +1136,17 @@ pub fn parse_preset_list(reassembled: &[u8]) -> crate::Result<Vec<(u16, String)>
     .ok_or_else(|| crate::Error::Stream("no MessagePack envelope root".into()))?;
     let list = match map_get(&root.value, ENVELOPE_PRESET_KEY) {
         Some(Value::Array(a)) => a,
+        // Before blaming the decoder, check whether the device simply said no. Asking a Stomp for
+        // setlist 1 (it has one) returns a complete, well-formed 20-byte stream carrying
+        // `{102: txn, 103: 255, 104: {111: -3}}` — the same refusal shape an edit gets. Reporting
+        // that as "key 104 is not an array" sent us hunting a parser bug that wasn't there, and it
+        // is the launch-time error the field has been reporting. [solid — 2026-08-02, HX Stomp]
         _ => {
+            if let Some((_, code)) = parse_edit_rejection(reassembled) {
+                return Err(crate::Error::Stream(format!(
+                    "the device refused to list this setlist (code {code}) — it may not exist"
+                )));
+            }
             return Err(crate::Error::Stream(format!(
                 "envelope key {ENVELOPE_PRESET_KEY} is not an array"
             )));
@@ -1558,6 +1575,28 @@ mod list_tests {
     }
 
     /// A stream whose declared length ends in a MessagePack container marker used to lose the
+    /// A setlist the device doesn't have. The reply is not corrupt — it is a complete 20-byte
+    /// stream carrying the ordinary refusal envelope, `{102: txn, 103: 255, 104: {111: -3}}`.
+    /// Captured from an HX Stomp (one setlist) asked for bank 1, 2026-08-02.
+    #[test]
+    fn a_refused_listing_reports_the_device_code_not_a_decode_error() {
+        const REFUSAL: &[u8] = &[
+            0x00, 0x00, 0x06, 0x00, 0x0c, 0x00, 0x00, 0x00, // marker/type/len prefix
+            0x83, 0x66, 0xcd, 0x00, 0x03, 0x67, 0xcc, 0xff, 0x68, 0x81, 0x6f, 0xfd,
+        ];
+        assert_eq!(parse_edit_rejection(REFUSAL), Some((3, -3)));
+        let err = parse_preset_list(REFUSAL).unwrap_err().to_string();
+        assert!(err.contains("refused"), "got: {err}");
+        assert!(
+            err.contains("-3"),
+            "the device's own code has to survive: {err}"
+        );
+        assert!(
+            !err.contains("is not an array"),
+            "stop blaming the decoder: {err}"
+        );
+    }
+
     /// scan to a false root starting inside the length field itself. A Floor hit this on a
     /// 6794-byte read (declared 6786 = `0x1A82`) and every retry failed the same way, so the whole
     /// preset was unreadable — not flaky, just that size.

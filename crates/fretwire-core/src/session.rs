@@ -2417,23 +2417,61 @@ impl Session {
             "preset-list stream chunk #0"
         );
 
+        // The list stream carries the same `marker/type/len` prefix as a preset stream — a bank of
+        // 128 on a Stomp declares 3259 and reassembles to 3267 — so it gets the same treatment:
+        // the declared length decides when the stream is done, a mid-stream empty reply is a credit
+        // frame to skip rather than a terminator, a short non-empty chunk is payload, and running
+        // out of requests is an error instead of a shorter list. On the old "stop at the first
+        // empty or short chunk" rule one interleaved credit frame silently truncated the setlist,
+        // and a truncated listing is not a cosmetic problem: the browse indices feed `goto`.
+        // [2026-08-02, same failure the preset read hit in `fretwire39`]
         let mut payload = first.body.clone();
         let full_chunk = first.body.len();
-        loop {
+        let target = fretwire_data::stream::declared_stream_len(&first.body);
+        let mut empties = 0usize;
+        for _ in 0..stream_request_cap(target) {
+            if target.is_some_and(|t| payload.len() >= t) {
+                break;
+            }
             let chunk = self.channel_request(chan, cmd::CHUNK, Vec::new())?;
             let n = chunk.body.len();
             tracing::debug!(arg = chunk.arg, body = n, "list chunk");
-            payload.extend_from_slice(&chunk.body);
-            if n == 0 || n < full_chunk {
-                break;
+            match classify_chunk(n, full_chunk, payload.len(), target) {
+                ChunkVerdict::Skip => {
+                    empties += 1;
+                    if empties >= 8 {
+                        break;
+                    }
+                }
+                ChunkVerdict::Keep => {
+                    payload.extend_from_slice(&chunk.body);
+                    if n >= full_chunk {
+                        empties = 0;
+                    }
+                }
+                ChunkVerdict::Last => {
+                    payload.extend_from_slice(&chunk.body);
+                    break;
+                }
             }
         }
         self.transport.drain();
         tracing::info!(
             bytes = payload.len(),
+            declared = target,
             bank,
             "reassembled preset-list stream"
         );
+        if let Some(t) = target
+            && payload.len() < t
+        {
+            return Err(fretwire_data::Error::Stream(format!(
+                "preset-list read ended {} bytes short of the declared {t} — the device stopped \
+                 answering mid-stream",
+                t - payload.len(),
+            ))
+            .into());
+        }
         Ok(payload)
     }
 

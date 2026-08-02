@@ -336,6 +336,23 @@ measured on a Stomp, `512 512 512 512 512 224` where HX Edit would send
 the blob. Fixed in `Session::write_preset`. [hypothesis for the lockup — the framing itself is
 [solid]; a Floor run confirms or kills the connection]
 
+### A refused *stream* looks exactly like a refused *edit* [solid]
+*2026-08-02, HX Stomp.*
+
+Asking for a setlist the device doesn't have does not produce a malformed stream. It produces a
+complete, well-formed 20-byte one carrying the ordinary refusal envelope:
+
+```
+00 00 06 00  0c 00 00 00        marker/type/len
+83 66 cd 00 03  67 cc ff  68 81 6f fd
+   {102: 3, 103: 255, 104: {111: -3}}
+```
+
+Same `103: 255` / `104: {111: code}` shape an edit rejection uses, on the browse stream. We were
+reporting it as `envelope key 104 is not an array` and, on the preset stream, `envelope key 104
+missing or not bytes` — which sent us looking for a decoder bug and is very likely the launch-time
+error the field kept reporting. Both readers check `parse_edit_rejection` before blaming themselves.
+
 ### Bypass is set-state, not a blind toggle [solid] — resolves prior "open"
 The two frames of one tremolo bypass press carry `101 → 59: true` then `101 → 59: false` (wire bytes
 `…3b c3` then `…3b c2`). So bypass writes an **explicit bool** at target key 59; it is not a toggle.

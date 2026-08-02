@@ -1382,10 +1382,12 @@ Fixed by correlating on the txn echoed at key 102. Verified on a Stomp: 46 conse
 and ops 30/39/41/43/71 all matched their own transaction. Note **save does have a real ACK** —
 `{102: txn, 103: 0, 104: nil}` — arriving just after the credit frame we had been mistaking for it.
 
-Whether this also explains the op-21 freezes is **[hypothesis]**, not a claim: a structural drag is
-`op 78 → op 43 → op 21`, and 78 and 43 are the two ops we almost never correlated, so a 14-chunk
-write could begin against a device that never acknowledged the structural edit. A Floor retest on
-the current build is what would tell us.
+This was also floated as an explanation for the op-21 freezes, on the reading that a structural drag
+is `op 78 → op 43 → op 21` and 78/43 are the two ops we almost never correlated. **Refuted
+2026-08-02:** that sequence appears in none of the 43 captures. `move_EQ_right_two_slots` carries a
+bare op-21 and nothing else, `one_by_one_move_all_blocks_one_right` is `78,43` eleven times with no
+op-21 anywhere, and `move_simple_eq_to_parallel_path` is `43,23`. HX Edit's whole-preset write is
+unbracketed, like ours.
 
 ### The duplicate cabs are HX Edit's `Cab › Dual`
 
@@ -1755,9 +1757,16 @@ This is the first candidate that fits every fact the blob theories could not:
 
 `Session::write_preset` now sends 496 + 16 per credit. It round-trips clean on a Stomp, which proves
 only that it isn't a regression: the Stomp completed writes before the change too. **[hypothesis]**
-until a Floor runs a build with it. If the endpoint drag stops killing the pedal, that is the answer;
-if it still dies at 2480 bytes, this is refuted and the next suspect is the op-78 bracket HX Edit
-puts around its own op-21 (`op 78 → op 43 → op 21`), which we do not send for a node move.
+until a Floor runs a build with it. If the endpoint drag stops killing the pedal, that is the answer.
+
+One thing that sharpens it: **packetisation is now the only known difference between our op-21 and
+HX Edit's.** Scanning the ops in all 43 captures on 2026-08-02 killed the standing suspicion that
+HX Edit brackets its whole-preset write with `op 78 → op 43`. It does not — `move_EQ_right_two_slots`
+is a bare op-21 with nothing before it, `one_by_one_move_all_blocks_one_right` is `78,43` eleven
+times and never reaches op-21, and `move_simple_eq_to_parallel_path` is `43,23`. Same op, same
+`{110: blob}` envelope, same terminator. The blob is our minimal re-encode rather than the device's
+own bytes — shorter, offset table rebuilt to match, and exonerated on hardware in Round 14 — so what
+is left differing is the packet boundaries.
 
 ## Round 21b: the "envelope key 104" errors are truncated reads
 

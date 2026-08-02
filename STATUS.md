@@ -1352,9 +1352,15 @@ It fits what the blob theories could not: the same bytes wedging and then comple
 cycle, death at two or three units every single time, session age looking like a predictor and then
 failing when `arg` was pinned, a power cycle being the only cure, and the Stomp shrugging it off.
 Fixed, and it round-trips clean on the Stomp — which proves only that it is not a regression, since
-the Stomp completed writes before it too. **[hypothesis] until a Floor runs it.** If the endpoint
-drag still dies at 2480 bytes, the next suspect is the `op 78 → op 43 → op 21` bracket HX Edit puts
-around its own whole-preset write and we do not.
+the Stomp completed writes before it too. **[hypothesis] until a Floor runs it.**
+
+Scanning the ops in all 43 captures the same day also killed a standing suspect: HX Edit does *not*
+bracket its whole-preset write with `op 78 → op 43`. `move_EQ_right_two_slots` is a bare op-21,
+`one_by_one_move_all_blocks_one_right` is `78,43` eleven times and never reaches op-21. Same op,
+same envelope, same terminator. The blob itself is our own minimal re-encode rather than the
+device's bytes back (shorter, with the header offset table rebuilt to match — pinned by tests and
+exonerated on hardware in the fourteenth round), so **packetisation is the only known difference
+left in how the write is *sent*.**
 
 **2. The recurring "envelope key 104" errors are truncated reads.** `fretwire39` caught one whole:
 6366 of a declared 7055 bytes, logged as a success and handed to the decoder, which blamed whichever

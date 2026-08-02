@@ -233,10 +233,11 @@ so it was being read one frame too early.
 Verified on an HX Stomp 2026-08-01: 46 consecutive op-40 swaps plus ops 30/39/41/43/71 all matched
 their own transaction, save included.
 
-> This is a plausible mechanism for the op-21 write freezes, though not proof: a structural drag is
-> `op 78 → op 43 → op 21`, and 78 and 43 are exactly the two ops we almost never correlated, so the
-> 14-chunk write could begin against a device that had not actually acknowledged the structural edit.
-> A Floor retest on the fixed build is what would settle it.
+> This was floated as a mechanism for the op-21 write freezes on the reading that a structural drag
+> is `op 78 → op 43 → op 21`. **That sequence is not in any capture** (checked 2026-08-02, all 43):
+> `move_EQ_right_two_slots` is a bare op-21 with no bracket, `one_by_one_move_all_blocks_one_right`
+> is `78,43` eleven times with no op-21, and `move_simple_eq_to_parallel_path` is `43,23`. HX Edit
+> sends a whole-preset write on its own, exactly as we do. Dropped as a lead.
 
 ### The reply's key 103 is a status, and `255` means refused [solid] — from the 2026-07-30 Floor log
 Every reply envelope is `{102: txn, 103: kind, 104: payload}`, and until now we read key 103 as a

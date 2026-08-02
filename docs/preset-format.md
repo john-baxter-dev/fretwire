@@ -9,6 +9,15 @@ against `captures/preset1_stream.msgpack.bin` (HX Stomp, fw v3.71). Integer keys
 Reassembled stream = `{102: <u32>, 103: 0, 104: <blob>}` (MessagePack, root ~8 bytes into the
 stream after a `marker/type/len` header). Key **104** is a `str`/`bin` blob = the preset.
 
+> **Byte 3 of the header is volatile — don't diff on it.** [solid — 2026-08-02] The high byte of
+> `type` changes between reads of an *unchanged* preset: twelve consecutive `dump-raw` runs on one
+> Stomp preset split into two groups differing at offset 3 alone (`0x00` / `0x28`), and the field
+> dumps a tester sent as three presets turned out to be one preset three times, differing at offset
+> 3 and nowhere else (`0x00` / `0x28` / `0x10`). Everything from offset 8 was byte-identical. The
+> parser skips the header, so this reaches nobody but a person running `cmp` — but it makes two
+> dumps of the same preset look different and, worse, made three dumps of one preset look like
+> three presets. Compare with `fretwire diff-stream`, which walks the tree, or from offset 8.
+
 ## Blob = a flat sequence of 3 MessagePack values
 1. `str "l6-helix\0"` — magic.
 2. `str` — the **offset table**, 48 bytes = 12 little-endian `u32`s. See below.

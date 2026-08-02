@@ -2023,6 +2023,10 @@ impl Session {
             let (raw, info, settled) = self.read_preset_inner()?;
             if settled {
                 self.last_raw = Some(raw.clone());
+                // A settled read establishes the identity as firmly as `read_preset` does, so
+                // publish it: callers that only want the bytes (`dump-raw`) can still say which
+                // preset they got, and `last_identity`'s contract is "as fresh as the last read".
+                self.last_info = info;
                 return Ok(raw);
             }
             tracing::debug!(

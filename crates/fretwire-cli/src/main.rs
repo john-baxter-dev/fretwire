@@ -644,7 +644,15 @@ fn main() -> Result<()> {
             let mut s = fretwire_core::Session::connect()?;
             let raw = s.read_preset_raw()?;
             std::fs::write(&path, &raw)?;
+            // Say *which* preset came out. This dumps whatever is loaded, and the filename is no
+            // evidence of that: a tester meaning to capture three presets sent three dumps of one,
+            // and it took a byte-level diff to notice (2026-08-02). Navigate with `goto` first.
+            let who = s
+                .last_identity()
+                .map(|i| format!("{} (bank {}, slot {})", i.name, i.bank, i.index))
+                .unwrap_or_else(|| "unknown — the identity read failed".to_string());
             println!("wrote {} bytes to {path}", raw.len());
+            println!("  preset: {who}");
         }
         Command::Backup { out: path } => {
             let mut s = fretwire_core::Session::connect()?;

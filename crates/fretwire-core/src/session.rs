@@ -428,7 +428,7 @@ impl Session {
         for f in &frames {
             let push = fretwire_data::stream::parse_status_push(&f.body);
             if trace {
-                tracing::debug!(src = f.src, cmd = f.cmd, body = ?f.body, ?push, "status frame");
+                tracing::debug!(src = f.src, cmd = f.cmd, arg = f.arg, body = ?f.body, ?push, "status frame");
             } else if let Some(fretwire_data::stream::StatusPush::Other(typ)) = push {
                 // A `{105,106}` state mirror whose shape we don't decode yet — rare, and the only
                 // thing we would ever want the bytes of. Always worth a line.

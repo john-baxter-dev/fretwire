@@ -1179,6 +1179,17 @@ place by the GUI like a bypass mirror (no re-read — the push carries the value
 ~15 updates a second). Byte-exact test from the captured frame. Type 22 also streams continuously
 while idle, so it stays `Other`. [solid]
 
+**OPEN — and it is why "the UI doesn't follow the hardware" (2026-08-02).** Chasing the knob
+feature turned up something bigger: **the status channel stops delivering pushes after ~4 KiB.**
+Four captures, 4075 / 4075 / 4075 / 4040 bytes, from frame counts of 179 / 191 / 195 / 386 — a byte
+ceiling, not a timeout (4075 + 21 = 4096, the body of the next frame it declined to send). After it,
+only empty keepalives: footswitches, knobs and preset changes all stop reaching the host until the
+session is reopened. An idle session never reaches it (2037 bytes in 75 s), so it only bites a
+session someone is using — which is exactly the tester's report, and it is *not* specific to knobs.
+Advancing the host `arg` by bytes received was tried and refuted (no change), so it was reverted
+rather than shipped. See `docs/protocol.md` for the next candidates. [solid — the ceiling; the cause
+is open]
+
 **Also from these logs:** op 30 refused with code `-3` five times (parameter sets the device threw
 out; the UI stayed healthy and surfaced them, which is the intended behavior). Blocks moved into the
 send/return loop sometimes only sound with the preceding block enabled — the tester's own later

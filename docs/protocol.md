@@ -379,6 +379,33 @@ index 0 and a descending f32. That is what lets the GUI follow a knob without re
 the push carries the value, so it is applied in place, exactly like a bypass mirror.
 [solid — 2026-08-02, HX Stomp, `fretwire watch`; byte-exact test]
 
+### OPEN: the status channel goes quiet after ~4 KiB of pushes [solid, uncaused]
+
+The device stops mirroring partway into every session, and it is a **byte ceiling, not a timeout**.
+Four `fretwire watch` captures on an HX Stomp:
+
+| capture | mirror frames | bytes delivered before silence | wall clock |
+|---|---:|---:|---:|
+| idle + interaction | 179 | **4075** | 44.6 s |
+| scripted interaction | 191 | **4075** | 44.9 s |
+| interaction, `arg` advanced | 195 | **4075** | 47.5 s |
+| knob sweeps every ~25 s | 386 | 4040 | 29.7 s |
+
+Different frame counts, the same total — and 4075 + 21 = 4096, the body of the next frame it
+declined to send. Afterwards the channel carries only empty `cmd 16` keepalives; the pedal's
+footswitches, knobs and preset changes stop reaching the host entirely until the session is
+reopened. A capture that stays idle never gets there (2037 bytes in 75 s) and keeps pushing to the
+end, which is why this hid for so long: it only bites a session someone is actually using.
+
+**Tried and refuted:** advancing the host's `arg` by the bytes received, on the theory that it is the
+ACK-style window the paged read uses. It does not lift the ceiling (4075 → 4040, inside the noise),
+so it was reverted rather than shipped as an unexplained change to what we put on the wire. Note the
+device's own `arg` on these frames is **pinned at 521** and never moves, matching the read path's
+"device IN arg stays pinned" behavior — so the host side is presumably still what re-opens the
+window, just not through an idle beat. Next candidates: a `cmd 0x08` page request on the status
+channel (what the read path sends to pull the next window), or a periodic re-arm HX Edit performs
+that we have never captured.
+
 Type 22 also arrives continuously while nothing is happening (`{82:0, 68:10, 121:27, 106:nil}`, 154
 identical copies in a two-minute idle capture), so it must stay classified as "undecoded" rather
 than be read as a change.

@@ -414,16 +414,38 @@ is usually nested under an inner key `106`. Decoded:
 | **panel parameter** | `{105:30, 106:{82:_,68:_,121:_, 106:{98:slot, 29:true, 26:_, 28:index, 119:value}}}` | slot + param index + value |
 | global setting | `{105:22, 106:{…, 106:{118:id, 119:value}}}` | `118`/`119` (mostly global settings) |
 | idle mirror | `{105:22, 106:{82:0, 68:10, 121:27, 106:nil}}` | none — sent continuously while idle |
-| footswitch/scene state | `{105:41, 106:{70:_, 63:bool, 66:int}}` | (not decoded further) |
+| footswitch press | `{105:41, 106:{70:fs_index, 63:bool, 66:int}}` | key 70 = **footswitch**, 63 = new state |
+| snapshot committed | `{105:23, 106:{23:0}}` | none — payload is constant |
 | block added | `{105:39, 106:{82:1, …, 106:{98:slot, 26:_}}}` | (not decoded further) |
 
-Types 41 and 39 arrive *alongside* pushes we already decode and carry nothing extra: a footswitch
-press emits type 49 (the bypass we use) plus a type 41 whose key 66 looks like a state bitmask
-(`0x00010900`, `0x0006FF00` observed), and a preset change emits type 4 **and** 8 (both the preset
-index we use) plus a type 39 naming a slot. Left undecoded deliberately — acting on them would
-double-apply what the decoded push already says. Note the type numbers are the **edit op numbers**
-(30 = set value, 39 = add block, 41 = bypass): the device mirrors panel actions in the same
-vocabulary it accepts commands in.
+Types 41, 23 and 39 arrive *alongside* pushes we already decode and carry nothing the editor needs:
+a footswitch press emits type 49 (the bypass we use) plus a type 41, a snapshot switch emits type 42
+and 46 plus a type 23, and a preset change emits type 4 **and** 8 plus a type 39 naming a slot. Left
+undecoded deliberately — acting on them would double-apply what the decoded push already says. Note
+the type numbers are the **edit op numbers** (30 = set value, 39 = add block, 41 = bypass): the
+device mirrors panel actions in the same vocabulary it accepts commands in.
+
+**Type 41's key 70 is the footswitch, not a bitmask.** [solid — 2026-08-02, HX Stomp, four presses]
+An earlier reading had key 66 down as a state bitmask; it isn't one — across four presses it went
+458496, 13055, 1037, 67840, which no four-block state fits. What *is* legible is key 70. On a preset
+whose own layout is FS1 → slot 2 and FS2 → slot 4, pressing FS1 twice and FS2 twice gave:
+
+| type 41 | the type 49 that followed |
+|---|---|
+| `{70: 0, 63: true,  66: 458496}` | `Bypass { slot: 2, enabled: true }` |
+| `{70: 1, 63: true,  66: 13055}`  | `Bypass { slot: 4, enabled: true }` |
+| `{70: 1, 63: false, 66: 1037}`   | `Bypass { slot: 4, enabled: false }` |
+| `{70: 0, 63: false, 66: 67840}`  | `Bypass { slot: 2, enabled: false }` |
+
+Key 70 tracks the **0-based footswitch** (FS1 → 0, FS2 → 1) and key 63 the state the press produced,
+matching the type-49 mirror every time. That is the live FS → block mapping, which is what an
+"assign block to a footswitch" feature would need; key 66 stays unexplained.
+
+**Type 23 rides every snapshot switch**, exactly once, always `{23: 0}` — seven switches, seven
+copies, no variation. Ordering is fixed: type 42, then a type 49 bypass mirror per changed block,
+then type 23, then type 46. A constant payload says nothing about its meaning, so "snapshot
+committed" is a guess from position alone. [solid on the shape and the ordering; the name is
+[hypothesis]]
 [observed 2026-08-02, HX Stomp]
 
 **A panel parameter change (type 30) is the op-30 edit reflected back.** Its payload is the *same*
@@ -473,7 +495,12 @@ nothing (4075 → 4040, inside the noise), so the ack is the request, not the cu
 
 Type 22 also arrives continuously while nothing is happening (`{82:0, 68:10, 121:27, 106:nil}`, 154
 identical copies in a two-minute idle capture), so it must stay classified as "undecoded" rather
-than be read as a change.
+than be read as a change. The idle copy and the carrying one differ in their **outer** keys, which
+looks like a sub-type: idle is `68:10, 121:27, 106:nil`, while a real notification is
+`68:9, 121:25, 106:{118:id, 119:value}`. In a 90-second session, 492 idle copies and 4 carrying
+`{118: 21, 119: 0..3}` — 1, 2 and 3 in that order while the tester was working the pedal's footswitch
+modes before switching snapshots, which makes "id 21 = footswitch mode" a tempting read and an
+unverified one; nobody recorded what was actually pressed. [2026-08-02, HX Stomp]
 
 Observed live: switching a snapshot pushes the new index **and** a `type 49` bypass mirror for each
 block the snapshot changed; HX Edit then re-reads the preset. So our editor: parse these into typed

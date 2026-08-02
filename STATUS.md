@@ -1372,6 +1372,14 @@ payload is an error instead of a preset, so the existing retry gets its go. [sol
 **3. The tester's build predates the push-window fix** — zero status pushes in all four logs. The
 panel-follows-UI work and the 4 KiB ceiling fix are both still unseen in the field.
 
+**Also, from a 90-second `watch` on the Stomp:** snapshot switching pushes exactly as documented
+(42, then a type-49 bypass mirror per changed block, then 23, then 46 — seven switches, seven times),
+so nothing was missing there. Two refinements fell out: **type 41's key 70 is the 0-based
+footswitch** (FS1 → 0, FS2 → 1, matched against the type-49 slot on four presses), which retires the
+old guess that its key 66 is a state bitmask and hands the "assign a block to a footswitch" request
+its wire format; and **type 23 rides every snapshot switch** with a constant `{23: 0}`. Both stay
+undecoded in code — acting on them would double-apply what types 49 and 42/46 already say.
+
 
 ## Repo map
 `crates/` (fretwire-data, fretwire-protocol, fretwire-usb, fretwire-core, fretwire-cli,

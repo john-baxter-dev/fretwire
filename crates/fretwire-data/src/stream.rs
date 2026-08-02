@@ -3,7 +3,9 @@
 //! The reassembled stream (concatenated chunk bodies) begins with a small envelope
 //! (`marker:u16`, `type:u16`, `len:u32`, then an 8-byte context handle) before the MessagePack
 //! root. Rather than hard-code that offset, [`locate_root`] scans for the offset whose
-//! MessagePack value consumes the most of the buffer — robust to envelope-size changes.
+//! MessagePack value consumes the most of the buffer — robust to envelope-size changes. Callers
+//! that know which key the envelope must carry should scan with [`locate_root_where`] instead;
+//! "longest match" alone picks up a false root two lengths in every 256 (see that function).
 
 use rmpv::Value;
 
@@ -55,8 +57,15 @@ impl PresetStream {
     /// Layout: a small envelope map `{.., 104: <blob>}` whose blob is a flat sequence of three
     /// MessagePack values — `str "l6-helix\0"`, a header string, and the preset map.
     pub fn parse(reassembled: &[u8]) -> crate::Result<PresetStream> {
-        let root = locate_root(reassembled, 32)
-            .ok_or_else(|| crate::Error::Stream("no MessagePack envelope root".into()))?;
+        let root = locate_root_where(reassembled, 32, |v| {
+            map_get(v, ENVELOPE_PRESET_KEY)
+                .and_then(value_bytes)
+                .is_some()
+        })
+        // Fall through to the unrestricted scan when nothing carries the key, so a genuinely
+        // malformed stream still reports which part was wrong rather than "no root".
+        .or_else(|| locate_root(reassembled, 32))
+        .ok_or_else(|| crate::Error::Stream("no MessagePack envelope root".into()))?;
         let blob = map_get(&root.value, ENVELOPE_PRESET_KEY)
             .and_then(value_bytes)
             .ok_or_else(|| {
@@ -1113,8 +1122,11 @@ const PRESET_NAME_KEY: i64 = 109;
 /// envelope `{.., 104: Array[ {index: {109: name, …}} ]}` (one entry per preset slot). Verified
 /// against `startup.pcapng` (HX Stomp, 126 presets).
 pub fn parse_preset_list(reassembled: &[u8]) -> crate::Result<Vec<(u16, String)>> {
-    let root = locate_root(reassembled, 32)
-        .ok_or_else(|| crate::Error::Stream("no MessagePack envelope root".into()))?;
+    let root = locate_root_where(reassembled, 32, |v| {
+        matches!(map_get(v, ENVELOPE_PRESET_KEY), Some(Value::Array(_)))
+    })
+    .or_else(|| locate_root(reassembled, 32))
+    .ok_or_else(|| crate::Error::Stream("no MessagePack envelope root".into()))?;
     let list = match map_get(&root.value, ENVELOPE_PRESET_KEY) {
         Some(Value::Array(a)) => a,
         _ => {
@@ -1169,7 +1181,9 @@ pub struct PresetInfo {
 /// (the identity), not the preset blob it carries in a full read. Returns `None` if the envelope or
 /// the index is missing.
 pub fn parse_preset_info(reply: &[u8]) -> Option<PresetInfo> {
-    let root = locate_root(reply, 32)?;
+    let root = locate_root_where(reply, 32, |v| {
+        map_get(v, ENVELOPE_PRESET_KEY).is_some_and(|p| map_get(p, 108).is_some())
+    })?;
     let payload = map_get(&root.value, ENVELOPE_PRESET_KEY)?;
     let index = map_get(payload, 108).and_then(Value::as_i64)?;
     let bank = map_get(payload, 107).and_then(Value::as_i64).unwrap_or(0);
@@ -1211,7 +1225,7 @@ const REJECT_CODE_KEY: i64 = 111;
 /// [solid — 2026-07-30 Floor log: two `add_block` commands answered `{102:44/60, 103:255,
 /// 104:{111:-21}}`, with the preset stream byte-identical before and after each]
 pub fn parse_edit_rejection(reply: &[u8]) -> Option<(u16, i64)> {
-    let root = locate_root(reply, 32)?;
+    let root = locate_root_where(reply, 32, |v| map_get(v, ENVELOPE_KIND_KEY).is_some())?;
     if map_get(&root.value, ENVELOPE_KIND_KEY).and_then(Value::as_i64)? != KIND_REJECTED {
         return None;
     }
@@ -1245,7 +1259,7 @@ pub enum StatusPush {
 /// `None` for meters/keepalives/other frames. The body includes the leading TLV-ish header, which
 /// `locate_root` scans past. Most changes nest under an inner key `106`; snapshot is flat (`92`).
 pub fn parse_status_push(frame_body: &[u8]) -> Option<StatusPush> {
-    let root = locate_root(frame_body, 16)?;
+    let root = locate_root_where(frame_body, 16, |v| map_get(v, 105).is_some())?;
     let typ = map_get(&root.value, 105).and_then(Value::as_i64)?;
     let payload = map_get(&root.value, 106)?;
 
@@ -1320,7 +1334,36 @@ pub struct Root {
 
 /// Scan the first `max_scan` bytes for the MessagePack root: the container value that decodes
 /// cleanly and consumes the most input. Returns `None` if nothing container-like parses.
+///
+/// Prefer [`locate_root_where`] when the caller knows a key the envelope must carry — "longest
+/// match" on its own is not sufficient to identify the root.
 pub fn locate_root(stream: &[u8], max_scan: usize) -> Option<Root> {
+    locate_root_where(stream, max_scan, |_| true)
+}
+
+/// [`locate_root`], restricted to candidates `accept` recognizes as the envelope.
+///
+/// The scan needs this, because longest-match is wrong for exactly the streams the device sends.
+/// The four bytes at offset 4 are the declared length, little-endian, so its **low byte sits
+/// directly in front of the real root** — and when that byte happens to be a MessagePack container
+/// marker whose element count is satisfied by the three remaining length bytes plus one more
+/// value, the decoder swallows the whole envelope as that container's last element. It ends where
+/// the real root ends and starts four bytes earlier, so it consumes *more* and wins the scan; its
+/// keys are then `{26: 0, 0: <the real envelope>}`, which carry none of the keys a caller wants.
+///
+/// Two lengths in every 256 do this: low byte `0x82` (fixmap, 2 pairs) and `0x94` (fixarray, 4
+/// elements). Everything else either isn't a container marker or needs more elements than the
+/// buffer has left, and fails to decode. It is not rare in practice — a 6794-byte preset stream
+/// declares 6786 = `0x1A82`, and every read of that preset failed identically.
+///
+/// [solid — 2026-08-01, `fretwire35.log`: three consecutive reads of the same "New Preset" after
+/// an add-block reassembled 6794/6794 bytes and all three failed with "envelope key 104 missing or
+/// not bytes"; the same tester saw the preset-list spelling of it ("not an array") at launch]
+pub fn locate_root_where(
+    stream: &[u8],
+    max_scan: usize,
+    accept: impl Fn(&Value) -> bool,
+) -> Option<Root> {
     let mut best: Option<Root> = None;
     let scan = max_scan.min(stream.len());
     for offset in 0..scan {
@@ -1330,7 +1373,7 @@ pub fn locate_root(stream: &[u8], max_scan: usize) -> Option<Root> {
             let consumed = start - cur.len();
             // We want the real payload root: a map or array, not an incidental scalar.
             let container = matches!(value, Value::Array(_) | Value::Map(_));
-            if container && best.as_ref().is_none_or(|b| consumed > b.consumed) {
+            if container && best.as_ref().is_none_or(|b| consumed > b.consumed) && accept(&value) {
                 best = Some(Root {
                     offset,
                     consumed,
@@ -1494,6 +1537,48 @@ mod list_tests {
             .step_by(2)
             .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
             .collect()
+    }
+
+    /// A stream whose declared length ends in a MessagePack container marker used to lose the
+    /// scan to a false root starting inside the length field itself. A Floor hit this on a
+    /// 6794-byte read (declared 6786 = `0x1A82`) and every retry failed the same way, so the whole
+    /// preset was unreadable — not flaky, just that size.
+    #[test]
+    fn a_length_that_looks_like_a_container_marker_does_not_hijack_the_root() {
+        // Every byte value, so this keeps covering 0x82/0x94 if the scan is ever rewritten.
+        for low in 0..=u8::MAX {
+            // Payload sized so the encoded envelope's length lands on `low`. The three envelope
+            // keys and the bin header are fixed overhead, so walking the payload walks the length.
+            let mut stream = None;
+            for pad in 0..400usize {
+                let env = Value::Map(vec![
+                    (Value::from(102), Value::from(1)),
+                    (Value::from(103), Value::from(0)),
+                    (Value::from(104), Value::Binary(vec![0xAB; pad])),
+                ]);
+                let body = enc(&env);
+                if body.len() > u8::MAX as usize && (body.len() & 0xff) as u8 == low {
+                    let mut s = vec![0u8, 0, 0x0f, 0x00];
+                    s.extend_from_slice(&(body.len() as u32).to_le_bytes());
+                    s.extend_from_slice(&body);
+                    stream = Some((s, pad));
+                    break;
+                }
+            }
+            let Some((stream, pad)) = stream else {
+                continue;
+            };
+            let root = locate_root_where(&stream, 32, |v| map_get(v, 104).is_some())
+                .unwrap_or_else(|| panic!("no root for low byte {low:#04x}"));
+            assert_eq!(root.offset, 8, "false root for low byte {low:#04x}");
+            assert_eq!(
+                map_get(&root.value, 104)
+                    .and_then(value_bytes)
+                    .map(<[u8]>::len),
+                Some(pad),
+                "wrong payload for low byte {low:#04x}"
+            );
+        }
     }
 
     #[test]

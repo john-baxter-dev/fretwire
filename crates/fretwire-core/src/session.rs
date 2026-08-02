@@ -438,7 +438,49 @@ impl Session {
                 pushes.push(p);
             }
         }
+        self.reopen_push_window(&frames)?;
         Ok(pushes)
+    }
+
+    /// Acknowledge the pushes we just drained, so the device keeps sending them.
+    ///
+    /// **Without this the status channel goes dead partway into every session.** The device mirrors
+    /// panel activity only until ~4 KiB of it is outstanding and then stops: 4075 bytes in three
+    /// captures and 4040 in a fourth, from frame counts of 179/191/195/386 — a byte ceiling, not a
+    /// timeout (4075 + 21 = 4096, the body of the next frame it declined to send). After that the
+    /// channel carries only empty keepalives, and the pedal's footswitches, knobs and preset changes
+    /// stop reaching the host entirely until the session is reopened. An *idle* session never
+    /// reaches the ceiling, which is why this hid for so long — it only bites a session someone is
+    /// actually using, and it is the real reason the editor "stops following the hardware".
+    ///
+    /// The fix is the same page request the chunked read uses to pull its next window: a `cmd 0x08`
+    /// carrying the channel's advanced offset. The device's own `arg` on these frames stays pinned
+    /// (at 521), exactly as it does during a paged read, which is what suggested it.
+    ///
+    /// Status channel only. That is where every measurement was taken and where the pushes live,
+    /// and it keeps this off the edit channel — the one that wedges Helix Floors mid-write. In the
+    /// verifying capture all 501 requests went to the status channel anyway: the other two never
+    /// delivered bytes here, because their reads consume and acknowledge their own frames.
+    ///
+    /// [solid — 2026-08-02, HX Stomp: 300 s, 1117 mirror frames, **23457 bytes**, pushes still
+    /// arriving at 299.9 s against a ceiling of 4075 without it. Refuted on the way: advancing the
+    /// idle beat's `arg` without the page request, which changed nothing (4075 → 4040).]
+    fn reopen_push_window(&mut self, frames: &[Frame]) -> crate::Result<()> {
+        let (src, dst) = channel::STATUS;
+        let bytes: u32 = frames
+            .iter()
+            .filter(|f| f.src == dst)
+            .map(|f| f.body.len() as u32)
+            .sum();
+        if bytes == 0 {
+            return Ok(());
+        }
+        self.advance_arg(src, bytes);
+        let seq = self.next_seq(src);
+        let arg = self.cur_arg(src);
+        self.transport
+            .send_frame(&Frame::new(src, dst, seq, cmd::CHUNK, arg, Vec::new()))?;
+        Ok(())
     }
 
     /// Send an edit-command body on the edit channel and wait for the device's ACK, then issue the

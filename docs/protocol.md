@@ -370,6 +370,16 @@ is usually nested under an inner key `106`. Decoded:
 | global setting | `{105:22, 106:{…, 106:{118:id, 119:value}}}` | `118`/`119` (mostly global settings) |
 | idle mirror | `{105:22, 106:{82:0, 68:10, 121:27, 106:nil}}` | none — sent continuously while idle |
 | footswitch/scene state | `{105:41, 106:{70:_, 63:bool, 66:int}}` | (not decoded further) |
+| block added | `{105:39, 106:{82:1, …, 106:{98:slot, 26:_}}}` | (not decoded further) |
+
+Types 41 and 39 arrive *alongside* pushes we already decode and carry nothing extra: a footswitch
+press emits type 49 (the bypass we use) plus a type 41 whose key 66 looks like a state bitmask
+(`0x00010900`, `0x0006FF00` observed), and a preset change emits type 4 **and** 8 (both the preset
+index we use) plus a type 39 naming a slot. Left undecoded deliberately — acting on them would
+double-apply what the decoded push already says. Note the type numbers are the **edit op numbers**
+(30 = set value, 39 = add block, 41 = bypass): the device mirrors panel actions in the same
+vocabulary it accepts commands in.
+[observed 2026-08-02, HX Stomp]
 
 **A panel parameter change (type 30) is the op-30 edit reflected back.** Its payload is the *same*
 `{98: slot, 28: param index, 119: value}` triple `edit::set_value` sends, under the same op number —
@@ -379,10 +389,10 @@ index 0 and a descending f32. That is what lets the GUI follow a knob without re
 the push carries the value, so it is applied in place, exactly like a bypass mirror.
 [solid — 2026-08-02, HX Stomp, `fretwire watch`; byte-exact test]
 
-### OPEN: the status channel goes quiet after ~4 KiB of pushes [solid, uncaused]
+### The device's push window must be paged, or the channel goes dead [solid]
 
-The device stops mirroring partway into every session, and it is a **byte ceiling, not a timeout**.
-Four `fretwire watch` captures on an HX Stomp:
+The device mirrors panel activity only until ~4 KiB of it is unacknowledged, then stops. Measured
+four times before the cause was found:
 
 | capture | mirror frames | bytes delivered before silence | wall clock |
 |---|---:|---:|---:|
@@ -392,19 +402,29 @@ Four `fretwire watch` captures on an HX Stomp:
 | knob sweeps every ~25 s | 386 | 4040 | 29.7 s |
 
 Different frame counts, the same total — and 4075 + 21 = 4096, the body of the next frame it
-declined to send. Afterwards the channel carries only empty `cmd 16` keepalives; the pedal's
-footswitches, knobs and preset changes stop reaching the host entirely until the session is
-reopened. A capture that stays idle never gets there (2037 bytes in 75 s) and keeps pushing to the
-end, which is why this hid for so long: it only bites a session someone is actually using.
+declined to send. Afterwards the channel carries only empty `cmd 16` keepalives; footswitches, knobs
+and preset changes stop reaching the host until the session is reopened. A session that stays *idle*
+never reaches the ceiling (2037 bytes in 75 s) and keeps pushing to the end, which is why this hid
+for so long: it only bites a session someone is actually using.
 
-**Tried and refuted:** advancing the host's `arg` by the bytes received, on the theory that it is the
-ACK-style window the paged read uses. It does not lift the ceiling (4075 → 4040, inside the noise),
-so it was reverted rather than shipped as an unexplained change to what we put on the wire. Note the
-device's own `arg` on these frames is **pinned at 521** and never moves, matching the read path's
-"device IN arg stays pinned" behavior — so the host side is presumably still what re-opens the
-window, just not through an idle beat. Next candidates: a `cmd 0x08` page request on the status
-channel (what the read path sends to pull the next window), or a periodic re-arm HX Edit performs
-that we have never captured.
+**The window is re-opened the same way a paged read pulls its next chunk** — a `cmd 0x08` on the
+channel, carrying the offset advanced by the bytes just received. The device's own `arg` on these
+frames stays pinned (at 521) exactly as it does mid-read, which is what suggested it.
+`Session::poll_events` now sends one per tick on the status channel whenever bytes arrived.
+
+| | mirror frames | bytes | pushes span |
+|---|---:|---:|---|
+| without the page request | 179–386 | 4075 | died at 30–47 s |
+| **with it** | **1117** | **23457** | **4.3 s → 299.9 s (whole run)** |
+
+Status channel only: that is where the pushes live and where every measurement was taken, and it
+keeps the extra frame off the edit channel. In the verifying capture all 501 requests went to the
+status channel anyway — the other two never leave unacknowledged bytes here, because their reads
+consume and acknowledge their own frames.
+
+**Refuted on the way:** advancing the idle beat's `arg` without sending the page request. It changes
+nothing (4075 → 4040, inside the noise), so the ack is the request, not the cursor.
+[solid — 2026-08-02, HX Stomp, `fretwire watch`]
 
 Type 22 also arrives continuously while nothing is happening (`{82:0, 68:10, 121:27, 106:nil}`, 154
 identical copies in a two-minute idle capture), so it must stay classified as "undecoded" rather

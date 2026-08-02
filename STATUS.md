@@ -1154,14 +1154,18 @@ field — three completed, five wedged anyway, and one wedged at cursor 29397 wh
 started at 50635. Round 19's nine-for-nine split was session age wearing the cursor as a costume.
 The probe is removed.
 
-What replaced it is sharper: **the first chunk's credit latency separates the two groups
-completely** — 4–7 ms on every write that completes, 32–192 ms on every write that wedges, after
-which the device answers at most once more. The device is already failing to consume when it
-acknowledges chunk one; chunks two through five are us pushing 2 KB into a stopped endpoint, which
-is why the tester always reports the same "2480 of N bytes" (that is *our* guard's stop point).
-`write_preset` now logs `first_credit_ms` on every write. Nothing about the bytes explains the
+What replaced it is sharper, and it holds across **all 21** recorded Floor writes (`fretwire12`
+onward, 13 wedged): **the credit count separates them without exception.** Every wedged write got 2
+or 3 credits and not one more — chunk 3 is never credited in any of them — while every completed
+write was credited at each chunk, climbing to 14–19 with `silent` never reaching 1. The device is
+not being outrun and does not degrade over the transfer; it stops dead after two or three chunks,
+and chunks four and five are us pushing into a stopped endpoint. That is why the tester always
+reports the same "2480 of N bytes" — that is *our* guard's stop point, not the device's. (First-chunk
+credit *latency* is a good tell — 4–8 ms completed vs 32–198 ms wedged — but 20/21, not a rule;
+`write_preset` logs `first_credit_ms` for future reports.) Nothing about the bytes explains the
 split: the **same paste of the same 6883 bytes** wedged the pedal and then completed 43 seconds
-later in the same GUI session after a power cycle. Next step is bytes, not inference —
+later in the same GUI session after a power cycle, and `fretwire24` wedged, recovered over a power
+cycle, completed, then wedged again 56 s later on the same preset. Next step is bytes, not inference —
 `FRETWIRE_DUMP_WRITES=<dir>` (already shipped) saves the blob before the first frame goes out.
 
 **Also from these logs:** op 30 refused with code `-3` five times (parameter sets the device threw

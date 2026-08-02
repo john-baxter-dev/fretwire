@@ -1632,28 +1632,33 @@ pinning the field the previous round suspected — first to `0`, then to `1`.
 supposed to explain is gone: log 33 wedged at cursor 29397 while log 30's first write completed at
 50635. The nine-for-nine split of round 19 was session age wearing the cursor as a costume.
 
-### What the timing says instead
+### What the credits say instead
 
-The first chunk's credit latency separates the two groups completely:
+Re-reading **every** recorded Floor write — 21 of them across `fretwire12`…`35`, 13 wedged — the
+credit count separates them without a single exception:
 
-| | first credit | then |
-|---|---:|---|
-| completed (4 writes) | 4–7 ms | every later chunk 4–7 ms |
-| wedged (5 writes) | 32–192 ms | at most one more credit, then silence |
+| | credits delivered | chunk 3 credited? |
+|---|---|---|
+| completed (8 writes) | climbs at every chunk, to 14–19; `silent` never reaches 1 | yes, 8/8 |
+| wedged (13 writes) | **stops at 2 or 3** | never, 13/13 |
 
-So the device is **already failing to consume when it acknowledges chunk one**. It is not being
-outrun, and it does not degrade across the transfer — by the time we notice, four chunks later, the
-outcome was fixed before we sent the second one. The familiar "2480 of N bytes" is our own guard's
-stop point (5 × 496), not the device's: 2480 is simply where we stop pushing.
+So the device is not being outrun and does not degrade across the transfer. It stops dead after two
+or three chunks, and everything after that goes into an endpoint that has already stopped. The
+familiar "2480 of N bytes" is our own guard's stop point (5 × 496), not the device's.
 
-`write_preset` now reports `first_credit_ms` on every write, succeeded or not.
+First-chunk credit *latency* is a good tell but not a rule: 4–8 ms on all eight completed writes and
+32–198 ms on twelve of the thirteen wedged ones — `fretwire24`'s third write is the exception,
+credited in 3 ms and then dead after the second. `write_preset` now reports `first_credit_ms` on
+every write, but the credit ceiling is the reliable signal.
 
 ### What it isn't
 
 Nothing about the bytes explains it. In `fretwire35` the **same paste of the same 6883 bytes**
 wedged the pedal, and then completed 43 seconds later in the same GUI session after a power cycle.
-Preset size doesn't separate the groups (6883 appears in both), nor does the preceding op sequence
-(a write after one bypass wedged; a write after twenty parameter sets completed).
+`fretwire24` does the same trick over three writes of one preset: wedged, power cycle, completed,
+then wedged again 56 s later. Preset size doesn't separate the groups (6883 appears in both), nor
+does the preceding op sequence (a write after one bypass wedged; a write after twenty parameter sets
+completed).
 
 That leaves device-side state we cannot see from here. The next step is bytes, not more inference:
 `FRETWIRE_DUMP_WRITES=<dir>` saves the exact blob before the first frame goes out, so a stalling

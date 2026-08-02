@@ -685,26 +685,32 @@ impl Session {
     /// 5-chunk write, unchanged across 90 reads of channel history), and the one Floor write on
     /// record that completed credited all 14.
     ///
-    /// **The outcome is already decided by the time the first chunk is credited**, which is not how
-    /// this was read at first. Across fourteen recorded Floor writes the first chunk's credit
-    /// arrives in 4–7 ms on every write that goes on to complete, and in 32–192 ms on every write
-    /// that wedges — after which the device answers at most one more and then nothing, and each
-    /// remaining chunk burns the full `CREDIT_WAIT`. So the device is not being outrun and does not
-    /// degrade over the transfer: it is already failing to consume when it acknowledges chunk one,
-    /// and chunks two through five are us pushing another 2 KB into an endpoint that has stopped.
-    /// That is why the tester always reports the same "2480 of N bytes" — 2480 is our guard's stop
-    /// point, not the device's. `first_credit_ms` on the summary line records this.
+    /// **A doomed write is doomed by chunk three, and the device is never outrun.** Over all 21
+    /// recorded Floor writes the credit count is the whole story: the thirteen that wedged received
+    /// **2 or 3 credits and not one more** — chunk 3 is never credited, in any of them — while the
+    /// eight that completed were credited at every single chunk, climbing to 14–19 with `silent`
+    /// never once reaching 1. So the device does not degrade across the transfer and is not being
+    /// pushed too hard; it stops dead after two or three chunks, and everything we send afterwards
+    /// goes into an endpoint that has already stopped. That is why the tester always reports the
+    /// same "2480 of N bytes": 2480 is `MAX_SILENT_CHUNKS`'s stop point, not the device's.
     ///
-    /// Nothing about the blob explains it. The same paste of the same 6883 bytes wedged the pedal
-    /// and then, after a power cycle, completed 43 seconds later in the same GUI session
-    /// (`fretwire35`). Preset size doesn't separate the two groups either. Whatever the state is,
-    /// it is on the device and invisible from here — settling it needs the bytes of a stalling
-    /// write and a succeeding one side by side, which is what `FRETWIRE_DUMP_WRITES` collects.
+    /// The first chunk's credit latency is a good tell but not a rule — 4–8 ms on all eight
+    /// completed writes and 32–198 ms on twelve of the thirteen wedged ones, with `fretwire24`'s
+    /// third write the exception: credited in 3 ms, then dead after the second. `first_credit_ms`
+    /// on the summary line records it for future reports; the credit ceiling is the reliable one.
     ///
-    /// [solid — 2026-08-01, `fretwire22b`/`23`/`24`/`26`/`30`/`32`/`33`/`35`: fourteen Floor
-    /// writes, nine wedged. **Open:** what device state stops it consuming. Refuted along the way:
-    /// that the abort causes it (`fretwire26`), and that the edit channel's `arg` offset drives it
-    /// (see `write_preset`'s body).]
+    /// Nothing about the blob explains which writes wedge. The same paste of the same 6883 bytes
+    /// wedged the pedal and then, after a power cycle, completed 43 seconds later in the same GUI
+    /// session (`fretwire35`); `fretwire24` wedged, recovered across a power cycle, completed, and
+    /// wedged again 56 s later on the same preset. Preset size doesn't separate the groups either.
+    /// Whatever the state is, it is on the device and invisible from here — settling it needs the
+    /// bytes of a stalling write and a succeeding one side by side, which `FRETWIRE_DUMP_WRITES`
+    /// collects.
+    ///
+    /// [solid — 2026-08-01, `fretwire12`/`17`/`22b`/`23`/`24`/`26`/`27`/`30`/`32`/`33`/`35`: 21
+    /// Floor writes, 13 wedged. **Open:** what device state stops it consuming. Refuted along the
+    /// way: that the abort causes it (`fretwire26`), and that the edit channel's `arg` offset
+    /// drives it (see `write_preset`'s body).]
     ///
     /// LIVE: the exact chunk size and `arg` cadence are reconstructed from `move_EQ_right_two_slots`.
     /// The device's `{103:1}` apply-ACK is best-effort (logged, not required); the caller confirms by

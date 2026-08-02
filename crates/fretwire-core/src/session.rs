@@ -2169,14 +2169,12 @@ impl Session {
         let mut payload = first.body.clone();
         let full_chunk = first.body.len();
         let target = fretwire_data::stream::declared_stream_len(&first.body);
-        // Bounds so a garbage length or a device that never terminates can't loop forever.
-        let max_chunks = target.map_or(4096, |t| t / full_chunk.max(1) + 8);
         let mut empties = 0usize;
-        for _ in 0..max_chunks {
+        for _ in 0..stream_request_cap(target) {
             if target.is_some_and(|t| payload.len() >= t) {
                 break; // whole declared payload is in hand
             }
-            // Bound the read in *wall-clock*, not just in chunks. `max_chunks` caps how many
+            // Bound the read in *wall-clock*, not just in chunks. The request cap bounds how many
             // requests we make, but each one can burn the full bulk-IN timeout against a device
             // that is enumerated yet no longer answering — for a ~7.4 KB preset that is ~36 × 3 s,
             // and the tester's freeze measured 121 s inside a single attempt, with three attempts
@@ -2244,6 +2242,24 @@ impl Session {
             declared = target,
             "reassembled preset stream",
         );
+
+        // A short payload is a failed read, not a preset. Every exit from the loop above except
+        // "the declared payload is whole" lands here — the request cap, the consecutive-empties
+        // guard — and each one used to fall straight through into the decoder, which then blamed
+        // whichever envelope key the missing tail happened to contain: the tester's recurring
+        // "envelope key 104 missing or not bytes", raised against a stream that was simply cut off.
+        // Erroring here says what actually happened and lets `read_preset`'s retry have another go,
+        // which is all a truncated read ever needed. [solid — 2026-08-02, `fretwire39`]
+        if let Some(t) = target
+            && payload.len() < t
+        {
+            return Err(fretwire_data::Error::Stream(format!(
+                "preset read ended {} bytes short of the declared {t} — the device stopped \
+                 answering mid-stream",
+                t - payload.len(),
+            ))
+            .into());
+        }
 
         // Re-ask who we're on. The op-23 identity **lags the blob by one preset**: the first read
         // after a preset change serves the new preset's stream under the *previous* preset's
@@ -2598,6 +2614,27 @@ fn plan_insert_right_end(
     Some((moves, target))
 }
 
+/// How many chunk requests a paginated stream of `target` bytes is allowed to take.
+///
+/// A pure loop bound, so a garbage declared length or a device that never terminates can't spin
+/// forever — the real timeout is `READ_DEADLINE`. It counts **requests**, and it has to be sized
+/// against a *fragment* rather than a whole chunk: the device splits chunks as it pleases (207+49,
+/// 46+210, 42+172, 84+130 in the field logs), and every split costs one more request for the same
+/// payload. The old bound — one request per whole chunk plus eight spare — could not absorb that,
+/// and `fretwire39` is what it cost: chunk #0 arrived 214 bytes long, so the cap came out at
+/// 7055/214 + 8 = 40, the read fragmented twelve times, and 40 requests fetched 6366 of 7055 bytes.
+/// The read then returned that truncated blob as a success and the decoder blamed the envelope.
+///
+/// 32 bytes is comfortably below the smallest fragment ever recorded (42), which puts a 7 KB preset
+/// at 236 requests where a healthy read of it needs 33.
+///
+/// [solid — 2026-08-02, `fretwire39` Floor session]
+fn stream_request_cap(target: Option<usize>) -> usize {
+    /// Assumed floor on a productive fragment. Not a wire constant — a bound.
+    const MIN_FRAGMENT: usize = 32;
+    target.map_or(4096, |t| t / MIN_FRAGMENT + 16)
+}
+
 /// What to do with one paginated-stream chunk reply. See [`classify_chunk`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ChunkVerdict {
@@ -2728,7 +2765,7 @@ mod preset_list_tests {
 
 #[cfg(test)]
 mod chunk_tests {
-    use super::{ChunkVerdict::*, classify_chunk};
+    use super::{ChunkVerdict::*, classify_chunk, stream_request_cap};
 
     const FULL: usize = 256;
 
@@ -2776,6 +2813,40 @@ mod chunk_tests {
         assert_eq!(classify_chunk(FULL, FULL, 512, None), Keep);
         assert_eq!(classify_chunk(12, FULL, 512, None), Last);
         assert_eq!(classify_chunk(0, FULL, 512, None), Last);
+    }
+
+    /// The read that truncated in `fretwire39`, replayed. Every reply the Floor actually sent is
+    /// real payload — `classify_chunk` keeps all of them — so nothing about the *decision* was
+    /// wrong. The read ran out of **requests**: chunk #0 came back 214 bytes instead of 256, and
+    /// the old cap of `declared / chunk_0 + 8` gave 40 slots for a stream that fragmented twelve
+    /// times. The 40th reply left 689 bytes still on the device, and the truncated blob went to the
+    /// decoder as if it were whole.
+    #[test]
+    fn a_fragmented_read_does_not_run_out_of_requests() {
+        // The reply sizes `fretwire39` logged at 14:10:08, chunk #0 first. 214-byte chunks, split
+        // into 42+172 and 84+130 whenever the device felt like it.
+        const REPLIES: [usize; 41] = [
+            214, 214, 214, 214, 214, 42, 172, 84, 214, 214, 214, 214, 214, 214, 214, 42, 172, 84,
+            130, 126, 214, 214, 214, 42, 214, 42, 172, 84, 214, 42, 214, 42, 214, 42, 214, 42, 214,
+            42, 214, 42, 214,
+        ];
+        const DECLARED: usize = 7055;
+        let got: usize = REPLIES.iter().sum();
+        assert_eq!(got, 6366, "what the device managed to hand over");
+        assert!(got < DECLARED, "and it was 689 bytes short");
+
+        // Not one of them was misread — the loop simply stopped asking.
+        let mut have = REPLIES[0];
+        for &n in &REPLIES[1..] {
+            assert_eq!(classify_chunk(n, REPLIES[0], have, Some(DECLARED)), Keep);
+            have += n;
+        }
+
+        assert_eq!(DECLARED / REPLIES[0] + 8, REPLIES.len() - 1, "the old cap");
+        // The new one absorbs the recorded run with room to spare, and would still cover the whole
+        // stream arriving as fragments smaller than any the device has ever sent.
+        assert!(stream_request_cap(Some(DECLARED)) > REPLIES.len());
+        assert!(stream_request_cap(Some(DECLARED)) >= DECLARED.div_ceil(42));
     }
 }
 

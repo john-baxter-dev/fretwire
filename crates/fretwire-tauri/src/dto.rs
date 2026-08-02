@@ -6,14 +6,15 @@ use fretwire_core::fretwire_data::stream::{ParamValue, StatusPush};
 use fretwire_core::{EditorBlock, EditorParam, EditorPreset, ModelChoice};
 use serde::Serialize;
 
-/// A device-originated state change (footswitch bypass, panel snapshot/preset switch), forwarded to
-/// the frontend so the GUI follows the hardware live. `Other` pushes are dropped.
+/// A device-originated state change (footswitch bypass, panel snapshot/preset switch, panel knob),
+/// forwarded to the frontend so the GUI follows the hardware live. `Other` pushes are dropped.
 #[derive(Serialize, Clone, Debug)]
 #[serde(tag = "kind")]
 pub enum PushDto {
     Bypass { slot: i64, enabled: bool },
     Snapshot { index: i64 },
     Preset { index: i64 },
+    Param { slot: i64, param: i64, value: f64 },
 }
 
 pub fn push_dtos(pushes: &[StatusPush]) -> Vec<PushDto> {
@@ -26,6 +27,23 @@ pub fn push_dtos(pushes: &[StatusPush]) -> Vec<PushDto> {
             }),
             StatusPush::Snapshot(i) => Some(PushDto::Snapshot { index: *i }),
             StatusPush::Preset(i) => Some(PushDto::Preset { index: *i }),
+            // The frontend renders every parameter as a number, so flatten the three wire types the
+            // same way the param DTOs do rather than teaching the UI a tagged value.
+            StatusPush::Param { slot, param, value } => Some(PushDto::Param {
+                slot: *slot,
+                param: *param,
+                value: fin(match value {
+                    ParamValue::Float(f) => *f as f64,
+                    ParamValue::Int(i) => *i as f64,
+                    ParamValue::Bool(b) => {
+                        if *b {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
+                }),
+            }),
             StatusPush::Other(_) => None,
         })
         .collect()

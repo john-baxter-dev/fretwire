@@ -218,6 +218,7 @@
   let flushAgain = false; // ...and pushes arrived while it was, so re-arm afterwards
   let pendingPresetChange = false;
   const pendingBypasses = new Map(); // slot → bypassed, from footswitch pushes
+  const pendingParams = new Map(); // "slot:param" → value, from panel-knob pushes
 
   // A footswitch bypass is fully described by its own push, so apply it directly. This is also why
   // the re-read can't be trusted for it: the device's readable stream lags its own push, so a fresh
@@ -233,6 +234,31 @@
       mixer_node: patch(preset.mixer_node),
     };
     pendingBypasses.clear();
+  }
+
+  // Panel knobs. Keyed "slot:param" because a sweep pushes ~15 updates a second and only the last
+  // one matters. Applied straight to the value we already hold — the push carries it, so re-reading
+  // the whole preset for every notch would flood the device for no new information.
+  function applyParams() {
+    if (!preset || !pendingParams.size) return;
+    const patch = (b) => {
+      if (!b?.params) return b;
+      let touched = false;
+      const params = b.params.map((p) => {
+        const v = pendingParams.get(`${b.slot}:${p.index}`);
+        if (v === undefined || v === p.value) return p;
+        touched = true;
+        return { ...p, value: v };
+      });
+      return touched ? { ...b, params } : b;
+    };
+    preset = {
+      ...preset,
+      blocks: preset.blocks.map(patch),
+      split_node: patch(preset.split_node),
+      mixer_node: patch(preset.mixer_node),
+    };
+    pendingParams.clear();
   }
 
   function scheduleFlush() {
@@ -282,6 +308,7 @@
       }
     }
     applyBypasses();
+    applyParams();
   }
 
   function handlePushes(pushes) {
@@ -299,14 +326,19 @@
         needsRead = true;
       } else if (p.kind === "Bypass") {
         pendingBypasses.set(p.slot, !p.enabled);
+      } else if (p.kind === "Param") {
+        pendingParams.set(`${p.slot}:${p.param}`, p.value);
       }
     }
     if (pendingPresetChange) {
       selectedSlot = null;
       addTarget = null;
       pendingBypasses.clear(); // those pushes belonged to the preset we just left
+      pendingParams.clear();
     } else if (!needsRead) {
-      applyBypasses(); // bypass-only: nothing to read, show it now
+      // bypass/knob only: the push carries everything, so show it without touching the device
+      applyBypasses();
+      applyParams();
       return;
     }
     scheduleFlush();

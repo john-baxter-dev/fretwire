@@ -366,15 +366,31 @@ is usually nested under an inner key `106`. Decoded:
 | **bypass** (footswitch/panel) | `{105:49, 106:{82:_,68:_,121:_, 106:{98:slot, 59:enabled}}}` | slot + `enabled` (key 59) |
 | **snapshot** | `{105:42 (and 46), 106:{92:index}}` | `92` = new snapshot index |
 | **preset** | `{105:4 (and 8), 106:{…, 106:{107:bank, 108:index}}}` | `108` = new preset index |
-| param/setting | `{105:22, 106:{…, 106:{118:id, 119:value}}}` | `118`/`119` (mostly global settings) |
+| **panel parameter** | `{105:30, 106:{82:_,68:_,121:_, 106:{98:slot, 29:true, 26:_, 28:index, 119:value}}}` | slot + param index + value |
+| global setting | `{105:22, 106:{…, 106:{118:id, 119:value}}}` | `118`/`119` (mostly global settings) |
+| idle mirror | `{105:22, 106:{82:0, 68:10, 121:27, 106:nil}}` | none — sent continuously while idle |
 | footswitch/scene state | `{105:41, 106:{70:_, 63:bool, 66:int}}` | (not decoded further) |
+
+**A panel parameter change (type 30) is the op-30 edit reflected back.** Its payload is the *same*
+`{98: slot, 28: param index, 119: value}` triple `edit::set_value` sends, under the same op number —
+the device mirrors panel edits in the vocabulary it accepts them in. Identified by sweeping the
+Drive knob of a `HD2_AmpUSPrincess` in slot 5 and watching fifteen pushes arrive with slot 5,
+index 0 and a descending f32. That is what lets the GUI follow a knob without re-reading the preset:
+the push carries the value, so it is applied in place, exactly like a bypass mirror.
+[solid — 2026-08-02, HX Stomp, `fretwire watch`; byte-exact test]
+
+Type 22 also arrives continuously while nothing is happening (`{82:0, 68:10, 121:27, 106:nil}`, 154
+identical copies in a two-minute idle capture), so it must stay classified as "undecoded" rather
+than be read as a change.
 
 Observed live: switching a snapshot pushes the new index **and** a `type 49` bypass mirror for each
 block the snapshot changed; HX Edit then re-reads the preset. So our editor: parse these into typed
 events and (a) apply bypass mirrors in place, (b) on a snapshot/preset push, re-read to catch the
 block/param changes. Parser: `fretwire_data::stream::parse_status_push` → `StatusPush` (byte-exact tests);
 collected by `Session::poll_events` (same heartbeat as `keepalive`, but returns the pushes); the GUI
-applies them on its tick (live-follow), no manual Refresh needed.
+applies them on its tick (live-follow), no manual Refresh needed. **`fretwire watch`** holds a
+session and prints the pushes as you touch the pedal, and `FRETWIRE_TRACE_STATUS=1` logs every
+status frame body decoded or not — the pair that identified type 30.
 
 **Coalesce the pushes before reacting.** A single preset change emits a *flurry* — the preset push,
 then the snapshot and per-block bypass mirrors as the new preset settles — spread over roughly a

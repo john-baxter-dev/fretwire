@@ -1168,6 +1168,17 @@ later in the same GUI session after a power cycle, and `fretwire24` wedged, reco
 cycle, completed, then wedged again 56 s later on the same preset. Next step is bytes, not inference —
 `FRETWIRE_DUMP_WRITES=<dir>` (already shipped) saves the blob before the first frame goes out.
 
+**Panel knobs now move the UI (2026-08-02).** The tester has twice noted that turning a knob on the
+pedal doesn't show up in the editor. Nothing logged undecoded pushes, so no log we had could say
+what a knob emits. `fretwire watch` + `FRETWIRE_TRACE_STATUS=1` answered it in one capture: a panel
+parameter change is **push type 30**, carrying the *same* `{98: slot, 28: index, 119: value}` triple
+the op-30 `set_value` edit sends — the device mirrors panel edits in the vocabulary it accepts them
+in. Sweeping the Drive knob of a US Princess in slot 5 produced fifteen pushes with slot 5, index 0
+and a descending f32. Parsed into `StatusPush::Param`, forwarded as a `Param` DTO, and applied in
+place by the GUI like a bypass mirror (no re-read — the push carries the value, and a sweep pushes
+~15 updates a second). Byte-exact test from the captured frame. Type 22 also streams continuously
+while idle, so it stays `Other`. [solid]
+
 **Also from these logs:** op 30 refused with code `-3` five times (parameter sets the device threw
 out; the UI stayed healthy and surfaced them, which is the intended behavior). Blocks moved into the
 send/return loop sometimes only sound with the preceding block enabled — the tester's own later

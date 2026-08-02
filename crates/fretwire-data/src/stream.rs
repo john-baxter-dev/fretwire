@@ -429,7 +429,7 @@ pub enum ParamValue {
 }
 
 impl ParamValue {
-    fn from_value(v: &Value) -> Option<ParamValue> {
+    pub(crate) fn from_value(v: &Value) -> Option<ParamValue> {
         match v {
             Value::F32(f) => Some(ParamValue::Float(*f)),
             Value::F64(f) => Some(ParamValue::Float(*f as f32)),
@@ -1251,6 +1251,13 @@ pub enum StatusPush {
     Snapshot(i64),
     /// The active preset changed (`type 4/8`): 0-based index within the setlist.
     Preset(i64),
+    /// A parameter was changed **on the pedal itself** (`type 30`) — a panel knob, or anything else
+    /// that moves a value without going through us.
+    Param {
+        slot: i64,
+        param: i64,
+        value: ParamValue,
+    },
     /// A recognized push `type` we don't decode further (kept so callers can log/ignore).
     Other(i64),
 }
@@ -1277,6 +1284,17 @@ pub fn parse_status_push(frame_body: &[u8]) -> Option<StatusPush> {
     }
     if let Some(index) = map_get(inner, 108).and_then(Value::as_i64) {
         return Some(StatusPush::Preset(index));
+    }
+    // A panel parameter change mirrors back the *same* `{98: slot, 28: index, 119: value}` triple
+    // the op-30 `set_value` edit sends, under the same push type number (30). Turning the Drive
+    // knob on a US Princess emits a run of these with slot 5, index 0 and a descending f32 — which
+    // is how it was identified. [solid — 2026-08-02, HX Stomp, `fretwire watch`]
+    if let (Some(slot), Some(param), Some(value)) = (
+        map_get(inner, 98).and_then(Value::as_i64),
+        map_get(inner, 28).and_then(Value::as_i64),
+        map_get(inner, 119).and_then(ParamValue::from_value),
+    ) {
+        return Some(StatusPush::Param { slot, param, value });
     }
     Some(StatusPush::Other(typ))
 }
@@ -1579,6 +1597,42 @@ mod list_tests {
                 "wrong payload for low byte {low:#04x}"
             );
         }
+    }
+
+    /// Bytes captured off an HX Stomp (2026-08-02) while the Drive knob on a US Princess in slot 5
+    /// was swept down — one frame from a run of fifteen, each carrying the next value. The payload
+    /// is the same `{98: slot, 28: index, 119: value}` triple the op-30 edit *sends*, under the
+    /// same op number, which is what identified it.
+    #[test]
+    fn a_panel_knob_pushes_the_same_shape_the_edit_sends() {
+        let frame = [
+            0, 0, 4, 0, 27, 0, 0, 0, 130, 105, 30, 106, 132, 82, 0, 68, 6, 121, 20, 106, 133, 98,
+            5, 29, 195, 26, 0, 28, 0, 119, 202, 62, 204, 204, 204,
+        ];
+        match parse_status_push(&frame) {
+            Some(StatusPush::Param { slot, param, value }) => {
+                assert_eq!((slot, param), (5, 0));
+                match value {
+                    ParamValue::Float(f) => assert!((f - 0.4).abs() < 1e-6, "got {f}"),
+                    other => panic!("expected a float, got {other:?}"),
+                }
+            }
+            other => panic!("expected a Param push, got {other:?}"),
+        }
+    }
+
+    /// The type-22 frame the Stomp emits continuously while idle. It is a `{105,106}` mirror like
+    /// the ones we decode, so it must stay classified as `Other` rather than be mistaken for a
+    /// change — 154 identical copies of it arrived in a two-minute capture.
+    #[test]
+    fn the_idle_status_mirror_stays_undecoded() {
+        let frame = [
+            0, 0, 4, 0, 13, 0, 0, 0, 130, 105, 22, 106, 132, 82, 0, 68, 10, 121, 27, 106, 192,
+        ];
+        assert!(matches!(
+            parse_status_push(&frame),
+            Some(StatusPush::Other(22))
+        ));
     }
 
     #[test]

@@ -1610,3 +1610,77 @@ elsewhere — which is equally worth knowing, and rules out the one lead we have
 
 Unchanged across all of these: the stall is always at `sent=2480` (5 × 496), on presets from 6816 to
 8430 bytes, and the device stops draining entirely one chunk later.
+
+
+## Round 20 (2026-08-01, late): `arg` is refuted, and the stall is decided at chunk one
+
+Eight more Floor writes across `fretwire30/32/33/35`, every one of them with `FRETWIRE_WRITE_ARG`
+pinning the field the previous round suspected — first to `0`, then to `1`.
+
+| log | write | cursor at start | forced arg | total | chunks | outcome |
+|---|---:|---:|---:|---:|---:|---|
+| 30 | 1 | 50635 | 1 | 6883 | 14 | **completed** |
+| 30 | 2 | 97969 | 1 | 6883 | 14 | **completed** |
+| 30 | 3 | 297136 | 1 | 6845 | 5 | wedged |
+| 32 | 1 | 277759 | 1 | 6826 | 5 | wedged |
+| 33 | 1 | 29397 | 1 | 6845 | 5 | wedged |
+| 35 | 1 | 134312 | 1 | 6883 | 5 | wedged |
+| 35 | 2 | 14361 | 1 | 6883 | 14 | **completed** |
+| 35 | 3 | 615032 | 1 | 6841 | 5 | wedged |
+
+**`arg` is not the cause. [solid]** Holding it constant changed nothing, and the ordering it was
+supposed to explain is gone: log 33 wedged at cursor 29397 while log 30's first write completed at
+50635. The nine-for-nine split of round 19 was session age wearing the cursor as a costume.
+
+### What the timing says instead
+
+The first chunk's credit latency separates the two groups completely:
+
+| | first credit | then |
+|---|---:|---|
+| completed (4 writes) | 4–7 ms | every later chunk 4–7 ms |
+| wedged (5 writes) | 32–192 ms | at most one more credit, then silence |
+
+So the device is **already failing to consume when it acknowledges chunk one**. It is not being
+outrun, and it does not degrade across the transfer — by the time we notice, four chunks later, the
+outcome was fixed before we sent the second one. The familiar "2480 of N bytes" is our own guard's
+stop point (5 × 496), not the device's: 2480 is simply where we stop pushing.
+
+`write_preset` now reports `first_credit_ms` on every write, succeeded or not.
+
+### What it isn't
+
+Nothing about the bytes explains it. In `fretwire35` the **same paste of the same 6883 bytes**
+wedged the pedal, and then completed 43 seconds later in the same GUI session after a power cycle.
+Preset size doesn't separate the groups (6883 appears in both), nor does the preceding op sequence
+(a write after one bypass wedged; a write after twenty parameter sets completed).
+
+That leaves device-side state we cannot see from here. The next step is bytes, not more inference:
+`FRETWIRE_DUMP_WRITES=<dir>` saves the exact blob before the first frame goes out, so a stalling
+write and a succeeding one can be diffed offline instead of compared by size.
+
+    FRETWIRE_DUMP_WRITES=~/fretwire-writes RUST_LOG=debug cargo run -p fretwire-tauri 2>&1 | tee log.txt
+
+
+## Round 20b: a preset size that made a preset unreadable
+
+Separately, the same session turned up a decode bug with nothing to do with the Floor: three
+consecutive reads of one preset reassembled 6794/6794 bytes and all three failed with
+`envelope key 104 missing or not bytes`, and the tester saw the preset-list spelling of it
+(`envelope key 104 is not an array`) at launch.
+
+The stream is `marker:u16, type:u16, len:u32 (LE)` and then the MessagePack envelope, and
+`locate_root` found the root by scanning for the value that consumed the most input. The length is
+little-endian, so **its low byte sits immediately in front of the real root** — and when that byte
+is itself a container marker satisfied by the three remaining length bytes plus one more value, the
+decoder swallows the whole envelope as that container's last element. It ends where the real root
+ends but starts four bytes earlier, so it consumes more and wins the scan, yielding
+`{26: 0, 0: <the real envelope>}` — no key 104.
+
+Exactly two length values in 256 do this: low byte `0x82` (fixmap, 2 pairs) and `0x94` (fixarray, 4
+elements). A 6794-byte stream declares 6786 = `0x1A82`. Every read of a preset that size failed, and
+would have kept failing.
+
+Callers now scan with `locate_root_where`, which only accepts a candidate carrying the key that
+caller needs. [solid — verified against all 256 low bytes, and the scan picks offset 4 without the
+predicate]

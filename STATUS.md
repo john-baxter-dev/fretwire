@@ -1132,6 +1132,44 @@ leaving name resolution alone was the right split.
 credits flat from chunk 3 of 14 — but it is a `deficit=` log line, i.e. the pre-`0732954` build. The
 tester needs the current build before that datapoint means anything.
 
+## Seventeenth round (2026-08-01, late): **a preset size that made a preset unreadable**, and `arg` is dead
+
+Six more logs (`fretwire30`–`35`) plus the chat. Two results.
+
+**1. A real decode bug, and it was never flaky — just that size.** Three consecutive reads of one
+preset reassembled 6794/6794 bytes and all three failed with `envelope key 104 missing or not
+bytes`; the tester also saw its preset-list spelling (`... is not an array`) at launch. The stream
+is `marker:u16, type:u16, len:u32 (LE)` then the MessagePack envelope, and `locate_root` picked the
+root by scanning for whichever value consumed the most input. The length is little-endian, so **its
+low byte sits directly in front of the real root** — and when that byte is itself a container marker
+whose element count is satisfied by the three remaining length bytes plus one more value, the
+decoder eats the whole envelope as that container's last element. It ends where the real root ends
+and starts four bytes earlier, so it consumes *more* and wins, giving `{26: 0, 0: <envelope>}` with
+no key 104. Exactly two lengths in 256 do it: low byte `0x82` (fixmap 2) and `0x94` (fixarray 4).
+6794 declares 6786 = `0x1A82`. Callers now scan with `locate_root_where`, which only accepts a
+candidate carrying the key that caller actually needs; a test walks all 256 low bytes. [solid]
+
+**2. The `arg` lead is refuted.** Eight more Floor writes, all with `FRETWIRE_WRITE_ARG` pinning the
+field — three completed, five wedged anyway, and one wedged at cursor 29397 while a completed one
+started at 50635. Round 19's nine-for-nine split was session age wearing the cursor as a costume.
+The probe is removed.
+
+What replaced it is sharper: **the first chunk's credit latency separates the two groups
+completely** — 4–7 ms on every write that completes, 32–192 ms on every write that wedges, after
+which the device answers at most once more. The device is already failing to consume when it
+acknowledges chunk one; chunks two through five are us pushing 2 KB into a stopped endpoint, which
+is why the tester always reports the same "2480 of N bytes" (that is *our* guard's stop point).
+`write_preset` now logs `first_credit_ms` on every write. Nothing about the bytes explains the
+split: the **same paste of the same 6883 bytes** wedged the pedal and then completed 43 seconds
+later in the same GUI session after a power cycle. Next step is bytes, not inference —
+`FRETWIRE_DUMP_WRITES=<dir>` (already shipped) saves the blob before the first frame goes out.
+
+**Also from these logs:** op 30 refused with code `-3` five times (parameter sets the device threw
+out; the UI stayed healthy and surfaced them, which is the intended behavior). Blocks moved into the
+send/return loop sometimes only sound with the preceding block enabled — the tester's own later
+sessions attribute much of this to the loop endpoint still sitting before DSP1 OUT, so signal level,
+not routing. Unchased.
+
 ## Prioritized next steps
 > **The path to live control is in `docs/next-steps.md`.** TL;DR: (1) **on Windows now** — capture a
 > dozen single-knob edits, decode with `fretwire decode-edit`, find out if param keys generalize (the

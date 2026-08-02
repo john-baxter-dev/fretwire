@@ -84,8 +84,8 @@ const READ_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 /// a log line can say which command a reply belongs to. `None` for either field when the body isn't
 /// one of the `edit::` builders' maps — the caller degrades to a less specific message.
 fn edit_op_txn(body: &[u8]) -> (Option<i64>, Option<u16>) {
-    use fretwire_data::stream::{locate_root, map_get};
-    let Some(root) = locate_root(body, 4) else {
+    use fretwire_data::stream::{locate_root_where, map_get};
+    let Some(root) = locate_root_where(body, 4, |v| map_get(v, edit::K_TXN).is_some()) else {
         return (None, None);
     };
     (
@@ -685,11 +685,26 @@ impl Session {
     /// 5-chunk write, unchanged across 90 reads of channel history), and the one Floor write on
     /// record that completed credited all 14.
     ///
-    /// [solid — 2026-08-01, `fretwire22b`/`23`/`24`/`26`: six Floor writes, five wedged. **Open:**
-    /// what makes the device stop consuming after ~2 chunks. The only thing separating the six is
-    /// the edit channel's running offset when the write starts — the single completed write began
-    /// at `arg=22079`, all five failures at `arg ≥ 47311` — but n = 6, it is confounded with
-    /// session length, and driving `arg` up over 90 reads on a Stomp reproduced nothing.]
+    /// **The outcome is already decided by the time the first chunk is credited**, which is not how
+    /// this was read at first. Across fourteen recorded Floor writes the first chunk's credit
+    /// arrives in 4–7 ms on every write that goes on to complete, and in 32–192 ms on every write
+    /// that wedges — after which the device answers at most one more and then nothing, and each
+    /// remaining chunk burns the full `CREDIT_WAIT`. So the device is not being outrun and does not
+    /// degrade over the transfer: it is already failing to consume when it acknowledges chunk one,
+    /// and chunks two through five are us pushing another 2 KB into an endpoint that has stopped.
+    /// That is why the tester always reports the same "2480 of N bytes" — 2480 is our guard's stop
+    /// point, not the device's. `first_credit_ms` on the summary line records this.
+    ///
+    /// Nothing about the blob explains it. The same paste of the same 6883 bytes wedged the pedal
+    /// and then, after a power cycle, completed 43 seconds later in the same GUI session
+    /// (`fretwire35`). Preset size doesn't separate the two groups either. Whatever the state is,
+    /// it is on the device and invisible from here — settling it needs the bytes of a stalling
+    /// write and a succeeding one side by side, which is what `FRETWIRE_DUMP_WRITES` collects.
+    ///
+    /// [solid — 2026-08-01, `fretwire22b`/`23`/`24`/`26`/`30`/`32`/`33`/`35`: fourteen Floor
+    /// writes, nine wedged. **Open:** what device state stops it consuming. Refuted along the way:
+    /// that the abort causes it (`fretwire26`), and that the edit channel's `arg` offset drives it
+    /// (see `write_preset`'s body).]
     ///
     /// LIVE: the exact chunk size and `arg` cadence are reconstructed from `move_EQ_right_two_slots`.
     /// The device's `{103:1}` apply-ACK is best-effort (logged, not required); the caller confirms by
@@ -733,39 +748,25 @@ impl Session {
         // arg stays at the channel cursor for the whole transfer (the capture barely advances it,
         // and small edits via `send_edit` don't advance per frame). LIVE: advance per chunk if the
         // device rejects a stalled offset.
-        let arg = self.cur_arg(src);
-        // Diagnostic: `FRETWIRE_WRITE_ARG=<n>` sends the chunks with a fixed `arg` instead of the
-        // channel cursor. Off unless set.
         //
-        // The cursor is a running count of the bytes we have *received* on this channel, so it
-        // climbs by ~7 KB with every preset read and is far larger late in a session than early.
-        // Across nine recorded Floor writes it is the only thing that separates the two outcomes:
-        // completed at 22079 and 42264, wedged at 47311, 72189, 93106, 94976, 112962, 203731 and
-        // 220292 — including two writes of the same preset in the *same session*, 7 minutes apart,
-        // where the early one landed and the late one did not. If the device is doing something
-        // with this field on a write, pinning it low should show up immediately; if the split is
-        // really about session age and `arg` is just a proxy for it, this will change nothing.
-        // Either answer is worth having. [hypothesis — 2026-08-01]
-        let arg = match std::env::var("FRETWIRE_WRITE_ARG")
-            .ok()
-            .and_then(|v| v.parse().ok())
-        {
-            Some(forced) => {
-                tracing::warn!(
-                    cursor = arg,
-                    forced,
-                    "FRETWIRE_WRITE_ARG overriding the write's arg"
-                );
-                forced
-            }
-            None => arg,
-        };
+        // This field was the leading suspect for the Floor lockup and it is **not the cause**. The
+        // cursor counts bytes received on the channel, so it climbs ~7 KB per preset read, and
+        // across the first six recorded writes it separated the outcomes perfectly (completed low,
+        // wedged high). A `FRETWIRE_WRITE_ARG` override pinned it to 0 and then 1 for eight more
+        // writes: three completed and five wedged anyway, and one of the wedged ones started at a
+        // *lower* cursor (29397) than a write that completed (50635). The split was session age
+        // wearing the cursor as a costume. [solid — 2026-08-01, `fretwire30`/`32`/`33`/`35`]
+        let arg = self.cur_arg(src);
         let total = tlv.len();
         let chunks = tlv.len().div_ceil(CHUNK);
         let started = std::time::Instant::now();
         let mut sent = 0usize;
         let mut credits = 0usize;
         let mut silent = 0usize;
+        // How long the *first* chunk's credit took. On this device that single number predicts the
+        // whole transfer (see the doc comment), so every write reports it whether it succeeds or
+        // not — it is the one field a bug report needs and the cheapest one to collect.
+        let mut first_credit_ms = 0u128;
         for (n, chunk) in tlv.chunks(CHUNK).enumerate() {
             let seq = self.next_seq(src);
             self.transport.send_frame(&Frame::new(
@@ -780,11 +781,15 @@ impl Session {
             // Block for this chunk's credit, then sweep up anything else already queued so the
             // device's backlog doesn't accumulate. Waiting for the *first* frame is what paces us;
             // the second call only mops up and must not add latency.
+            let waited = std::time::Instant::now();
             let got = self.transport.drain_collect(CREDIT_WAIT, 1).len()
                 + self
                     .transport
                     .drain_collect(std::time::Duration::from_millis(2), 8)
                     .len();
+            if n == 0 {
+                first_credit_ms = waited.elapsed().as_millis();
+            }
             credits += got;
             // Count *consecutive* unanswered chunks, not the running total. The device batches its
             // credits — a healthy transfer can be several behind and catch up in one sweep — so a
@@ -807,6 +812,7 @@ impl Session {
                     sent,
                     total,
                     credits,
+                    first_credit_ms,
                     chunks = n + 1,
                     "device stopped acknowledging mid-write — abandoning the transfer"
                 );
@@ -822,6 +828,7 @@ impl Session {
                     sent,
                     total,
                     credits,
+                    first_credit_ms,
                     chunks = n + 1,
                     "preset write exceeded its wall-clock budget — abandoning the transfer"
                 );
@@ -846,7 +853,7 @@ impl Session {
             .transport
             .drain_collect(std::time::Duration::from_millis(80), 32);
         let acked = acks.iter().any(|f| reply_txn(&f.body) == Some(txn));
-        tracing::info!(bytes = total, acked, "write-preset sent");
+        tracing::info!(bytes = total, acked, first_credit_ms, "write-preset sent");
         Ok(())
     }
 

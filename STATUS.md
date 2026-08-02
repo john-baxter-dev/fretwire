@@ -1380,6 +1380,20 @@ old guess that its key 66 is a state bitmask and hands the "assign a block to a 
 its wire format; and **type 23 rides every snapshot switch** with a constant `{23: 0}`. Both stay
 undecoded in code — acting on them would double-apply what types 49 and 42/46 already say.
 
+**Side effect worth watching in the field.** `read_preset_raw` now publishes the identity it settled
+on, which it never did before, and two GUI callers read that identity:
+
+* `copy_preset` labels the clipboard with `last_identity()` *after* a raw read. Previously that name
+  came from the last `read_preset` instead — so copying right after navigating **on the pedal** put
+  the previous preset's name on the Paste button. That matches the field report of "copied
+  cali400test … 'cali400test1' still shows on the Paste button". Consistent with it, not proven: the
+  exact sequence hasn't been replayed.
+* `check_cross_setlist_write` compares the target bank against `last_identity()` and **passes when
+  there is no identity at all**. Every op-21 path reads raw, so on those paths the guard was
+  previously inert; now it engages, using an identity `read_preset_raw` only publishes once it has
+  settled. Safer, and a live behaviour change — a save that crosses setlists will now be refused
+  where it used to go through (`FRETWIRE_SETLISTS=1` is the escape hatch).
+
 
 ## Repo map
 `crates/` (fretwire-data, fretwire-protocol, fretwire-usb, fretwire-core, fretwire-cli,

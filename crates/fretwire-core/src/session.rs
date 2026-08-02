@@ -725,9 +725,10 @@ impl Session {
     ///
     /// Transport: the large edit TLV is sent across `cmd 0x04` frames on the edit channel (the device
     /// reassembles by the TLV's declared length), then a terminating `cmd 0x08`, mirroring the
-    /// chunked-read in reverse. The device answers each data frame with an empty `cmd 0x08` frame —
-    /// **a flow-control credit.** We wait a real timeout for each one, because outrunning the device
-    /// is what wedged it back when we fired all fourteen chunks with a 5 ms glance between them.
+    /// chunked-read in reverse. The device answers each **512-byte unit** with an empty `cmd 0x08`
+    /// frame — **a flow-control credit.** We wait a real timeout for each one, because outrunning the
+    /// device is what wedged it back when we fired all fourteen chunks with a 5 ms glance between
+    /// them. A unit is two frames, 496 + 16, so that it ends on a short USB packet; see the loop.
     ///
     /// **Three consecutive unanswered chunks means the pedal is gone, and this was tested.** For
     /// half a day the guard was removed on the theory that it might be aborting writes that would
@@ -775,7 +776,11 @@ impl Session {
     /// The device's `{103:1}` apply-ACK is best-effort (logged, not required); the caller confirms by
     /// re-reading.
     pub fn write_preset(&mut self, blob: Vec<u8>) -> crate::Result<()> {
-        const CHUNK: usize = 496; // ≤ one 512-byte bulk packet incl. the 16-byte frame header
+        /// Payload bytes per flow-control credit — HX Edit's unit, and it is **512, not 496**.
+        const UNIT: usize = 512;
+        /// Biggest body that still fits one 512-byte bulk packet once the 16-byte frame header is
+        /// added. A `UNIT` therefore goes out as two frames, 496 + 16.
+        const FRAME_BODY: usize = 496;
         /// How long to wait for a chunk's flow-control credit before counting it missing. Generous
         /// next to the ~7 ms a healthy chunk round-trips in: the point is to let a busy device catch
         /// up, since outrunning it is what wedges it.
@@ -823,7 +828,7 @@ impl Session {
         // wearing the cursor as a costume. [solid — 2026-08-01, `fretwire30`/`32`/`33`/`35`]
         let arg = self.cur_arg(src);
         let total = tlv.len();
-        let chunks = tlv.len().div_ceil(CHUNK);
+        let chunks = tlv.len().div_ceil(UNIT);
         let started = std::time::Instant::now();
         let mut sent = 0usize;
         let mut credits = 0usize;
@@ -832,17 +837,34 @@ impl Session {
         // whole transfer (see the doc comment), so every write reports it whether it succeeds or
         // not — it is the one field a bug report needs and the cheapest one to collect.
         let mut first_credit_ms = 0u128;
-        for (n, chunk) in tlv.chunks(CHUNK).enumerate() {
-            let seq = self.next_seq(src);
-            self.transport.send_frame(&Frame::new(
-                src,
-                dst,
-                seq,
-                cmd::OPEN,
-                arg,
-                chunk.to_vec(),
-            ))?;
-            sent += chunk.len();
+        for (n, unit) in tlv.chunks(UNIT).enumerate() {
+            // **Two frames per unit, and the second one is what makes this work.** A 496-byte body
+            // plus the 16-byte header is exactly 512 bytes — the bulk endpoint's `wMaxPacketSize`.
+            // Sending only 496-byte bodies, as we did, means every packet is a maximum-size packet
+            // and the device never sees the short packet that ends a USB bulk transfer. HX Edit
+            // never does that: in both captures that carry a bulk upload it splits each 512-byte
+            // unit into 496 + 16, so every unit ends on a 32-byte packet, and only then does the
+            // credit come back — `move_EQ_right_two_slots` (op 21: 496,16,496,16,496,16,8,496,8,8,
+            // 496,16,423 for a 2991-byte TLV) and `import_ir` (fifteen 496+16 pairs). Same 512
+            // payload bytes per credit either way; the difference is purely how they are packetised.
+            //
+            // That is the shape of the Floor lockup: it takes two or three units and then stops
+            // draining its endpoint, which is what a device does when its receive path is waiting
+            // for a transfer that never terminates. It also explains why the blob never mattered
+            // and why session age looked like a predictor — how much slack the endpoint had left.
+            // [hypothesis — 2026-08-02. Mechanism and captures agree; a Floor confirms it.]
+            for part in unit.chunks(FRAME_BODY) {
+                let seq = self.next_seq(src);
+                self.transport.send_frame(&Frame::new(
+                    src,
+                    dst,
+                    seq,
+                    cmd::OPEN,
+                    arg,
+                    part.to_vec(),
+                ))?;
+                sent += part.len();
+            }
             // Block for this chunk's credit, then sweep up anything else already queued so the
             // device's backlog doesn't accumulate. Waiting for the *first* frame is what paces us;
             // the second call only mops up and must not add latency.
@@ -863,7 +885,7 @@ impl Session {
             silent = if got == 0 { silent + 1 } else { 0 };
             tracing::debug!(
                 arg,
-                len = chunk.len(),
+                len = unit.len(),
                 sent,
                 total,
                 credits,

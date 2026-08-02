@@ -308,6 +308,33 @@ the credits are how you *detect* a wedged device, not how you avoid wedging one.
 triggers it is still open; the blob that does it is ~1 KB in by then, so the device is reacting to
 something it has already consumed rather than to the finished preset. [hypothesis]
 
+### A credit unit is **512 payload bytes, sent as 496 + 16** [solid]
+*2026-08-02, re-read of `move_EQ_right_two_slots.pcapng` and `import_ir.pcapng`.*
+
+The credit is not per frame. HX Edit sends **512 payload bytes per credit**, and it splits them
+across two frames — one of 496 bytes, then one of 16:
+
+```
+OUT  cmd=0x04  blen=496      OUT  cmd=0x04  blen=496
+OUT  cmd=0x04  blen=16       OUT  cmd=0x04  blen=8      ← whatever is left of the 512
+IN   cmd=0x08  blen=0        IN   cmd=0x08  blen=0      ← one credit for the pair
+```
+
+The reason is USB, not the protocol. The bulk endpoints declare `wMaxPacketSize` **512**, and a frame
+is a 16-byte header plus its body — so a 496-byte body is a packet of *exactly* the maximum size.
+A bulk transfer made only of maximum-size packets never terminates; it takes a short packet to close
+it. Splitting 512 into 496 + 16 makes the second frame a 32-byte packet, and that is what ends each
+unit. Both captures that carry a bulk upload do it without exception: the op-21 preset write
+(`496,16,496,16,496,16,8,496,8,8,496,16,423` for a 2991-byte TLV) and the IR upload (fifteen 496+16
+pairs). Nothing else in the protocol ever sends a 512-byte packet.
+
+We sent 496-byte bodies back to back and so emitted an unbroken run of maximum-size packets —
+measured on a Stomp, `512 512 512 512 512 224` where HX Edit would send
+`512 32 512 32 512 32 512 32 512 32 144`. That is a candidate mechanism for the Floor's
+"stopped draining its endpoint" lockup, which arrives two or three units in and cares nothing for
+the blob. Fixed in `Session::write_preset`. [hypothesis for the lockup — the framing itself is
+[solid]; a Floor run confirms or kills the connection]
+
 ### Bypass is set-state, not a blind toggle [solid] — resolves prior "open"
 The two frames of one tremolo bypass press carry `101 → 59: true` then `101 → 59: false` (wire bytes
 `…3b c3` then `…3b c2`). So bypass writes an **explicit bool** at target key 59; it is not a toggle.

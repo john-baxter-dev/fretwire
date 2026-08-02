@@ -1328,6 +1328,45 @@ not routing. Unchased.
    Loose end: make `device_handshake` primary bring-up faithful (would also enable primary-channel
    browse).
 
+## Eighteenth round (2026-08-02): **our op-21 write never terminates a USB transfer**
+
+Four more Floor logs (`fretwire37`–`40`), the `calitest2|3|4` dumps, and the chat. Three results.
+
+**1. The lockup is one gesture, and we may finally have the mechanism.** Six op-21 writes across the
+four sessions, five wedged, all six the same user action: dragging the loop endpoint (the split ⋔ /
+mixer ⋉ node). That is the only gesture in the GUI that reaches `write_preset` — `set_node_pos` does
+a read-modify-write, and every write in these logs is preceded 10–100 ms earlier by a full preset
+read, which undo and restore would not do. Everything else the tester did for four hours — model
+swaps, bypasses, parameter sweeps, block drags into and out of the parallel path, saves — is
+surgical and has never wedged a pedal.
+
+The mechanism, and it is not in the blob: **`wMaxPacketSize` on the bulk endpoints is 512, a frame
+is a 16-byte header plus its body, and our 496-byte chunk body is a packet of exactly the maximum
+size.** We sent nothing but those, so the transfer had no short packet to terminate it. HX Edit
+never does this — its unit is 512 payload bytes split 496 + 16, closing each unit on a 32-byte
+packet, in both captures that carry a bulk upload (`move_EQ_right_two_slots`, `import_ir`). Measured
+on the Stomp, ours was `512 512 512 512 512 224` against HX Edit's
+`512 32 512 32 512 32 512 32 512 32 144`.
+
+It fits what the blob theories could not: the same bytes wedging and then completing after a power
+cycle, death at two or three units every single time, session age looking like a predictor and then
+failing when `arg` was pinned, a power cycle being the only cure, and the Stomp shrugging it off.
+Fixed, and it round-trips clean on the Stomp — which proves only that it is not a regression, since
+the Stomp completed writes before it too. **[hypothesis] until a Floor runs it.** If the endpoint
+drag still dies at 2480 bytes, the next suspect is the `op 78 → op 43 → op 21` bracket HX Edit puts
+around its own whole-preset write and we do not.
+
+**2. The recurring "envelope key 104" errors are truncated reads.** `fretwire39` caught one whole:
+6366 of a declared 7055 bytes, logged as a success and handed to the decoder, which blamed whichever
+envelope key the missing tail contained. The read loop was capped at `declared / chunk_0 + 8`
+requests; chunk #0 arrived 214 bytes long, giving 40, and the device fragmented the stream twelve
+times, each split costing another request. The cap is sized against a fragment now, and a short
+payload is an error instead of a preset, so the existing retry gets its go. [solid]
+
+**3. The tester's build predates the push-window fix** — zero status pushes in all four logs. The
+panel-follows-UI work and the 4 KiB ceiling fix are both still unseen in the field.
+
+
 ## Repo map
 `crates/` (fretwire-data, fretwire-protocol, fretwire-usb, fretwire-core, fretwire-cli,
 fretwire-tauri) · `docs/` (protocol, preset-format, safety, next-steps) · `captures/` (pcaps + notes

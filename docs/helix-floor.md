@@ -1695,3 +1695,94 @@ bytes (declared `0x1B94`, three reads, `fretwire12`, 2026-07-31) and 6794 bytes 
 three reads, `fretwire35`, 2026-08-01) — plus three more reads of those same sizes. Nine reads in
 874, all nine accounted for, and no decode failure anywhere else. [solid — verified against all 256
 low bytes in a test, and against every read the testers have logged]
+
+## Round 21 (2026-08-02): our write is a run of maximum-size USB packets
+
+Four more Floor sessions (`fretwire37`–`40`), six op-21 writes, five wedged. Same signature as
+always: two or three credits, then nothing, then `bulk OUT timed out — the device stopped draining
+its endpoint`. The tester's summary of when it happens has not varied in a week — *"moving the
+mixer"*, *"dragging the endpoint of the loop"*, *"ok here we go, will the endpoint dump core? yup,
+it certainly will"*.
+
+### It is one gesture, and it is the only op-21 in the app
+
+Worth stating plainly, because it narrows the whole problem. From the GUI, `write_preset` is
+reachable from exactly three places: `set_node_pos` (drag the split ⋔ or mixer ⋉ to a new column),
+undo/redo, and a backup restore. Every write in these four logs is preceded 10–100 ms earlier by a
+complete preset read, which is `set_node_pos`'s own read-modify-write — undo replays a stored blob
+and reads nothing first. So all six were the loop-endpoint drag. Every other edit the tester made
+across four sessions — model swaps, bypasses, parameter sweeps, block moves into and out of the
+parallel path, saves — is surgical, and none of it has ever wedged a pedal.
+
+### What the op history says, and what it doesn't
+
+Tabulating all 21 recorded writes against the ops that preceded them in the same power-on:
+
+| ops before the write | completed | wedged |
+|---|---:|---:|
+| an op-43 `move_block` somewhere earlier | 2 | 9 |
+| no op-43 | 7 | 3 |
+
+Suggestive, and it is not the answer: `fretwire38` wedged on an op history of exactly `[78, 43]`
+and `fretwire8` completed on exactly `[78, 43]`. Same ops, same order, opposite outcomes — the same
+wall the blob bytes hit.
+
+### The packets
+
+`wMaxPacketSize` on the pedal's bulk endpoints is **512**. A frame is a 16-byte header plus its
+body, so our 496-byte chunk body is a packet of *exactly* the maximum size, and we sent nothing but
+those. A bulk transfer built only from maximum-size packets has no short packet to terminate it.
+
+HX Edit never does this. Its unit is 512 payload bytes split into a 496-byte frame and a 16-byte
+frame, so every unit closes on a 32-byte packet, and the credit comes back after the pair. Both
+captures carrying a bulk upload agree — the op-21 write in `move_EQ_right_two_slots`
+(`496,16,496,16,496,16,8,496,8,8,496,16,423` for a 2991-byte TLV) and the fifteen 496+16 pairs of
+`import_ir`. Measured on a Stomp, ours was `512 512 512 512 512 224` where HX Edit sends
+`512 32 512 32 512 32 512 32 512 32 144`.
+
+This is the first candidate that fits every fact the blob theories could not:
+
+* **The bytes never mattered.** The same 6883 bytes wedged and then completed after a power cycle.
+  Packetisation is identical either way; what differs is how much room the endpoint had left.
+* **It dies two or three units in, always.** That is a receive path filling up, not a parser
+  choking — and it is why chunk 3 is never credited in any of the thirteen wedged writes.
+* **Session age looked like a predictor and then didn't.** The `arg` cursor separated the first six
+  writes perfectly and fell apart when it was pinned (Round 20). Undrained endpoint slack is the
+  thing session age was actually standing in for.
+* **A power cycle is the only reliable cure**, and it is what resets an endpoint.
+* **The Stomp mostly survives it** — a different USB stack with more slack, and it still completes
+  every write on both cadences.
+
+`Session::write_preset` now sends 496 + 16 per credit. It round-trips clean on a Stomp, which proves
+only that it isn't a regression: the Stomp completed writes before the change too. **[hypothesis]**
+until a Floor runs a build with it. If the endpoint drag stops killing the pedal, that is the answer;
+if it still dies at 2480 bytes, this is refuted and the next suspect is the op-78 bracket HX Edit
+puts around its own op-21 (`op 78 → op 43 → op 21`), which we do not send for a node move.
+
+## Round 21b: the "envelope key 104" errors are truncated reads
+
+The tester has been reporting `envelope key 104 missing or not bytes` on and off for days —
+at launch, after a save, once "apart from fat fingering the space bar". Two of them, in `fretwire12`
+and `fretwire35`, were the false-root bug of Round 20b. The rest are something else, and
+`fretwire39` caught one whole:
+
+```
+stream-start reply (chunk #0) arg=1887 body=214
+stream chunk arrived fragmented — keeping it, continuing read got=1112 want=7055 len=42
+... twelve more fragments ...
+reassembled preset stream bytes=6366 declared=7055
+```
+
+Six hundred and eighty-nine bytes short, reported as a successful read, handed to the decoder, which
+blamed whichever envelope key the missing tail happened to contain. The device still had more to
+send — the next two frames in the log are `cmd=4 body=42` and `cmd=4 body=172`, discarded as
+non-replies — and the session fell over half a minute later.
+
+The read loop was bounded by `declared / chunk_0_size + 8` requests. Chunk #0 came back **214** bytes
+rather than 256, giving a cap of 40, and the device fragmented the stream twelve times (42+172,
+84+130, and so on, each split costing one more request for the same payload). The 40th request was
+the cap. A bound sized against a whole chunk cannot survive a device that fragments freely.
+
+Sized against a fragment now, and — the part that turns a recoverable hiccup into a bogus decode
+error — **a short payload is an error rather than a preset**, so the existing retry gets its go.
+[solid]

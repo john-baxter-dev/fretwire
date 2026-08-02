@@ -1687,5 +1687,11 @@ elements). A 6794-byte stream declares 6786 = `0x1A82`. Every read of a preset t
 would have kept failing.
 
 Callers now scan with `locate_root_where`, which only accepts a candidate carrying the key that
-caller needs. [solid — verified against all 256 low bytes, and the scan picks offset 4 without the
-predicate]
+caller needs.
+
+The log corpus confirms the prediction exactly. Across 874 reads in every log we have, 99 distinct
+stream sizes appear; **the only two that ever failed to decode are the two this predicts** — 7068
+bytes (declared `0x1B94`, three reads, `fretwire12`, 2026-07-31) and 6794 bytes (declared `0x1A82`,
+three reads, `fretwire35`, 2026-08-01) — plus three more reads of those same sizes. Nine reads in
+874, all nine accounted for, and no decode failure anywhere else. [solid — verified against all 256
+low bytes in a test, and against every read the testers have logged]

@@ -100,6 +100,14 @@ enum Command {
     /// Connect and immediately tear down — isolates the teardown so you can confirm the pedal
     /// returns to standalone (no "panel lock") after our software lets go.
     Disconnect,
+    /// Hold a session and print the device's unsolicited status pushes as you touch the pedal —
+    /// footswitches, snapshot/preset changes, panel knobs. The tool for finding out what the
+    /// hardware actually sends for a change we don't follow yet. Ctrl-C to stop.
+    Watch {
+        /// Seconds to watch before hanging up.
+        #[arg(long, default_value_t = 60)]
+        secs: u64,
+    },
     /// Read the currently-loaded preset and print it, with the snapshot diagnosis.
     Pull,
     /// List one setlist's presets with their indices. Reads only.
@@ -291,6 +299,25 @@ fn main() -> Result<()> {
             let mut s = fretwire_core::Session::connect()?;
             s.close()?;
             println!("disconnected — session-close sent on all channels; pedal back to standalone");
+        }
+        Command::Watch { secs } => {
+            // Same 250 ms beat the GUI's heartbeat uses, so what shows up here is exactly what the
+            // GUI would see. `FRETWIRE_TRACE_STATUS=1` additionally logs every frame body, decoded
+            // or not — that is the setting for identifying a push we don't parse yet.
+            let mut s = fretwire_core::Session::connect()?;
+            println!("watching for {secs}s — touch the pedal (footswitch, snapshot, knob)…");
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+            let start = std::time::Instant::now();
+            let mut seen = 0usize;
+            while std::time::Instant::now() < until {
+                for p in s.poll_events()? {
+                    seen += 1;
+                    println!("  [{:>6.2}s] {p:?}", start.elapsed().as_secs_f32());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+            println!("{seen} push(es) seen");
+            s.close()?;
         }
         Command::Pull => {
             // Read the currently-loaded preset live and print it, including the snapshot

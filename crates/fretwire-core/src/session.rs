@@ -417,10 +417,27 @@ impl Session {
         let frames = self
             .transport
             .drain_collect(std::time::Duration::from_millis(15), 96);
-        let pushes = frames
-            .iter()
-            .filter_map(|f| fretwire_data::stream::parse_status_push(&f.body))
-            .collect();
+        // Diagnostic: `FRETWIRE_TRACE_STATUS=1` logs every drained frame body, parsed or not. Off
+        // by default because the status channel also carries meters and idles, which would bury a
+        // log. On, because we cannot decode a push we never wrote down — the tester has asked twice
+        // why turning a knob on the pedal doesn't move the UI, and the answer is that the push for
+        // it (if there is one) has never been captured. Turn this on, touch the hardware, and the
+        // bytes are in the log.
+        let trace = std::env::var_os("FRETWIRE_TRACE_STATUS").is_some();
+        let mut pushes = Vec::new();
+        for f in &frames {
+            let push = fretwire_data::stream::parse_status_push(&f.body);
+            if trace {
+                tracing::debug!(src = f.src, cmd = f.cmd, body = ?f.body, ?push, "status frame");
+            } else if let Some(fretwire_data::stream::StatusPush::Other(typ)) = push {
+                // A `{105,106}` state mirror whose shape we don't decode yet — rare, and the only
+                // thing we would ever want the bytes of. Always worth a line.
+                tracing::debug!(typ, body = ?f.body, "undecoded status push");
+            }
+            if let Some(p) = push {
+                pushes.push(p);
+            }
+        }
         Ok(pushes)
     }
 

@@ -79,9 +79,25 @@
       (c) => c.column <= maxCol && (showB || c.row === 0),
     );
 
+    // A block on the B row outside the split→mixer bracket. The pedal stores and saves it happily,
+    // so this is a note, not a refusal — but it is the difference between a block that plays and one
+    // that doesn't, and it took the tester an evening of swapping filters to find out. Only the
+    // left-hand side is known to kill audio (nothing has branched yet, so the cell has no feed);
+    // blocks past the mixer he verified by ear as playing. [before-split: hypothesis — 2026-08-02,
+    // `somehinged3var5.log` strands column 3 and every filter he put there went dead.]
+    const strandedSide = (c) =>
+      !split || c.row !== 1 || !c.occupied
+        ? null
+        : c.column < d.split_pos
+          ? "before"
+          : c.column >= d.mixer_pos
+            ? "after"
+            : null;
+
     const items = cells.map((c) => {
       const b = bySlot.get(c.slot);
       const name = b ? b.user_label || b.model_name : "";
+      const side = strandedSide(c);
       return {
         slot: c.slot,
         occupied: c.occupied,
@@ -90,6 +106,13 @@
         name: name.length > 13 ? name.slice(0, 12) + "…" : name,
         bypassed: b ? !!b.bypassed : false,
         color: catColor(b?.category),
+        stranded: side,
+        strandedWhy:
+          side === "before"
+            ? "Left of the split — the signal hasn't branched yet, so nothing feeds this block. Move the split left of it, or the block right."
+            : side === "after"
+              ? "Right of the mixer — outside the parallel path. The pedal keeps it and it still plays."
+              : null,
       };
     });
 
@@ -133,7 +156,6 @@
       // keeps and plays it, so refusing to *drag a node* into that arrangement was our rule, not
       // the device's, and it cost the tester three attempts in one evening. [2026-08-02]
       if (dragNode) {
-        const bCols = allCells.filter((c) => c.row === 1 && c.occupied).map((c) => c.column);
         const [lo, hi] =
           dragNode === "split" ? [1, d.mixer_pos - 1] : [d.split_pos + 1, maxCol + 1];
         const cur = dragNode === "split" ? d.split_pos : d.mixer_pos;
@@ -141,14 +163,14 @@
           if (p !== cur) nodeDrops.push({ pos: p, x: gapX(p) });
         }
         // The only rule left is split-before-mixer, so say what a drop *does* rather than what is
-        // forbidden — and warn when it would leave loop blocks outside the bracket, which the
-        // device allows but which is rarely what someone means to do.
+        // forbidden. The two sides are not the same: a loop block left of the split has nothing
+        // feeding it, one right of the mixer keeps playing (verified by ear), so only warn about the
+        // side that costs you audio — and only when a drop could actually strand something.
         nodeHint =
           `Drop the ${dragNode} on a gap` +
           (dragNode === "split"
-            ? " — it has to stay left of the mixer."
-            : " — it has to stay right of the split.") +
-          (bCols.length ? " Loop blocks left outside the bracket still play." : "");
+            ? " — it has to stay left of the mixer. Loop blocks it lands right of lose their feed."
+            : " — it has to stay right of the split.");
       }
     }
 
@@ -247,6 +269,8 @@
         class="cell"
         class:sel={c.slot === selectedSlot}
         class:bypassed={c.bypassed}
+        class:stranded={c.stranded === "before"}
+        title={c.strandedWhy}
         class:insb={dragOver === c.slot && dragSide === "l" && dragSrc != null && dragSrc !== c.slot}
         class:insa={dragOver === c.slot && dragSide === "r" && dragSrc != null && dragSrc !== c.slot}
         draggable="true"
@@ -291,6 +315,7 @@
       >
         <span class="name">{c.name}</span>
         <span class="slot">slot {c.slot}</span>
+        {#if c.stranded === "before"}<span class="unfed">⚠ no feed</span>{/if}
       </button>
     {:else}
       <div
@@ -386,6 +411,24 @@
   }
   .cell.bypassed .name {
     color: #626a77;
+  }
+  /* A loop block sitting left of the split has nothing feeding it. Amber rather than an error
+     colour: the pedal accepts and saves the arrangement, it just makes no sound there. */
+  .cell.stranded {
+    border-color: #b7791f;
+    border-style: dashed;
+  }
+  .cell .unfed {
+    position: absolute;
+    top: -8px;
+    right: -6px;
+    padding: 0 4px;
+    border-radius: 7px;
+    background: #b7791f;
+    color: #1a1c20;
+    font-size: 9px;
+    font-weight: 700;
+    white-space: nowrap;
   }
   /* A dragged block hovering another block: an insertion bar on the half it will land on. */
   .cell.insb::before,

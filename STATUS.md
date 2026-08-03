@@ -1534,6 +1534,44 @@ excluded, so the next place to look is the per-snapshot bypass mask (every block
 every committed edit triggers a full ~7 KB preset re-read — 309 chunk round-trips for 12 edits in
 `somehinged3var3.log`.
 
+## Twenty-first round (2026-08-02 night): **the silent loop block, found**
+
+Three more sessions off the pushed build (`somehinged3var4/5/5a.log`, one screenshot). Zero
+refusals, zero decode failures, Trails working — and the mystery that has run since the Floor
+arrived is answered by a warning we were already printing.
+
+**1. A loop block left of the split has nothing feeding it.** `somehinged3var5.log`:
+
+    WARN moving this node leaves row-B blocks outside the bracket — strays=[3] pos=4 kind=2
+
+He dragged the split to column 4 and left the loop block at column 3 outside it, on the left. Then:
+"tronup works / no wait, it doesn't / but helio does, weird". The two loop blocks were on opposite
+sides of the split — Heliosphere at column 4 inside the bracket and audible, Tron Up at column 3
+outside it and dead. He swapped three filters into that slot chasing it (`HD2_FM4ObiWah`,
+`HD2_FM4QFilter`, `HD2_FilterMysterFilterMono`, all in the log, all ACKed) and none made a sound.
+The signal has not branched yet at that column, so the cell has no feed. [hypothesis — one session,
+but it explains every "no worky" on record that Round 22 did not]
+
+This does **not** undo Round 22. Past the mixer he verified by ear that blocks still play. The
+bracket is asymmetric: the right side is cosmetic, the left side is not.
+
+**2. Our warning was right and nobody could see it.** It went to a log file. The chain now gives an
+unfed loop block an amber dashed border and a "⚠ no feed" badge with the reason on hover, and the
+split's drag caption says a drop will strand the blocks it lands right of. Still nothing refused —
+the pedal accepts the arrangement, and out-guarding it is what caused the last two mistakes.
+
+**3. "Hella quiet" is not a bug.** Split Y's `Balance A`/`Balance B` are both at the 0.5 factory
+default, so each leg is attenuated and the mixer sums them; a parallel delay against a dry amp path
+is meant to sit back. His mixer is 0 dB on both legs with +3 dB output — essentially factory.
+
+**4. Edit ACKs log their target.** Matching "I tried three different filters" to the wire meant
+hand-decoding the MessagePack in each op-40 reply, because `send_edit` logged the target only on
+refusal. It logs it on success too now, so a session log reads back as a list of what was done.
+
+**Open.** Confirmation for result 1 is one gesture: drag the split back left of the stranded block
+and the filter should come alive with nothing else changed. Still no `fretwire46`, so the op-21
+packetisation hypothesis remains untested.
+
 
 ## Repo map
 `crates/` (fretwire-data, fretwire-protocol, fretwire-usb, fretwire-core, fretwire-cli,

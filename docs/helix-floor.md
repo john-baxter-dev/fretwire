@@ -1884,3 +1884,51 @@ reverb:
 
 Trails specifically is the key-29 case, fixed separately; the switch had gone read-only in the build
 he was testing (`somehingeddelaytrails.png` shows it greyed), which is what he was reporting.
+
+## Round 24: a loop block left of the split has nothing feeding it [hypothesis]
+
+The evening's last three sessions finally produced a mechanism for the silent loop blocks, and it
+is the one geometric claim that survives — the *other* side of the bracket from the one Round 22
+demolished.
+
+`somehinged3var5.log` has our own warning in it, fired once:
+
+```
+WARN moving this node leaves row-B blocks outside the bracket — strays=[3] pos=4 kind=2
+```
+
+He dragged the split to column 4. The loop block at column 3 was left to its **left**. What he
+reported over the next ten minutes:
+
+> tronup works / no wait, it doesn't / but helio does, weird
+> ok, the helio works, but it's hella quiet …
+> the tron still won't work, hold on, will try another filter
+> OK, so now filters won't work - I've tried 3 different ones
+
+The two blocks were on opposite sides of the split. Heliosphere at column 4 was inside the bracket
+and audible; Tron Up at column 3 was outside it and dead, and stayed dead through three model swaps.
+The swaps are in the log — `HD2_FM4ObiWah`, `HD2_FM4QFilter`, `HD2_FilterMysterFilterMono`, all
+three ACKed, all three inaudible. A cell left of the split has nothing feeding it, because the
+signal has not branched yet.
+
+**This does not resurrect Round 22.** Past the mixer he verified by ear that blocks still play, and
+that stands. The bracket is asymmetric: the right-hand side is cosmetic, the left-hand side is not.
+
+Two things fall out of it:
+
+* **"hella quiet" is not a bug.** Split Y's `Balance A`/`Balance B` are both at their 0.5 default, so
+  each leg is attenuated and the mixer sums them back — normal Helix behaviour, and against a dry
+  amp path a parallel delay is meant to sit back. He also had the mixer's output `Level` at +3 dB
+  and both leg levels at 0 dB, all within a hair of factory.
+* **Our warning was right and invisible.** It went to a log file. The chain now marks an unfed loop
+  block with an amber dashed border and a "⚠ no feed" badge, and the drag caption for the split says
+  which blocks a drop would strand. Nothing is refused — the pedal takes the arrangement, and
+  out-guarding it is what caused the last two mistakes.
+
+To confirm: drag the split back left of the stranded block and the filter should come alive with no
+other change. One gesture, unambiguous.
+
+### Edit ACKs carry their target now
+Matching "I tried three different filters" to the wire took hand-decoding the MessagePack the device
+echoes in each op-40 reply. `send_edit` logged the target only on refusal; it logs it on success too
+now, so a session log can be read back as a list of what was actually done.

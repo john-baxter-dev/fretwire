@@ -562,7 +562,17 @@ impl Session {
             Some(txn) => self.edit_request_txn(cmd::OPEN, tlv.to_bytes(), txn)?,
             None => self.edit_request(cmd::OPEN, tlv.to_bytes())?,
         };
-        tracing::debug!(op = ?sent_op, txn = ?sent_txn, reply = ?ack.body, "edit ACK");
+        // Log the target on success too, not just on refusal. Working out what a tester actually
+        // did in a session used to mean hand-decoding the MessagePack the device echoes back — three
+        // model swaps in `somehinged3var5.log` had to be recovered that way to match them to "I tried
+        // three different filters". One field on the line he already sends makes a log replayable.
+        tracing::debug!(
+            op = ?sent_op,
+            txn = ?sent_txn,
+            target = %edit_target_str(&edit_body),
+            reply = ?ack.body,
+            "edit ACK"
+        );
         // The ACK is not always an ack. Key 103 is the reply's kind, and `255` means the device
         // threw the command away — it applies nothing, reports nothing else, and the next read comes
         // back unchanged. We used to log this line and `Ok(())` on top of it, so the GUI cheerfully

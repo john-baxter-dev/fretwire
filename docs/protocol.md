@@ -191,7 +191,8 @@ Decoded structure (confirmed across many single-knob captures, `captures/param_m
   PreDelay→1 / Mix→5 / LowCut→6 / Level→8 (each = its index in the block's mono/stereo `Helix.sym`
   list). The same param has different indices on different models, exactly as its position differs.
 - **Value = target key 119** (float32 for knobs; int for enums; bool for switches). Key `29: true`
-  is a constant descriptor on knob edits.
+  is a constant descriptor on knob edits. The type is **not** coerced — sending the wrong one is
+  refused outright; see "The value's wire type must match the parameter's type exactly" below.
 - **★ Sub-model selector = target key 26** [solid]: `0` = the block's **main model** (amp/effect),
   `1` = the **paired cab/IR** fused into the same slot (amp+cab blocks). A cab-param edit is byte-for-byte
   a main edit with `26:1`; the param index (key 28) is then positional in the *cab's* `Helix.sym`
@@ -263,13 +264,43 @@ for that target, so the code looks like "wrong shape for this thing" rather than
 | code | seen on | meaning [hypothesis] |
 |---:|---|---|
 | `-21` | op 39 `add_block` carrying a `paired_index`; op 40 swapping to a `*WithPan` twin | a model-ref the op will not take for that target |
-| `-3` | op 30 `set_value` writing a split node's `bypass` param | that parameter is not writable this way — bypass has its own op (41) |
+| `-3` | op 30 `set_value` writing a split node's `bypass` param; op 30 sending the **wrong wire type** for the param; op 30 addressing a param **past the model's symbol list** | that parameter is not writable *as asked* — wrong op, wrong type, or no such index |
 | `-306` | op 40 swapping any block to a `*WithPan` dual-cab twin | that model is a different **block type** (HX Edit's `Cab › Dual`), not an in-place swap target. The same swap also answers `-21` in some device states, so treat the refusal, not the code, as the signal |
 
 The `-3` case is worth knowing about because `bypass` **is** a real entry in the split's stored param
 array, and the four split models are the only ones in the whole catalog (4 of 681) that carry it. So
 the editor will happily offer it as a knob; `Session::set_param` now recognises it and sends op 41
 instead. [solid — 2026-07-31, two op-30 writes to a Split Y's bypass, both refused with `-3`]
+
+### The value's wire type must match the parameter's type exactly [solid]
+Key 119 is not coerced. A **switch** takes a MessagePack bool and *only* a bool: an int or a float
+carrying the same 0/1 is refused with `-3` and nothing is applied. Measured on an HX Stomp (fw 3.71,
+2026-08-02) against `HD2_DelayBucketBrigade`'s `TempoSync1`:
+
+| sent | result |
+|---|---|
+| `Float(1.0)` | refused, `-3` |
+| `Int(1)` | refused, `-3` |
+| `Bool(true)` | **accepted**, reads back `true` |
+
+This is a footgun rather than an obstacle: nothing about the refusal says "wrong type", and a client
+that picks one wire type per control (a float for every slider, an int for every switch) gets a
+parameter class that can never be written. Ours did — the GUI's on/off switch sent an int, so every
+switch in the editor was a guaranteed refusal until 2026-08-02. `Session` now reads the param's type
+out of the device's own last preset blob and coerces, so the reference data isn't needed for it.
+
+### A value past the model's symbol list has no address at all [solid]
+Some blocks send **one more value than their symbol names** — `Trails` on a delay/reverb, the mic
+index on a legacy (non-`CabMicIr_*`) cab. Key 28 is an index into the symbol's param order, so these
+have no key-28 value that reaches them, and op 30 refuses them with `-3` **whatever** the wire type:
+
+    Trails, index 8 of 9, HD2_DelayBucketBrigade — Bool(true) -3, Int(1) -3, Float(1.0) -3
+    TempoSync1, index 7 — Bool(true) OK
+
+HX Edit does show a Trails switch, so it reaches it some other way (op 25 `setting` is the obvious
+suspect — untested, no capture of a Trails change yet). Until that's decoded these are read-only:
+`EditorParam::settable` is `false` for them and the GUI renders the value without a control.
+[solid — 2026-08-02, HX Stomp fw 3.71]
 
 ### op 39 will not add a paired cab; add then swap [solid] — same log
 `add_block` (op 39) is refused whenever the model-ref carries a real `paired_index` — i.e. every pick

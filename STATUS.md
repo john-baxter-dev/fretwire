@@ -1394,6 +1394,60 @@ on, which it never did before, and two GUI callers read that identity:
   settled. Safer, and a live behaviour change — a save that crosses setlists will now be refused
   where it used to go through (`FRETWIRE_SETLISTS=1` is the escape hatch).
 
+## Nineteenth round (2026-08-02 evening): **a switch takes a bool, and nothing else**
+
+`fretwire42`/`43` (pre-pull) and `fretwire45` (first Floor session on the new build), three preset
+dumps, three screenshots, and a long chat log of the tester filling all eight blocks and dragging
+things around to see what breaks. Four results.
+
+**1. The truncated-read fix holds on the Floor.** `envelope key 104` appears five times in the chat
+during the `fretwire42` session and never again after he pulled — zero decode failures in
+`fretwire45`, against six `preset read/decode failed` in `fretwire42`. The Round-18 fix is confirmed
+in the field. The write lockup is *not*: he wedged the pedal once on the new build moving the mixer,
+which is an op-21, but that session's log (`fretwire46`) hasn't arrived, so the packetisation
+hypothesis is still open.
+
+**2. Every on/off switch in the GUI was a guaranteed refusal.** He hit it on a reverb's `Trails`:
+"pedal refuse the para change (op30) device code -3". Reproduced on the Stomp and separated into two
+distinct causes.
+
+The first is ours. Key 119 is **not coerced** — a switch takes a MessagePack bool and refuses an int
+or a float carrying the same 0/1 with `-3`. Measured on `HD2_DelayBucketBrigade`'s `TempoSync1`:
+`Float(1.0)` → `-3`, `Int(1)` → `-3`, `Bool(true)` → accepted, reads back `true`. The GUI's switch
+control routed through `set_param_enum`, which sends an int, so no switch in the editor had ever
+worked. `Session` now reads the param's type out of the device's own last blob — no reference data
+needed — and coerces; verified live, `set 2 7 0` flips `TempoSync1` where it used to be refused.
+
+That fix needed a second one. `param_is_bool`, `clamp_param` and the split-bypass redirect all read
+`last_raw`, and a one-shot CLI invocation connects and edits without ever having read anything, so
+all three silently answered "no". `ensure_blob()` does one ~3 KB read on the first edit of a session
+(free thereafter, and best-effort — a failure there must not fail the edit).
+
+**3. `Trails` is genuinely unreachable, and that is a protocol fact, not a bug.** It is refused as a
+bool too — as an int and a float as well. It is the one value a delay/reverb sends **past the end of
+its symbol's param list**, and key 28 is an index into that list, so nothing addresses it. Same for
+the mic index on a legacy cab. HX Edit shows a Trails switch, so it reaches it another way (op 25
+`setting` is the obvious suspect; no capture of a Trails change exists yet). `EditorParam::settable`
+is `false` for these and the GUI shows the value with no control, rather than a switch that can only
+fail.
+
+**4. Half the "fretwire broke my pedal" reports are one missing wire.** Ten-plus times he dragged a
+block onto the lower row and it went silent — "no worky whether fuzz is 0 or 1". Row B only carries
+signal between the split and the mixer. Dropping a block **right of the mixer** strands it off the
+path; the device accepts the placement without a word, and the only clue is that the cell has no
+wire through it, which his own screenshots show plainly once you know to look. He found the way out
+by accident: dropping at the far left of the row works, because the device pulls the *split* left to
+enclose the new block. Only the mixer sits still. Those cells are no longer offered as drop targets
+(an occupied one is never hidden — a stranded block has to stay visible to be rescued).
+
+His other complaint there was real too, and not the rendering bug he guessed: the mixer would not
+drop between blocks 1 and 2 because two loop blocks sat under them and the bracket has to enclose
+the occupied row. The constraint was right and entirely unexplained, so a node drag now captions it.
+
+**Not a bug: the three dumps.** `somehinged`, `somehinged2` and `midhinged` are byte-identical apart
+from byte 3 (the volatile header byte) — three captures of one preset. `dump-raw` reads whatever is
+loaded, and it now prints which preset that was, which is the fix from the round before.
+
 
 ## Repo map
 `crates/` (fretwire-data, fretwire-protocol, fretwire-usb, fretwire-core, fretwire-cli,

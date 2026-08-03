@@ -1795,3 +1795,37 @@ the cap. A bound sized against a whole chunk cannot survive a device that fragme
 Sized against a fragment now, and — the part that turns a recoverable hiccup into a bogus decode
 error — **a short payload is an error rather than a preset**, so the existing retry gets its go.
 [solid]
+
+## Round 22: a block on row B outside the bracket is silent, and the pedal never says so
+
+The 2026-08-02 evening session is a tester filling all eight blocks and dragging them around. Ten or
+more times a block moved to the lower row stopped passing audio — "delay in loop, and again, delay
+doesn't work whether fuzz is on or not", "flanger in loop same, no worky". He read it as fretwire
+corrupting his routing. It isn't:
+
+> **Row B only carries signal between the split and the mixer.** A block dropped on it right of the
+> mixer sits off the path. The device accepts the placement, reports no error, and simply doesn't
+> run the block. [solid]
+
+He found the boundary himself without naming it: *"so far I drag X effect directly below where it
+was, and it doesn't work. This time I dragged it to the first (far left) block in the loop, it
+places the mixer before the gate, and now the tron works."* Dropping left of the split works because
+the device pulls the **split** left to enclose the new block. It does not do the same for the mixer
+— that one stays where it was put. His screenshots show it exactly: the branch wire stops under the
+mixer glyph, and the four dashed cells to its right have no wire through them at all.
+
+We were drawing those cells as drop targets anyway. Now we don't. An *occupied* out-of-bracket cell
+is still drawn, whatever column it is in — hiding a stranded block would leave no way to rescue it.
+
+The same session's second complaint was a real constraint with no explanation attached: the mixer
+would not drop between top-row blocks 1 and 2, because two loop blocks sat at columns 1 and 2 and
+the bracket has to keep enclosing the occupied row. His theory was that the drop target was being
+covered by the row below. It wasn't offered in the first place. A node drag now captions the rule.
+
+### The Round-21b fix is confirmed on hardware
+`envelope key 104` appears five times in the chat during the `fretwire42` session, and never again
+after he pulled the fix: zero decode failures in `fretwire45`, against six `preset read/decode
+failed` in `fretwire42`. Truncated reads are done.
+
+The write lockup is not. He wedged the pedal once on the new build, moving the mixer — an op-21 —
+but that session's log has not arrived, so the packetisation hypothesis of Round 21 is still open.

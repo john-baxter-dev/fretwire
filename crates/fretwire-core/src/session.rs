@@ -96,6 +96,33 @@ fn edit_op_txn(body: &[u8]) -> (Option<i64>, Option<u16>) {
     )
 }
 
+/// Render an edit body's **target map** (key 101) as a compact `{98:4, 24:390}` line, for the log
+/// entry that reports a refusal.
+///
+/// A refusal that says only the op number and the device's code cannot be diagnosed at all. A Floor
+/// log on 2026-08-02 caught op 40 refused with `-306` and there was no way to learn what it had been
+/// asked to swap to — three plausible reconstructions all completed fine on a Stomp. What was sent
+/// has to be in the same line as what came back.
+fn edit_target_str(body: &[u8]) -> String {
+    use fretwire_data::rmpv::Value;
+    use fretwire_data::stream::{locate_root_where, map_get};
+    fn render(v: &Value) -> String {
+        match v {
+            Value::Map(m) => {
+                let inner: Vec<String> = m
+                    .iter()
+                    .map(|(k, val)| format!("{k}:{}", render(val)))
+                    .collect();
+                format!("{{{}}}", inner.join(", "))
+            }
+            other => format!("{other}"),
+        }
+    }
+    locate_root_where(body, 4, |v| map_get(v, edit::K_TXN).is_some())
+        .and_then(|root| map_get(&root.value, edit::K_TARGET).map(render))
+        .unwrap_or_else(|| "?".to_string())
+}
+
 /// Human name for an edit op id, for error messages the GUI shows verbatim. Unknown ids get a bare
 /// "edit" — the numeric op rides alongside it at the call site.
 fn op_name(op: i64) -> &'static str {
@@ -494,6 +521,9 @@ impl Session {
         // builder puts them at keys 100/102, and a log that says only what came *back* is what made
         // the 2026-07-30 rejection take frame-size archaeology to identify.
         let (sent_op, sent_txn) = edit_op_txn(&body);
+        // Kept for the rejection log below. These bodies are tens of bytes — the whole-preset write
+        // goes through `write_preset`, not here — so the copy costs nothing.
+        let edit_body = body.clone();
         let tlv = Tlv::command(op::PARAM_SET, body);
         // Correlate the ACK by the transaction id it echoes, not by "next non-keepalive frame on the
         // channel". The device interleaves empty `cmd 0x08` credit frames and other channels' traffic
@@ -519,7 +549,13 @@ impl Session {
                 || "command".to_string(),
                 |o| format!("{} (op {o})", op_name(o)),
             );
-            tracing::warn!(op = ?sent_op, txn, code, "the pedal rejected the edit");
+            tracing::warn!(
+                op = ?sent_op,
+                txn,
+                code,
+                target = %edit_target_str(&edit_body),
+                "the pedal rejected the edit"
+            );
             return Err(crate::Error::Rejected(format!(
                 "{what} — device code {code}"
             )));

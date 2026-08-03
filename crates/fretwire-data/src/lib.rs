@@ -12,6 +12,11 @@ pub mod preset;
 pub mod stream;
 pub mod symbols;
 
+/// The MessagePack value type. Already part of this crate's public surface (`stream::map_get` and
+/// friends take and return it), so re-export it rather than making every caller depend on the exact
+/// `rmpv` version we do.
+pub use rmpv;
+
 pub use models::{Model, ModelFile, Param};
 pub use preset::Preset;
 

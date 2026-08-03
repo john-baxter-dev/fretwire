@@ -1568,7 +1568,10 @@ is meant to sit back. His mixer is 0 dB on both legs with +3 dB output — essen
 hand-decoding the MessagePack in each op-40 reply, because `send_edit` logged the target only on
 refusal. It logs it on success too now, so a session log reads back as a list of what was done.
 
-**Open.** Confirmation for result 1 is one gesture: drag the split back left of the stranded block
+**Open.** `captures/_RUNBOOK-hx-edit-session.md` collects everything now blocked on an HX Edit
+capture — the node move (the op-21 lockup), how HX Edit switches a block mono↔stereo, a `Cab › Dual`
+block, and the op-25 global-settings ids — plus the two things that need only a screenshot.
+Confirmation for result 1 is one gesture: drag the split back left of the stranded block
 and the filter should come alive with nothing else changed. Still no `fretwire46`, so the op-21
 packetisation hypothesis remains untested.
 

@@ -1431,18 +1431,21 @@ the mic index on a legacy cab. HX Edit shows a Trails switch, so it reaches it a
 is `false` for these and the GUI shows the value with no control, rather than a switch that can only
 fail.
 
-**4. Half the "fretwire broke my pedal" reports are one missing wire.** Ten-plus times he dragged a
-block onto the lower row and it went silent — "no worky whether fuzz is 0 or 1". Row B only carries
-signal between the split and the mixer. Dropping a block **right of the mixer** strands it off the
-path; the device accepts the placement without a word, and the only clue is that the cell has no
-wire through it, which his own screenshots show plainly once you know to look. He found the way out
-by accident: dropping at the far left of the row works, because the device pulls the *split* left to
-enclose the new block. Only the mixer sits still. Those cells are no longer offered as drop targets
-(an occupied one is never hidden — a stranded block has to stay visible to be rescued).
+**4. A row-B theory that lasted an hour.** Ten-plus times he dragged a block onto the lower row and
+it went silent. The bracket we draw stops at the mixer column, so cells past it look disconnected,
+and I stopped offering them as drop targets. The next dump refuted it: `somehinged3_var1.bin` has
+the mixer before column 3 with both loop blocks moved out to columns 3 and 4, `somehinged2.log`
+shows the moves as two clean `78 → 43` pairs with two saves and no errors, and he checked by ear —
+they play. The baseline dumps kill the inverse reading too: `somehinged`/`somehinged2`/`midhinged`
+all have both loop blocks *inside* the bracket, and that is the session he spent reporting silent
+loop blocks. Reverted; **what silences a block in the loop is still open**, and the mixer's own B-leg
+level/pan is the next suspect.
 
-His other complaint there was real too, and not the rendering bug he guessed: the mixer would not
-drop between blocks 1 and 2 because two loop blocks sat under them and the bracket has to enclose
-the occupied row. The constraint was right and entirely unexplained, so a node drag now captions it.
+Two things survive it. The device is **looser than our own enclosure guard** — op 43 moves a loop
+block outside the bracket and the pedal keeps it — and that guard is what blocked him from putting
+the mixer between blocks 1 and 2, twice. Worth a hardware test before removing. And `show-preset`
+now prints each DSP's bracket with the loop blocks' columns, which is how this got settled in one
+command instead of by hand-decoding key 13.
 
 **Not a bug: the three dumps.** `somehinged`, `somehinged2` and `midhinged` are byte-identical apart
 from byte 3 (the volatile header byte) — three captures of one preset. `dump-raw` reads whatever is

@@ -69,19 +69,14 @@
     const maxCol = dragging
       ? maxAllCol
       : Math.max(1, Math.min(Math.max(lastOcc + 1, split ? d.mixer_pos : 1), maxAllCol));
-    // Row B only carries signal between the split and the mixer. Dropping a block *right* of the
-    // mixer strands it off the path: it goes silent and the device accepts the placement without
-    // complaint, so the only clue is the missing wire. A tester hit that a dozen times in one
-    // session and read it as fretwire breaking his pedal (2026-08-02). Don't offer those cells.
-    //
-    // Left of the split is a different case and stays droppable: the device pulls the split left to
-    // enclose the new block, which is how you *grow* the parallel path leftward — the same tester
-    // found that by accident and it worked. Only the mixer sits still. An occupied cell is never
-    // hidden, whatever column it ended up in — a stranded block must stay visible to be rescued.
-    const strandedB = (c) =>
-      split && c.row === 1 && !c.occupied && c.column >= d.mixer_pos;
+    // Every row-B cell is a legal drop target, including the ones past the mixer column. It is
+    // tempting to hide those — the bracket wire stops at the mixer, so they look disconnected — and
+    // for a few hours on 2026-08-02 we did. The device says otherwise: a Floor preset with the
+    // mixer before column 3 and its two loop blocks moved out to columns 3 and 4 accepted the move,
+    // saved it, and both blocks still passed audio. Whatever key 13 means, it is not "signal stops
+    // here". Don't act on the drawing. [refuted — `somehinged3_var1.bin` + `somehinged2.log`]
     const cells = allCells.filter(
-      (c) => c.column <= maxCol && (showB || c.row === 0) && !strandedB(c),
+      (c) => c.column <= maxCol && (showB || c.row === 0),
     );
 
     const items = cells.map((c) => {
@@ -147,9 +142,13 @@
         for (let p = lo; p <= hi; p++) {
           if (p !== cur) nodeDrops.push({ pos: p, x: gapX(p) });
         }
+        // Attributed to fretwire, not the device: this is our own enclosure guard, and the pedal
+        // is demonstrably looser than it (it will keep loop blocks past the mixer column). Say who
+        // is refusing, so a tester who finds the guard wrong reports it instead of blaming the
+        // hardware.
         const side = dragNode === "mixer" ? "right of" : "left of";
         nodeHint = bCols.length
-          ? `The ${dragNode} has to stay ${side} every block on the lower row` +
+          ? `fretwire keeps the ${dragNode} ${side} every block on the lower row` +
             (nodeDrops.length ? "." : " — move those blocks first.")
           : `Drop the ${dragNode} on any gap.`;
       }

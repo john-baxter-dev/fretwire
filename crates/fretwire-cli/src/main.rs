@@ -1086,6 +1086,35 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
         "{} block(s) · {topo} topology · {load}",
         preset.blocks.len()
     );
+    // Where each DSP's bracket actually sits. "Is this block inside the parallel path?" is the
+    // question behind most of the field reports about blocks going silent, and answering it from a
+    // dump used to mean decoding key 13 by hand.
+    for d in &preset.dsps {
+        if let (Some(sp), Some(mp)) = (d.split_pos, d.mixer_pos) {
+            let inside: Vec<String> = d
+                .grid
+                .iter()
+                .filter(|c| c.row == 1 && c.occupied)
+                .map(|c| {
+                    let where_ = if c.column < sp {
+                        " before-split!"
+                    } else if c.column >= mp {
+                        " past-mixer!"
+                    } else {
+                        ""
+                    };
+                    format!("slot {} @col {}{where_}", c.slot, c.column)
+                })
+                .collect();
+            println!(
+                "  DSP{} bracket: split before col {sp}, mixer before col {mp} → path B spans cols \
+                 {sp}..={}  [{}]",
+                d.dsp + 1,
+                mp - 1,
+                inside.join(", ")
+            );
+        }
+    }
     for b in &preset.blocks {
         let label = b
             .user_label

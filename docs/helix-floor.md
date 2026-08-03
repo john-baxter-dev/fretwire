@@ -1796,31 +1796,37 @@ Sized against a fragment now, and — the part that turns a recoverable hiccup i
 error — **a short payload is an error rather than a preset**, so the existing retry gets its go.
 [solid]
 
-## Round 22: a block on row B outside the bracket is silent, and the pedal never says so
+## Round 22: what the mixer column means is still unknown [refuted]
 
-The 2026-08-02 evening session is a tester filling all eight blocks and dragging them around. Ten or
-more times a block moved to the lower row stopped passing audio — "delay in loop, and again, delay
-doesn't work whether fuzz is on or not", "flanger in loop same, no worky". He read it as fretwire
-corrupting his routing. It isn't:
+The first version of this section claimed that a block on row B past the mixer column is off the
+signal path and goes silent, and that this explained the tester's repeated "no worky" reports. It is
+wrong, and it was refuted within the hour by the next dump he sent.
 
-> **Row B only carries signal between the split and the mixer.** A block dropped on it right of the
-> mixer sits off the path. The device accepts the placement, reports no error, and simply doesn't
-> run the block. [solid]
+`somehinged3_var1.bin` has the bracket at **split before column 1, mixer before column 3**, and its
+two loop blocks moved out to **columns 3 and 4 — both past the mixer**. `somehinged2.log` shows the
+moves going out as two clean `78 → 43` pairs with two saves and not one error, and he checked by ear:
 
-He found the boundary himself without naming it: *"so far I drag X effect directly below where it
-was, and it doesn't work. This time I dragged it to the first (far left) block in the loop, it
-places the mixer before the gate, and now the tron works."* Dropping left of the split works because
-the device pulls the **split** left to enclose the new block. It does not do the same for the mixer
-— that one stays where it was put. His screenshots show it exactly: the branch wire stops under the
-mixer glyph, and the four dashed cells to its right have no wire through them at all.
+> moved the loop fx elements, and they work even though they're "outside" the loop. saved
 
-We were drawing those cells as drop targets anyway. Now we don't. An *occupied* out-of-bracket cell
-is still drawn, whatever column it is in — hiding a stranded block would leave no way to rescue it.
+So whatever the node holder's key 13 encodes, it is **not** "signal stops here", and the bracket we
+draw from it is not the boundary of the parallel path. The wire drawing was mistaken for a fact
+about audio.
 
-The same session's second complaint was a real constraint with no explanation attached: the mixer
-would not drop between top-row blocks 1 and 2, because two loop blocks sat at columns 1 and 2 and
-the bracket has to keep enclosing the occupied row. His theory was that the drop target was being
-covered by the row below. It wasn't offered in the first place. A node drag now captions the rule.
+What actually silences a block dragged into the loop is still open. The baseline dumps rule out the
+obvious rewrite of the theory too: `somehinged`, `somehinged2` and `midhinged` all have the mixer
+before column 6 with both loop blocks at columns 1 and 2 — comfortably *inside* the bracket — and
+that is the session where he reported loop blocks going silent over and over. Inside and outside
+both work, and both fail. The mixer's own level/pan on the B leg has not been looked at yet and is
+the obvious next suspect.
+
+Two things that are worth keeping from the round:
+
+* **The device is looser than our enclosure guard.** `Session::set_node_pos` and the UI both refuse
+  to leave a loop block outside the bracket; op 43 will happily move one out there and the pedal
+  saves and plays it. Our guard is what stopped him putting the mixer between blocks 1 and 2 — twice
+  — so it is a candidate for removal, pending a hardware test of a mixer position left of a B block.
+* `show-preset` now prints each DSP's bracket and flags loop blocks outside it, because working this
+  out from a dump previously meant decoding key 13 by hand.
 
 ### The Round-21b fix is confirmed on hardware
 `envelope key 104` appears five times in the chat during the `fretwire42` session, and never again

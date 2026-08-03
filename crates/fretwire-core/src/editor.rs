@@ -81,13 +81,16 @@ pub struct EditorParam {
     /// `default` (empty meta) for params the `.models` files don't cover (e.g. the trailing
     /// `Trails` switch). See [`ParamMeta`].
     pub meta: ParamMeta,
-    /// Whether an op-30 write can reach this param. `false` for the values a block carries **past
-    /// the end of its symbol's param list** — `Trails` on a delay/reverb, the mic index on a legacy
-    /// cab. Op 30 addresses a param by its index in the model's `Helix.sym` order, and these have
-    /// no such index, so the device refuses every write to them.
-    /// [solid — 2026-08-02, HX Stomp fw 3.71: `Trails` refused as bool, int *and* float (code -3),
-    /// while `TempoSync1` one index below it took a bool fine]
+    /// Whether an op-30 write can reach this param at all.
     pub settable: bool,
+    /// Set for a value the block carries **past the end of its symbol's param list** — `Trails` on
+    /// a delay/reverb, the mic index on a legacy cab. These have no index in the model's `Helix.sym`
+    /// order, so the ordinary addressing (target key 29 `true`, key 28 = param index) is refused
+    /// with `-3`. They are reached instead with key 29 `false`, where key 28 indexes the block's
+    /// extra values — and this is that index.
+    /// [solid — `captures/dynamic_ambience_trails_on_off.pcapng`, confirmed live on an HX Stomp
+    /// 2026-08-02: `{98:2, 29:false, 26:0, 28:0, 119:true}` turns a Bucket Brigade's trails on]
+    pub extra_index: Option<i64>,
 }
 
 /// A block as the editor sees it: identity, resolved model, current state, named params.
@@ -1294,10 +1297,16 @@ fn name_params(
         .iter()
         .enumerate()
         .map(|(i, &value)| {
-            // Only claim a param is unsettable when we actually have the symbol's list to check it
-            // against — with no reference data imported every param is unnamed, and marking the
-            // whole preset read-only would be worse than letting a write fail.
-            let settable = order.is_none() || i < names.len();
+            // A value past the symbol's list is addressed through the extras table rather than by
+            // param index. A block has exactly one such value in every case seen so far — that is
+            // the branch that names it below — so its extras index is 0. If a block ever sends two,
+            // we have no evidence for what the second one's index is: leave it unaddressable rather
+            // than guess. With no reference data at all there is no list to be past, so nothing is
+            // an extra and every param keeps the ordinary path.
+            let is_extra = order.is_some() && i >= names.len();
+            let lone_extra = i == names.len() && values.len() == names.len() + 1;
+            let extra_index = (is_extra && lone_extra).then_some(0);
+            let settable = !is_extra || extra_index.is_some();
             let name = names.get(i).cloned().unwrap_or_else(|| {
                 if i == names.len() && values.len() == names.len() + 1 {
                     trailing_extra_name(category).to_string()
@@ -1314,6 +1323,7 @@ fn name_params(
                 value,
                 meta,
                 settable,
+                extra_index,
             }
         })
         .collect()
@@ -1351,11 +1361,11 @@ mod trailing_extra_tests {
         assert_eq!(params.last().unwrap().name, "Trails");
     }
 
-    /// Op 30 addresses a param by its index in the model's symbol order, so a value the symbol
-    /// doesn't list has no address and the device refuses every write to it — confirmed on an HX
-    /// Stomp, where `Trails` was rejected as bool, int and float alike (2026-08-02).
+    /// A value past the symbol's list has no param index, so it is addressed through the extras
+    /// table instead (target key 29 `false`, key 28 = the extras index). A block sends exactly one
+    /// such value, so that index is 0 — the wire form HX Edit uses to toggle Trails.
     #[test]
-    fn the_trailing_extra_is_marked_unsettable() {
+    fn the_trailing_extra_is_addressed_as_an_extra() {
         let order: Vec<String> = ["Time", "Feedback", "Mix"]
             .iter()
             .map(|s| s.to_string())
@@ -1363,13 +1373,27 @@ mod trailing_extra_tests {
         let values = vec![ParamValue::Float(0.0); 4];
         let params = name_params(&values, Some(&order), None, Some(9));
         assert!(
-            params[..3].iter().all(|p| p.settable),
-            "listed params stay editable"
+            params[..3]
+                .iter()
+                .all(|p| p.settable && p.extra_index.is_none()),
+            "listed params keep the ordinary param-index path"
         );
         assert_eq!(params[3].name, "Trails");
+        assert_eq!(params[3].extra_index, Some(0));
+        assert!(params[3].settable);
+    }
+
+    /// Two values past the list is a shape we have never seen and have no wire evidence for. Leave
+    /// those unaddressable rather than guessing an extras index for each.
+    #[test]
+    fn several_values_past_the_list_stay_unsettable() {
+        let order: Vec<String> = ["Time", "Mix"].iter().map(|s| s.to_string()).collect();
+        let values = vec![ParamValue::Float(0.0); 4];
+        let params = name_params(&values, Some(&order), None, Some(9));
         assert!(
-            !params[3].settable,
-            "the value past the symbol's list has no op-30 address"
+            params[2..]
+                .iter()
+                .all(|p| !p.settable && p.extra_index.is_none())
         );
     }
 

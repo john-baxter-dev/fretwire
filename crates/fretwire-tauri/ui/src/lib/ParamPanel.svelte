@@ -109,9 +109,9 @@
   // (0..=127) let a 0..=3 head selector be set to 77, which hung the pedal hard enough to drop it
   // off USB. A value we can't bound is one we have no business sending.
   function control(p) {
-    // Values a block carries past the end of its symbol's param list (`Trails` on a delay/reverb,
-    // the mic index on a legacy cab) have no op-30 address — the device refuses every write to
-    // them, whatever the wire type. Rendering a switch there only promises something we can't do.
+    // A block carrying *several* values past the end of its symbol's param list. The lone trailing
+    // value (`Trails`, a legacy cab's mic index) is reachable through the extras addressing and
+    // stays editable; a second one has no wire evidence for its index, so don't offer a control.
     if (p.settable === false) return "unsettable";
     if (p.enum_labels && p.enum_labels.length) return "enum";
     if (p.value_type === 2 || p.kind === "bool") return "bool";
@@ -257,7 +257,7 @@
         {:else if c === "unsettable"}
           <span
             class="val unranged"
-            title="The device carries this value but gives it no parameter address, so no editor can write it — HX Edit reaches it another way. Read-only here."
+            title="The device carries this value but fretwire has no confirmed way to address it, so it is read-only here rather than a control that would be refused."
             >{p.kind === "bool" ? (p.value >= 0.5 ? "On" : "Off") : fmt(p.value)}</span
           >
         {:else if c === "unranged"}

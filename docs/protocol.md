@@ -289,18 +289,32 @@ parameter class that can never be written. Ours did — the GUI's on/off switch 
 switch in the editor was a guaranteed refusal until 2026-08-02. `Session` now reads the param's type
 out of the device's own last preset blob and coerces, so the reference data isn't needed for it.
 
-### A value past the model's symbol list has no address at all [solid]
+### Target key 29 chooses what key 28 indexes [solid]
 Some blocks send **one more value than their symbol names** — `Trails` on a delay/reverb, the mic
-index on a legacy (non-`CabMicIr_*`) cab. Key 28 is an index into the symbol's param order, so these
-have no key-28 value that reaches them, and op 30 refuses them with `-3` **whatever** the wire type:
+index on a legacy (non-`CabMicIr_*`) cab. These have no position in the symbol's param order, so the
+ordinary addressing cannot reach them and op 30 refuses every wire type with `-3`:
 
-    Trails, index 8 of 9, HD2_DelayBucketBrigade — Bool(true) -3, Int(1) -3, Float(1.0) -3
-    TempoSync1, index 7 — Bool(true) OK
+    Trails, index 8 of 9, HD2_DelayBucketBrigade, 29:true — Bool(true) -3, Int(1) -3, Float(1.0) -3
+    TempoSync1, index 7, 29:true — Bool(true) OK
 
-HX Edit does show a Trails switch, so it reaches it some other way (op 25 `setting` is the obvious
-suspect — untested, no capture of a Trails change yet). Until that's decoded these are read-only:
-`EditorParam::settable` is `false` for them and the GUI renders the value without a control.
-[solid — 2026-08-02, HX Stomp fw 3.71]
+**Key 29 is the switch between two addressing modes.** `true` — every ordinary edit — means key 28
+is the param's index in the model's `Helix.sym` order. `false` selects the block's *extra* values,
+and there the lone trailing value is index `0`:
+
+| what | body |
+|---|---|
+| Dynamic Ambience `Mix` (`dynamic_ambience_mix_modify`) | `{98: 7, 29: true, 26: 0, 28: 5, 119: 0.5}` |
+| Dynamic Ambience `Trails` (`dynamic_ambience_trails_on_off`) | `{98: 7, 29: false, 26: 0, 28: 0, 119: <bool>}` |
+
+Six trails toggles in that capture, all the same shape. Confirmed live on an HX Stomp (fw 3.71,
+2026-08-02): `{98: 2, 29: false, 26: 0, 28: 0, 119: true}` turns a Bucket Brigade's trails on and it
+reads back `true`. Builder `edit::set_value_flagged`; `Session::set_trails` and the CLI's `trails`
+wrap it, and the ordinary setters route a param whose `extra_index` is set through the same path, so
+the GUI's Trails switch works like any other.
+
+A block with **two or more** values past its symbol list has never been seen, and there is no
+evidence for what a second one's extras index would be — those stay unaddressable rather than
+guessed (`EditorParam::settable == false`).
 
 ### op 39 will not add a paired cab; add then swap [solid] — same log
 `add_block` (op 39) is refused whenever the model-ref carries a real `paired_index` — i.e. every pick

@@ -127,30 +127,28 @@
         { kind: "split", x: xSplit, y: yNode, text: "⋔", slot: d.split_node?.slot },
         { kind: "mixer", x: xMixer, y: yNode, text: "⋉", slot: d.mixer_node?.slot },
       ];
-      // While a node drags, offer the valid gap positions as drop zones — same constraints as the
-      // backend: the bracket must keep enclosing the occupied B row, and split < mixer.
+      // While a node drags, offer the valid gap positions as drop zones — same range as the
+      // backend, which is now only "split stays left of the mixer". The bracket does **not** have
+      // to enclose the occupied B row: op 43 moves a loop block out past the mixer and the pedal
+      // keeps and plays it, so refusing to *drag a node* into that arrangement was our rule, not
+      // the device's, and it cost the tester three attempts in one evening. [2026-08-02]
       if (dragNode) {
         const bCols = allCells.filter((c) => c.row === 1 && c.occupied).map((c) => c.column);
         const [lo, hi] =
-          dragNode === "split"
-            ? [1, Math.min(bCols.length ? Math.min(...bCols) : Infinity, d.mixer_pos - 1)]
-            : [
-                Math.max(bCols.length ? Math.max(...bCols) + 1 : 0, d.split_pos + 1),
-                maxCol + 1,
-              ];
+          dragNode === "split" ? [1, d.mixer_pos - 1] : [d.split_pos + 1, maxCol + 1];
         const cur = dragNode === "split" ? d.split_pos : d.mixer_pos;
         for (let p = lo; p <= hi; p++) {
           if (p !== cur) nodeDrops.push({ pos: p, x: gapX(p) });
         }
-        // Attributed to fretwire, not the device: this is our own enclosure guard, and the pedal
-        // is demonstrably looser than it (it will keep loop blocks past the mixer column). Say who
-        // is refusing, so a tester who finds the guard wrong reports it instead of blaming the
-        // hardware.
-        const side = dragNode === "mixer" ? "right of" : "left of";
-        nodeHint = bCols.length
-          ? `fretwire keeps the ${dragNode} ${side} every block on the lower row` +
-            (nodeDrops.length ? "." : " — move those blocks first.")
-          : `Drop the ${dragNode} on any gap.`;
+        // The only rule left is split-before-mixer, so say what a drop *does* rather than what is
+        // forbidden — and warn when it would leave loop blocks outside the bracket, which the
+        // device allows but which is rarely what someone means to do.
+        nodeHint =
+          `Drop the ${dragNode} on a gap` +
+          (dragNode === "split"
+            ? " — it has to stay left of the mixer."
+            : " — it has to stay right of the split.") +
+          (bCols.length ? " Loop blocks left outside the bracket still play." : "");
       }
     }
 

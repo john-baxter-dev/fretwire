@@ -1447,6 +1447,29 @@ the mixer between blocks 1 and 2, twice. Worth a hardware test before removing. 
 now prints each DSP's bracket with the loop blocks' columns, which is how this got settled in one
 command instead of by hand-decoding key 13.
 
+**5. Trails works — key 29 is an addressing mode, not a flag.** Sean's first report off the new
+build was that the Trails switch had gone. It had: I had just made it read-only on the finding that
+op 30 refuses it as bool, int and float alike. That finding was right and the conclusion was wrong.
+`captures/dynamic_ambience_trails_on_off.pcapng` had the answer all along —
+
+    Mix:    {98: 7, 29: true,  26: 0, 28: 5, 119: 0.5}
+    Trails: {98: 7, 29: false, 26: 0, 28: 0, 119: <bool>}
+
+— six toggles, all the same shape. **Key 29 chooses what key 28 indexes**: `true` = the param's
+place in the model's symbol order, `false` = the block's *extra* values, where the lone trailing one
+is `0`. Confirmed live: `{98:2, 29:false, 26:0, 28:0, 119:true}` turns a Bucket Brigade's trails on
+and it reads back `true`. `EditorParam::extra_index` carries it, the ordinary setters route through
+it, and the switch is back in the GUI. A block with *two* values past its symbol list stays
+unaddressable — no evidence for what the second index would be.
+
+**6. Our enclosure guard was stricter than the pedal, and it was the real obstacle.** Three times in
+one evening the tester couldn't place a node — the mixer between blocks 1 and 2 (twice) and the
+split after block 3 — because `set_node_pos` and the UI both required the bracket to keep enclosing
+the occupied B row. Op 43 does not care: it moved his loop blocks out past the mixer, the pedal
+saved them and they play. Relaxed to the one structural rule that is actually ours to keep (split
+left of mixer, inside the grid); leaving blocks outside the bracket now logs a warning instead of
+refusing.
+
 **Not a bug: the three dumps.** `somehinged`, `somehinged2` and `midhinged` are byte-identical apart
 from byte 3 (the volatile header byte) — three captures of one preset. `dump-raw` reads whatever is
 loaded, and it now prints which preset that was, which is the fix from the round before.

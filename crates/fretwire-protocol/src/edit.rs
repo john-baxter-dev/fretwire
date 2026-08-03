@@ -290,6 +290,27 @@ pub fn set_value_on(
     value: EditValue,
     txn: u16,
 ) -> Vec<u8> {
+    set_value_flagged(slot, model_sel, true, param_index, value, txn)
+}
+
+/// [`set_value_on`] with the addressing flag (target key 29) exposed.
+///
+/// **Key 29 chooses what key 28 indexes.** `true` — every ordinary edit — means "the parameter's
+/// position in the model's `Helix.sym` order". `false` selects the block's *extra* values, the ones
+/// the symbol doesn't list, and there `28: 0` is `Trails`. HX Edit toggles a reverb's trails with
+/// `{98: slot, 29: false, 26: 0, 28: 0, 119: <bool>}` and nothing else — six of them in
+/// `captures/dynamic_ambience_trails_on_off.pcapng`, against `29: true, 28: 5` for the same block's
+/// Mix knob in `dynamic_ambience_mix_modify.pcapng`. Sending `29: true` for one of these is refused
+/// with `-3`, which is what made `Trails` look unreachable.
+/// [solid — 2026-08-02, capture + confirmed live on an HX Stomp]
+pub fn set_value_flagged(
+    slot: i64,
+    model_sel: i64,
+    by_param_index: bool,
+    param_index: i64,
+    value: EditValue,
+    txn: u16,
+) -> Vec<u8> {
     let wire_value = match value {
         EditValue::Bool(b) => Value::from(b),
         EditValue::Float(f) => Value::F32(f),
@@ -303,7 +324,7 @@ pub fn set_value_on(
             Value::from(K_TARGET),
             Value::Map(vec![
                 (Value::from(K_SLOT), Value::from(slot)),
-                (Value::from(K_FLAG_29), Value::from(true)),
+                (Value::from(K_FLAG_29), Value::from(by_param_index)),
                 (Value::from(K_MODEL_SEL), Value::from(model_sel)),
                 (Value::from(K_PARAM_INDEX), Value::from(param_index)),
                 (Value::from(K_VALUE), wire_value),

@@ -139,6 +139,8 @@ enum Command {
         param_index: i64,
         value: f32,
     },
+    /// Turn a delay/reverb's Trails on or off (the tail that rings on after bypass).
+    Trails { slot: i64, state: OnOff },
     /// Set a parameter on the block's paired cab/IR (amp+cab blocks).
     ///
     /// Param indices are in the cab's own namespace: mic=0, position=1, distance=2, angle=3.
@@ -365,6 +367,12 @@ fn main() -> Result<()> {
             let mut s = fretwire_core::Session::connect()?;
             s.set_param(slot, param_index, value)?;
             println!("slot {slot} param[{param_index}] -> {value}");
+        }
+        Command::Trails { slot, state } => {
+            let on = state == OnOff::On;
+            let mut s = fretwire_core::Session::connect()?;
+            s.set_trails(slot, on)?;
+            println!("slot {slot} trails -> {}", if on { "on" } else { "off" });
         }
         Command::SetCab {
             slot,
@@ -1164,7 +1172,7 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
                 if p.settable {
                     ""
                 } else {
-                    "   (read-only — no op-30 address)"
+                    "   (read-only — no confirmed address)"
                 }
             );
         }
@@ -1179,7 +1187,7 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
                     if p.settable {
                         ""
                     } else {
-                        "   (read-only — no op-30 address)"
+                        "   (read-only — no confirmed address)"
                     }
                 );
             }

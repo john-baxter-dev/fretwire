@@ -1610,30 +1610,47 @@ impl Session {
             .filter(|c| c.row == 1 && c.occupied)
             .map(|c| c.column)
             .collect();
+        // Structural range only: the split stays left of the mixer, the mixer right of the split,
+        // and both within the 8-wide grid (column 9 — just past the last — is the mixer's far
+        // right). Enclosing the occupied B row is **not** enforced.
+        //
+        // It used to be, and that guard was ours, not the device's. Op 43 will move a loop block
+        // clean out past the mixer column, and the pedal saves it and plays it —
+        // `somehinged3_var1.bin` is a Floor preset with the mixer before column 3 and both loop
+        // blocks at columns 3 and 4. Refusing to move a node into the same arrangement the device
+        // reaches by another route blocked the tester three times in one evening (the mixer between
+        // blocks 1 and 2, twice; the split after block 3). Warn and send it. [2026-08-02]
         let (lo, hi) = if kind == slot_kind::SPLIT {
-            // split: ≥ 1, ≤ first B block's column, and strictly left of the mixer.
-            (
-                1,
-                b_cols
-                    .iter()
-                    .min()
-                    .copied()
-                    .unwrap_or(other - 1)
-                    .min(other - 1),
-            )
+            (1, other - 1)
         } else {
-            // mixer: past the last B block's column, and strictly right of the split. The grid is
-            // 8 columns wide, so column 9 (just past the last one) is as far right as it goes.
-            (
-                (b_cols.iter().max().copied().unwrap_or(other) + 1).max(other + 1),
-                9,
-            )
+            (other + 1, 9)
         };
         if pos < lo || pos > hi {
             return Err(fretwire_data::Error::Stream(format!(
-                "node position {pos} out of range {lo}..={hi} (bracket must enclose the B row)"
+                "node position {pos} out of range {lo}..={hi} (the split stays left of the mixer)"
             ))
             .into());
+        }
+        let strays: Vec<i64> = b_cols
+            .iter()
+            .copied()
+            .filter(|&c| {
+                let (sp, mp) = if kind == slot_kind::SPLIT {
+                    (pos, other)
+                } else {
+                    (other, pos)
+                };
+                c < sp || c >= mp
+            })
+            .collect();
+        if !strays.is_empty() {
+            tracing::warn!(
+                ?strays,
+                pos,
+                kind,
+                "moving this node leaves row-B blocks outside the bracket — the device accepts \
+                 that, but say so in case it turns out to matter"
+            );
         }
         if !ps.set_dsp_node_pos(dsp, kind, pos) {
             return Err(
@@ -1800,7 +1817,16 @@ impl Session {
         }
         // Same shape of mistake, one layer down: a switch takes a bool on the wire and refuses a
         // float with the same `-3`. See [`Self::param_is_bool`].
-        if self.param_is_bool(slot, false, param_index) {
+        let is_bool = self.param_is_bool(slot, false, param_index);
+        let wire = if is_bool {
+            EditValue::Bool(value >= 0.5)
+        } else {
+            EditValue::Float(value)
+        };
+        if self.send_if_extra(slot, false, param_index, wire)? {
+            return Ok(());
+        }
+        if is_bool {
             return self.set_param_bool(slot, false, param_index, value >= 0.5);
         }
         let value = self.clamp_param(slot, false, param_index, value as f64) as f32;
@@ -1842,7 +1868,16 @@ impl Session {
         value: f32,
     ) -> crate::Result<()> {
         self.ensure_blob();
-        if self.param_is_bool(slot, true, param_index) {
+        let is_bool = self.param_is_bool(slot, true, param_index);
+        let wire = if is_bool {
+            EditValue::Bool(value >= 0.5)
+        } else {
+            EditValue::Float(value)
+        };
+        if self.send_if_extra(slot, true, param_index, wire)? {
+            return Ok(());
+        }
+        if is_bool {
             return self.set_param_bool(slot, true, param_index, value >= 0.5);
         }
         let value = self.clamp_param(slot, true, param_index, value as f64) as f32;
@@ -1893,6 +1928,21 @@ impl Session {
         Ok(())
     }
 
+    /// Set a block's **Trails** switch — the delay/reverb tail that keeps ringing after the block
+    /// is bypassed or the preset changes.
+    ///
+    /// Trails is the one value these blocks carry past the end of their symbol's param list, so it
+    /// has no ordinary param index and op 30 refuses every write addressed by one. HX Edit reaches
+    /// it by flipping target key 29 to `false`, which switches key 28 to indexing the block's extra
+    /// values instead — and there Trails is `0`. See [`edit::set_value_flagged`].
+    pub fn set_trails(&mut self, slot: i64, on: bool) -> crate::Result<()> {
+        let txn = self.bump_txn();
+        let body =
+            edit::set_value_flagged(slot, edit::MODEL_MAIN, false, 0, EditValue::Bool(on), txn);
+        self.send_edit(body)?;
+        Ok(())
+    }
+
     /// Make sure a preset blob is on hand before an edit that has to know what it is editing —
     /// which parameters are switches, what ranges they declare, which slot holds a split node.
     ///
@@ -1917,6 +1967,19 @@ impl Session {
     /// wrong gets a guaranteed refusal — the GUI's switch control routed through
     /// [`Self::set_param_enum`] and so could never toggle anything.
     fn param_is_bool(&self, slot: i64, paired: bool, param_index: i64) -> bool {
+        self.param_meta_of(slot, paired, param_index)
+            .is_some_and(|(is_bool, _)| is_bool)
+    }
+
+    /// `(is_bool, extra_index)` for a param, read out of the device's own last blob. `extra_index`
+    /// is `Some` for a value past the model's symbol list, which op 30 reaches through key 29
+    /// `false` rather than by param index — see [`EditorParam::extra_index`].
+    fn param_meta_of(
+        &self,
+        slot: i64,
+        paired: bool,
+        param_index: i64,
+    ) -> Option<(bool, Option<i64>)> {
         self.last_raw
             .as_ref()
             .and_then(|raw| self.catalog.load_preset(raw).ok())
@@ -1926,10 +1989,32 @@ impl Session {
                     params
                         .iter()
                         .find(|q| q.index as i64 == param_index)
-                        .map(|q| matches!(q.value, ParamValue::Bool(_)))
+                        .map(|q| (matches!(q.value, ParamValue::Bool(_)), q.extra_index))
                 })
             })
-            .unwrap_or(false)
+    }
+
+    /// Send a param that lives past the model's symbol list, if this is one. Returns `true` when it
+    /// handled the write, so the ordinary setters can fall through when it isn't.
+    fn send_if_extra(
+        &mut self,
+        slot: i64,
+        paired: bool,
+        param_index: i64,
+        value: EditValue,
+    ) -> crate::Result<bool> {
+        let Some((_, Some(extra))) = self.param_meta_of(slot, paired, param_index) else {
+            return Ok(false);
+        };
+        let txn = self.bump_txn();
+        let model_sel = if paired {
+            edit::MODEL_PAIRED
+        } else {
+            edit::MODEL_MAIN
+        };
+        let body = edit::set_value_flagged(slot, model_sel, false, extra, value, txn);
+        self.send_edit(body)?;
+        Ok(true)
     }
 
     /// Set an **integer/enum** parameter (e.g. the cab `Mic` selector) by its param index. `paired`
@@ -1946,7 +2031,16 @@ impl Session {
         value: i64,
     ) -> crate::Result<()> {
         self.ensure_blob();
-        if self.param_is_bool(slot, paired, param_index) {
+        let is_bool = self.param_is_bool(slot, paired, param_index);
+        let wire = if is_bool {
+            EditValue::Bool(value != 0)
+        } else {
+            EditValue::Int(value)
+        };
+        if self.send_if_extra(slot, paired, param_index, wire)? {
+            return Ok(());
+        }
+        if is_bool {
             return self.set_param_bool(slot, paired, param_index, value != 0);
         }
         let value = self

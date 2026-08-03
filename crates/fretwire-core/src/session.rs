@@ -1753,6 +1753,7 @@ impl Session {
 
     /// Set a knob/continuous parameter by its index in the model's device param order.
     pub fn set_param(&mut self, slot: i64, param_index: i64, value: f32) -> crate::Result<()> {
+        self.ensure_blob();
         // The four split models are the only ones in the whole catalog that carry a `bypass`
         // *parameter*, and the device will not write it with op 30 — it answers `{103:255,
         // 104:{111:-3}}` and applies nothing. Bypass has its own op; send that instead.
@@ -1760,6 +1761,11 @@ impl Session {
         if self.param_is_split_bypass(slot, param_index) {
             // Param semantics are "bypassed"; `set_enabled` takes the opposite.
             return self.set_enabled(slot, value < 0.5);
+        }
+        // Same shape of mistake, one layer down: a switch takes a bool on the wire and refuses a
+        // float with the same `-3`. See [`Self::param_is_bool`].
+        if self.param_is_bool(slot, false, param_index) {
+            return self.set_param_bool(slot, false, param_index, value >= 0.5);
         }
         let value = self.clamp_param(slot, false, param_index, value as f64) as f32;
         let txn = self.bump_txn();
@@ -1799,6 +1805,10 @@ impl Session {
         param_index: i64,
         value: f32,
     ) -> crate::Result<()> {
+        self.ensure_blob();
+        if self.param_is_bool(slot, true, param_index) {
+            return self.set_param_bool(slot, true, param_index, value >= 0.5);
+        }
         let value = self.clamp_param(slot, true, param_index, value as f64) as f32;
         let txn = self.bump_txn();
         let body = edit::set_paired_value(slot, param_index, value, txn);
@@ -1823,24 +1833,75 @@ impl Session {
             ParamValue::Float(v) if paired => self.set_paired_param(slot, param_index, v),
             ParamValue::Float(v) => self.set_param(slot, param_index, v),
             ParamValue::Int(v) => self.set_param_enum(slot, paired, param_index, v),
-            ParamValue::Bool(v) => {
-                let txn = self.bump_txn();
-                let model_sel = if paired {
-                    edit::MODEL_PAIRED
-                } else {
-                    edit::MODEL_MAIN
-                };
-                let body =
-                    edit::set_value_on(slot, model_sel, param_index, EditValue::Bool(v), txn);
-                self.send_edit(body)?;
-                Ok(())
-            }
+            ParamValue::Bool(v) => self.set_param_bool(slot, paired, param_index, v),
         }
+    }
+
+    /// Send a **bool** parameter as a MessagePack bool — the only wire type the device accepts for
+    /// a switch. See [`Self::param_is_bool`] for why the other setters route here.
+    pub fn set_param_bool(
+        &mut self,
+        slot: i64,
+        paired: bool,
+        param_index: i64,
+        value: bool,
+    ) -> crate::Result<()> {
+        let txn = self.bump_txn();
+        let model_sel = if paired {
+            edit::MODEL_PAIRED
+        } else {
+            edit::MODEL_MAIN
+        };
+        let body = edit::set_value_on(slot, model_sel, param_index, EditValue::Bool(value), txn);
+        self.send_edit(body)?;
+        Ok(())
+    }
+
+    /// Make sure a preset blob is on hand before an edit that has to know what it is editing —
+    /// which parameters are switches, what ranges they declare, which slot holds a split node.
+    ///
+    /// All of that reads `last_raw`, and a one-shot CLI invocation connects and edits without ever
+    /// having read anything, so every such check silently answered "no" and the edit went out with
+    /// the wrong wire type. Costs one ~3 KB read, once per session: after the first read (which the
+    /// GUI does at connect) this is free. Best-effort — a failure here must not fail the edit.
+    fn ensure_blob(&mut self) {
+        if self.last_raw.is_none()
+            && let Err(e) = self.read_preset_raw()
+        {
+            tracing::debug!(error = %e, "no preset blob for the pre-edit checks; sending as asked");
+        }
+    }
+
+    /// Does this param currently read as a bool? Answered from the **device's own last blob**, not
+    /// the reference data, so it works on a clean clone with no `.models` imported.
+    ///
+    /// A switch has exactly one acceptable wire type. Confirmed on hardware (HX Stomp, fw 3.71,
+    /// 2026-08-02): `TempoSync1` takes `Bool(true)` and refuses both `Int(1)` and `Float(1.0)` with
+    /// device code `-3`. The typed setters below each hard-code a type, so a caller that guesses
+    /// wrong gets a guaranteed refusal — the GUI's switch control routed through
+    /// [`Self::set_param_enum`] and so could never toggle anything.
+    fn param_is_bool(&self, slot: i64, paired: bool, param_index: i64) -> bool {
+        self.last_raw
+            .as_ref()
+            .and_then(|raw| self.catalog.load_preset(raw).ok())
+            .and_then(|p| {
+                p.block(slot).and_then(|b| {
+                    let params = if paired { &b.paired_params } else { &b.params };
+                    params
+                        .iter()
+                        .find(|q| q.index as i64 == param_index)
+                        .map(|q| matches!(q.value, ParamValue::Bool(_)))
+                })
+            })
+            .unwrap_or(false)
     }
 
     /// Set an **integer/enum** parameter (e.g. the cab `Mic` selector) by its param index. `paired`
     /// targets the block's cab/IR sub-model (`26:1`) rather than the main model. The value is the
     /// option index, sent on the wire as an int (not a float).
+    ///
+    /// A param the blob reports as a **bool** is redirected to [`Self::set_param_bool`]: an int is
+    /// refused there, and a `0`/`1` from a switch is unambiguous.
     pub fn set_param_enum(
         &mut self,
         slot: i64,
@@ -1848,6 +1909,10 @@ impl Session {
         param_index: i64,
         value: i64,
     ) -> crate::Result<()> {
+        self.ensure_blob();
+        if self.param_is_bool(slot, paired, param_index) {
+            return self.set_param_bool(slot, paired, param_index, value != 0);
+        }
         let value = self
             .clamp_param(slot, paired, param_index, value as f64)
             .round() as i64;

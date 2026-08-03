@@ -196,6 +196,9 @@
         class="node"
         class:sel={n.slot != null && n.slot === selectedSlot}
         draggable="true"
+        title={n.kind === "split"
+          ? "Split — click to edit its A/B balance, drag to move it"
+          : "Mixer — click to edit the A/B levels, pans and polarity, drag to move it"}
         style="left:{n.x - 18}px; top:{n.y - 16}px;"
         ondragstart={(e) => {
           e.dataTransfer.effectAllowed = "move";

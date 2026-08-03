@@ -1066,6 +1066,48 @@ fn print_snapshot_diagnosis(stream: &[u8]) {
 }
 
 /// Print an editor preset as a block/param tree.
+fn print_params(params: &[fretwire_core::editor::EditorParam]) {
+    for p in params {
+        println!(
+            "       [{:>2}] {:<14} = {}{}",
+            p.index,
+            p.name,
+            fmt_value(p.value),
+            if p.settable {
+                ""
+            } else {
+                "   (read-only — no confirmed address)"
+            }
+        );
+    }
+}
+
+/// The split and mixer are real blocks with their own model and parameters — the mixer is
+/// `HD2_AppDSPFlowJoin`, whose A/B levels, pans and polarity decide what you actually hear out of
+/// the parallel path. They are the first thing to check when a block on one leg goes silent, and
+/// until now a dump never showed them: you had to read key 17 out of the raw MessagePack.
+fn print_routing_nodes(preset: &fretwire_core::EditorPreset) {
+    for d in &preset.dsps {
+        for (glyph, what, node, pos) in [
+            ("⋔", "split", &d.split_node, d.split_pos),
+            ("⋉", "mixer", &d.mixer_node, d.mixer_pos),
+        ] {
+            let Some(n) = node else { continue };
+            let at = pos.map(|p| format!(" before col {p}")).unwrap_or_default();
+            println!(
+                "\n  DSP{} {glyph} {what}{at}  slot {}  [{}]",
+                d.dsp + 1,
+                n.slot,
+                n.symbolic_id.as_deref().unwrap_or("unresolved"),
+            );
+            if n.params.is_empty() {
+                println!("       (no parameters)");
+            }
+            print_params(&n.params);
+        }
+    }
+}
+
 fn print_preset(preset: &fretwire_core::EditorPreset) {
     match &preset.current {
         Some(i) => println!("Preset [{}] {}", i.index, i.name),
@@ -1163,36 +1205,13 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
             bypass,
             dsp,
         );
-        for p in &b.params {
-            println!(
-                "       [{:>2}] {:<14} = {}{}",
-                p.index,
-                p.name,
-                fmt_value(p.value),
-                if p.settable {
-                    ""
-                } else {
-                    "   (read-only — no confirmed address)"
-                }
-            );
-        }
+        print_params(&b.params);
         if let Some(cab) = &b.paired_model_name {
             println!("       + cab: {cab}");
-            for p in &b.paired_params {
-                println!(
-                    "       [{:>2}] {:<14} = {}{}",
-                    p.index,
-                    p.name,
-                    fmt_value(p.value),
-                    if p.settable {
-                        ""
-                    } else {
-                        "   (read-only — no confirmed address)"
-                    }
-                );
-            }
+            print_params(&b.paired_params);
         }
     }
+    print_routing_nodes(preset);
     if !preset.snapshot_names.is_empty() {
         let active = preset
             .active_snapshot

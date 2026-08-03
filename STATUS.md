@@ -1474,6 +1474,66 @@ refusing.
 from byte 3 (the volatile header byte) — three captures of one preset. `dump-raw` reads whatever is
 loaded, and it now prints which preset that was, which is the fix from the round before.
 
+## Twentieth round (2026-08-02 late): **`-306` is out of DSP, and the mixer is innocent**
+
+`somehinged3.log` / `somehinged3var3.log`, two screenshots, and the chat from the session where he
+methodically moved every loop block two columns right and tried to reposition the split and mixer
+around them. Four results, two of them things we had been wrong about for weeks.
+
+**1. `-306` on op 40 means the DSP is full.** It looked like a property of the model — a Room reverb
+refusing to become a Euclidean Delay, a Bleat Chop Trem refusing to become an Elephant Man. It is
+the preset's total load and nothing else. Same preset, same slot, same target model on the Stomp:
+refused at 71.8% used, accepted at 65.3%. A ladder of targets brackets the ceiling between a landing
+total of 74.9% (accepted) and 75.3% (refused), so **the device fills up at about 75% on our meter**
+and "28% free" can mean no room at all. The meter sums the blocks' `load` and counts nothing else;
+the missing quarter is probably the fixed input/output/split/mixer nodes, unconfirmed. His DSP1 was
+at 72.7% — effectively full — so both his refusals were ordinary.
+
+Eight hardware probes were needed to kill the first theory, that op 40 cannot cross a model
+category. It can: tremolo→delay, reverb→delay and delay→reverb all work with DSP free, and the one
+category-preserving swap that failed (70s Chorus Mono→Stereo) failed on capacity like the rest.
+`send_edit` now glosses the code instead of guarding against it — the pedal decides what fits.
+
+The rejection log with the target map, added the round before, is the only reason this was
+diagnosable at all.
+
+**2. The mixer is a block, and its levels are not the answer.** Round 19 nominated the B-leg
+level/pan as the next suspect for the silent blocks. It is readable now — the split and mixer carry
+a model and a stored param array like any block, and `show-preset` prints them instead of making you
+decode key 15/17 by hand. In `somehinged3_var1.bin` the mixer (`HD2_AppDSPFlowJoin`) is A Level 0,
+A Pan 0.5, B Level 0, B Pan 0.5, B Polarity off, and the split (`HD2_AppDSPFlowSplitY`) is
+BalanceA/BalanceB 0.5. Unity and centred. **Third theory dead**, and this one leaves nothing behind:
+those six values and the split's two are all the routing knobs there are.
+
+What it does expose is that he could never have checked: the mixer glyph has always been clickable
+and nothing said so. It has a tooltip now, and the CLI prints the values.
+
+**3. The bool fix is confirmed in the field.** `somehinged3var3.log` has
+`{98:2, 29:true, 26:0, 28:9, 119: Bool(true)}` — `TempoSync1` sent as a MessagePack bool — accepted,
+code 0, and zero op-30 `-3` across both new logs. On the older build the same gesture is the `-3` he
+hit twice in chat, on a delay and on a reverb. Trails specifically is the key-29 case from result 5
+of the last round; `somehingeddelaytrails.png` shows it greyed out, which is exactly the read-only
+state that fix removes.
+
+**4. Confirmed: our node guard is what blocked him, not the rendering.** His own diagnosis was that
+the drop targets were being covered by the loop blocks beneath them — "there's no vertical target
+... because the two loop elements are beneath it". Nothing was covering anything; the UI never drew
+a target, because the mixer's range started at `max(last B column + 1, split + 1)`. With loop blocks
+at columns 1 and 2 that is column 3, and he wanted column 2. Fixed the round before, unpushed at the
+time he hit it.
+
+**Not a bug: the doubled writes.** Every discrete param change appears twice in the logs with
+consecutive transaction ids and identical bodies (`59`/`60`, `72`/`73`, …). That is `preview_param`
+streaming the gesture and `set_param` committing it — by design, and the commit is what earns the
+history entry and the re-read.
+
+**Open.** Still no explanation for a block going silent in the loop; the routing knobs are now
+excluded, so the next place to look is the per-snapshot bypass mask (every block he called silent is
+`-` in the active snapshot of the dump he sent, which may be cause or may be coincidence). Still no
+`fretwire46`, so the op-21 packetisation hypothesis is untested. One cosmetic cost worth knowing:
+every committed edit triggers a full ~7 KB preset re-read — 309 chunk round-trips for 12 edits in
+`somehinged3var3.log`.
+
 
 ## Repo map
 `crates/` (fretwire-data, fretwire-protocol, fretwire-usb, fretwire-core, fretwire-cli,

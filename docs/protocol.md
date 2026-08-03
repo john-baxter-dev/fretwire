@@ -265,12 +265,46 @@ for that target, so the code looks like "wrong shape for this thing" rather than
 |---:|---|---|
 | `-21` | op 39 `add_block` carrying a `paired_index`; op 40 swapping to a `*WithPan` twin | a model-ref the op will not take for that target |
 | `-3` | op 30 `set_value` writing a split node's `bypass` param; op 30 sending the **wrong wire type** for the param; op 30 addressing a param **past the model's symbol list** | that parameter is not writable *as asked* — wrong op, wrong type, or no such index |
-| `-306` | op 40 swapping any block to a `*WithPan` dual-cab twin | that model is a different **block type** (HX Edit's `Cab › Dual`), not an in-place swap target. The same swap also answers `-21` in some device states, so treat the refusal, not the code, as the signal |
+| `-306` | op 40 swapping to a model the DSP has no room for; op 40 swapping any block to a `*WithPan` dual-cab twin | **out of DSP** — see below. The dual-cab twins are a separate case (a different block type, not an in-place swap target) that answers `-21` in some device states, so there treat the refusal, not the code, as the signal |
 
 The `-3` case is worth knowing about because `bypass` **is** a real entry in the split's stored param
 array, and the four split models are the only ones in the whole catalog (4 of 681) that carry it. So
 the editor will happily offer it as a knob; `Session::set_param` now recognises it and sends op 41
 instead. [solid — 2026-07-31, two op-30 writes to a Split Y's bypass, both refused with `-3`]
+
+### `-306` on op 40 means the model does not fit in the DSP budget [solid]
+The field logs made this look like a property of the *model* — a Room reverb refusing to become a
+Euclidean Delay, a Bleat Chop Trem refusing to become an Elephant Man. It is a property of the
+**preset's total DSP load** at the moment of the swap, and nothing else.
+
+Measured on an HX Stomp (fw 3.71, 2026-08-02), same preset, same block, same target model, only the
+free DSP changed:
+
+| slot 4 → `HD2_DelayElephantManMono` | preset before | result |
+|---|---:|---|
+| as loaded | 71.8% | refused, `-306` |
+| after freeing 6.5% elsewhere | 65.3% | **accepted** (→ 68.8%) |
+
+A ladder of targets on one slot from a fixed baseline brackets the ceiling. The number is the total
+the preset *would land on*, by our meter:
+
+| landing total | result |
+|---:|---|
+| 73.3%, 73.8%, 74.4%, 74.9% | accepted |
+| 75.3%, 75.6%, 76.5% | refused, `-306` |
+
+So the device fills up at **~75% on our meter**, not 100%: "28% free" can mean no room at all. The
+meter sums the effect blocks' `load` from `HelixModelDefs.bin` and counts nothing else, so the
+missing quarter is most likely the fixed input/output (and, on a parallel preset, split/mixer) nodes
+we never add in — unconfirmed, and worth pinning down before rescaling anything the user sees.
+
+Eight probes were needed to kill the first theory, that op 40 cannot cross a model *category*. It
+cannot: tremolo→delay, reverb→delay and delay→reverb all succeed with DSP free, and the one
+category-preserving swap that failed (70s Chorus Mono→Stereo) failed on capacity like the rest.
+
+`Session::send_edit` glosses the code rather than guarding against it locally — the pedal decides
+what fits, we only explain the answer. (Out-guarding the pedal is how the row-B stranding and node
+enclosure mistakes happened; see `docs/helix-floor.md`.)
 
 ### The value's wire type must match the parameter's type exactly [solid]
 Key 119 is not coerced. A **switch** takes a MessagePack bool and *only* a bool: an int or a float

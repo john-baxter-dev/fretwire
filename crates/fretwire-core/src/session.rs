@@ -144,6 +144,32 @@ fn op_name(op: i64) -> &'static str {
     }
 }
 
+/// A plain-language gloss for the refusal codes we have pinned down, appended in parentheses after
+/// the raw number (which stays, so a log still identifies the case).
+///
+/// `-306` on op 40 is **not enough DSP** [solid — 2026-08-02, HX Stomp]. The same swap (slot 7 →
+/// `HD2_DelayCosmosEchoStereo`) is refused with the preset at 71.8% on our meter and accepted at
+/// 58.8%, nothing else changed. A ladder of targets brackets the ceiling between a landing total of
+/// 74.9% (accepted) and 75.3% (refused) — the meter reads low, so "28% free" can still be full. See
+/// `docs/protocol.md`.
+///
+/// `-3` is the parameter write the block would not take — see the wire-type and key-29 addressing
+/// sections of the same doc.
+fn reject_hint(op: Option<i64>, code: i64) -> String {
+    let hint = match (op, code) {
+        (Some(edit::OP_SWAP_MODEL), -306) => Some(
+            "not enough DSP for that model — the pedal fills up near 75% on our meter, so free \
+             some up by simplifying or removing a block",
+        ),
+        (_, -3) => Some(
+            "the block would not take that write — wrong value type for the parameter, or no \
+             parameter at that index",
+        ),
+        _ => None,
+    };
+    hint.map_or_else(String::new, |h| format!(" ({h})"))
+}
+
 /// Does the identity the device reported (`got`) confirm the one we asked [`Session::goto_preset`]
 /// for (`want`)?
 ///
@@ -557,7 +583,8 @@ impl Session {
                 "the pedal rejected the edit"
             );
             return Err(crate::Error::Rejected(format!(
-                "{what} — device code {code}"
+                "{what} — device code {code}{}",
+                reject_hint(sent_op, code)
             )));
         }
         // Flush HX Edit sends after each edit — fire-and-forget: the edit is already ACKed/applied,
@@ -3357,7 +3384,7 @@ mod reorder_tests_legacy {
 
 #[cfg(test)]
 mod tests {
-    use super::{edit_op_txn, identity_confirms, op_name, reply_txn};
+    use super::{edit, edit_op_txn, identity_confirms, op_name, reject_hint, reply_txn};
     use fretwire_data::stream::{PresetInfo, parse_edit_rejection};
 
     fn info(bank: i64, index: i64, name: &str) -> PresetInfo {
@@ -3410,6 +3437,20 @@ mod tests {
         assert_eq!(longest_silence(&[1, 0, 0, 2, 0, 0, 3]), 2);
 
         assert_eq!(longest_silence(&[]), 0);
+    }
+
+    #[test]
+    fn the_codes_we_have_pinned_down_get_a_plain_language_gloss() {
+        // -306 is only ever "out of DSP" on a model swap; the same number from another op means
+        // something we have not established, so it stays bare rather than guessing at the user.
+        let dsp = reject_hint(Some(edit::OP_SWAP_MODEL), -306);
+        assert!(dsp.contains("not enough DSP"), "{dsp}");
+        assert_eq!(reject_hint(Some(edit::OP_MOVE_BLOCK), -306), "");
+        assert_eq!(reject_hint(Some(edit::OP_SWAP_MODEL), -21), "");
+
+        // -3 is the parameter-write refusal whatever op carries it.
+        assert!(reject_hint(Some(edit::OP_SET_VALUE), -3).contains("wrong value type"));
+        assert!(reject_hint(None, -3).contains("wrong value type"));
     }
 
     #[test]

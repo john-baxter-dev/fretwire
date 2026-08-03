@@ -1835,3 +1835,52 @@ failed` in `fretwire42`. Truncated reads are done.
 
 The write lockup is not. He wedged the pedal once on the new build, moving the mixer — an op-21 —
 but that session's log has not arrived, so the packetisation hypothesis of Round 21 is still open.
+
+## Round 23: the mixer is a block, and it is not the culprit either
+
+The B-leg level/pan the last round nominated as the next suspect is now readable, and in the
+tester's own dump it is innocent.
+
+The routing nodes are ordinary blocks with a model and a stored param array; `show-preset` prints
+them now instead of making you decode key 15/17 by hand. From `somehinged3_var1.bin`:
+
+```
+DSP1 ⋔ split before col 1  slot 10  [HD2_AppDSPFlowSplitY]
+     [ 0] BalanceA       = 0.5
+     [ 1] BalanceB       = 0.5
+     [ 2] bypass         = false
+
+DSP1 ⋉ mixer before col 3  slot 19  [HD2_AppDSPFlowJoin]
+     [ 0] A Level        = 0      [ 3] B Pan          = 0.5
+     [ 1] A Pan          = 0.5    [ 4] B Polarity     = false
+     [ 2] B Level        = 0      [ 5] Level          = 3
+```
+
+Dead centre, both legs at unity, polarity off. Nothing here mutes a leg, so **the mixer's levels do
+not explain the silent blocks** — the third theory in a row to die on his dumps, and the one that
+leaves the least behind. The split's `BalanceA`/`BalanceB` are the only other routing knobs there
+are, and they are centred too.
+
+What the round does settle is that he could never have checked this himself: the mixer glyph has
+always been clickable, but nothing said so, and the CLI never showed the values at all. Both fixed.
+
+### `-306` is out of DSP [solid]
+Two `-306` refusals in `somehinged3.log`, and with the target map in the log this time they were
+finally diagnosable — see `docs/protocol.md`. The short version: op 40 refuses a swap the DSP budget
+cannot fit, and **our meter reads about a quarter low**, so his 72.7% was effectively full. He was
+not doing anything strange; the two models he picked were just too big for what was left.
+
+This also means the first hypothesis — that op 40 cannot cross a model category — is dead, along
+with the reflex behind it. Three of the last four "the pedal is being weird" findings turned out to
+be fretwire mis-modelling the pedal, and the fourth was fretwire hiding what the pedal reported.
+
+### The bool fix is confirmed on hardware
+`somehinged3var3.log` has `{98:2, 29:true, 26:0, 28:9, 119: Bool(true)}` — `TempoSync1` on the trem,
+sent as a MessagePack bool — accepted, code 0. Zero op-30 `-3` in either of the two newest logs. On
+the older build the same gesture is the `-3` he hit twice in chat, once on a delay and once on a
+reverb:
+
+> ooh, turned on trails, pedal refuse the para change (op30) device code -3
+
+Trails specifically is the key-29 case, fixed separately; the switch had gone read-only in the build
+he was testing (`somehingeddelaytrails.png` shows it greyed), which is what he was reporting.

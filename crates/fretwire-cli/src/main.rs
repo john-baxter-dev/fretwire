@@ -1157,20 +1157,30 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
         );
         for p in &b.params {
             println!(
-                "       [{:>2}] {:<14} = {}",
+                "       [{:>2}] {:<14} = {}{}",
                 p.index,
                 p.name,
-                fmt_value(p.value)
+                fmt_value(p.value),
+                if p.settable {
+                    ""
+                } else {
+                    "   (read-only — no op-30 address)"
+                }
             );
         }
         if let Some(cab) = &b.paired_model_name {
             println!("       + cab: {cab}");
             for p in &b.paired_params {
                 println!(
-                    "       [{:>2}] {:<14} = {}",
+                    "       [{:>2}] {:<14} = {}{}",
                     p.index,
                     p.name,
-                    fmt_value(p.value)
+                    fmt_value(p.value),
+                    if p.settable {
+                        ""
+                    } else {
+                        "   (read-only — no op-30 address)"
+                    }
                 );
             }
         }

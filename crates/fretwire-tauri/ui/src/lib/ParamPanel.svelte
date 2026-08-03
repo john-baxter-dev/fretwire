@@ -109,6 +109,10 @@
   // (0..=127) let a 0..=3 head selector be set to 77, which hung the pedal hard enough to drop it
   // off USB. A value we can't bound is one we have no business sending.
   function control(p) {
+    // Values a block carries past the end of its symbol's param list (`Trails` on a delay/reverb,
+    // the mic index on a legacy cab) have no op-30 address — the device refuses every write to
+    // them, whatever the wire type. Rendering a switch there only promises something we can't do.
+    if (p.settable === false) return "unsettable";
     if (p.enum_labels && p.enum_labels.length) return "enum";
     if (p.value_type === 2 || p.kind === "bool") return "bool";
     if (p.stops && p.stops.length) return "seg";
@@ -250,6 +254,12 @@
             />
             <span>{p.value >= 0.5 ? "On" : "Off"}</span>
           </label>
+        {:else if c === "unsettable"}
+          <span
+            class="val unranged"
+            title="The device carries this value but gives it no parameter address, so no editor can write it — HX Edit reaches it another way. Read-only here."
+            >{p.kind === "bool" ? (p.value >= 0.5 ? "On" : "Off") : fmt(p.value)}</span
+          >
         {:else if c === "unranged"}
           <span
             class="val unranged"

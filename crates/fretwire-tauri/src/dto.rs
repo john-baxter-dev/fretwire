@@ -100,6 +100,9 @@ pub struct ParamDto {
     /// For segmented floats (cab mic Angle: 0°/45°): the discrete stops — render as buttons; the
     /// stop's `value` is written via the ordinary float path. Empty for continuous params.
     pub stops: Vec<SegStopDto>,
+    /// `false` when op 30 cannot address this param at all (see [`EditorParam::settable`]) — show
+    /// the value, but no control.
+    pub settable: bool,
 }
 
 #[derive(Serialize)]
@@ -129,6 +132,7 @@ impl From<&EditorParam> for ParamDto {
                     label: s.label.clone(),
                 })
                 .collect(),
+            settable: p.settable,
         }
     }
 }

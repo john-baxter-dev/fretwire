@@ -803,34 +803,42 @@ impl Session {
     /// device is what wedged it back when we fired all fourteen chunks with a 5 ms glance between
     /// them. A unit is two frames, 496 + 16, so that it ends on a short USB packet; see the loop.
     ///
-    /// **Three consecutive unanswered chunks means the pedal is gone, and this was tested.** For
-    /// half a day the guard was removed on the theory that it might be aborting writes that would
-    /// otherwise have finished — `fretwire24.log` had shown the same Floor complete a 14-chunk write
-    /// of the same preset, so the credit stall looked like something a transfer might recover from.
+    /// **One unanswered chunk means the pedal is gone, and this was tested.** For half a day the
+    /// guard was removed on the theory that it might be aborting writes that would otherwise have
+    /// finished — `fretwire24.log` had shown the same Floor complete a 14-chunk write of the same
+    /// preset, so the credit stall looked like something a transfer might recover from.
     /// `fretwire26.log` is that experiment: with nothing stopping it, the write pushed on past the
-    /// three quiet chunks and the very next send timed out — the device had stopped draining its
-    /// endpoint entirely. It does not recover. Aborting is not what wedges the pedal, and it is
-    /// already wedged by the time we notice.
+    /// quiet chunks and the very next send timed out — the device had stopped draining its endpoint
+    /// entirely. It does not recover. Aborting is not what wedges the pedal, and it is already
+    /// wedged by the time we notice.
     ///
     /// So the guard is back, purely as a faster and more legible failure: it reports
-    /// `sent`/`total`/`credits` after ~0.75 s instead of surfacing a bare USB write timeout after
-    /// 2 s. It never fires on a healthy transfer — an HX Stomp credits every chunk (1,2,4,5,6 on a
-    /// 5-chunk write, unchanged across 90 reads of channel history), and the one Floor write on
-    /// record that completed credited all 14.
+    /// `sent`/`total`/`credits` in ~0.25 s instead of surfacing a bare USB write timeout after 2 s
+    /// (then a second one, then the keepalive dropping the session — four seconds of nothing).
+    /// It never fires on a healthy transfer: across **51 recorded writes, not one of the 29 that
+    /// completed ever left a single chunk uncredited** — `silent` never reached 1 — while **all 22
+    /// that wedged did.** An HX Stomp credits every chunk too (1,2,4,5,6 on a 5-chunk write,
+    /// unchanged across 90 reads of channel history). `CREDIT_WAIT` is 250 ms against a ~7 ms
+    /// healthy round-trip, so a chunk going unanswered is not slowness; it is the endpoint dying.
     ///
-    /// **A doomed write is doomed by chunk three, and the device is never outrun.** Over all 21
-    /// recorded Floor writes the credit count is the whole story: the thirteen that wedged received
-    /// **2 or 3 credits and not one more** — chunk 3 is never credited, in any of them — while the
-    /// eight that completed were credited at every single chunk, climbing to 14–19 with `silent`
-    /// never once reaching 1. So the device does not degrade across the transfer and is not being
-    /// pushed too hard; it stops dead after two or three chunks, and everything we send afterwards
-    /// goes into an endpoint that has already stopped. That is why the tester always reports the
-    /// same "2480 of N bytes": 2480 is `MAX_SILENT_CHUNKS`'s stop point, not the device's.
+    /// **A doomed write is doomed by chunk three, and the device is never outrun.** Over all 51
+    /// recorded writes the credit count is the whole story: the 22 that wedged received **1 to 3
+    /// credits and not one more**, while the 29 that completed were credited at every single chunk,
+    /// climbing to 14–19. Not one write on either side of that gap. So the device does not degrade
+    /// across the transfer and is not being pushed too hard; it stops dead after two or three
+    /// chunks, and everything we send afterwards goes into an endpoint that has already stopped.
     ///
-    /// The first chunk's credit latency is a good tell but not a rule — 4–8 ms on all eight
-    /// completed writes and 32–198 ms on twelve of the thirteen wedged ones, with `fretwire24`'s
-    /// third write the exception: credited in 3 ms, then dead after the second. `first_credit_ms`
-    /// on the summary line records it for future reports; the credit ceiling is the reliable one.
+    /// The first chunk's credit latency is a good tell but not a rule — 4.6–8.2 ms on all 29
+    /// completed writes and 22–255 ms on 21 of the 22 wedged ones, with `fretwire24`'s third write
+    /// the standing exception: credited in 2.8 ms, then dead after the second. `first_credit_ms` on
+    /// the summary line records it for future reports; the credit ceiling is the reliable one.
+    ///
+    /// **Ending each unit on a short packet (`80ee812`) is the single biggest win so far, and it is
+    /// not a cure.** The tester rebuilt mid-session, which splits the logs cleanly: 21 of 31 writes
+    /// wedged before it (68%), 3 of 26 after (12%). Same pedal, same presets, same evening. The
+    /// residual 12% still shows the identical signature — credits stop at 1–3, endpoint dies — so
+    /// whatever the remaining trigger is, starving the device of short packets was only part of it.
+    /// [solid — 2026-08-03, `fretwire22b`–`51`.]
     ///
     /// Nothing about the blob explains which writes wedge. The same paste of the same 6883 bytes
     /// wedged the pedal and then, after a power cycle, completed 43 seconds later in the same GUI
@@ -840,10 +848,11 @@ impl Session {
     /// bytes of a stalling write and a succeeding one side by side, which `FRETWIRE_DUMP_WRITES`
     /// collects.
     ///
-    /// [solid — 2026-08-01, `fretwire12`/`17`/`22b`/`23`/`24`/`26`/`27`/`30`/`32`/`33`/`35`: 21
-    /// Floor writes, 13 wedged. **Open:** what device state stops it consuming. Refuted along the
-    /// way: that the abort causes it (`fretwire26`), and that the edit channel's `arg` offset
-    /// drives it (see `write_preset`'s body).]
+    /// [solid — 2026-08-03, `fretwire12`–`51` plus the `somehinged*` runs: 51 writes, 22 wedged.
+    /// **Open:** what device state stops it consuming. Refuted along the way: that the abort causes
+    /// it (`fretwire26`), that the edit channel's `arg` offset drives it (see `write_preset`'s
+    /// body), and that short packets alone explain it (`80ee812` cut the rate to a fifth and left
+    /// 12% standing).]
     ///
     /// LIVE: the exact chunk size and `arg` cadence are reconstructed from `move_EQ_right_two_slots`.
     /// The device's `{103:1}` apply-ACK is best-effort (logged, not required); the caller confirms by
@@ -863,8 +872,13 @@ impl Session {
         /// if the device keeps taking bytes but never finishes. Generous: 14 chunks that each wait
         /// out `CREDIT_WAIT` is ~3.5 s, so 30 s cannot be reached by mere slowness.
         const WRITE_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
-        /// Consecutive unanswered chunks before we call the device wedged and stop.
-        const MAX_SILENT_CHUNKS: usize = 3;
+        /// Consecutive unanswered chunks before we call the device wedged and stop. **One.** A
+        /// healthy transfer has never left a chunk uncredited in 29 recorded completions, and every
+        /// one of the 22 that wedged went quiet and stayed quiet; waiting for a second and third
+        /// silent chunk only buys the dying endpoint two more `CREDIT_WAIT`s and, in the newest
+        /// logs, hands the fatal blocking `send_frame` the chance to time out first — which is how
+        /// `fretwire48`/`51` failed with a bare USB error instead of this guard's message.
+        const MAX_SILENT_CHUNKS: usize = 1;
 
         let txn = self.bump_txn();
         let tlv = Tlv::command(op::PARAM_SET, edit::write_preset(&blob, txn)).to_bytes();
@@ -978,9 +992,11 @@ impl Session {
                 );
                 self.last_raw = None;
                 return Err(crate::Error::WriteStalled(format!(
-                    "the pedal stopped responding {sent} of {total} bytes into a preset write \
-                     (no reply to the last {silent} frames). The edit buffer may be inconsistent — \
-                     reload the preset, and power-cycle the pedal if it is unresponsive"
+                    "the pedal stopped taking data {sent} of {total} bytes into a preset write. \
+                     Every write that has done this needed a power cycle to come back, so do that \
+                     first, then reload the preset — the edit buffer holds a half-written one. \
+                     Nothing was saved to flash. This is a known Helix Floor fault we are still \
+                     chasing; the log line above it is the useful part of a bug report"
                 )));
             }
             if started.elapsed() > WRITE_BUDGET {

@@ -1627,3 +1627,26 @@ bug.
 path B, then raise `Balance B` or its Sensitivity and listen. `captures/_RUNBOOK-hx-edit-session.md`
 is unchanged and still the list for the next HX Edit session — the node move stays top of it, since
 12% of writes still wedge and we have never watched HX Edit perform that edit.
+
+## Parameters read in real units (2026-08-03)
+
+`HelixControls.json` was only being used for enum labels. Every continuous parameter showed its raw
+DSP value, which is how the tester spent part of a session on an Adriatic Delay reading `1.3728`,
+couldn't tell what it meant, and nearly filed it as broken:
+
+> fiddled with the adriatic delay, the time was was too long, almost made me think it wasn't working
+
+It was a 1.4-second delay. The same file already held the recipe to say so — a `dspToDisplayScale`,
+range-switched `format` rules, and `formatUnits` templates — so `ParamMeta` now carries it and both
+front ends apply it:
+
+    [ 0] Time           = 1.373 s       [1.3728]
+    [ 1] Feedback       = 50 %          [0.5]
+    [ 5] Level          = +0.0 dB       [0]
+    [ 9] SyncSelect1    = 1/4 Triplet   [6]
+
+The CLI keeps the raw value in brackets because that is what `fretwire set` takes. The GUI formats
+client-side, from rules sent in the param DTO, because a slider re-renders on every drag frame
+before any value reaches Rust. Aliases are resolved (`time_ms_20_1800` → `time_ms`), ranges pick
+their own units (ms under a second, seconds past it), and anything the reference data doesn't
+describe falls back to the bare number.

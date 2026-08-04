@@ -60,6 +60,10 @@ pub struct ParamMeta {
     /// the cab mic `Angle`: 0°/45°): the allowed stops. The value written is the stop's `value`
     /// via the ordinary float path — the wire type stays float. Empty for continuous params.
     pub stops: Vec<SegStop>,
+    /// How to display a continuous value with its unit ("1.373 s" for a stored `1.3728`). `None`
+    /// for params whose control isn't described, and for enums/switches, which read as labels.
+    /// See [`NumFormat`].
+    pub format: Option<NumFormat>,
 }
 
 /// One position of a segmented float control (see [`ParamMeta::stops`]).
@@ -973,6 +977,7 @@ fn param_meta_from(
 ) -> std::collections::HashMap<String, std::collections::HashMap<String, ParamMeta>> {
     let discrete = discrete_control_labels(controls);
     let segmented = segmented_float_controls(controls);
+    let numeric = numeric_control_formats(controls);
     let mut map: std::collections::HashMap<String, std::collections::HashMap<String, ParamMeta>> =
         std::collections::HashMap::new();
     for (_, bytes) in models {
@@ -1005,6 +1010,16 @@ fn param_meta_from(
                     } else {
                         Vec::new()
                     };
+                    // Continuous floats get their unit-bearing display recipe. Enums and switches
+                    // read as labels, and a segmented float shows its stop labels instead.
+                    let format = if p.value_type == Some(1) {
+                        p.display_type
+                            .as_deref()
+                            .and_then(|dt| numeric.get(dt))
+                            .cloned()
+                    } else {
+                        None
+                    };
                     let meta = ParamMeta {
                         min: p.min_f64(),
                         max: p.max_f64(),
@@ -1012,6 +1027,7 @@ fn param_meta_from(
                         value_type: p.value_type,
                         enum_labels,
                         stops,
+                        format,
                     };
                     (p.symbolic_id.clone(), meta)
                 })
@@ -1189,6 +1205,173 @@ fn seg_label(fmt: &str, v: f64) -> String {
         }
     }
     format!("{v}")
+}
+
+/// How a numeric parameter should be shown. The device stores DSP values — a delay time is
+/// `1.3728`, a mix is `0.5` — and HX Edit displays them scaled and carrying a unit ("1.373 s",
+/// "50 %"). `HelixControls.json` holds that recipe, keyed by the param's `displayType`.
+///
+/// This is not cosmetic. The tester spent part of a session on an Adriatic Delay reading `1.3728`,
+/// couldn't tell what it meant, and nearly filed it as "the delay isn't working" — it was a 1.4
+/// second delay time, which "1.373 s" would have said outright.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NumFormat {
+    /// `dspToDisplayScale`: stored value × this = display units (seconds → ms, 0–1 → percent).
+    pub scale: f64,
+    /// Range rules in file order; the first whose bounds contain the scaled value wins. A control
+    /// with one unranged format has a single rule spanning everything.
+    pub rules: Vec<FormatRule>,
+}
+
+/// One range of a [`NumFormat`] — the file splits a control by magnitude so that, say, a delay
+/// reads in ms up to a second and in seconds past it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FormatRule {
+    pub lo: f64,
+    pub hi: f64,
+    /// `unitsMultiplier`: applied on top of `scale` for this range only (ms → s past 1000).
+    pub mult: f64,
+    /// printf-ish template — `formatUnits` where the file has one, so the unit comes with it.
+    pub template: String,
+}
+
+impl NumFormat {
+    /// Render `raw` (the stored value) the way HX Edit would. `None` only if there are no rules.
+    pub fn display(&self, raw: f64) -> Option<String> {
+        let scaled = raw * self.scale;
+        let rule = self
+            .rules
+            .iter()
+            .find(|r| scaled >= r.lo && scaled < r.hi)
+            .or_else(|| self.rules.last())?;
+        Some(printf_f(&rule.template, scaled * rule.mult))
+    }
+}
+
+/// Substitute a float into a printf-ish template: `%[+][.N]f`, with `%%` for a literal percent.
+/// Only these forms appear in the reference data; anything else is passed through untouched (some
+/// templates are pure text, e.g. `blend`'s "Equal").
+fn printf_f(template: &str, v: f64) -> String {
+    let mut out = String::with_capacity(template.len() + 8);
+    let b = template.as_bytes();
+    let mut i = 0;
+    let mut used = false;
+    while i < b.len() {
+        if b[i] != b'%' {
+            out.push(b[i] as char);
+            i += 1;
+            continue;
+        }
+        if i + 1 < b.len() && b[i + 1] == b'%' {
+            out.push('%');
+            i += 2;
+            continue;
+        }
+        // %[+][.N]f — anything that doesn't match is copied verbatim.
+        let mut j = i + 1;
+        let plus = j < b.len() && b[j] == b'+';
+        if plus {
+            j += 1;
+        }
+        let mut prec = 0usize;
+        if j < b.len() && b[j] == b'.' {
+            j += 1;
+            let s = j;
+            while j < b.len() && b[j].is_ascii_digit() {
+                j += 1;
+            }
+            prec = template[s..j].parse().unwrap_or(0);
+        }
+        if j < b.len() && b[j] == b'f' && !used {
+            if plus && v >= 0.0 {
+                out.push('+');
+            }
+            out.push_str(&format!("{v:.prec$}"));
+            used = true;
+            i = j + 1;
+        } else {
+            out.push('%');
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Parse `HelixControls.json` into control name → [`NumFormat`] for the **continuous** controls
+/// (the discrete ones are label lists — see [`discrete_control_labels`]). Resolves the `alias`
+/// indirection the file uses for its 58 range-specialised aliases (`time_ms_20_1800` → `time_ms`).
+fn numeric_control_formats(controls: &[u8]) -> std::collections::HashMap<String, NumFormat> {
+    let mut out = std::collections::HashMap::new();
+    let Ok(root) = serde_json::from_slice::<serde_json::Value>(controls) else {
+        return out;
+    };
+    let Some(obj) = root.as_object() else {
+        return out;
+    };
+    for name in obj.keys() {
+        // Follow `alias` hops, bounded so a cycle in the data can't hang the import.
+        let mut ctrl = &obj[name];
+        for _ in 0..8 {
+            match ctrl.get("alias").and_then(serde_json::Value::as_str) {
+                Some(target) => match obj.get(target) {
+                    Some(next) => ctrl = next,
+                    None => break,
+                },
+                None => break,
+            }
+        }
+        if ctrl.get("isDiscrete").and_then(serde_json::Value::as_bool) == Some(true) {
+            continue;
+        }
+        let scale = ctrl
+            .get("dspToDisplayScale")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(1.0);
+        let units = |v: &serde_json::Value| {
+            v.get("formatUnits")
+                .or_else(|| v.get("format"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        };
+        let mut rules = Vec::new();
+        match ctrl.get("format") {
+            Some(serde_json::Value::Array(arr)) => {
+                for e in arr {
+                    let Some(t) = units(e) else { continue };
+                    rules.push(FormatRule {
+                        lo: e
+                            .get("lowerBound")
+                            .and_then(serde_json::Value::as_f64)
+                            .unwrap_or(f64::NEG_INFINITY),
+                        hi: e
+                            .get("upperBound")
+                            .and_then(serde_json::Value::as_f64)
+                            .unwrap_or(f64::INFINITY),
+                        mult: e
+                            .get("unitsMultiplier")
+                            .and_then(serde_json::Value::as_f64)
+                            .unwrap_or(1.0),
+                        template: t,
+                    });
+                }
+            }
+            // A scalar `format`, or none at all but a bare `formatUnits`: one rule for everything.
+            _ => {
+                if let Some(t) = units(ctrl) {
+                    rules.push(FormatRule {
+                        lo: f64::NEG_INFINITY,
+                        hi: f64::INFINITY,
+                        mult: 1.0,
+                        template: t,
+                    });
+                }
+            }
+        }
+        if !rules.is_empty() {
+            out.insert(name.clone(), NumFormat { scale, rules });
+        }
+    }
+    out
 }
 
 /// Parse `HelixControls.json` into a map of **discrete** control name → ordered option labels (the
@@ -1419,6 +1602,44 @@ mod tests {
     fn dev_catalog() -> Catalog {
         Catalog::from_data_dir(&crate::data_dir())
             .expect("load reference data (run `fretwire import-data`)")
+    }
+
+    /// The case that sent the tester chasing a delay he thought was broken: stored `1.3728` is a
+    /// 1.4-second delay time, and the raw number said none of that. Also pins the two shapes the
+    /// recipe has to handle — a range switch with a `unitsMultiplier` (ms → s past 1000) and the
+    /// plain scaled percent.
+    #[test]
+    fn a_delay_time_reads_in_seconds_not_raw_dsp_units() {
+        let meta = dev_catalog().param_meta;
+        let delay = meta
+            .get("HD2_DelayAdriaticDelay")
+            .expect("bundled delay model present");
+
+        let time = delay.get("Time").expect("delay has a Time param");
+        let f = time.format.as_ref().expect("Time has a display format");
+        assert_eq!(f.display(1.3728).as_deref(), Some("1.373 s"));
+        // Under a second it stays in milliseconds, and under 10 ms it gains a decimal.
+        assert_eq!(f.display(0.4).as_deref(), Some("400 ms"));
+        assert_eq!(f.display(0.005).as_deref(), Some("5.0 ms"));
+
+        let mix = delay.get("Mix").expect("delay has a Mix param");
+        let f = mix.format.as_ref().expect("Mix has a display format");
+        assert_eq!(f.display(0.5).as_deref(), Some("50 %"));
+
+        // A switch is read as a label, so it must not carry a numeric recipe.
+        let mic = meta["HD2_CabMicIr_2x12JazzRivet"]["Mic"].clone();
+        assert!(mic.format.is_none());
+    }
+
+    #[test]
+    fn a_volume_param_keeps_its_sign_and_unit() {
+        let meta = dev_catalog().param_meta;
+        let lvl = meta["HD2_DelayAdriaticDelay"]["Level"]
+            .format
+            .clone()
+            .expect("Level has a display format");
+        assert_eq!(lvl.display(0.0).as_deref(), Some("+0.0 dB"));
+        assert_eq!(lvl.display(-4.89).as_deref(), Some("-4.9 dB"));
     }
 
     #[test]

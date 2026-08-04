@@ -103,12 +103,33 @@ pub struct ParamDto {
     /// `false` when op 30 cannot address this param at all (see [`EditorParam::settable`]) — show
     /// the value, but no control.
     pub settable: bool,
+    /// How to render this value with its unit. Sent as rules rather than a finished string because
+    /// the panel re-formats continuously while a slider is dragged, before any value reaches Rust.
+    pub format: Option<NumFormatDto>,
 }
 
 #[derive(Serialize)]
 pub struct SegStopDto {
     pub value: f64,
     pub label: String,
+}
+
+/// Display recipe for a continuous param — see [`fretwire_core::editor::NumFormat`]. The panel
+/// applies `scale`, picks the first rule bracketing the result, multiplies by its `mult`, and fills
+/// the printf-ish `template`.
+#[derive(Serialize)]
+pub struct NumFormatDto {
+    pub scale: f64,
+    pub rules: Vec<FormatRuleDto>,
+}
+
+#[derive(Serialize)]
+pub struct FormatRuleDto {
+    /// `null` for an unbounded end — JSON has no infinity.
+    pub lo: Option<f64>,
+    pub hi: Option<f64>,
+    pub mult: f64,
+    pub template: String,
 }
 
 impl From<&EditorParam> for ParamDto {
@@ -133,6 +154,19 @@ impl From<&EditorParam> for ParamDto {
                 })
                 .collect(),
             settable: p.settable,
+            format: p.meta.format.as_ref().map(|f| NumFormatDto {
+                scale: f.scale,
+                rules: f
+                    .rules
+                    .iter()
+                    .map(|r| FormatRuleDto {
+                        lo: fin_opt(Some(r.lo)),
+                        hi: fin_opt(Some(r.hi)),
+                        mult: r.mult,
+                        template: r.template.clone(),
+                    })
+                    .collect(),
+            }),
         }
     }
 }

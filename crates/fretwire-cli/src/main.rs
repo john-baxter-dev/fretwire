@@ -1072,7 +1072,7 @@ fn print_params(params: &[fretwire_core::editor::EditorParam]) {
             "       [{:>2}] {:<14} = {}{}",
             p.index,
             p.name,
-            fmt_value(p.value),
+            fmt_param(p),
             if p.settable {
                 ""
             } else {
@@ -1235,6 +1235,25 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
                 .unwrap_or_else(|| "?".into());
             println!("  controller {} -> {}{}", a.controller, slot, param);
         }
+    }
+}
+
+/// A parameter as a human reads it, with the raw value kept alongside because that is what
+/// `fretwire set` takes: `1.373 s  [1.3728]`. An enum shows its label, a plain number shows alone.
+fn fmt_param(p: &fretwire_core::editor::EditorParam) -> String {
+    use fretwire_data::stream::ParamValue::*;
+    let raw = fmt_value(p.value);
+    let pretty = match p.value {
+        Float(f) => p.meta.format.as_ref().and_then(|nf| nf.display(f.into())),
+        Int(i) => usize::try_from(i)
+            .ok()
+            .and_then(|i| p.meta.enum_labels.get(i))
+            .cloned(),
+        Bool(_) => None,
+    };
+    match pretty {
+        Some(s) if s != raw => format!("{s:<12}  [{raw}]"),
+        _ => raw,
     }
 }
 

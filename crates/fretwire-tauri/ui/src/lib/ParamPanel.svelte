@@ -135,6 +135,33 @@
   function fmt(v) {
     return Number.isInteger(v) ? String(v) : v.toFixed(2);
   }
+
+  // The device stores DSP values — a delay time is 1.3728 — and HX Edit shows them scaled with a
+  // unit ("1.373 s"). `p.format` carries that recipe from HelixControls.json; this applies it. Done
+  // here rather than in Rust because a slider re-renders on every drag frame, before any value has
+  // been sent. Falls back to the bare number when the reference data doesn't describe the control.
+  function fmtVal(p, v) {
+    const f = p.format;
+    if (!f || !Number.isFinite(v)) return fmt(v);
+    const s = v * f.scale;
+    const r =
+      f.rules.find((r) => (r.lo == null || s >= r.lo) && (r.hi == null || s < r.hi)) ??
+      f.rules[f.rules.length - 1];
+    if (!r) return fmt(v);
+    return printf(r.template, s * r.mult);
+  }
+
+  // printf-ish `%[+][.N]f`, with `%%` a literal percent — the only forms the reference data uses.
+  function printf(template, v) {
+    let used = false;
+    return template.replace(/%%|%(\+?)(?:\.(\d+))?f/g, (m, plus, prec) => {
+      if (m === "%%") return "%";
+      if (used) return m;
+      used = true;
+      const s = v.toFixed(prec === undefined ? 0 : Number(prec));
+      return plus && v >= 0 ? `+${s}` : s;
+    });
+  }
 </script>
 
 {#if block}
@@ -258,13 +285,13 @@
           <span
             class="val unranged"
             title="The device carries this value but fretwire has no confirmed way to address it, so it is read-only here rather than a control that would be refused."
-            >{p.kind === "bool" ? (p.value >= 0.5 ? "On" : "Off") : fmt(p.value)}</span
+            >{p.kind === "bool" ? (p.value >= 0.5 ? "On" : "Off") : fmtVal(p, p.value)}</span
           >
         {:else if c === "unranged"}
           <span
             class="val unranged"
             title="No range for this parameter in the reference data, so fretwire won't send a value it can't bound — an out-of-range integer can hang the device."
-            >{fmt(p.value)}</span
+            >{fmtVal(p, p.value)}</span
           >
         {:else if c === "seg"}
           {@const active = nearestStop(p)}
@@ -301,7 +328,7 @@
                 else onFloat(block.slot, paired, p.index, v);
               }}
             />
-            <span class="val">{fmt(live[k] ?? p.value)}</span>
+            <span class="val">{fmtVal(p, live[k] ?? p.value)}</span>
           </div>
         {/if}
       </div>
@@ -428,7 +455,9 @@
   }
   .val {
     flex: 0 0 auto;
-    min-width: 48px;
+    /* Wide enough for the unit-bearing forms ("-14.4 dB", "1.373 s") so the column doesn't jump
+       width mid-drag as a value crosses from one format range into the next. */
+    min-width: 68px;
     text-align: right;
     white-space: nowrap;
     color: #e6e8ec;

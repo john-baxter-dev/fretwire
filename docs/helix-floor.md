@@ -1885,7 +1885,7 @@ reverb:
 Trails specifically is the key-29 case, fixed separately; the switch had gone read-only in the build
 he was testing (`somehingeddelaytrails.png` shows it greyed), which is what he was reporting.
 
-## Round 24: a loop block left of the split has nothing feeding it [hypothesis]
+## Round 24: a loop block left of the split has nothing feeding it [refuted — see Round 26]
 
 The evening's last three sessions finally produced a mechanism for the silent loop blocks, and it
 is the one geometric claim that survives — the *other* side of the bracket from the one Round 22
@@ -1904,6 +1904,10 @@ reported over the next ten minutes:
 > ok, the helio works, but it's hella quiet …
 > the tron still won't work, hold on, will try another filter
 > OK, so now filters won't work - I've tried 3 different ones
+
+> **Refuted the next day — see Round 26. The position was a coincidence; all three "dead" models
+> were envelope filters and the live one was a reverb. Read this round for the evidence, not the
+> conclusion.**
 
 The two blocks were on opposite sides of the split. Heliosphere at column 4 was inside the bracket
 and audible; Tron Up at column 3 was outside it and dead, and stayed dead through three model swaps.
@@ -1932,3 +1936,83 @@ other change. One gesture, unambiguous.
 Matching "I tried three different filters" to the wire took hand-decoding the MessagePack the device
 echoes in each op-40 reply. `send_edit` logged the target only on refusal; it logs it on success too
 now, so a session log can be read back as a list of what was actually done.
+
+## Round 25: the short-packet fix cut the op-21 lockup to a fifth, and one credit tells you [solid]
+
+`fretwire43` opens with a `Compiling` line — the tester pulled and rebuilt mid-evening, which
+splits every recorded write into before and after `80ee812` ("End every op-21 unit on a short USB
+packet"). Same pedal, same presets, the same few hours:
+
+| | writes | wedged | |
+|---|---:|---:|---|
+| before `80ee812` (`fretwire12`–`42`) | 31 | 21 | **68%** |
+| after `80ee812` (`fretwire43`–`51`, `somehinged*`) | 26 | 3 | **12%** |
+
+So ending each 512-byte unit on a short packet was the single biggest win the write path has had,
+and it is **not a cure** — 12% still wedge, with the identical signature. The hypothesis in
+`write_preset`'s loop is confirmed as a cause and refuted as *the* cause.
+
+### The credit ceiling separates all 51 writes with nothing in between
+
+Counting every op-21 write we hold, on both devices:
+
+| | credits received | first-credit latency |
+|---|---|---|
+| completed (29) | **14–19** — every chunk credited | 4.6–8.2 ms |
+| wedged (22) | **1–3, never more** | 22–255 ms (one outlier at 2.8 ms) |
+
+No write on either side of that gap. The device does not degrade under load and is not being
+outrun: it stops dead after two or three chunks, and everything sent afterwards goes into an
+endpoint that has already stopped draining. First-credit latency is a good tell with one standing
+exception (`fretwire24`'s third write, credited in 2.8 ms, dead after the second); the credit
+ceiling has none.
+
+### The guard was three times too patient
+
+Sharper still: **across all 29 completed writes, not one chunk ever went uncredited** — `silent`
+never reached 1 — and **all 22 wedged writes reached it.** One silent chunk is the whole signal, so
+`MAX_SILENT_CHUNKS` is now 1 rather than 3.
+
+That matters because the old value no longer fired at all. In the newest logs the device wedges
+after 2–3 chunks, so waiting for a third silent chunk hands the next blocking `send_frame` the
+chance to time out first — which is exactly how `fretwire48` and `fretwire51` failed: a bare
+`bulk OUT timed out`, then a second one, then the keepalive dropping the session, four seconds of
+nothing, and none of the diagnostics the guard exists to print. It now reports
+`sent`/`total`/`credits`/`first_credit_ms` in about 250 ms.
+
+This does not save the pedal — Round-21 work (`fretwire26`) already established that aborting is
+not what wedges it and that it is wedged by the time we notice. It converts a four-second freeze
+into an immediate, accurate message that says a power cycle is needed and that flash was untouched.
+
+## Round 26: it was never the split — envelope filters need level [solid]
+
+Round 24 said a row-B block left of the split has nothing feeding it. The tester's next session put
+the split between columns 4 and 5, leaving Heliosphere at column 4 outside the bracket on the left,
+and our new badge duly lit up:
+
+> a-hah!, helio, which is on L4, now has an amber warning notice "no feed"
+> and interestingly, even though the Helio is "out of the loop", it still works
+> so the UI logic says "NOPE", but Helix say "This is fine"
+
+That is a direct counter-example, and it came with the explanation attached. Sorting the two
+sessions by *what the blocks were* rather than where they sat:
+
+| block | family | what he heard |
+|---|---|---|
+| Tron Up (`HD2_FM4TronUp`) | envelope filter — Freq, Q, **Range** | dead |
+| Obi Wah, Q Filter, Mystery Filter | envelope filters — **Sensitivity**, Attack, Release | dead |
+| Heliosphere, Ping Pong, Adriatic, Dual Delay | reverb / delay | audible, "hella quiet" |
+
+Every model he called dead sweeps on input level; every model he called quiet passes signal
+regardless. Split Y sits at `Balance A`/`Balance B` 0.5 by default, so each leg runs about 6 dB
+down before the mixer sums them — enough that an envelope filter in path B may never open, wherever
+in path B it sits. Position correlated with effect type by accident across two sessions.
+
+The badge is gone. A row-B block outside the bracket is still worth marking, because HX Edit cannot
+draw that layout at all — its path B always spans exactly the split→mixer span — but it is now a
+muted grey "outside path B" note whose tooltip says the pedal keeps it and still plays it, not an
+amber warning claiming it is dead. **Third time the same lesson: do not out-guard the pedal.**
+
+To settle the audio question with no Windows and no capture: put an envelope filter in path B, play,
+then raise `Balance B` (or the filter's own Sensitivity) and play again. If it comes alive, level is
+the whole story.

@@ -1534,7 +1534,7 @@ excluded, so the next place to look is the per-snapshot bypass mask (every block
 every committed edit triggers a full ~7 KB preset re-read — 309 chunk round-trips for 12 edits in
 `somehinged3var3.log`.
 
-## Twenty-first round (2026-08-02 night): **the silent loop block, found**
+## Twenty-first round (2026-08-02 night): **the silent loop block, found** [result 1 refuted — see the twenty-second round]
 
 Three more sessions off the pushed build (`somehinged3var4/5/5a.log`, one screenshot). Zero
 refusals, zero decode failures, Trails working — and the mystery that has run since the Floor
@@ -1580,3 +1580,50 @@ packetisation hypothesis remains untested.
 `crates/` (fretwire-data, fretwire-protocol, fretwire-usb, fretwire-core, fretwire-cli,
 fretwire-tauri) · `docs/` (protocol, preset-format, safety, next-steps) · `captures/` (pcaps + notes
 + reassembled blob) · `tools/` · `ROADMAP.md`.
+
+## Twenty-second round (2026-08-03): **the packetisation fix is measured, and the split was a red herring**
+
+Four sessions plus an archive of dumps and screenshots (`fretwire48`–`51`, `somehinged4`). The
+tester rebuilt partway through the run, which turned the whole log pile into a controlled
+before/after.
+
+**1. Ending each op-21 unit on a short packet cut the lockup rate from 68% to 12%.** `fretwire43`
+starts with a `Compiling` line — that is him picking up `80ee812`. Across every write we hold: 21 of
+31 wedged before it, 3 of 26 after. Same pedal, same presets, the same evening. The hypothesis is
+confirmed as *a* cause and refuted as *the* cause; the remaining 12% wedge with the identical
+signature.
+
+**2. One uncredited chunk is the entire signal, and our guard wanted three.** Over all 51 recorded
+writes the split is total: the 29 that completed were credited at every single chunk (14–19 credits,
+`silent` never once reaching 1); the 22 that wedged got 1–3 credits and never another. Nothing in
+between. `MAX_SILENT_CHUNKS` is now 1.
+
+That was not cosmetic. The device now wedges after 2–3 chunks, so waiting for a third silent one let
+the next blocking send time out first — which is precisely how `fretwire48` and `fretwire51` failed:
+`bulk OUT timed out`, again, then the keepalive dropping the session. Four seconds of nothing and
+none of the numbers the guard exists to print. It now fires in ~250 ms and says a power cycle is
+needed and that flash was untouched. It still cannot save the pedal; `fretwire26` settled that the
+abort is not the cause and the device is gone before we notice.
+
+**3. Round 21's result 1 was wrong: it was never the split.** He moved the split so Heliosphere sat
+outside the bracket on the left, our new badge lit up — and he heard the block play anyway. "So the
+UI logic says NOPE, but Helix say This is fine." Sorting both evenings by what the blocks *were*
+instead of where they sat: every model he called dead is an envelope filter (Tron Up, Obi Wah, Q
+Filter, Mystery Filter — all sweep on input level), and every model he called merely quiet is a
+delay or reverb. Split Y's legs sit ~6 dB down at the 0.5 default, which is enough that an envelope
+filter in path B may never open, wherever in path B it is. Position tracked effect type by accident,
+twice.
+
+The "⚠ no feed" badge is gone. A row-B block outside the bracket still gets a marker, because HX
+Edit cannot draw that layout at all, but it is a muted "outside path B" note that says the pedal
+keeps it and plays it. Third time for the same lesson — do not out-guard the pedal.
+
+**4. The paste buffer is ours, not the pedal's.** He saw "somehinged2" stay on the Paste button
+across a UI crash and a device reboot, wondered if it lived in firmware, and answered it himself: it
+survives within a run and is gone after the app restarts. Worth knowing when reading his logs; not a
+bug.
+
+**Open.** Result 3 is one gesture from settled with no Windows involved: put an envelope filter in
+path B, then raise `Balance B` or its Sensitivity and listen. `captures/_RUNBOOK-hx-edit-session.md`
+is unchanged and still the list for the next HX Edit session — the node move stays top of it, since
+12% of writes still wedge and we have never watched HX Edit perform that edit.

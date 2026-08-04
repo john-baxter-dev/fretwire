@@ -22,7 +22,9 @@ General rules, same as always:
 ## A. The node move ⭐ highest priority
 
 **Unblocks:** the op-21 whole-preset write lockup, open since Round 21, and the only thing on record
-that has wedged the pedal hard enough to need a reboot.
+that has wedged the pedal hard enough to need a reboot. Ending each unit on a short USB packet took
+it from 68% of writes to 12% (Round 25) — so it is much rarer now, and the last 12% still needs
+this capture.
 
 We know HX Edit sends bare op-21 whole-preset writes — all 43 existing captures were swept for it on
 2026-08-02. What we have never seen is HX Edit doing the **node** move specifically, which is the one
@@ -111,5 +113,7 @@ Listed so nobody spends session time on them:
 
 - **Type-49 pushes** (`{98: slot}` — pedal-side model changes not reaching our UI): `fretwire watch`
   on Linux while changing a block's model with the joystick.
-- **The before-split silence**: drag the split left of the stranded block and listen.
+- **Why the filters went dead** (Round 26 — the answer is probably level, not routing). Put an
+  envelope filter in path B, play it, then raise the split's `Balance B` or the filter's own
+  Sensitivity and play again. If it wakes up, that closes two evenings of "no worky" for good.
 - **Anything about audio.** Captures show commands, not sound.

@@ -79,12 +79,17 @@
       (c) => c.column <= maxCol && (showB || c.row === 0),
     );
 
-    // A block on the B row outside the split→mixer bracket. The pedal stores and saves it happily,
-    // so this is a note, not a refusal — but it is the difference between a block that plays and one
-    // that doesn't, and it took the tester an evening of swapping filters to find out. Only the
-    // left-hand side is known to kill audio (nothing has branched yet, so the cell has no feed);
-    // blocks past the mixer he verified by ear as playing. [before-split: hypothesis — 2026-08-02,
-    // `somehinged3var5.log` strands column 3 and every filter he put there went dead.]
+    // A block on the B row outside the split→mixer bracket. HX Edit cannot draw this layout at all —
+    // its path B always spans exactly the bracket — so it is worth marking. But the pedal stores it,
+    // saves it, and **plays it**: the tester put a reverb left of the split and heard it fine.
+    //
+    // It briefly said "no feed" here, on the theory that a cell left of the split has nothing
+    // branched into it yet. That was wrong, and the same evening's logs say why: every block he
+    // called dead was an envelope filter (Tron Up, Mystery Filter, Autofilter — all sweep on input
+    // level), and every block he called merely quiet was a delay or reverb. Split Y sits at Balance
+    // 0.5 per leg, so path B runs ~6 dB down and an envelope filter there may never open, wherever
+    // it sits. Position was a coincidence; level was the cause. Don't out-guard the pedal.
+    // [refuted — 2026-08-03, `fretwire49`/`50` + `Somehinged4_var2.png`.]
     const strandedSide = (c) =>
       !split || c.row !== 1 || !c.occupied
         ? null
@@ -109,9 +114,9 @@
         stranded: side,
         strandedWhy:
           side === "before"
-            ? "Left of the split — the signal hasn't branched yet, so nothing feeds this block. Move the split left of it, or the block right."
+            ? "Left of the split, so outside the parallel path. The pedal keeps it and it still plays — HX Edit just can't draw a path B this shape."
             : side === "after"
-              ? "Right of the mixer — outside the parallel path. The pedal keeps it and it still plays."
+              ? "Right of the mixer, so outside the parallel path. The pedal keeps it and it still plays."
               : null,
       };
     });
@@ -169,7 +174,7 @@
         nodeHint =
           `Drop the ${dragNode} on a gap` +
           (dragNode === "split"
-            ? " — it has to stay left of the mixer. Loop blocks it lands right of lose their feed."
+            ? " — it has to stay left of the mixer."
             : " — it has to stay right of the split.");
       }
     }
@@ -269,7 +274,7 @@
         class="cell"
         class:sel={c.slot === selectedSlot}
         class:bypassed={c.bypassed}
-        class:stranded={c.stranded === "before"}
+        class:stranded={c.stranded != null}
         title={c.strandedWhy}
         class:insb={dragOver === c.slot && dragSide === "l" && dragSrc != null && dragSrc !== c.slot}
         class:insa={dragOver === c.slot && dragSide === "r" && dragSrc != null && dragSrc !== c.slot}
@@ -315,7 +320,7 @@
       >
         <span class="name">{c.name}</span>
         <span class="slot">slot {c.slot}</span>
-        {#if c.stranded === "before"}<span class="unfed">⚠ no feed</span>{/if}
+        {#if c.stranded != null}<span class="unfed">outside path B</span>{/if}
       </button>
     {:else}
       <div
@@ -412,10 +417,9 @@
   .cell.bypassed .name {
     color: #626a77;
   }
-  /* A loop block sitting left of the split has nothing feeding it. Amber rather than an error
-     colour: the pedal accepts and saves the arrangement, it just makes no sound there. */
+  /* A row-B block outside the split→mixer bracket — a layout HX Edit can't draw. Deliberately a
+     muted grey and not amber: the block plays, so this is a note about the drawing, not a fault. */
   .cell.stranded {
-    border-color: #b7791f;
     border-style: dashed;
   }
   .cell .unfed {
@@ -424,10 +428,10 @@
     right: -6px;
     padding: 0 4px;
     border-radius: 7px;
-    background: #b7791f;
-    color: #1a1c20;
+    background: #3a4049;
+    color: #98a1ae;
     font-size: 9px;
-    font-weight: 700;
+    font-weight: 600;
     white-space: nowrap;
   }
   /* A dragged block hovering another block: an insertion bar on the half it will land on. */

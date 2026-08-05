@@ -23,8 +23,10 @@ General rules, same as always:
 
 **Unblocks:** the op-21 whole-preset write lockup, open since Round 21, and the only thing on record
 that has wedged the pedal hard enough to need a reboot. Ending each unit on a short USB packet took
-it from 68% of writes to 12% (Round 25) — so it is much rarer now, and the last 12% still needs
-this capture.
+it from 68% of writes to **15%** (34 writes since, 5 wedged) — much rarer, not gone, and every one
+of the recent ones was a **node move**, which is exactly what this section captures. The editor now
+gives up at the first uncredited chunk and says so, so the failure is at least diagnosable; the
+pedal still needs a power cycle afterwards.
 
 We know HX Edit sends bare op-21 whole-preset writes — all 43 existing captures were swept for it on
 2026-08-02. What we have never seen is HX Edit doing the **node** move specifically, which is the one
@@ -41,22 +43,7 @@ Start from a preset with a parallel path and at least one block on the lower row
 In the notes, record the column each node started and ended on, counting the same way the UI draws
 it. If HX Edit *refuses* any of these, that is just as useful — say so and note the exact wording.
 
-## B. Mono ↔ stereo on an existing block ⭐
-
-**Unblocks:** letting the editor switch a block's variant. 153 models ship both; we read the variant
-and cost it correctly, and the swap works on the wire, but the GUI's picker collapses to one entry
-per model and only ever offers the variant the block already has. Before building a toggle we should
-know what HX Edit actually sends — plain op 40 to the other symbol index, or something else.
-
-1. `variant_delay_mono_to_stereo.pcapng` — take a **mono** delay and make it stereo, however HX Edit
-   exposes that. **Write down where the control is** — that's half the answer.
-2. `variant_delay_stereo_to_mono.pcapng` — and back.
-3. `variant_mod_mono_to_stereo.pcapng` — same on a modulation block, to check it isn't per-category.
-
-Dump before and after the first one (`variant_before.bin` / `variant_after.bin`) so we can diff what
-changed in the block record besides the model ref.
-
-## B2. The output block's **destination** — the one thing blocking DSP2 presets ⭐
+## B. The output block's **destination** — the one thing blocking DSP2 presets ⭐
 
 **Unblocks:** building a preset that uses Path 2 (DSP2) at all. Everything else about DSP2 is
 already solved — slots are global (`dsp*20+index`), edits to a DSP2 block are byte-identical to a
@@ -74,15 +61,38 @@ The backup already gives us the *values*: across its 363 presets, `dsp0.outputA.
 means Path 2 is fed (126 presets vs 5 where it isn't), while `== 1` is the ordinary output (202 of
 229 unused). So we need the write shape, not the meaning.
 
-1. `route_path1_output_to_path2.pcapng` — on a serial single-path preset, set **Path 1's output** to
-   Path 2. Just that.
+In practice: start from a plain serial preset with one path, click the **output block** at the right
+end of Path 1, and change its destination from Multi (or whatever it is) to **Path 2**. HX Edit will
+probably draw a second path as soon as you do — that is the moment we want on the wire. **Write down
+where the control was and what the options were called**, same as step C; the option list is worth
+as much as the bytes, and a photo of that dropdown open is ideal.
+
+1. `route_path1_output_to_path2.pcapng` — set Path 1's output to Path 2. Just that.
 2. `route_path1_output_to_multi.pcapng` — and back to Multi/main.
 3. `route_path2_input_source.pcapng` — change **Path 2's input** source, wherever HX Edit puts it.
 
 Dump before and after #1 (`route_before.bin` / `route_after.bin`) — the diff should show key `6`
 on slot 9 changing, and confirms whether anything else moves with it.
 
-## C. A two-cab (`Cab › Dual`) block
+If HX Edit turns out to send this as an op-21 whole-preset write rather than a small edit, say so —
+that is the same operation as section A, and the two captures then answer each other.
+
+## C. Mono ↔ stereo on an existing block ⭐
+
+**Unblocks:** letting the editor switch a block's variant. 153 models ship both; we read the variant
+and cost it correctly, and the swap works on the wire, but the GUI's picker collapses to one entry
+per model and only ever offers the variant the block already has. Before building a toggle we should
+know what HX Edit actually sends — plain op 40 to the other symbol index, or something else.
+
+1. `variant_delay_mono_to_stereo.pcapng` — take a **mono** delay and make it stereo, however HX Edit
+   exposes that. **Write down where the control is** — that's half the answer.
+2. `variant_delay_stereo_to_mono.pcapng` — and back.
+3. `variant_mod_mono_to_stereo.pcapng` — same on a modulation block, to check it isn't per-category.
+
+Dump before and after the first one (`variant_before.bin` / `variant_after.bin`) so we can diff what
+changed in the block record besides the model ref.
+
+## D. A two-cab (`Cab › Dual`) block
 
 **Unblocks:** dual-cab support, which is currently absent and probably reads back as half of itself.
 
@@ -100,7 +110,7 @@ one — our only "dual" fixture is a dual *amp*.
 Note in the template which visual half of the block each action touched — A vs B is the whole
 question.
 
-## D. Global settings — op-25 id space
+## E. Global settings — op-25 id space
 
 **Unblocks:** a Global Settings pane. We can already write settings and cannot read any back.
 
@@ -108,7 +118,7 @@ Full recipe is in `_TODO-global-settings.md`; it hasn't changed. Six small captu
 and the one that matters most is `global_settings_pane_open.pcapng` — **just opening the pane**, for
 the read-side traffic. Without that the GUI can set values it can never display.
 
-## E. A block with two or more values past its symbol list — *only if you happen to hit one*
+## F. A block with two or more values past its symbol list — *only if you happen to hit one*
 
 Key 29 solved the single trailing extra (Trails on a delay/reverb, `Mic` on a legacy cab). A block
 carrying **two** or more would stay read-only in the editor, because we have no evidence for what the
@@ -135,7 +145,7 @@ measured ~75 ceiling) instead of pretending the budget is 100. That part is sett
 
 No longer urgent — nothing about fit checking depends on it — but still cheap and still worth it.
 
-**A screenshot of the mono/stereo control** wherever HX Edit puts it, from step B. Worth having on
+**A screenshot of the mono/stereo control** wherever HX Edit puts it, from step C. Worth having on
 its own even if the capture is messy.
 
 ## Doesn't need Windows at all

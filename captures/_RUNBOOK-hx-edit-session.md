@@ -56,6 +56,32 @@ know what HX Edit actually sends — plain op 40 to the other symbol index, or s
 Dump before and after the first one (`variant_before.bin` / `variant_after.bin`) so we can diff what
 changed in the block record besides the model ref.
 
+## B2. The output block's **destination** — the one thing blocking DSP2 presets ⭐
+
+**Unblocks:** building a preset that uses Path 2 (DSP2) at all. Everything else about DSP2 is
+already solved — slots are global (`dsp*20+index`), edits to a DSP2 block are byte-identical to a
+DSP1 one, an "empty" DSP2 still carries its full 20-slot array so the grid is already there, and
+`add_block` derives the DSP from the slot. What is missing is the *routing*: nothing feeds Path 2
+until Path 1's output is pointed at it.
+
+That selector is **not a parameter**. On the output node (slot 9) the params array holds exactly
+`pan` and `gain`; the destination is a sibling field, content key **`6`** — and the input node's
+source is key **`5`**. Ordinary `set_value` addresses params by index in the model's symbol order,
+so it cannot reach either one. Guessing the write is the sort of thing that hung the pedal once
+already (an out-of-range int on a head selector), so this wants a capture rather than a probe.
+
+The backup already gives us the *values*: across its 363 presets, `dsp0.outputA.@output == 2`
+means Path 2 is fed (126 presets vs 5 where it isn't), while `== 1` is the ordinary output (202 of
+229 unused). So we need the write shape, not the meaning.
+
+1. `route_path1_output_to_path2.pcapng` — on a serial single-path preset, set **Path 1's output** to
+   Path 2. Just that.
+2. `route_path1_output_to_multi.pcapng` — and back to Multi/main.
+3. `route_path2_input_source.pcapng` — change **Path 2's input** source, wherever HX Edit puts it.
+
+Dump before and after #1 (`route_before.bin` / `route_after.bin`) — the diff should show key `6`
+on slot 9 changing, and confirms whether anything else moves with it.
+
 ## C. A two-cab (`Cab › Dual`) block
 
 **Unblocks:** dual-cab support, which is currently absent and probably reads back as half of itself.

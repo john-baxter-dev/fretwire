@@ -1726,3 +1726,32 @@ against a budget of 100 it effectively never fired: a preset at 72.7 looked like
 everything passed. Against the real ceiling it greys the models the pedal would actually refuse.
 Disabled entries now say why on hover ("Needs 7.5% DSP; only 3.0% is free…") and show their cost in
 warning colour, since that number is the whole explanation.
+
+## Twenty-third round (2026-08-04): **the stall guard works, and the picker fix arrived a day late**
+
+`fretwire52.log` / `fretwire52a.log` plus two dumps, from the 08-04 build.
+
+**1. The fail-fast write guard is confirmed in the field.** Both wedges were caught exactly as
+designed — `silent=1`, 1536 of ~7100 bytes, ~250 ms after the last credit, with credits and
+`first_credit_ms` in the record:
+
+    write-preset chunk sent=1536 total=7120 credits=2 silent=1
+    ERROR device stopped acknowledging mid-write — abandoning sent=1536 credits=2 chunks=3
+
+On the old guard this was four seconds of bare `bulk OUT timed out` with nothing to diagnose. It
+still does not *save* the pedal — the keepalive times out 2 s later and the session drops, as
+documented — but the diagnosis is now free. Both wedges hit at chunk 3 of a node move.
+
+**2. The wedge rate is not obviously improving.** 8 writes, 2 wedged (25%) this session; running
+post-`80ee812` total 34 writes / 5 wedged (**15%**), against 68% before it. Small sample, and both
+of tonight's were node moves — still the operation that does it.
+
+**3. Three `-306` refusals on op 39 (add) that the new build would have prevented.** He tried to add
+to slot 8 three times on `somehinged2_test`, which sits at **raw 69.7 — 92.9% of capacity, 5.3 raw
+free**. Nothing was wrong; the model didn't fit. That is exactly what the picker now greys out, so
+these logs are the last from a build that let him try.
+
+**4. A third envelope-filter-in-path-B case.** `somehinged3_baseline_loop-no-worky.bin` has a
+**Mystery Filter** (Sensitivity 5.2) at slot 15 in path B with `BalanceB` at 0.5, next to a Dual
+Delay that works. Same shape as Round 26 both times. He has named it "baseline", so he is setting up
+the controlled comparison himself.

@@ -129,13 +129,13 @@
   // you — 72.7 of it meant "nearly full", which is the opposite of how it read. Raw units stay in
   // the CLI and the docs; nothing in the GUI shows them.
   const pct = (raw) => (raw / BUDGET) * 100;
-  // Header readout, per DSP: used and actually-left. "96.9% · 3.1% free" on the Stomp, both DSPs
-  // joined by "·" on the Floor.
-  const dspLoadLabel = $derived(
-    dspViews
-      .map((v) => `${pct(v.dsp_load).toFixed(1)}% · ${Math.max(pct(BUDGET - v.dsp_load), 0).toFixed(1)}% free`)
-      .join(" · "),
-  );
+  // Header readout, per DSP. Rendered as one labelled chip each rather than a joined string: on
+  // the Floor the two used to run together as "96.9% · 3.1% free · 0.0% · 100.0% free", with the
+  // same separator between the DSPs as inside them and nothing saying which was which.
+  const dspUsed = (v) => Math.min(100, Math.max(0, pct(v.dsp_load)));
+  const dspFree = (v) => Math.max(pct(BUDGET - v.dsp_load), 0);
+  // Within a few points of the ceiling — the picker is already greying most models out by here.
+  const dspTight = (v) => dspFree(v) < 10;
 
   // Whether the selected slot is a structural node (split/mixer/input/output) rather than a normal
   // block — nodes aren't swappable or deletable.
@@ -740,7 +740,20 @@
           <span>device <b>{preset.device_model ?? "—"}</b></span>
           <span>fw <b>{preset.firmware ?? "—"}</b></span>
           <span>routing <b>{preset.split ? "parallel (split)" : "serial"}</b></span>
-          <span>DSP <b>{dspLoadLabel}</b></span>
+          {#each dspViews as v (v.dsp)}
+            <span
+              class="dsp-chip"
+              class:tight={dspTight(v)}
+              title="{dspViews.length > 1 ? `DSP ${v.dsp + 1}` : 'DSP'}: {dspUsed(v).toFixed(
+                1,
+              )}% of what the pedal will accept, {dspFree(v).toFixed(1)}% free"
+            >
+              <span class="dsp-name">{dspViews.length > 1 ? `DSP ${v.dsp + 1}` : "DSP"}</span>
+              <span class="dsp-bar"><span class="fill" style="width:{dspUsed(v)}%"></span></span>
+              <b>{dspUsed(v).toFixed(1)}%</b>
+              <span class="dsp-free">{dspFree(v).toFixed(1)}% free</span>
+            </span>
+          {/each}
         </div>
         {#if preset.snapshot_names.length}
           <div class="snapshots">
@@ -782,13 +795,13 @@
         {/if}
         {#each dspViews as dspView (dspView.dsp)}
           {#if dspViews.length > 1}
-            <div class="dsp-head">
+            <div class="dsp-head" class:tight={dspTight(dspView)}>
               DSP {dspView.dsp + 1}
+              <span class="dsp-bar"
+                ><span class="fill" style="width:{dspUsed(dspView)}%"></span></span
+              >
               <span class="dsp-load"
-                >{pct(dspView.dsp_load).toFixed(1)}% · {Math.max(
-                  pct(BUDGET - dspView.dsp_load),
-                  0,
-                ).toFixed(1)}% free</span
+                >{dspUsed(dspView).toFixed(1)}% used · {dspFree(dspView).toFixed(1)}% free</span
               >
             </div>
           {/if}
@@ -1139,6 +1152,43 @@
     font-size: 12px;
     margin-left: 6px;
   }
+  /* One per DSP. The bar is what makes two of them tell apart at a glance — the numbers alone
+     read as one run-on figure, which is how "96.9% · 3.1% free · 0.0% · 100.0% free" happened. */
+  .dsp-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .dsp-chip .dsp-name {
+    font-variant-numeric: tabular-nums;
+  }
+  .dsp-bar {
+    width: 60px;
+    height: 6px;
+    border-radius: 3px;
+    background: #2a2f3a;
+    overflow: hidden;
+  }
+  .dsp-bar .fill {
+    display: block;
+    height: 100%;
+    background: #5b8dd6;
+  }
+  .dsp-chip b {
+    font-variant-numeric: tabular-nums;
+  }
+  .dsp-chip .dsp-free {
+    font-size: 12px;
+    color: #6d7688;
+    font-variant-numeric: tabular-nums;
+  }
+  /* Nearly full: the same warning colour the model picker uses on a model that won't fit. */
+  .dsp-chip.tight .dsp-bar .fill {
+    background: #e0785f;
+  }
+  .dsp-chip.tight b {
+    color: #e0785f;
+  }
   .hint {
     color: #9aa3b2;
   }
@@ -1153,6 +1203,9 @@
     letter-spacing: 0.5px;
     color: #9aa3b2;
     text-transform: uppercase;
+  }
+  .dsp-head.tight .dsp-bar .fill {
+    background: #e0785f;
   }
   .dsp-head .dsp-load {
     font-size: 11px;

@@ -257,6 +257,28 @@ fn free_dsp_is_measured_against_the_ceiling_not_a_hundred() {
     assert_eq!(p.dsp_free_on(97), DSP_CEILING);
 }
 
+/// What a user is shown is a percentage of *capacity*, so a full DSP reads 100% rather than 75.
+#[test]
+fn displayed_dsp_percent_puts_the_ceiling_at_a_hundred() {
+    use fretwire_core::editor::{DSP_CEILING, dsp_percent};
+    assert!((dsp_percent(DSP_CEILING) - 100.0).abs() < 1e-9);
+    assert_eq!(dsp_percent(0.0), 0.0);
+    // The tester's 72.7 was reported as "27% free" and was in fact nearly full.
+    assert!((dsp_percent(72.7) - 96.93).abs() < 0.01);
+
+    let p = catalog().load_preset(&two_dsp_stream()).unwrap();
+    for (dsp, load) in p.dsp_load_by_dsp() {
+        assert!((p.dsp_percent_on(dsp) - dsp_percent(load)).abs() < 1e-9);
+        assert!(
+            p.dsp_percent_on(dsp) > load,
+            "the scaled figure is the larger"
+        );
+    }
+    // An unused DSP must not print as "-0.0%" — an empty f64 sum is negative zero.
+    assert!(p.dsp_load_on(97).is_sign_positive());
+    assert_eq!(format!("{:.1}", p.dsp_percent_on(97)), "0.0");
+}
+
 #[test]
 fn grid_partitions_by_dsp_and_keeps_slots_global() {
     let p = catalog().load_preset(&two_dsp_stream()).unwrap();

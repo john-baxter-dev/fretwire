@@ -124,12 +124,16 @@
     const v = dspViews.find((x) => x.dsp === Math.floor(slot / 20));
     return v ? v.dsp_load : (preset?.dsp_load ?? 0);
   };
-  // Header readout, per DSP: how much is used and how much is actually left. "72.7% · 2.3% free"
-  // on the Stomp, both DSPs joined by "·" on the Floor. Showing the free figure is the point —
-  // 72.7% next to an implied 100 reads as plenty of room, and it is nearly none.
+  // Every DSP figure on screen is a percentage of what the pedal will actually accept, so the
+  // ceiling reads 100%. The raw `dsp_load` is a percentage of a budget the hardware never gives
+  // you — 72.7 of it meant "nearly full", which is the opposite of how it read. Raw units stay in
+  // the CLI and the docs; nothing in the GUI shows them.
+  const pct = (raw) => (raw / BUDGET) * 100;
+  // Header readout, per DSP: used and actually-left. "96.9% · 3.1% free" on the Stomp, both DSPs
+  // joined by "·" on the Floor.
   const dspLoadLabel = $derived(
     dspViews
-      .map((v) => `${v.dsp_load.toFixed(1)}% · ${Math.max(BUDGET - v.dsp_load, 0).toFixed(1)}% free`)
+      .map((v) => `${pct(v.dsp_load).toFixed(1)}% · ${Math.max(pct(BUDGET - v.dsp_load), 0).toFixed(1)}% free`)
       .join(" · "),
   );
 
@@ -771,6 +775,7 @@
             title={addTarget >= 0 ? `Add block — slot ${addTarget}` : "Add block"}
             remaining={BUDGET -
               (addTarget >= 0 ? loadForSlot(addTarget) : Math.min(...dspViews.map((v) => v.dsp_load)))}
+            budget={BUDGET}
             onpick={onAdd}
             oncancel={() => (addTarget = null)}
           />
@@ -780,8 +785,8 @@
             <div class="dsp-head">
               DSP {dspView.dsp + 1}
               <span class="dsp-load"
-                >{dspView.dsp_load.toFixed(1)}% · {Math.max(
-                  BUDGET - dspView.dsp_load,
+                >{pct(dspView.dsp_load).toFixed(1)}% · {Math.max(
+                  pct(BUDGET - dspView.dsp_load),
                   0,
                 ).toFixed(1)}% free</span
               >

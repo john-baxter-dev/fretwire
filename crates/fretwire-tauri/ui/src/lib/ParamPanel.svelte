@@ -228,6 +228,7 @@
         currentSymbolicId={block.symbolic_id}
         initialCategory={block.category}
         remaining={swapRemaining}
+        {budget}
         onpick={(idx, defaultPaired) => {
           swapping = false;
           // An Amp+Cab pick brings its own matched cab; otherwise keep the current pairing.
@@ -246,6 +247,7 @@
         initialCategory={block.paired_category ?? 19}
         lockCategory
         remaining={swapRemaining}
+        {budget}
         onpick={(idx) => {
           swappingCab = false;
           onSwap(block.slot, block.model_index, idx);

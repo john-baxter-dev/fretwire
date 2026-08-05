@@ -1704,3 +1704,24 @@ in `docs/protocol.md`.
 Still open, and now purely cosmetic: what HX Edit puts on screen. If it displays `blocks ÷ 75` its
 meter reads ~97% where ours reads 72.7% and we could show the same number instead of a measured
 ceiling. One screenshot decides it; no fit check depends on the answer.
+
+### The meter now reads 0–100 (2026-08-04)
+
+With the ceiling pinned to [74.9, 75.3), the honest presentation is a percentage of *capacity*:
+`editor::dsp_percent` divides by `DSP_CEILING`, so a full DSP reads 100% instead of 75%. The
+tester's `somehinged3` goes from `72.7% used (27.3% free)` — which is what made his refusals look
+like the pedal misbehaving — to **97.0% used · 3.0% free**.
+
+- **GUI:** scaled everywhere and raw nowhere — header, per-DSP headings, the model picker's "DSP
+  free", and each model's cost in the picker list. Scaling the model costs too is what keeps the
+  arithmetic on screen self-consistent (a 5.6 block reads 7.5%, and 97.0 + 7.5 overflows, correctly).
+- **CLI:** scaled, with the raw sum in brackets — `DSP 97.0% · 3.0% free  [raw 72.7 of ~75]`. Its
+  output is what bug reports quote and every load figure in `docs/` is on the raw scale, so it
+  carries both. Per-block costs stay raw, matching the `.models` table.
+- Fit comparisons are unchanged and still in raw units. Scaling is presentation only.
+
+**The picker's grey-out works now.** It was always there — models that don't fit are disabled — but
+against a budget of 100 it effectively never fired: a preset at 72.7 looked like it had 27 free, so
+everything passed. Against the real ceiling it greys the models the pedal would actually refuse.
+Disabled entries now say why on hover ("Needs 7.5% DSP; only 3.0% is free…") and show their cost in
+warning colour, since that number is the whole explanation.

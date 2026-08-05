@@ -40,6 +40,14 @@ use std::path::Path;
 /// builds right up to it, which is the best evidence there is that this is the real limit.]
 pub const DSP_CEILING: f64 = 75.0;
 
+/// A raw block-load sum as the **percentage of capacity** to show a user: [`DSP_CEILING`] reads
+/// 100%. Raw loads are a percentage of a budget the hardware never hands over, so 72.7 reads as
+/// plenty of room when it is nearly none — the GUI shows only this scaled figure. The CLI prints
+/// both, because its output is what bug reports quote and every load in `docs/` is raw.
+pub fn dsp_percent(load: f64) -> f64 {
+    load / DSP_CEILING * 100.0
+}
+
 /// The shipped reference data needed to interpret a preset: the model table + device param orders.
 pub struct Catalog {
     pub models: ModelDefs,
@@ -320,24 +328,32 @@ impl EditorPreset {
     pub fn dsp_load_by_dsp(&self) -> Vec<(usize, f64)> {
         self.dsps
             .iter()
-            // An empty f64 sum is -0.0, which formats as "-0.0%" for an unused DSP.
-            .map(|d| (d.dsp, self.dsp_load_on(d.dsp) + 0.0))
+            .map(|d| (d.dsp, self.dsp_load_on(d.dsp)))
             .collect()
     }
 
     /// DSP load drawn by one DSP's blocks. A DSP with no blocks (or no such index) reads `0.0`.
     pub fn dsp_load_on(&self, dsp: usize) -> f64 {
-        self.blocks
+        let load: f64 = self
+            .blocks
             .iter()
             .filter(|b| b.dsp == dsp)
             .filter_map(|b| b.dsp_load)
-            .sum()
+            .sum();
+        // An empty f64 sum is -0.0, which formats as "-0.0%" for an unused DSP.
+        load + 0.0
     }
 
     /// Room left on one DSP before the device starts refusing blocks — [`DSP_CEILING`] minus what
     /// that DSP already draws, floored at zero. This, not `100 - load`, is the headroom a user has.
     pub fn dsp_free_on(&self, dsp: usize) -> f64 {
         (DSP_CEILING - self.dsp_load_on(dsp)).max(0.0)
+    }
+
+    /// One DSP's load as the percentage of capacity a user should see — the ceiling reads 100%.
+    /// See [`dsp_percent`].
+    pub fn dsp_percent_on(&self, dsp: usize) -> f64 {
+        dsp_percent(self.dsp_load_on(dsp))
     }
 
     /// Room left per DSP — `(dsp, free)` in DSP order. See [`Self::dsp_free_on`].

@@ -12,10 +12,17 @@
     initialCategory = null,
     // Pin the picker to `initialCategory` (e.g. the change-cab flow only offers cabs).
     lockCategory = false,
-    remaining = 100,
+    // Both in raw model-file units, as `dsp_load` comes off the wire — the *comparison* stays in
+    // that scale, only the numbers on screen are converted.
+    remaining = 75,
+    budget = 75,
     onpick,
     oncancel,
   } = $props();
+
+  // Shown as a percentage of what the pedal will actually accept, so the ceiling reads 100% and a
+  // model's cost adds up against the meter next to it. See `editor::DSP_CEILING`.
+  const pct = (raw) => (raw / budget) * 100;
 
   let cats = $state([]);
   // Intentionally a one-time snapshot of the prop (the picker's starting category, then
@@ -65,7 +72,7 @@
         {#each cats as c}<option value={c.id}>{c.name}</option>{/each}
       </select>
     {/if}
-    <span class="dim">{remaining.toFixed(1)}% DSP free</span>
+    <span class="dim">{pct(remaining).toFixed(1)}% DSP free</span>
     <span class="spacer"></span>
     <button class="x" onclick={oncancel}>✕</button>
   </div>
@@ -74,14 +81,18 @@
   <div class="list">
     {#each models as m (m.index)}
       {@const isCurrent = currentSymbolicId && m.symbolic_id === currentSymbolicId}
+      {@const tooBig = !isCurrent && !fits(m)}
       <button
         class="item"
         class:current={isCurrent}
-        disabled={!isCurrent && !fits(m)}
+        disabled={tooBig}
+        title={tooBig
+          ? `Needs ${pct(m.dsp_load ?? 0).toFixed(1)}% DSP; only ${pct(remaining).toFixed(1)}% is free. The pedal would refuse this with -306.`
+          : m.name}
         onclick={() => onpick(m.index, m.default_paired_index ?? null)}
       >
         <span class="name">{m.name}{isCurrent ? " ✓" : ""}</span>
-        <span class="dsp">{m.dsp_load != null ? m.dsp_load.toFixed(1) + "%" : "—"}</span>
+        <span class="dsp">{m.dsp_load != null ? pct(m.dsp_load).toFixed(1) + "%" : "—"}</span>
       </button>
     {/each}
   </div>
@@ -138,9 +149,14 @@
   .item.current {
     border-color: #f0c245;
   }
+  /* Won't fit the DSP that's left. Dimmed rather than hidden, so the cost stays readable and it's
+     obvious the model exists — and its cost is the one number that explains the greying. */
   .item:disabled {
     opacity: 0.4;
     cursor: not-allowed;
+  }
+  .item:disabled .dsp {
+    color: #e0785f;
   }
   .item .dsp {
     color: #9aa3b2;

@@ -623,8 +623,9 @@ fn main() -> Result<()> {
                 && proj > fretwire_core::editor::DSP_CEILING
             {
                 eprintln!(
-                    "⚠  projected DSP ~{proj:.1}% is past the ~{:.0}% this pedal accepts — expect \
-                     a `-306` refusal (that ceiling is measured, not the 100% the meter implies).",
+                    "⚠  projected DSP ~{:.0}% of capacity [{proj:.1} of ~{:.0} raw] — past what \
+                     this pedal accepts, so expect a `-306` refusal.",
+                    fretwire_core::editor::dsp_percent(proj),
                     fretwire_core::editor::DSP_CEILING
                 );
             }
@@ -1123,20 +1124,31 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
     } else {
         "serial"
     };
-    // A two-DSP device budgets each DSP separately, so report them separately. Headroom is
-    // measured against DSP_CEILING, not 100 — the pedal starts refusing blocks a quarter short.
-    let ceiling = fretwire_core::editor::DSP_CEILING;
+    // A two-DSP device budgets each DSP separately, so report them separately. Percentages are of
+    // *capacity* — DSP_CEILING reads 100% — with the raw sums kept in brackets, because the block
+    // costs printed below and every load figure in the docs are on the raw scale.
+    use fretwire_core::editor::{DSP_CEILING as CEIL, dsp_percent as pc};
     let load = match preset.dsp_load_by_dsp().as_slice() {
         [(d, one)] => format!(
-            "DSP {one:.1}% used · {:.1}% free (the pedal refuses past ~{ceiling:.0}%)",
-            preset.dsp_free_on(*d)
+            "DSP {:.1}% used · {:.1}% free  [{one:.1} of ~{CEIL:.0} raw]",
+            preset.dsp_percent_on(*d),
+            pc(preset.dsp_free_on(*d)),
         ),
         many => format!(
-            "{} (each DSP refuses past ~{ceiling:.0}%)",
+            "{}  [raw {} of ~{CEIL:.0}]",
             many.iter()
-                .map(|(d, l)| format!("DSP{} {l:.1}% · {:.1}% free", d + 1, preset.dsp_free_on(*d)))
+                .map(|(d, _)| format!(
+                    "DSP{} {:.1}% · {:.1}% free",
+                    d + 1,
+                    preset.dsp_percent_on(*d),
+                    pc(preset.dsp_free_on(*d))
+                ))
                 .collect::<Vec<_>>()
-                .join(" · ")
+                .join(" · "),
+            many.iter()
+                .map(|(_, l)| format!("{l:.1}"))
+                .collect::<Vec<_>>()
+                .join(" · "),
         ),
     };
     println!(

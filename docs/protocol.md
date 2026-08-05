@@ -353,10 +353,11 @@ record. The correction lives entirely in the ceiling.
 **Two scales, deliberately.** Every load figure in this document, in the `.models` files and in the
 tester's logs is *raw* — a percentage of a budget the hardware never hands over, which is why 72.7
 read as "27% free" when it was nearly full. What a user is shown is `blocks ÷ 75 × 100`
-(`editor::dsp_percent`), so the ceiling reads 100%. The GUI shows only the scaled figure; the CLI
-prints it with the raw sum in brackets — `DSP 97.0% · 3.0% free  [raw 72.7 of ~75]` — so a pasted
-log still lines up with the numbers here. Fit comparisons stay in raw units throughout; scaling is
-strictly presentation.
+(`editor::dsp_percent`), so the ceiling reads 100%. **Everything on a given screen is scaled**,
+per-block costs and model-picker costs included, so the figures in a listing sum to its total. The
+one raw number kept in front of a user is the CLI header's bracket — `DSP 97.0% · 3.0% free  [raw
+72.7 of ~75]` — which is the anchor between a pasted log and the tables here. Fit comparisons stay
+in raw units throughout; scaling is strictly presentation.
 
 It remains a guess that this is also what HX Edit displays. One screenshot would confirm it
 (`captures/_RUNBOOK-hx-edit-session.md`); nothing depends on the answer.

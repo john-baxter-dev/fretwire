@@ -1208,9 +1208,11 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
         } else {
             String::new()
         };
+        // Same scale as the header's percentage: two figures in one listing that add up
+        // differently is a trap. The raw sum is in the header's brackets for `.models` lookups.
         let dsp = b
             .dsp_load
-            .map(|l| format!("  ({l:.1}% DSP)"))
+            .map(|l| format!("  ({:.1}% DSP)", fretwire_core::editor::dsp_percent(l)))
             .unwrap_or_default();
         println!(
             "\n  {}slot {:<2}{} {}{}  [{}]{}{}{}",

@@ -173,8 +173,22 @@ impl Device {
     }
 }
 
-/// Logical channels, identified by a (host `src`, device `dst`) u16 pair. `src`/`dst` swap by
-/// direction on the wire. Names from observed roles.
+/// Logical channels, multiplexed over the single bulk endpoint pair ([`EP_OUT`]/[`EP_IN`]) — the
+/// channel lives in the frame header, not in USB.
+///
+/// Each is a stable pair of ids, one per side: **`(host_id, device_id)`**. Neither is inherently
+/// source or destination; a frame's [`Frame::src`]/[`Frame::dst`] are these two in the order its
+/// direction implies — host→device sends `(host, device)`, and its reply comes back
+/// `(device, host)`. So destructuring as `let (src, dst) = channel::EDIT;` is right for an outgoing
+/// frame only; going the other way means using the fields in reverse. Matching a reply is better
+/// done off the request (`reply.dst == frame.src`, as `fretwire_usb::Transport::request` does) than
+/// by reaching for these constants.
+///
+/// `.0` (the host id) doubles as the **key identifying the channel** in the per-channel sequence
+/// and stream-offset counters that `fretwire_core::session::Session` keeps — a use where "src"
+/// means nothing.
+///
+/// Names from observed roles.
 pub mod channel {
     /// Primary/handshake channel — the documented handshake runs here.
     pub const PRIMARY: (u16, u16) = (0x1001, 0x03EF);

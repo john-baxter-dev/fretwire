@@ -87,7 +87,7 @@
         class:current={isCurrent}
         disabled={tooBig}
         title={tooBig
-          ? `Needs ${pct(m.dsp_load ?? 0).toFixed(1)}% DSP; only ${pct(remaining).toFixed(1)}% is free. The pedal would refuse this with -306.`
+          ? `Needs ${pct(m.dsp_load ?? 0).toFixed(1)}% DSP; only ${pct(remaining).toFixed(1)}% is free. Remove or simplify a block to make room.`
           : m.name}
         onclick={() => onpick(m.index, m.default_paired_index ?? null)}
       >

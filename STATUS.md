@@ -1715,9 +1715,10 @@ like the pedal misbehaving — to **97.0% used · 3.0% free**.
 - **GUI:** scaled everywhere and raw nowhere — header, per-DSP headings, the model picker's "DSP
   free", and each model's cost in the picker list. Scaling the model costs too is what keeps the
   arithmetic on screen self-consistent (a 5.6 block reads 7.5%, and 97.0 + 7.5 overflows, correctly).
-- **CLI:** scaled, with the raw sum in brackets — `DSP 97.0% · 3.0% free  [raw 72.7 of ~75]`. Its
-  output is what bug reports quote and every load figure in `docs/` is on the raw scale, so it
-  carries both. Per-block costs stay raw, matching the `.models` table.
+- **CLI:** scaled too — **including each block's own cost**, so a listing's figures sum to its
+  header. Two scales in one listing is a trap; the raw sum rides along in the header's brackets
+  (`DSP 97.0% · 3.0% free  [raw 72.7 of ~75]`) for `.models` lookups and for the logs and docs that
+  quote raw, which is all the anchor that was actually needed.
 - Fit comparisons are unchanged and still in raw units. Scaling is presentation only.
 
 **The picker's grey-out works now.** It was always there — models that don't fit are disabled — but

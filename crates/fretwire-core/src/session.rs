@@ -148,18 +148,22 @@ fn op_name(op: i64) -> &'static str {
 /// the raw number (which stays, so a log still identifies the case).
 ///
 /// `-306` on op 40 is **not enough DSP** [solid — 2026-08-02, HX Stomp]. The same swap (slot 7 →
-/// `HD2_DelayCosmosEchoStereo`) is refused with the preset at 71.8% on our meter and accepted at
-/// 58.8%, nothing else changed. A ladder of targets brackets the ceiling between a landing total of
-/// 74.9% (accepted) and 75.3% (refused) — the meter reads low, so "28% free" can still be full. See
-/// `docs/protocol.md`.
+/// `HD2_DelayCosmosEchoStereo`) is refused with the preset at 71.8 raw and accepted at 58.8,
+/// nothing else changed; a ladder of targets brackets the ceiling to [74.9, 75.3) raw. Those are
+/// raw block-sum figures — what the editor *shows* is scaled so that ceiling reads 100%
+/// (`editor::dsp_percent`), which is why the gloss names no number at all. See `docs/protocol.md`.
+///
+/// The code itself stays in the message even though it means nothing to a user: it is what the
+/// device actually replied, and it is the string that makes a pasted log searchable. The GUI's own
+/// affordances (the greyed picker entry and its tooltip) explain the situation without it.
 ///
 /// `-3` is the parameter write the block would not take — see the wire-type and key-29 addressing
 /// sections of the same doc.
 fn reject_hint(op: Option<i64>, code: i64) -> String {
     let hint = match (op, code) {
         (Some(edit::OP_SWAP_MODEL), -306) => Some(
-            "not enough DSP for that model — the pedal fills up near 75% on our meter, so free \
-             some up by simplifying or removing a block",
+            "not enough DSP for that model — remove or simplify a block on the same DSP to make \
+             room",
         ),
         (_, -3) => Some(
             "the block would not take that write — wrong value type for the parameter, or no \

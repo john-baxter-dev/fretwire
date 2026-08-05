@@ -1650,3 +1650,38 @@ client-side, from rules sent in the param DTO, because a slider re-renders on ev
 before any value reaches Rust. Aliases are resolved (`time_ms_20_1800` → `time_ms`), ranges pick
 their own units (ms under a second, seconds past it), and anything the reference data doesn't
 describe falls back to the bare number.
+
+## The DSP meter tells the truth about headroom (2026-08-04)
+
+Round 20 measured where the pedal stops accepting blocks — **~75% on our meter, not 100%** — and
+then nothing used the number. `DSP_BUDGET` was still the invented `100.0`, so `show-preset` printed
+`72.7% used (27.3% free)` for a preset with room for nothing, the GUI's meter and its "does it fit"
+greying agreed, and the swap fit-check warning never fired before a `-306` did. **The tool was
+telling people they had a quarter of a DSP they did not have.** Fixed:
+
+- `DSP_BUDGET = 100.0` → **`DSP_CEILING = 75.0`**, carrying its provenance (the Stomp ladder, and
+  the Floor's `somehinged3` refusing `+6.02` at 72.7%, which brackets that device under 78.7 too).
+- `EditorPreset::dsp_free_on` / `dsp_free_by_dsp` / `dsp_load_on` — headroom is `ceiling - load`,
+  floored at zero, **per DSP**.
+- CLI: `DSP 72.7% used · 2.3% free (the pedal refuses past ~75%)`.
+- GUI: header and per-DSP headings show used *and* free; the ceiling ships in the preset DTO
+  (`dsp_ceiling`) so the two Svelte copies of `const BUDGET = 100` are gone.
+- The `swap` fit check compared the projected load against the **whole preset's** total. On a Floor
+  that both warns about presets that fit and stays quiet about ones that don't — each DSP is
+  budgeted on its own. Now checked against the target block's DSP.
+
+**What the missing quarter is not.** The standing guess was the fixed input/output/split/mixer
+nodes we never sum. `io.models` does price them (Stomp in/out `10.99` each, `HD2_AppDSPFlowOutput`
+`8.00`, Split Y `1.50`, Join `10.99`) and they are real slots in the preset — `0`, `9`, `10`, `19`
+of each DSP's array, kinds `0`/`1`/`2`/`3` against an ordinary block's `6`. But **no subset of them
+closes the gap**: the ladder preset is parallel, so the full overhead is 34.47 and would put the
+ceiling at 65.5, where 73.3 was accepted; without split and mixer it is 21.98 → 78.0, outside a
+bracket good to ±0.2. Against a budget of 100 the additive theory is refuted. So the node loads
+stay out of the meter — folding in a wrong 34 would trade a known error for an unknown one, and the
+raw block sum is what every log and capture note on record quotes. The correction lives in the
+ceiling, which is measured.
+
+Still open: *why* it is 75. One HX Edit screenshot settles it (if HX Edit reads ~97 where we read
+72.7 the scale is affine and the offset is the difference); failing that, a second `-306` ladder on
+a **serial** preset does it from Linux alone — a serial ceiling ~12.5 points higher would mean the
+split and mixer are billed after all. Both are in `captures/_RUNBOOK-hx-edit-session.md`.

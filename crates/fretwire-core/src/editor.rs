@@ -13,10 +13,27 @@ use fretwire_data::stream::{ParamValue, PresetStream};
 use fretwire_data::symbols::DeviceSymbols;
 use std::path::Path;
 
-/// The HX Stomp's DSP budget, as a percentage (single DSP). **Unconfirmed** — inferred from the
-/// per-model load cap (40%) and busy-preset sums; should be validated against HX Edit's own meter.
-/// Used for fit *warnings*, not hard enforcement (the device is the final arbiter).
-pub const DSP_BUDGET: f64 = 100.0;
+/// Where a DSP actually stops accepting blocks, on the same scale [`EditorPreset::dsp_load`]
+/// reports: **about 75%, not 100%.** Measured on hardware, not derived — so "28% free" on our
+/// meter can mean no room at all, and this is the number a fit check must compare against.
+///
+/// The gap is real but not yet decomposed. Our meter sums the effect blocks' `load` and nothing
+/// else; a preset also runs fixed nodes we never add in, and `io.models` prices them —
+/// `HelixStomp_AppDSPFlowInput` / `…OutputMain` 10.99 each, `HD2_AppDSPFlowOutput` 8.00,
+/// `HD2_AppDSPFlowSplitY` 1.50, `HD2_AppDSPFlowJoin` 10.99. **No subset of those sums to the
+/// missing ~25 points against a 100 budget**, so counting them in would trade one wrong number
+/// for another; see `docs/protocol.md`. Until that closes, the raw sum keeps its old meaning —
+/// every log, capture note and doc on record quotes it — and the ceiling carries the correction.
+///
+/// Used for *warnings*, never enforcement: the device is the final arbiter (out-guarding it is
+/// how the row-B stranding and node-enclosure mistakes happened).
+///
+/// [solid — 2026-08-02/03. HX Stomp fw 3.71: one preset, one slot, a ladder of swap targets, by
+/// the total each would land on — 73.3 / 73.8 / 74.4 / 74.9 accepted, 75.3 / 75.6 / 76.5 refused
+/// `-306`. Independently on the tester's Helix Floor: `somehinged3` sits at 72.7% on DSP1 and
+/// refused Elephant Man Mono (+6.02) and Euclidean Delay (+10.5), putting that device's ceiling
+/// under 78.7 too.]
+pub const DSP_CEILING: f64 = 75.0;
 
 /// The shipped reference data needed to interpret a preset: the model table + device param orders.
 pub struct Catalog {
@@ -185,11 +202,13 @@ pub struct EditorPreset {
     /// Active snapshot index and snapshot names (preset key `10`).
     pub active_snapshot: Option<i64>,
     pub snapshot_names: Vec<String>,
-    /// Total DSP load (% of the device budget) — sum of the blocks' `dsp_load`. The HX Stomp's
-    /// budget is ~100% per DSP; HX Edit greys out models that wouldn't fit the remainder.
+    /// Total DSP load — sum of the blocks' `dsp_load`, and **only** the blocks': the fixed
+    /// input/output/split/mixer nodes draw DSP too and are not in here. The device fills up at
+    /// [`DSP_CEILING`] on this scale, not 100, so read headroom with
+    /// [`EditorPreset::dsp_free_on`] rather than subtracting from 100.
     ///
     /// On a two-DSP device this sums **both** DSPs, which is not how the device budgets them —
-    /// each DSP has its own budget. Use [`EditorPreset::dsp_load_by_dsp`] for the per-DSP figure.
+    /// each DSP has its own. Use [`EditorPreset::dsp_load_by_dsp`] for the per-DSP figure.
     pub dsp_load: f64,
     /// Identity (bank/index/name) of the preset this edit buffer was read from, when known. Set by
     /// `Session::read_preset` from the op-23 read-info reply; `None` for offline decodes (no device
@@ -290,22 +309,37 @@ impl EditorPreset {
         self.dsps.iter().any(|d| d.split)
     }
 
-    /// DSP load broken down per DSP — `(dsp, load)` in DSP order. Each DSP has its own budget
-    /// (~100%), so this is the meaningful figure on a two-DSP device; [`Self::dsp_load`] is the
-    /// whole-preset sum.
+    /// DSP load broken down per DSP — `(dsp, load)` in DSP order. Each DSP is budgeted on its own,
+    /// so this is the meaningful figure on a two-DSP device; [`Self::dsp_load`] is the whole-preset
+    /// sum and means nothing to the hardware.
     pub fn dsp_load_by_dsp(&self) -> Vec<(usize, f64)> {
         self.dsps
             .iter()
-            .map(|d| {
-                let load: f64 = self
-                    .blocks
-                    .iter()
-                    .filter(|b| b.dsp == d.dsp)
-                    .filter_map(|b| b.dsp_load)
-                    .sum();
-                // An empty f64 sum is -0.0, which formats as "-0.0%" for an unused DSP.
-                (d.dsp, load + 0.0)
-            })
+            // An empty f64 sum is -0.0, which formats as "-0.0%" for an unused DSP.
+            .map(|d| (d.dsp, self.dsp_load_on(d.dsp) + 0.0))
+            .collect()
+    }
+
+    /// DSP load drawn by one DSP's blocks. A DSP with no blocks (or no such index) reads `0.0`.
+    pub fn dsp_load_on(&self, dsp: usize) -> f64 {
+        self.blocks
+            .iter()
+            .filter(|b| b.dsp == dsp)
+            .filter_map(|b| b.dsp_load)
+            .sum()
+    }
+
+    /// Room left on one DSP before the device starts refusing blocks — [`DSP_CEILING`] minus what
+    /// that DSP already draws, floored at zero. This, not `100 - load`, is the headroom a user has.
+    pub fn dsp_free_on(&self, dsp: usize) -> f64 {
+        (DSP_CEILING - self.dsp_load_on(dsp)).max(0.0)
+    }
+
+    /// Room left per DSP — `(dsp, free)` in DSP order. See [`Self::dsp_free_on`].
+    pub fn dsp_free_by_dsp(&self) -> Vec<(usize, f64)> {
+        self.dsps
+            .iter()
+            .map(|d| (d.dsp, self.dsp_free_on(d.dsp)))
             .collect()
     }
 
@@ -439,8 +473,10 @@ struct RawData {
     models: Vec<(String, Vec<u8>)>,
 }
 
-/// The `.models` files the catalog reads for DSP loads, per-param ranges, and cab links. `io.models`
-/// carries no block loads but its params (input gate, output level/pan) are wanted, so it's included.
+/// The `.models` files the catalog reads for DSP loads, per-param ranges, and cab links.
+/// `io.models` is in here for its params (input gate, output level/pan) and for the fixed
+/// input/output/split/mixer nodes' own `load` figures — which the loads table carries but
+/// [`EditorPreset::dsp_load`] does not sum; see [`DSP_CEILING`].
 const MODEL_FILES: &[&str] = &[
     "amp.models",
     "cab.models",

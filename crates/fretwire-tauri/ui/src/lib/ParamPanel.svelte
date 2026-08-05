@@ -7,6 +7,9 @@
   let {
     block,
     dspLoad = 0,
+    // What this DSP fills up at, on `dspLoad`'s scale — ~75, not 100. Passed down so the swap
+    // picker greys the same models the pedal would refuse (see `editor::DSP_CEILING`).
+    budget = 75,
     isNode = false,
     isSplit = false,
     splitTypes = [],
@@ -27,7 +30,6 @@
   // here — the split *type* is changed elsewhere, controllers are footswitch bindings.
   const editable = $derived(!isNode && !block?.is_controller);
 
-  const BUDGET = 100;
   let swapping = $state(false);
   let swappingCab = $state(false);
   // Reset the swap pickers when the selected block changes.
@@ -36,8 +38,8 @@
     swapping = false;
     swappingCab = false;
   });
-  // DSP budget available if this block were replaced (exclude its own current load).
-  const swapRemaining = $derived(BUDGET - (dspLoad - (block?.dsp_load ?? 0)));
+  // DSP available if this block were replaced (exclude its own current load).
+  const swapRemaining = $derived(budget - (dspLoad - (block?.dsp_load ?? 0)));
 
   // Live values shown while dragging a slider (committed on release; previews stream meanwhile).
   let live = $state({});

@@ -293,10 +293,48 @@ the preset *would land on*, by our meter:
 | 73.3%, 73.8%, 74.4%, 74.9% | accepted |
 | 75.3%, 75.6%, 76.5% | refused, `-306` |
 
-So the device fills up at **~75% on our meter**, not 100%: "28% free" can mean no room at all. The
-meter sums the effect blocks' `load` from `HelixModelDefs.bin` and counts nothing else, so the
-missing quarter is most likely the fixed input/output (and, on a parallel preset, split/mixer) nodes
-we never add in — unconfirmed, and worth pinning down before rescaling anything the user sees.
+So the device fills up at **~75% on our meter**, not 100%: "28% free" can mean no room at all. This
+is `fretwire_core::editor::DSP_CEILING`, and it is what every fit check and headroom figure now
+compares against; `EditorPreset::dsp_free_on` returns `DSP_CEILING - load`, never `100 - load`.
+
+The ceiling holds on the Helix Floor too, from the other direction: the tester's `somehinged3` sits
+at **72.7%** on DSP1 and refused both Elephant Man Mono (`load` 6.02) and Euclidean Delay (10.5),
+which puts that device's ceiling under 78.7 — and above 72.7, since the preset itself loads and
+plays. Two different devices, same neighbourhood. **The ceiling is per DSP**, not per preset: a
+Floor preset can total 120% across two DSPs and be nowhere near a refusal.
+
+#### What the missing quarter is *not* [solid — 2026-08-04]
+The obvious theory was the fixed nodes we never add in. `io.models` does price them, which settles
+the half of the question that was open — the numbers exist and we already parse them into
+`Catalog::loads`:
+
+| node | `load` |
+|---|---:|
+| `HelixStomp_AppDSPFlowInput`, `…OutputMain`, `…OutputSend` | 10.99 each |
+| `HD2_AppDSPFlow1Input` / `2Input` | 10.99 |
+| `HD2_AppDSPFlowOutput` | 8.00 |
+| `HD2_AppDSPFlowJoin` (mixer) | 10.99 |
+| `HD2_AppDSPFlowSplitY` / `SplitAB` | 1.50 · `SplitXOver` 2.27 · `SplitDyn` 3.50 |
+
+They are real nodes in a real preset, not bookkeeping: slots `0`, `9`, `10` and `19` of each DSP's
+slot array are the input, output, split and mixer (`19 => 0/1/2/3` where an ordinary block is `6`),
+each with its own params. **But no subset of them adds up to the missing ~25 points.** The ladder
+preset is parallel, so its overhead would be input + output + split + join = `10.99 + 10.99 + 1.50 +
+10.99 = 34.47`, landing the ceiling at 65.5 — but 73.3 was *accepted*. Drop the split and mixer and
+it is 21.98 → 78.0, outside a bracket measured to ±0.2. Every other combination misses too, so
+against a budget of 100 the additive theory is dead. Either the budget is not 100 in these units
+(~110 would fit both devices) or the nodes are not what we are missing.
+
+Consequence for the code: we do **not** fold the node loads into the meter. Adding a wrong 34 to
+the number would trade a known error for an unknown one, and the raw block sum is quoted in every
+log, capture note and doc on record. The correction lives in the ceiling instead, which is measured.
+
+**The experiment that closes it** is one screenshot: HX Edit's own DSP readout for a preset we
+have. If it reads ~97% where ours reads 72.7, the scale is affine (a fixed overhead plus blocks)
+and the overhead is `HXEdit − ours`; if it reads 72.7 too, then HX Edit counts what we count and
+the ceiling really is a device property. Failing that, a second `-306` ladder on a **serial** preset
+does it from Linux alone: if the serial ceiling sits ~12.5 points above the parallel one, the split
+and mixer are billed after all.
 
 Eight probes were needed to kill the first theory, that op 40 cannot cross a model *category*. It
 cannot: tremolo→delay, reverb→delay and delay→reverb all succeed with DSP free, and the one

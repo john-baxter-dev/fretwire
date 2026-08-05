@@ -598,21 +598,21 @@ fn main() -> Result<()> {
             paired_index: paired,
         } => {
             let mut s = fretwire_core::Session::connect()?;
-            // DSP-fit check: read the current preset and project the swap's load. A warning only —
-            // the budget is unconfirmed and the device is the final arbiter (see DSP_BUDGET).
+            // DSP-fit check: read the current preset and project the swap's load. Against **this
+            // block's DSP**, not the whole preset — each DSP is budgeted on its own, so summing
+            // both on a Floor warned about presets that fit fine and stayed quiet about ones that
+            // didn't. A warning only; the device is the final arbiter (see DSP_CEILING).
             let projected = match s.read_preset() {
                 Ok(preset) => {
-                    let old = preset
-                        .blocks
-                        .iter()
-                        .find(|b| b.slot == slot)
-                        .and_then(|b| b.dsp_load)
-                        .unwrap_or(0.0);
+                    let block = preset.blocks.iter().find(|b| b.slot == slot);
+                    let dsp = block.map(|b| b.dsp).unwrap_or(0);
+                    let cur = preset.dsp_load_on(dsp);
+                    let old = block.and_then(|b| b.dsp_load).unwrap_or(0.0);
                     let new = s
                         .catalog()
                         .model_load_by_index(index)
                         .map(|l| l + s.catalog().model_load_by_index(paired).unwrap_or(0.0));
-                    new.map(|n| (preset.dsp_load, preset.dsp_load - old + n))
+                    new.map(|n| (cur, cur - old + n))
                 }
                 Err(e) => {
                     tracing::debug!("fit check skipped (read failed: {e})");
@@ -620,12 +620,12 @@ fn main() -> Result<()> {
                 }
             };
             if let Some((_cur, proj)) = projected
-                && proj > fretwire_core::editor::DSP_BUDGET
+                && proj > fretwire_core::editor::DSP_CEILING
             {
                 eprintln!(
-                    "⚠  projected DSP ~{proj:.1}% exceeds the ~{:.0}% budget — the device \
-                    may reject this swap or drop a block.",
-                    fretwire_core::editor::DSP_BUDGET
+                    "⚠  projected DSP ~{proj:.1}% is past the ~{:.0}% this pedal accepts — expect \
+                     a `-306` refusal (that ceiling is measured, not the 100% the meter implies).",
+                    fretwire_core::editor::DSP_CEILING
                 );
             }
             s.swap_model(slot, index, paired)?;
@@ -1123,14 +1123,21 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
     } else {
         "serial"
     };
-    // A two-DSP device budgets each DSP separately, so report them separately.
+    // A two-DSP device budgets each DSP separately, so report them separately. Headroom is
+    // measured against DSP_CEILING, not 100 — the pedal starts refusing blocks a quarter short.
+    let ceiling = fretwire_core::editor::DSP_CEILING;
     let load = match preset.dsp_load_by_dsp().as_slice() {
-        [(_, one)] => format!("DSP {one:.1}% used ({:.1}% free)", (100.0 - one).max(0.0)),
-        many => many
-            .iter()
-            .map(|(d, l)| format!("DSP{} {l:.1}%", d + 1))
-            .collect::<Vec<_>>()
-            .join(" · "),
+        [(d, one)] => format!(
+            "DSP {one:.1}% used · {:.1}% free (the pedal refuses past ~{ceiling:.0}%)",
+            preset.dsp_free_on(*d)
+        ),
+        many => format!(
+            "{} (each DSP refuses past ~{ceiling:.0}%)",
+            many.iter()
+                .map(|(d, l)| format!("DSP{} {l:.1}% · {:.1}% free", d + 1, preset.dsp_free_on(*d)))
+                .collect::<Vec<_>>()
+                .join(" · ")
+        ),
     };
     println!(
         "{} block(s) · {topo} topology · {load}",

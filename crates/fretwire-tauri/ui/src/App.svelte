@@ -10,7 +10,6 @@
   import Toast from "./lib/Toast.svelte";
   import FirstRun from "./lib/FirstRun.svelte";
 
-  const BUDGET = 100;
 
   // First-run gating: until we've checked whether the Line 6 reference data is imported, show
   // nothing (avoids flashing the editor then the setup screen). `null` = checking, then a status
@@ -115,14 +114,24 @@
   const allNodes = $derived(
     dspViews.flatMap((v) => [v.split_node, v.mixer_node, v.input_node, v.output_node]),
   );
-  // Each DSP carries its own ~100% budget, so a block's fit is judged against *its* DSP's load,
-  // not the combined total (which can exceed 100% on the Floor). Slots are global: `dsp*20+index`.
+  // What a DSP fills up at, on the same scale as `dsp_load`. **Not 100** — the pedal starts
+  // refusing blocks a quarter short of it (measured on both devices; see `editor::DSP_CEILING`).
+  // The backend sends the figure so there is one copy of it; the fallback covers the mock backend.
+  const BUDGET = $derived(preset?.dsp_ceiling ?? 75);
+  // Each DSP is budgeted on its own, so a block's fit is judged against *its* DSP's load, not the
+  // combined total (which can exceed the ceiling on the Floor). Slots are global: `dsp*20+index`.
   const loadForSlot = (slot) => {
     const v = dspViews.find((x) => x.dsp === Math.floor(slot / 20));
     return v ? v.dsp_load : (preset?.dsp_load ?? 0);
   };
-  // Header readout: "38.4%" on the Stomp, "38.4% · 58.9%" (per DSP) on the Floor.
-  const dspLoadLabel = $derived(dspViews.map((v) => v.dsp_load.toFixed(1) + "%").join(" · "));
+  // Header readout, per DSP: how much is used and how much is actually left. "72.7% · 2.3% free"
+  // on the Stomp, both DSPs joined by "·" on the Floor. Showing the free figure is the point —
+  // 72.7% next to an implied 100 reads as plenty of room, and it is nearly none.
+  const dspLoadLabel = $derived(
+    dspViews
+      .map((v) => `${v.dsp_load.toFixed(1)}% · ${Math.max(BUDGET - v.dsp_load, 0).toFixed(1)}% free`)
+      .join(" · "),
+  );
 
   // Whether the selected slot is a structural node (split/mixer/input/output) rather than a normal
   // block — nodes aren't swappable or deletable.
@@ -770,7 +779,12 @@
           {#if dspViews.length > 1}
             <div class="dsp-head">
               DSP {dspView.dsp + 1}
-              <span class="dsp-load">{dspView.dsp_load.toFixed(1)}%</span>
+              <span class="dsp-load"
+                >{dspView.dsp_load.toFixed(1)}% · {Math.max(
+                  BUDGET - dspView.dsp_load,
+                  0,
+                ).toFixed(1)}% free</span
+              >
             </div>
           {/if}
           <Chain
@@ -788,6 +802,7 @@
           <ParamPanel
             block={selectedBlock}
             dspLoad={selectedBlock ? loadForSlot(selectedBlock.slot) : preset.dsp_load}
+            budget={BUDGET}
             isNode={selectedIsNode}
             isSplit={selectedIsSplit}
             {splitTypes}

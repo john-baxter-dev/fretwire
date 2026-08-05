@@ -283,6 +283,10 @@ pub struct PresetDto {
     pub firmware: Option<String>,
     pub split: bool,
     pub dsp_load: f64,
+    /// The load a DSP fills up at, on `dsp_load`'s scale — **~75, not 100** (see
+    /// `fretwire_core::editor::DSP_CEILING`). Sent so the UI's meters and "does it fit" greying
+    /// read the measured ceiling instead of carrying their own copy of the number.
+    pub dsp_ceiling: f64,
     pub split_pos: Option<i64>,
     pub mixer_pos: Option<i64>,
     pub active_snapshot: Option<i64>,
@@ -322,6 +326,7 @@ impl From<&EditorPreset> for PresetDto {
             firmware: p.firmware.clone(),
             split: p.split(),
             dsp_load: fin(p.dsp_load),
+            dsp_ceiling: fretwire_core::editor::DSP_CEILING,
             split_pos: p.split_pos(),
             mixer_pos: p.mixer_pos(),
             active_snapshot: p.active_snapshot,

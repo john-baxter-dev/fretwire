@@ -220,9 +220,41 @@ fn dsp_load_is_reported_per_dsp() {
     for (dsp, load) in &loads {
         assert!(*load > 0.0, "dsp {dsp} should draw some load");
     }
-    // Each DSP has its own ~100% budget; the flat total is their sum.
+    // Each DSP is budgeted on its own; the flat total is merely their sum.
     let total: f64 = loads.iter().map(|(_, l)| l).sum();
     assert!((total - p.dsp_load).abs() < 1e-6);
+    for (dsp, load) in &loads {
+        assert!((p.dsp_load_on(*dsp) - load).abs() < 1e-6);
+    }
+}
+
+/// Headroom is measured against the load the pedal actually stops at (~75), not the 100 the
+/// percentage implies. Reading it as `100 - load` is what told the tester he had 27% free on a
+/// preset that would not take another block — see `editor::DSP_CEILING`.
+#[test]
+fn free_dsp_is_measured_against_the_ceiling_not_a_hundred() {
+    use fretwire_core::editor::DSP_CEILING;
+    let p = catalog().load_preset(&two_dsp_stream()).unwrap();
+
+    for (dsp, load) in p.dsp_load_by_dsp() {
+        let free = p.dsp_free_on(dsp);
+        assert!((free - (DSP_CEILING - load)).abs() < 1e-6);
+        assert!(
+            free < 100.0 - load,
+            "dsp {dsp}: free must be stingier than the naive 100 - {load}"
+        );
+    }
+    assert_eq!(
+        p.dsp_free_by_dsp(),
+        p.dsp_load_by_dsp()
+            .iter()
+            .map(|(d, _)| (*d, p.dsp_free_on(*d)))
+            .collect::<Vec<_>>()
+    );
+
+    // A DSP loaded past the ceiling reports no room rather than a negative figure, and an unused
+    // DSP index reports the whole ceiling rather than panicking.
+    assert_eq!(p.dsp_free_on(97), DSP_CEILING);
 }
 
 #[test]

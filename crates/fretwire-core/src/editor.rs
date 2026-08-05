@@ -17,22 +17,27 @@ use std::path::Path;
 /// reports: **about 75%, not 100%.** Measured on hardware, not derived — so "28% free" on our
 /// meter can mean no room at all, and this is the number a fit check must compare against.
 ///
-/// The gap is real but not yet decomposed. Our meter sums the effect blocks' `load` and nothing
-/// else; a preset also runs fixed nodes we never add in, and `io.models` prices them —
-/// `HelixStomp_AppDSPFlowInput` / `…OutputMain` 10.99 each, `HD2_AppDSPFlowOutput` 8.00,
-/// `HD2_AppDSPFlowSplitY` 1.50, `HD2_AppDSPFlowJoin` 10.99. **No subset of those sums to the
-/// missing ~25 points against a 100 budget**, so counting them in would trade one wrong number
-/// for another; see `docs/protocol.md`. Until that closes, the raw sum keeps its old meaning —
-/// every log, capture note and doc on record quotes it — and the ceiling carries the correction.
+/// The missing quarter is a **flat reserve, not something the preset spends**. It was long
+/// assumed to be the fixed nodes we never sum — the input, the output, and on a parallel preset
+/// the split and mixer, which `io.models` does price (`HD2_AppDSPFlow1Input` 10.99,
+/// `HD2_AppDSPFlowOutput` 8.00, `HD2_AppDSPFlowSplitY` 1.50, `HD2_AppDSPFlowJoin` 10.99). A
+/// census of 363 real presets says otherwise: serial and parallel DSPs stop at the *same* number,
+/// so the split and mixer's 12.49 is not billed here, and neither is anything else that varies
+/// with the preset. See `docs/protocol.md`. So the raw sum keeps its old meaning — every log,
+/// capture note and doc on record quotes it — and the ceiling carries the whole correction.
 ///
 /// Used for *warnings*, never enforcement: the device is the final arbiter (out-guarding it is
 /// how the row-B stranding and node-enclosure mistakes happened).
 ///
-/// [solid — 2026-08-02/03. HX Stomp fw 3.71: one preset, one slot, a ladder of swap targets, by
-/// the total each would land on — 73.3 / 73.8 / 74.4 / 74.9 accepted, 75.3 / 75.6 / 76.5 refused
-/// `-306`. Independently on the tester's Helix Floor: `somehinged3` sits at 72.7% on DSP1 and
-/// refused Elephant Man Mono (+6.02) and Euclidean Delay (+10.5), putting that device's ceiling
-/// under 78.7 too.]
+/// [solid — three independent lines, 2026-08-02/04.
+/// **1.** HX Stomp fw 3.71: one preset, one slot, a ladder of swap targets, by the total each
+/// would land on — 73.3 / 73.8 / 74.4 / 74.9 accepted, 75.3 / 75.6 / 76.5 refused `-306`.
+/// **2.** The tester's Helix Floor: `somehinged3` sits at 72.7% on DSP1 and refused Elephant Man
+/// Mono (+6.02) and Euclidean Delay (+10.5), putting that device's ceiling under 78.7 too.
+/// **3.** His `.hxb` backup — 363 presets, 458 DSPs carrying blocks, including Line 6's own two
+/// factory setlists. **Nothing exceeds 74.84**, and the wall is flat: 74.84 parallel vs 74.80
+/// serial, 74.84 on DSP1 vs 74.77 on DSP2, with 46 presets sitting in the 70–74.84 band. Line 6
+/// builds right up to it, which is the best evidence there is that this is the real limit.]
 pub const DSP_CEILING: f64 = 75.0;
 
 /// The shipped reference data needed to interpret a preset: the model table + device param orders.

@@ -1670,18 +1670,37 @@ telling people they had a quarter of a DSP they did not have.** Fixed:
   that both warns about presets that fit and stays quiet about ones that don't — each DSP is
   budgeted on its own. Now checked against the target block's DSP.
 
-**What the missing quarter is not.** The standing guess was the fixed input/output/split/mixer
-nodes we never sum. `io.models` does price them (Stomp in/out `10.99` each, `HD2_AppDSPFlowOutput`
-`8.00`, Split Y `1.50`, Join `10.99`) and they are real slots in the preset — `0`, `9`, `10`, `19`
-of each DSP's array, kinds `0`/`1`/`2`/`3` against an ordinary block's `6`. But **no subset of them
-closes the gap**: the ladder preset is parallel, so the full overhead is 34.47 and would put the
-ceiling at 65.5, where 73.3 was accepted; without split and mixer it is 21.98 → 78.0, outside a
-bracket good to ±0.2. Against a budget of 100 the additive theory is refuted. So the node loads
-stay out of the meter — folding in a wrong 34 would trade a known error for an unknown one, and the
-raw block sum is what every log and capture note on record quotes. The correction lives in the
-ceiling, which is measured.
+**The missing quarter is a flat reserve, not the routing nodes.** The standing guess was the fixed
+input/output/split/mixer nodes we never sum. `io.models` does price them (`HD2_AppDSPFlow1Input`
+`10.99`, `HD2_AppDSPFlowOutput` `8.00`, Split Y `1.50`, Join `10.99`) and they are real slots in
+the preset — `0`, `9`, `10`, `19` of each DSP's array, kinds `0`/`1`/`2`/`3` against an ordinary
+block's `6`. But they do not explain the gap, and the arithmetic said so before the census did: the
+ladder preset is parallel, so the four together are 31.48 and would put the ceiling at 68.5, where
+73.3 was accepted. No subset lands on the ~25 the bracket demands.
 
-Still open: *why* it is 75. One HX Edit screenshot settles it (if HX Edit reads ~97 where we read
-72.7 the scale is affine and the offset is the difference); failing that, a second `-306` ladder on
-a **serial** preset does it from Linux alone — a serial ceiling ~12.5 points higher would mean the
-split and mixer are billed after all. Both are in `captures/_RUNBOOK-hx-edit-session.md`.
+**The census that settles it.** His `.hxb` backup has been sitting in `captures/helix-floor/` since
+July and we had never used it as evidence: 363 presets over eight setlists, **including Line 6's own
+two factory setlists** — 458 DSPs carrying blocks, every one a preset the hardware accepted. Summing
+each DSP's block loads the way our meter does:
+
+| slice | n | max load |
+|---|---:|---:|
+| everything | 458 | **74.84** |
+| parallel DSPs | 151 | 74.84 |
+| serial DSPs | 307 | 74.80 |
+| DSP1 · DSP2 | 302 · 156 | 74.84 · 74.77 |
+
+The wall is **flat**. Were the split and mixer billed here, serial presets would run to ~87 and
+parallel ones stop at ~75; both stop at 74.8, a difference of 0.04, and the same holds across split
+types. Nothing preset-dependent is being charged — the device keeps a quarter of each DSP and lets
+blocks have the rest. 46 DSPs sit in the 70–74.84 band and **none above**, so Line 6 builds right up
+to this number too. With the Stomp ladder (74.9 accepted, 75.3 refused) the ceiling is pinned to
+**[74.9, 75.3)**, hence 75.0.
+
+Also learned, independently useful: **each DSP has two inputs and two outputs** (`inputA`/`inputB`,
+`outputA`/`outputB` in the `.hxb` tone), not one of each. The reproduction recipe for the census is
+in `docs/protocol.md`.
+
+Still open, and now purely cosmetic: what HX Edit puts on screen. If it displays `blocks ÷ 75` its
+meter reads ~97% where ours reads 72.7% and we could show the same number instead of a measured
+ceiling. One screenshot decides it; no fit check depends on the answer.

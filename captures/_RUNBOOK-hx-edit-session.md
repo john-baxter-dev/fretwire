@@ -97,18 +97,17 @@ HX Edit changing that value closes it. Worth knowing about, not worth hunting fo
 
 ## Not a capture — but do these, they're cheap
 
-**The DSP meter screenshot.** Load `somehinged3` in HX Edit and photograph its DSP readout. Our
-meter says 72.7% and the pedal refuses swaps as though it were full; a ladder of hardware probes
-puts the real ceiling near 75% on our scale, which the editor now reports as headroom instead of
-pretending the budget is 100. What is still open is **why** 75 — the obvious answer, the fixed
-input/output/split/mixer nodes, is priced in `io.models` and does not add up (see
-`docs/protocol.md`). This screenshot decides it in thirty seconds:
+**The DSP meter screenshot.** Load `somehinged3` in HX Edit and photograph its DSP readout. Ours
+says 72.7% and the editor now reports the headroom that actually goes with it (~2.3%, against the
+measured ~75 ceiling) instead of pretending the budget is 100. That part is settled — a census of
+458 real DSPs pins the ceiling and rules out the routing nodes as the missing quarter, see
+`docs/protocol.md`. What is left is cosmetic, and this screenshot decides it in thirty seconds:
 
-- HX Edit reads **~97%** → the scale is affine, the offset is `HXEdit − 72.7`, and we can show the
-  same number HX Edit does instead of a measured ceiling.
-- HX Edit reads **~72.7%** → it counts what we count, and ~75 is simply where the hardware stops.
+- HX Edit reads **~97%** → it displays `blocks ÷ 75`, and we can show the same number users see in
+  HX Edit rather than a raw sum plus a ceiling.
+- HX Edit reads **~72.7%** → it shows the raw sum like we do, and the ceiling stays as-is.
 
-Either way we stop documenting a magic number. Highest value-per-second item in the document.
+No longer urgent — nothing about fit checking depends on it — but still cheap and still worth it.
 
 **A screenshot of the mono/stereo control** wherever HX Edit puts it, from step B. Worth having on
 its own even if the capture is messy.
@@ -119,11 +118,9 @@ Listed so nobody spends session time on them:
 
 - **Type-49 pushes** (`{98: slot}` — pedal-side model changes not reaching our UI): `fretwire watch`
   on Linux while changing a block's model with the joystick.
-- **A `-306` ladder on a serial preset.** The one we have was parallel. Take a serial preset, pick a
-  slot, and `fretwire swap` it to progressively bigger models until one is refused; `show-preset`
-  names the landing total each time. A ceiling ~12.5 points above the parallel one (~87 vs ~75)
-  means the split and mixer are billed to the DSP after all — which is the whole question in
-  `docs/protocol.md`, answered without Windows.
+- ~~A `-306` ladder on a serial preset~~ — **done, from the `.hxb` backup instead** (2026-08-04).
+  458 real DSPs say the ceiling is the same serial or parallel, so the split and mixer are not
+  billed against it. See `docs/protocol.md`.
 - **Why the filters went dead** (Round 26 — the answer is probably level, not routing). Put an
   envelope filter in path B, play it, then raise the split's `Balance B` or the filter's own
   Sensitivity and play again. If it wakes up, that closes two evenings of "no worky" for good.

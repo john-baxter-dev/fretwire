@@ -825,17 +825,24 @@ impl Session {
     /// unchanged across 90 reads of channel history). `CREDIT_WAIT` is 250 ms against a ~7 ms
     /// healthy round-trip, so a chunk going unanswered is not slowness; it is the endpoint dying.
     ///
-    /// **A doomed write is doomed by chunk three, and the device is never outrun.** Over all 51
-    /// recorded writes the credit count is the whole story: the 22 that wedged received **1 to 3
-    /// credits and not one more**, while the 29 that completed were credited at every single chunk,
-    /// climbing to 14–19. Not one write on either side of that gap. So the device does not degrade
-    /// across the transfer and is not being pushed too hard; it stops dead after two or three
-    /// chunks, and everything we send afterwards goes into an endpoint that has already stopped.
+    /// **A doomed write is doomed by chunk three.** Over all 51 recorded writes the credit count is
+    /// the whole story at the end: the 22 that wedged received **1 to 3 credits and not one more**,
+    /// while the 29 that completed were credited at every chunk, climbing to 14–19. Not one write
+    /// on either side of that gap.
     ///
-    /// The first chunk's credit latency is a good tell but not a rule — 4.6–8.2 ms on all 29
-    /// completed writes and 22–255 ms on 21 of the 22 wedged ones, with `fretwire24`'s third write
-    /// the standing exception: credited in 2.8 ms, then dead after the second. `first_credit_ms` on
-    /// the summary line records it for future reports; the credit ceiling is the reliable one.
+    /// **But it does not stop dead — it slows down first, and we can see it.** The chunk-*two*
+    /// credit separates the outcomes almost perfectly across 39 writes with per-chunk timings:
+    /// **5–8 ms on all 19 that completed, 23–253 ms on 19 of the 20 that wedged** (`fretwire24`
+    /// again the exception). So the device does degrade before it dies, one whole chunk before the
+    /// silence, and pushing a full-rate chunk into a device that just took 200 ms to credit the
+    /// last one is plausibly what finishes it. `SLOW_CREDIT`/`BACKOFF` in the loop act on that.
+    ///
+    /// This corrects, rather than overturns, the earlier reading. That analysis had the right
+    /// signal and called it "the first chunk's credit latency", measuring it as the gap between the
+    /// first two chunk log lines — which is chunk **two**'s credit wait, not chunk one's. The
+    /// `first_credit_ms` field was then added to record it and, measuring what its name says,
+    /// measures the wrong chunk: it is 2–7 ms on wedged and completed writes alike and separates
+    /// nothing. `worst_credit_ms` and the per-chunk `credit_ms` now record the real one.
     ///
     /// **Ending each unit on a short packet (`80ee812`) is the single biggest win so far, and it is
     /// not a cure.** The tester rebuilt mid-session, which splits the logs cleanly: 21 of 31 writes
@@ -852,11 +859,13 @@ impl Session {
     /// bytes of a stalling write and a succeeding one side by side, which `FRETWIRE_DUMP_WRITES`
     /// collects.
     ///
-    /// [solid — 2026-08-03, `fretwire12`–`51` plus the `somehinged*` runs: 51 writes, 22 wedged.
-    /// **Open:** what device state stops it consuming. Refuted along the way: that the abort causes
-    /// it (`fretwire26`), that the edit channel's `arg` offset drives it (see `write_preset`'s
-    /// body), and that short packets alone explain it (`80ee812` cut the rate to a fifth and left
-    /// 12% standing).]
+    /// [solid — 2026-08-04, `fretwire12`–`52a` plus the `somehinged*` runs: 59 writes, 22 wedged;
+    /// 39 of them carry per-chunk timings. **Open:** what device state stops it consuming, and
+    /// whether backing off on a slow credit rescues it — an HX Stomp has never wedged, so only a
+    /// Floor can answer that. Refuted along the way: that the abort causes it (`fretwire26`), that
+    /// the edit channel's `arg` offset drives it (see `write_preset`'s body), that short packets
+    /// alone explain it (`80ee812` cut the rate to a fifth and left 15% standing), and that the
+    /// device never degrades before dying (the chunk-2 credit says it does).]
     ///
     /// LIVE: the exact chunk size and `arg` cadence are reconstructed from `move_EQ_right_two_slots`.
     /// The device's `{103:1}` apply-ACK is best-effort (logged, not required); the caller confirms by
@@ -883,6 +892,31 @@ impl Session {
         /// logs, hands the fatal blocking `send_frame` the chance to time out first — which is how
         /// `fretwire48`/`51` failed with a bare USB error instead of this guard's message.
         const MAX_SILENT_CHUNKS: usize = 1;
+        /// A credit slower than this means the device is falling behind — **the earliest signal
+        /// there is that a write is going to wedge**, and it arrives a whole chunk before the
+        /// silence does.
+        ///
+        /// Across all 39 recorded writes the chunk-2 credit separates the outcomes almost
+        /// perfectly: every one of the 19 that completed took **5–8 ms**, and 19 of the 20 that
+        /// wedged took **23–253 ms**. (The exception is `fretwire24`, the same write that is the
+        /// standing counter-example for first-credit latency.) Chunk *one*'s credit predicts
+        /// nothing — `first_credit_ms` is 2–7 ms in both groups — which is why this went unseen
+        /// for so long: we were measuring the wrong chunk. 15 ms sits in the empty gap between
+        /// the two populations.
+        const SLOW_CREDIT: std::time::Duration = std::time::Duration::from_millis(15);
+        /// How long to stand off after a slow credit before pushing the next chunk.
+        ///
+        /// The theory this tests: the device wedges because we keep feeding a receive path that
+        /// has stopped keeping up, and the fix is to stop feeding it for a moment. That is the one
+        /// mechanism consistent with everything known — the short-packet fix (which cut wedges
+        /// 68% → 15% by letting each transfer terminate), the fact that the blob never mattered,
+        /// and now a slow credit predicting the death one chunk in advance.
+        /// [hypothesis — 2026-08-04. Needs a Floor to confirm; an HX Stomp has never wedged.]
+        const BACKOFF: std::time::Duration = std::time::Duration::from_millis(120);
+        /// Consecutive slow credits before we give up rather than keep pushing. Backing off once
+        /// is the rescue attempt; a second slow credit says it did not take. No completed write on
+        /// record has *one* slow credit, let alone two, so this cannot fire on a healthy transfer.
+        const MAX_SLOW_CHUNKS: usize = 2;
 
         let txn = self.bump_txn();
         let tlv = Tlv::command(op::PARAM_SET, edit::write_preset(&blob, txn)).to_bytes();
@@ -924,6 +958,10 @@ impl Session {
         let mut sent = 0usize;
         let mut credits = 0usize;
         let mut silent = 0usize;
+        // Consecutive slow credits, and the worst one seen — both go in the closing log line so a
+        // field log says how close a completed write came, not just that it finished.
+        let mut slow = 0usize;
+        let mut worst_credit_ms = 0u128;
         // How long the *first* chunk's credit took. On this device that single number predicts the
         // whole transfer (see the doc comment), so every write reports it whether it succeeds or
         // not — it is the one field a bug report needs and the cheapest one to collect.
@@ -960,15 +998,28 @@ impl Session {
             // device's backlog doesn't accumulate. Waiting for the *first* frame is what paces us;
             // the second call only mops up and must not add latency.
             let waited = std::time::Instant::now();
-            let got = self.transport.drain_collect(CREDIT_WAIT, 1).len()
+            let got = self.transport.drain_collect(CREDIT_WAIT, 1).len();
+            // How long *this* chunk's credit took. Measured before the mop-up sweep, which is a
+            // fixed 2 ms and would otherwise smear the number that matters.
+            let credit_ms = waited.elapsed();
+            let got = got
                 + self
                     .transport
                     .drain_collect(std::time::Duration::from_millis(2), 8)
                     .len();
             if n == 0 {
-                first_credit_ms = waited.elapsed().as_millis();
+                first_credit_ms = credit_ms.as_millis();
             }
+            worst_credit_ms = worst_credit_ms.max(credit_ms.as_millis());
             credits += got;
+            // A credit that arrived, but late. The device is still answering and has not gone
+            // quiet, so this is not the silence guard's case — it is the window in which the
+            // device can still be rescued, if it can be rescued at all.
+            slow = if got > 0 && credit_ms > SLOW_CREDIT {
+                slow + 1
+            } else {
+                0
+            };
             // Count *consecutive* unanswered chunks, not the running total. The device batches its
             // credits — a healthy transfer can be several behind and catch up in one sweep — so a
             // cumulative deficit says "busy" as often as it says "dead". Going quiet and staying
@@ -981,8 +1032,47 @@ impl Session {
                 total,
                 credits,
                 silent,
+                credit_ms = credit_ms.as_millis(),
+                slow,
                 "write-preset chunk"
             );
+            // The device is answering but lagging. Stand off before the next chunk instead of
+            // pushing into it — and if a second credit is just as slow, standing off did not work,
+            // so stop while the failure is still describable rather than feed it to the silence.
+            if slow > 0 && n + 1 < chunks {
+                if slow >= MAX_SLOW_CHUNKS {
+                    tracing::error!(
+                        sent,
+                        total,
+                        credits,
+                        first_credit_ms,
+                        credit_ms = credit_ms.as_millis(),
+                        chunks = n + 1,
+                        "device is falling behind and did not recover after backing off — \
+                         abandoning the transfer"
+                    );
+                    self.last_raw = None;
+                    return Err(crate::Error::WriteStalled(format!(
+                        "the pedal fell behind {sent} of {total} bytes into a preset write and did \
+                         not catch up when we paused for it. Reload the preset — the edit buffer \
+                         holds a half-written one — and power-cycle the pedal if it has stopped \
+                         responding. Nothing was saved to flash"
+                    )));
+                }
+                tracing::warn!(
+                    sent,
+                    total,
+                    credit_ms = credit_ms.as_millis(),
+                    backoff_ms = BACKOFF.as_millis(),
+                    "the pedal is lagging on a preset write — pausing to let it catch up"
+                );
+                std::thread::sleep(BACKOFF);
+                // Anything the device queued while we waited is still flow control, not payload.
+                credits += self
+                    .transport
+                    .drain_collect(std::time::Duration::from_millis(2), 8)
+                    .len();
+            }
             // Only worth stopping while there is still data to withhold: past the last chunk the
             // blob is already in the device and quitting would just deny it the terminator.
             if silent >= MAX_SILENT_CHUNKS && n + 1 < chunks {
@@ -1033,7 +1123,15 @@ impl Session {
             .transport
             .drain_collect(std::time::Duration::from_millis(80), 32);
         let acked = acks.iter().any(|f| reply_txn(&f.body) == Some(txn));
-        tracing::info!(bytes = total, acked, first_credit_ms, "write-preset sent");
+        // `worst_credit_ms` is the number to read in a field log: a completed write should show a
+        // single-digit figure, and anything near SLOW_CREDIT means that write nearly died.
+        tracing::info!(
+            bytes = total,
+            acked,
+            first_credit_ms,
+            worst_credit_ms,
+            "write-preset sent"
+        );
         Ok(())
     }
 

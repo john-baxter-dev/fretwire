@@ -1755,3 +1755,36 @@ these logs are the last from a build that let him try.
 **Mystery Filter** (Sensitivity 5.2) at slot 15 in path B with `BalanceB` at 0.5, next to a Dual
 Delay that works. Same shape as Round 26 both times. He has named it "baseline", so he is setting up
 the controlled comparison himself.
+
+### The write wedge has an early warning, and we were measuring the wrong chunk (2026-08-04)
+
+Re-analysing every write on record with per-chunk timings — 39 of them — turned up a near-perfect
+discriminator that is **not** the one we have been logging:
+
+| the chunk-2 credit took | writes | outcome |
+|---|---:|---|
+| 5–8 ms | 19 | all completed |
+| 23–253 ms | 19 | all wedged |
+| 3 ms | 1 | wedged (`fretwire24`, the standing exception) |
+
+**Chunk one's credit predicts nothing** — `first_credit_ms` is 2–7 ms on wedged and completed
+writes alike. That field was added specifically to capture this signal, and it measures the wrong
+chunk: the original analysis had found the right thing but computed it as the gap between the first
+two chunk log lines, which is chunk *two*'s credit wait. Named for chunk one, implemented for chunk
+one, and it has separated nothing ever since.
+
+So the device **does** degrade before it dies — a full chunk before the silence — which refutes the
+"it stops dead, it is never outrun" reading. Acting on it:
+
+- `SLOW_CREDIT` (15 ms, in the empty gap between the two populations) marks a chunk as lagging.
+- On a lagging chunk we **stand off `BACKOFF` (120 ms)** instead of pushing the next one in. This is
+  the actual fix attempt: the theory is that feeding a receive path that has stopped keeping up is
+  what finishes it, which is the one mechanism consistent with the short-packet fix helping, the
+  blob never mattering, and a slow credit predicting death one chunk early.
+- Two consecutive slow credits means backing off did not take, so we stop there rather than feed
+  the silence — no completed write on record has even one slow credit, so this cannot misfire.
+- `credit_ms` per chunk and `worst_credit_ms` on the summary line are now logged, so the next round
+  says whether the back-off worked. A healthy write should show single digits.
+
+**Unconfirmed by construction:** an HX Stomp has never wedged, so this cannot be tested here. It
+ships as a hypothesis with the instrumentation to judge it.

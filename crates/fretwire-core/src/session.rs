@@ -831,18 +831,34 @@ impl Session {
     /// on either side of that gap.
     ///
     /// **But it does not stop dead — it slows down first, and we can see it.** The chunk-*two*
-    /// credit separates the outcomes almost perfectly across 39 writes with per-chunk timings:
-    /// **5–8 ms on all 19 that completed, 23–253 ms on 19 of the 20 that wedged** (`fretwire24`
-    /// again the exception). So the device does degrade before it dies, one whole chunk before the
-    /// silence, and pushing a full-rate chunk into a device that just took 200 ms to credit the
-    /// last one is plausibly what finishes it. `SLOW_CREDIT`/`BACKOFF` in the loop act on that.
+    /// credit separates the outcomes across 39 writes with per-chunk timings, and the instrumented
+    /// build made the separation exact. Over the 20 writes in `fretwire55`/`56`/`zadtheinhaler57`/
+    /// `58`: **1–3 ms on all 17 that completed, 28 / 32 / 94 ms on all 3 that wedged**, nothing in
+    /// between. The device does degrade before it dies, one whole chunk before the silence.
     ///
     /// This corrects, rather than overturns, the earlier reading. That analysis had the right
     /// signal and called it "the first chunk's credit latency", measuring it as the gap between the
     /// first two chunk log lines — which is chunk **two**'s credit wait, not chunk one's. The
     /// `first_credit_ms` field was then added to record it and, measuring what its name says,
-    /// measures the wrong chunk: it is 2–7 ms on wedged and completed writes alike and separates
+    /// measures the wrong chunk: it is 0–5 ms on wedged and completed writes alike and separates
     /// nothing. `worst_credit_ms` and the per-chunk `credit_ms` now record the real one.
+    ///
+    /// **Backing off does not rescue it — refuted on the hardware.** The obvious reading of the
+    /// slow credit was congestion: the device has stopped keeping up, so stop feeding it for a
+    /// moment and it recovers. Shipped as a 120 ms stand-off, it failed 3 for 3. In every case the
+    /// pedal went from one slow credit straight to total silence on the very next chunk, and not a
+    /// single credit arrived during the pause (`credits` is unchanged across it in all three).
+    /// Whatever the slow credit signals, it is not a queue we can drain by waiting.
+    /// [solid — 2026-08-05, `fretwire55`/`56`/`zadtheinhaler57`/`58`.]
+    ///
+    /// So the loop no longer pauses; it **stops at the first slow mid-transfer credit, without
+    /// sending the chunk it was about to send.** The write is lost either way — no write with a
+    /// slow chunk-2 credit has ever completed — so the only thing that changes is that we stop
+    /// pushing 512 more bytes into an endpoint that has demonstrably stopped draining. Today every
+    /// wedge ends with the pedal needing a power cycle; whether withholding that last chunk spares
+    /// it is the one variable never tested, and it is the difference between "reload the preset"
+    /// and "reach behind the pedal".
+    /// [hypothesis — 2026-08-05. The detection is solid; only the power-cycle outcome is open.]
     ///
     /// **Ending each unit on a short packet (`80ee812`) is the single biggest win so far, and it is
     /// not a cure.** The tester rebuilt mid-session, which splits the logs cleanly: 21 of 31 writes
@@ -859,13 +875,14 @@ impl Session {
     /// bytes of a stalling write and a succeeding one side by side, which `FRETWIRE_DUMP_WRITES`
     /// collects.
     ///
-    /// [solid — 2026-08-04, `fretwire12`–`52a` plus the `somehinged*` runs: 59 writes, 22 wedged;
-    /// 39 of them carry per-chunk timings. **Open:** what device state stops it consuming, and
-    /// whether backing off on a slow credit rescues it — an HX Stomp has never wedged, so only a
-    /// Floor can answer that. Refuted along the way: that the abort causes it (`fretwire26`), that
-    /// the edit channel's `arg` offset drives it (see `write_preset`'s body), that short packets
-    /// alone explain it (`80ee812` cut the rate to a fifth and left 15% standing), and that the
-    /// device never degrades before dying (the chunk-2 credit says it does).]
+    /// [solid — 2026-08-05, `fretwire12`–`zadtheinhaler58`: 79 writes, 25 wedged; 59 of them carry
+    /// per-chunk timings. The rate has sat at 15% (3 of 20) since the short-packet fix and did not
+    /// move when the stand-off shipped. **Open:** what device state stops it consuming — an HX
+    /// Stomp has never wedged, so only a Floor can answer that. Refuted along the way: that the
+    /// abort causes it (`fretwire26`), that the edit channel's `arg` offset drives it (see
+    /// `write_preset`'s body), that short packets alone explain it (`80ee812` cut the rate to a
+    /// fifth and left 15% standing), that the device never degrades before dying (the chunk-2
+    /// credit says it does), and that the degradation is congestion that backing off can clear.]
     ///
     /// LIVE: the exact chunk size and `arg` cadence are reconstructed from `move_EQ_right_two_slots`.
     /// The device's `{103:1}` apply-ACK is best-effort (logged, not required); the caller confirms by
@@ -892,31 +909,25 @@ impl Session {
         /// logs, hands the fatal blocking `send_frame` the chance to time out first — which is how
         /// `fretwire48`/`51` failed with a bare USB error instead of this guard's message.
         const MAX_SILENT_CHUNKS: usize = 1;
-        /// A credit slower than this means the device is falling behind — **the earliest signal
-        /// there is that a write is going to wedge**, and it arrives a whole chunk before the
-        /// silence does.
+        /// A mid-transfer credit slower than this means the device is falling behind — **the
+        /// earliest signal there is that a write is going to wedge**, and it arrives a whole chunk
+        /// before the silence does.
         ///
-        /// Across all 39 recorded writes the chunk-2 credit separates the outcomes almost
-        /// perfectly: every one of the 19 that completed took **5–8 ms**, and 19 of the 20 that
-        /// wedged took **23–253 ms**. (The exception is `fretwire24`, the same write that is the
-        /// standing counter-example for first-credit latency.) Chunk *one*'s credit predicts
-        /// nothing — `first_credit_ms` is 2–7 ms in both groups — which is why this went unseen
-        /// for so long: we were measuring the wrong chunk. 15 ms sits in the empty gap between
-        /// the two populations.
-        const SLOW_CREDIT: std::time::Duration = std::time::Duration::from_millis(15);
-        /// How long to stand off after a slow credit before pushing the next chunk.
+        /// The Floor logs carrying per-chunk timings settle both the signal and the threshold. Over
+        /// the 20 writes in `fretwire55`/`56`/`zadtheinhaler57`/`58`, the **chunk-2** credit
+        /// separates the outcomes with no overlap at all: **1–3 ms on all 17 that completed, 28 /
+        /// 32 / 94 ms on all 3 that wedged.** Chunk *one* separates nothing (`first_credit_ms` is
+        /// 0–5 ms in both groups) — we spent a while measuring the wrong chunk.
         ///
-        /// The theory this tests: the device wedges because we keep feeding a receive path that
-        /// has stopped keeping up, and the fix is to stop feeding it for a moment. That is the one
-        /// mechanism consistent with everything known — the short-packet fix (which cut wedges
-        /// 68% → 15% by letting each transfer terminate), the fact that the blob never mattered,
-        /// and now a slow credit predicting the death one chunk in advance.
-        /// [hypothesis — 2026-08-04. Needs a Floor to confirm; an HX Stomp has never wedged.]
-        const BACKOFF: std::time::Duration = std::time::Duration::from_millis(120);
-        /// Consecutive slow credits before we give up rather than keep pushing. Backing off once
-        /// is the rescue attempt; a second slow credit says it did not take. No completed write on
-        /// record has *one* slow credit, let alone two, so this cannot fire on a healthy transfer.
-        const MAX_SLOW_CHUNKS: usize = 2;
+        /// The threshold has to clear one more bar: the worst *non-final* credit on a write that
+        /// went on to complete is **16 ms** (`fretwire56`, chunk 7 of 14 — a blip the device came
+        /// straight back from). 22 ms sits in the empty gap between that and the slowest wedge, so
+        /// no recorded healthy write trips it.
+        ///
+        /// Only non-final chunks count. A slow credit on the **last** chunk is normal and means
+        /// nothing — it is the device committing the preset, and it runs 2–195 ms on writes that
+        /// complete perfectly. The `n + 1 < chunks` guard at the call site is what keeps that out.
+        const SLOW_CREDIT: std::time::Duration = std::time::Duration::from_millis(22);
 
         let txn = self.bump_txn();
         let tlv = Tlv::command(op::PARAM_SET, edit::write_preset(&blob, txn)).to_bytes();
@@ -1036,42 +1047,26 @@ impl Session {
                 slow,
                 "write-preset chunk"
             );
-            // The device is answering but lagging. Stand off before the next chunk instead of
-            // pushing into it — and if a second credit is just as slow, standing off did not work,
-            // so stop while the failure is still describable rather than feed it to the silence.
+            // The device is answering but lagging, and on this hardware that is terminal: stop
+            // here, with the next chunk still in hand. See `SLOW_CREDIT` for why this cannot fire
+            // on a healthy write, and the doc comment for why standing off does not rescue one.
             if slow > 0 && n + 1 < chunks {
-                if slow >= MAX_SLOW_CHUNKS {
-                    tracing::error!(
-                        sent,
-                        total,
-                        credits,
-                        first_credit_ms,
-                        credit_ms = credit_ms.as_millis(),
-                        chunks = n + 1,
-                        "device is falling behind and did not recover after backing off — \
-                         abandoning the transfer"
-                    );
-                    self.last_raw = None;
-                    return Err(crate::Error::WriteStalled(format!(
-                        "the pedal fell behind {sent} of {total} bytes into a preset write and did \
-                         not catch up when we paused for it. Reload the preset — the edit buffer \
-                         holds a half-written one — and power-cycle the pedal if it has stopped \
-                         responding. Nothing was saved to flash"
-                    )));
-                }
-                tracing::warn!(
+                tracing::error!(
                     sent,
                     total,
+                    credits,
+                    first_credit_ms,
                     credit_ms = credit_ms.as_millis(),
-                    backoff_ms = BACKOFF.as_millis(),
-                    "the pedal is lagging on a preset write — pausing to let it catch up"
+                    chunks = n + 1,
+                    "device is falling behind mid-write — stopping before we push more at it"
                 );
-                std::thread::sleep(BACKOFF);
-                // Anything the device queued while we waited is still flow control, not payload.
-                credits += self
-                    .transport
-                    .drain_collect(std::time::Duration::from_millis(2), 8)
-                    .len();
+                self.last_raw = None;
+                return Err(crate::Error::WriteStalled(format!(
+                    "the pedal started falling behind {sent} of {total} bytes into a preset write, \
+                     so we stopped rather than push more data at it. Reload the preset — the edit \
+                     buffer holds a half-written one. Nothing was saved to flash. If the pedal has \
+                     also stopped responding, power-cycle it"
+                )));
             }
             // Only worth stopping while there is still data to withhold: past the last chunk the
             // blob is already in the device and quitting would just deny it the terminator.

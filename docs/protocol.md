@@ -461,6 +461,31 @@ the credits are how you *detect* a wedged device, not how you avoid wedging one.
 triggers it is still open; the blob that does it is ~1 KB in by then, so the device is reacting to
 something it has already consumed rather than to the finished preset. [hypothesis]
 
+#### The credit **latency** predicts it a chunk early [solid]
+*2026-08-05, `fretwire55`/`56` + `zadtheinhaler57`/`58` — 20 writes with per-chunk timings.*
+
+The device doesn't stop dead; it slows down first, and one chunk is all the warning there is. The
+**chunk-2** credit separates the outcomes with no overlap:
+
+| chunk-2 credit | writes | outcome |
+|---|---:|---|
+| 1–3 ms | 17 | all completed |
+| 28 / 32 / 94 ms | 3 | all wedged |
+
+Two things make this easy to measure wrong. Chunk **one**'s credit predicts nothing (0–5 ms in both
+groups) — an earlier analysis found the right signal but computed it from the gap between the first
+two chunk log lines, which is chunk two's wait, and the field added to record it was then named and
+implemented for chunk one. And a slow credit on the **final** chunk is normal: 2–195 ms on writes
+that complete perfectly, because that is the device committing the preset. Only non-final chunks
+count.
+
+**Backing off does not rescue it.** [solid] The obvious reading — the device has fallen behind, so
+stop feeding it and it recovers — was shipped as a 120 ms stand-off and failed 3 for 3. Every wedge
+went from one slow credit to total silence on the very next chunk, and not a single credit arrived
+during the pause. So a slow credit is not a queue you can drain by waiting; it is the endpoint on
+its way out. The useful response is to stop while the next chunk is still in hand, which at least
+stops pushing bytes at a device that has stopped taking them.
+
 ### A credit unit is **512 payload bytes, sent as 496 + 16** [solid]
 *2026-08-02, re-read of `move_EQ_right_two_slots.pcapng` and `import_ir.pcapng`.*
 

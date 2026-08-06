@@ -239,11 +239,34 @@ impl Transport {
         accept: impl Fn(&Frame) -> bool,
     ) -> Result<Frame> {
         self.send(frame.encode())?;
+        // Frames that aren't the reply are put *back*, not thrown away. Most are keepalives and
+        // meters that nobody misses, but the status channel's panel mirror comes down this same
+        // pipe — every footswitch, knob and preset change the player makes on the pedal. Dropping
+        // those is why the editor only ever caught up with the hardware after the user did
+        // something in the GUI: the push had arrived, mid-request, and gone in the bin.
+        // `zadtheinhaler57` discarded 111 status frames in one session.
+        //
+        // They go back in arrival order and ahead of anything that queued behind them, so the next
+        // `drain_collect`/`poll_status` sees the same sequence the device sent. Collected in a
+        // local first — re-queueing inside the loop would just hand them straight back to
+        // `next_frame_within` and spin.
+        let mut skipped: Vec<Frame> = Vec::new();
+        let mut out = Err(Error::Unmatched {
+            dst: frame.src,
+            seq: frame.seq,
+        });
         for _ in 0..MAX_SKIP {
-            let reply = self.next_frame_within(timeout)?;
+            let reply = match self.next_frame_within(timeout) {
+                Ok(r) => r,
+                Err(e) => {
+                    out = Err(e);
+                    break;
+                }
+            };
             if reply.dst == frame.src && reply.cmd != fretwire_protocol::cmd::IDLE && accept(&reply)
             {
-                return Ok(reply);
+                out = Ok(reply);
+                break;
             }
             tracing::debug!(
                 want_dst = format_args!("{:#06x}", frame.src),
@@ -252,13 +275,17 @@ impl Transport {
                 got_seq = reply.seq,
                 cmd = reply.cmd,
                 body = reply.body.len(),
-                "skipping non-reply frame",
+                "set aside non-reply frame",
             );
+            skipped.push(reply);
         }
-        Err(Error::Unmatched {
-            dst: frame.src,
-            seq: frame.seq,
-        })
+        // Keepalives are pure noise and the one thing that would grow this queue without bound —
+        // a long session interleaves thousands. Anything with a body is a push worth keeping.
+        skipped.retain(|f| f.cmd != fretwire_protocol::cmd::IDLE && !f.body.is_empty());
+        for f in skipped.into_iter().rev() {
+            self.pending.push_front(f);
+        }
+        out
     }
 
     /// Discard any already-buffered frames (e.g. the device's post-transaction epilogue that got

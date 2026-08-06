@@ -1788,3 +1788,55 @@ So the device **does** degrade before it dies — a full chunk before the silenc
 
 **Unconfirmed by construction:** an HX Stomp has never wedged, so this cannot be tested here. It
 ships as a hypothesis with the instrumentation to judge it.
+
+### Twenty-fourth round (2026-08-05) — the back-off is refuted, and the panel mirror was in the bin
+
+`fretwire55`/`56` and `zadtheinhaler57`/`58` are the first logs from the back-off build, and they
+carry per-chunk `credit_ms` for every write. 20 writes, 3 wedged (**15%** — unchanged).
+
+**1. The chunk-2 predictor is confirmed, exactly.** With real instrumentation instead of log-line
+arithmetic the two populations do not overlap at all:
+
+| chunk-2 credit | writes | outcome |
+|---|---:|---|
+| 1–3 ms | 17 | all completed |
+| 28 / 32 / 94 ms | 3 | all wedged |
+
+`first_credit_ms` is 0–5 ms in both groups and still separates nothing. Slow credits on the **final**
+chunk are normal — 2–195 ms on writes that complete perfectly — so only non-final chunks count.
+
+**2. Backing off does not rescue the write. Refuted, 3 for 3.** In every wedge the pedal went from
+one slow credit straight to complete silence on the very next chunk, and **not one credit arrived
+during the 120 ms pause** (`credits` is unchanged across it in all three). Whatever the slow credit
+means, it is not congestion we can drain by waiting.
+
+So the loop no longer pauses — it **stops at the first slow mid-transfer credit, with the next chunk
+still in hand**, and `SLOW_CREDIT` moves 15 → 22 ms. The threshold has to clear the worst *non-final*
+credit on a write that went on to complete, which is 16 ms (`fretwire56`, chunk 7 of 14, a blip the
+device came straight back from); 22 sits between that and the slowest wedge, so no recorded healthy
+write trips it. The write was lost either way — nothing with a slow chunk-2 credit has ever
+completed — so the only thing that changes is that we stop pushing 512 more bytes into an endpoint
+that has stopped draining. **Open:** every wedge to date has ended needing a power cycle, and
+whether withholding that last chunk spares it is the one variable never tested.
+
+**3. The status channel's panel mirror was being thrown away mid-request.** [solid] Sean has asked
+three times why a footswitch press doesn't move the GUI, and why clicking *any* block in the GUI
+then makes the pedal's real state appear. Root cause: `Transport::request_matching` **dropped** every
+frame that wasn't the reply it was waiting for. `zadtheinhaler57` discarded **111** status frames in
+one session — 49 of `body=21`, 23 of `body=35`, and so on, all `cmd 4` from `0x03F0`.
+
+Everything downstream already worked: `parse_status_push` decodes type 49 to
+`StatusPush::Bypass { slot, enabled }`, `dto.rs` maps it to `PushDto::Bypass`, and the GUI applies
+it. The frames just never got there — they arrived while some other request was in flight and went
+in the bin, and the GUI's next full re-read (triggered by the user's own click) is what finally
+showed the truth. Non-reply frames are now put **back** on the pending queue in arrival order;
+keepalives and empty bodies are still dropped, so the queue can't grow without bound.
+
+Not unit-testable here — `Transport` wraps a live `nusb` interface and the crate has no fixture for
+it — so this is verified by construction and by the field logs that show the frames existing.
+
+**4. Field notes worth keeping.** Copy/paste of a preset across setlists carries footswitch
+assignments (works). A cab switched to Cab › Mic+IR costs *less* DSP, not more. The `strays` warning
+matches what he hears: a block left outside the split bracket goes quiet or drops low in the mix, so
+that warning is earning its place. Minor UI nit: the block-grid scroll bar doesn't come back after
+the window is narrowed again.

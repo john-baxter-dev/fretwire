@@ -152,8 +152,13 @@ its own even if the capture is messy.
 
 Listed so nobody spends session time on them:
 
-- **Type-49 pushes** (`{98: slot}` — pedal-side model changes not reaching our UI): `fretwire watch`
-  on Linux while changing a block's model with the joystick.
+- ~~**Type-49 pushes** — pedal-side changes not reaching our UI~~ — **found, 2026-08-05.** The
+  decoding was fine; the frames were being thrown away before they got to it, by the code waiting
+  for a reply to something else (`zadtheinhaler57` binned 111 of them in one session). Now they go
+  back on the queue. **Please confirm on the next build:** press a footswitch to bypass a block and
+  watch the GUI *without* touching it — it should follow within a second, and turning a knob on the
+  pedal should move the matching parameter too. If it still needs a click to catch up, say so, and
+  run once with `FRETWIRE_TRACE_STATUS=1` set so the log carries the push bytes.
 - ~~A `-306` ladder on a serial preset~~ — **done, from the `.hxb` backup instead** (2026-08-04).
   458 real DSPs say the ceiling is the same serial or parallel, so the split and mixer are not
   billed against it. See `docs/protocol.md`.

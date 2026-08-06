@@ -1,5 +1,5 @@
 <script>
-  import { invoke, listen } from "./lib/ipc.js";
+  import { invoke, listen, IS_MOCK } from "./lib/ipc.js";
   import { onMount } from "svelte";
   import Chain from "./lib/Chain.svelte";
   import ParamPanel from "./lib/ParamPanel.svelte";
@@ -10,7 +10,6 @@
   import Toast from "./lib/Toast.svelte";
   import FirstRun from "./lib/FirstRun.svelte";
 
-  const BUDGET = 100;
 
   // First-run gating: until we've checked whether the Line 6 reference data is imported, show
   // nothing (avoids flashing the editor then the setup screen). `null` = checking, then a status
@@ -29,6 +28,27 @@
   let status = $state("Ready — WebKitGTK webview is painting.");
   let statusErr = $state(false);
   let preset = $state(null);
+
+  // The status line reports the last thing that happened, which makes it a liar the moment the
+  // loaded preset changes out from under it. Both halves showed up in the tester's screenshots: a
+  // "Connected — 15 blocks" line still on screen beside a 9-block preset, and "Saved to slot 7."
+  // sitting over a preset in a different setlist. So re-state it whenever the identity moves —
+  // whichever path moved it (sidebar click, pedal knob, restore). Not $state: this is a marker for
+  // the effect below, and tracking it would re-run the effect on its own write.
+  let announced = null;
+  const presetKey = (p) => (p ? `${p.bank ?? 0}/${p.index ?? 0}` : null);
+  $effect(() => {
+    if (!preset) {
+      announced = null;
+      return;
+    }
+    const key = presetKey(preset);
+    if (key === announced) return;
+    announced = key;
+    const n = preset.blocks.length;
+    status = `${preset.name || "Preset"} — ${n} block${n === 1 ? "" : "s"}.`;
+  });
+
   let presets = $state([]);
   let splitTypes = $state([]);
   let selectedSlot = $state(null);
@@ -43,10 +63,15 @@
   let toasts = $state([]);
   let toastSeq = 0;
   const dismissToast = (id) => (toasts = toasts.filter((t) => t.id !== id));
+  // Errors linger: they carry device refusal codes and byte counts a tester has to copy down by
+  // hand, and 6 s is not enough to transcribe one. Confirmations ("Backed up 12 presets") are
+  // read at a glance, so they keep the shorter life. Temporary — asked for while the Floor
+  // lockups are being chased; revisit once the errors stop being the interesting part.
+  const TOAST_MS = { error: 18000, info: 6000 };
   function toast(msg, kind = "error") {
     const id = ++toastSeq;
     toasts = [...toasts, { id, msg: String(msg), kind }];
-    setTimeout(() => dismissToast(id), 6000);
+    setTimeout(() => dismissToast(id), TOAST_MS[kind] ?? TOAST_MS.error);
   }
   let saveAsDlg = $state(null); // { slot, name }
   let renameDlg = $state(null); // { name }
@@ -65,25 +90,68 @@
     node.select?.();
   };
 
+  // Each DSP's routing view (one on the HX Stomp, two on the Helix Floor). Fall back to the
+  // preset's flat DSP-0 fields when the backend didn't send `dsps` (older payloads / the mock).
+  const dspViews = $derived.by(() => {
+    if (!preset) return [];
+    if (preset.dsps?.length) return preset.dsps;
+    return [
+      {
+        dsp: 0,
+        split: preset.split,
+        split_pos: preset.split_pos,
+        mixer_pos: preset.mixer_pos,
+        split_node: preset.split_node,
+        mixer_node: preset.mixer_node,
+        input_node: preset.input_node,
+        output_node: preset.output_node,
+        grid: preset.grid ?? [],
+        dsp_load: preset.dsp_load,
+      },
+    ];
+  });
+  // Every structural node across all DSPs — so a DSP-2 split/mixer/IO node is selectable too.
+  const allNodes = $derived(
+    dspViews.flatMap((v) => [v.split_node, v.mixer_node, v.input_node, v.output_node]),
+  );
+  // What a DSP fills up at, on the same scale as `dsp_load`. **Not 100** — the pedal starts
+  // refusing blocks a quarter short of it (measured on both devices; see `editor::DSP_CEILING`).
+  // The backend sends the figure so there is one copy of it; the fallback covers the mock backend.
+  const BUDGET = $derived(preset?.dsp_ceiling ?? 75);
+  // Each DSP is budgeted on its own, so a block's fit is judged against *its* DSP's load, not the
+  // combined total (which can exceed the ceiling on the Floor). Slots are global: `dsp*20+index`.
+  const loadForSlot = (slot) => {
+    const v = dspViews.find((x) => x.dsp === Math.floor(slot / 20));
+    return v ? v.dsp_load : (preset?.dsp_load ?? 0);
+  };
+  // Every DSP figure on screen is a percentage of what the pedal will actually accept, so the
+  // ceiling reads 100%. The raw `dsp_load` is a percentage of a budget the hardware never gives
+  // you — 72.7 of it meant "nearly full", which is the opposite of how it read. Raw units stay in
+  // the CLI and the docs; nothing in the GUI shows them.
+  const pct = (raw) => (raw / BUDGET) * 100;
+  // Header readout, per DSP. Rendered as one labelled chip each rather than a joined string: on
+  // the Floor the two used to run together as "96.9% · 3.1% free · 0.0% · 100.0% free", with the
+  // same separator between the DSPs as inside them and nothing saying which was which.
+  const dspUsed = (v) => Math.min(100, Math.max(0, pct(v.dsp_load)));
+  const dspFree = (v) => Math.max(pct(BUDGET - v.dsp_load), 0);
+  // Within a few points of the ceiling — the picker is already greying most models out by here.
+  const dspTight = (v) => dspFree(v) < 10;
+
   // Whether the selected slot is a structural node (split/mixer/input/output) rather than a normal
   // block — nodes aren't swappable or deletable.
   const selectedIsNode = $derived(
-    !!preset &&
-      selectedSlot != null &&
-      [preset.split_node, preset.mixer_node, preset.input_node, preset.output_node].some(
-        (n) => n?.slot === selectedSlot,
-      ),
+    !!preset && selectedSlot != null && allNodes.some((n) => n?.slot === selectedSlot),
   );
-  const selectedIsSplit = $derived(!!preset && preset.split_node?.slot === selectedSlot);
+  const selectedIsSplit = $derived(
+    !!preset && dspViews.some((v) => v.split_node?.slot === selectedSlot),
+  );
 
   // The selected block, looked up fresh from the current preset (so it reflects live edits).
   const selectedBlock = $derived.by(() => {
     if (!preset || selectedSlot == null) return null;
     return (
       preset.blocks.find((b) => b.slot === selectedSlot) ??
-      [preset.split_node, preset.mixer_node, preset.input_node, preset.output_node].find(
-        (n) => n?.slot === selectedSlot,
-      ) ??
+      allNodes.find((n) => n?.slot === selectedSlot) ??
       null
     );
   });
@@ -93,9 +161,14 @@
   onMount(() => {
     const unlisten = listen("device-pushes", (e) => handlePushes(e.payload));
     const unProgress = listen("backup-progress", (e) => (backupProgress = e.payload));
+    // The pedal stopped answering and the backend closed the session out from under us. Fall back
+    // to the disconnected view rather than leaving a UI whose every button will fail.
+    const unLost = listen("device-lost", (e) => onDeviceLost(e.payload));
     return () => {
       unlisten.then((f) => f());
       unProgress.then((f) => f());
+      unLost.then((f) => f());
+      clearTimeout(pushTimer); // don't let a coalesced refresh fire into a torn-down session
     };
   });
 
@@ -142,35 +215,146 @@
     }
   }
 
-  async function handlePushes(pushes) {
-    if (!preset || !connected) return;
-    let presetChanged = false;
-    const bypasses = new Map(); // slot → bypassed, from footswitch pushes
-    for (const p of pushes) {
-      if (p.kind === "Snapshot") activeSnapshot = p.index; // read-back lags; trust the push
-      else if (p.kind === "Preset") presetChanged = true;
-      else if (p.kind === "Bypass") bypasses.set(p.slot, !p.enabled);
+  // ---- device-push coalescing ----
+  //
+  // One turn of the preset knob emits a *flurry* of pushes — the preset change, then snapshot and
+  // bypass pushes as the new preset settles — spread over about a second, and the heartbeat hands
+  // them to us in 250 ms batches. Refreshing on every batch cost ~3 full preset streams plus a
+  // preset-list re-read per knob turn (~530 KB across 21 preset changes in the tester's 2026-07-26
+  // session), all fired at a Helix Floor that was still reconfiguring both DSPs — and twice it
+  // stopped answering. So fold the batches together and read *once*, after the device goes quiet.
+  const PUSH_QUIET_MS = 300; // no pushes for this long → treat the device as settled
+  const PUSH_MAX_WAIT_MS = 1200; // ...but never defer a refresh longer than this
+  let pushTimer = null;
+  let pushDeadline = 0;
+  let flushing = false; // a refresh is mid-flight; don't start a second
+  let flushAgain = false; // ...and pushes arrived while it was, so re-arm afterwards
+  let pendingPresetChange = false;
+  const pendingBypasses = new Map(); // slot → bypassed, from footswitch pushes
+  const pendingParams = new Map(); // "slot:param" → value, from panel-knob pushes
+
+  // A footswitch bypass is fully described by its own push, so apply it directly. This is also why
+  // the re-read can't be trusted for it: the device's readable stream lags its own push, so a fresh
+  // read can still carry the pre-toggle state. Overlaying wins either way.
+  function applyBypasses() {
+    if (!preset || !pendingBypasses.size) return;
+    const patch = (b) =>
+      b && pendingBypasses.has(b.slot) ? { ...b, bypassed: pendingBypasses.get(b.slot) } : b;
+    preset = {
+      ...preset,
+      blocks: preset.blocks.map(patch),
+      split_node: patch(preset.split_node),
+      mixer_node: patch(preset.mixer_node),
+    };
+    pendingBypasses.clear();
+  }
+
+  // Panel knobs. Keyed "slot:param" because a sweep pushes ~15 updates a second and only the last
+  // one matters. Applied straight to the value we already hold — the push carries it, so re-reading
+  // the whole preset for every notch would flood the device for no new information.
+  function applyParams() {
+    if (!preset || !pendingParams.size) return;
+    const patch = (b) => {
+      if (!b?.params) return b;
+      let touched = false;
+      const params = b.params.map((p) => {
+        const v = pendingParams.get(`${b.slot}:${p.index}`);
+        if (v === undefined || v === p.value) return p;
+        touched = true;
+        return { ...p, value: v };
+      });
+      return touched ? { ...b, params } : b;
+    };
+    preset = {
+      ...preset,
+      blocks: preset.blocks.map(patch),
+      split_node: patch(preset.split_node),
+      mixer_node: patch(preset.mixer_node),
+    };
+    pendingParams.clear();
+  }
+
+  function scheduleFlush() {
+    // A flush is already talking to the device — let it finish and re-arm on the way out, rather
+    // than firing a second read on top of the first. Overlapping them would reintroduce exactly the
+    // read pile-up this whole mechanism exists to prevent.
+    if (flushing) {
+      flushAgain = true;
+      return;
     }
-    // Any device-side change (bypass, snapshot, preset) is reflected by re-reading the preset —
-    // reassigning `preset` is a clean reactive update (nested in-place mutation wasn't refreshing).
+    const now = Date.now();
+    if (!pushDeadline) pushDeadline = now + PUSH_MAX_WAIT_MS;
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(flushPushes, Math.max(0, Math.min(PUSH_QUIET_MS, pushDeadline - now)));
+  }
+
+  async function flushPushes() {
+    pushTimer = null;
+    pushDeadline = 0;
+    const presetChanged = pendingPresetChange;
+    pendingPresetChange = false;
+    if (!connected) return;
+    flushing = true;
+    try {
+      await runFlush(presetChanged);
+    } finally {
+      flushing = false;
+    }
+    if (flushAgain) {
+      flushAgain = false;
+      scheduleFlush();
+    }
+  }
+
+  async function runFlush(presetChanged) {
+    await refreshPreset();
     if (presetChanged) {
+      activeSnapshot = preset?.active_snapshot ?? 0;
+      // Follow the device into whichever setlist it landed in — switching presets from the panel
+      // can cross setlists, and the sidebar would otherwise keep listing the old one with nothing
+      // highlighted. Only re-list when the bank actually changed: moving *within* a setlist can't
+      // alter that setlist's contents, and the listing is a second multi-KB stream off the device.
+      const bank = preset?.bank ?? 0;
+      if (bank !== viewBank) {
+        viewBank = bank;
+        await refreshPresets(bank);
+      }
+    }
+    applyBypasses();
+    applyParams();
+  }
+
+  function handlePushes(pushes) {
+    if (!preset || !connected) return;
+    // Snapshot and preset changes rewrite state we can't derive from the push alone (a snapshot
+    // carries its own bypass matrix and parameter values), so they need a re-read. A bypass does
+    // not.
+    let needsRead = false;
+    for (const p of pushes) {
+      if (p.kind === "Snapshot") {
+        activeSnapshot = p.index; // read-back lags; trust the push
+        needsRead = true;
+      } else if (p.kind === "Preset") {
+        pendingPresetChange = true;
+        needsRead = true;
+      } else if (p.kind === "Bypass") {
+        pendingBypasses.set(p.slot, !p.enabled);
+      } else if (p.kind === "Param") {
+        pendingParams.set(`${p.slot}:${p.param}`, p.value);
+      }
+    }
+    if (pendingPresetChange) {
       selectedSlot = null;
       addTarget = null;
-      bypasses.clear(); // those pushes belonged to the preset we just left
+      pendingBypasses.clear(); // those pushes belonged to the preset we just left
+      pendingParams.clear();
+    } else if (!needsRead) {
+      // bypass/knob only: the push carries everything, so show it without touching the device
+      applyBypasses();
+      applyParams();
+      return;
     }
-    await refreshPreset();
-    if (presetChanged) activeSnapshot = preset?.active_snapshot ?? 0;
-    // Footswitch bypass: like snapshots, the device's readable stream lags its own push, so the
-    // re-read can still carry the pre-toggle state. Overlay the pushed values onto the fresh read.
-    if (bypasses.size && preset) {
-      const patch = (b) => (b && bypasses.has(b.slot) ? { ...b, bypassed: bypasses.get(b.slot) } : b);
-      preset = {
-        ...preset,
-        blocks: preset.blocks.map(patch),
-        split_node: patch(preset.split_node),
-        mixer_node: patch(preset.mixer_node),
-      };
-    }
+    scheduleFlush();
   }
 
   // Run a command that returns the updated preset; keep the selection. Errors surface as toasts.
@@ -215,8 +399,34 @@
     apply(invoke("insert_block", { srcSlot, dstSlot, before }));
   // Drag the split (⋔) / join (⋉) node to a new signal column — re-classifies top-row blocks
   // between common / path A / common-after without moving any block.
-  const onMoveNode = (node, pos) => apply(invoke("set_node_pos", { node, pos }));
+  const onMoveNode = (node, pos, dsp = 0) => apply(invoke("set_node_pos", { node, pos, dsp }));
   const onDelete = (slot) => (deleteDlg = slot);
+
+  // ---- copy/paste ----
+  // HX Edit can copy a preset (or a block) and paste it onto another slot; without it a tester
+  // rebuilding a case by hand does it click by click. The blobs live in the Rust side — the UI only
+  // learns the name, for the button label.
+  let presetClip = $state(null);
+  let blockClip = $state(null);
+  async function onCopyPreset() {
+    try {
+      presetClip = await invoke("copy_preset");
+      toast(`Copied preset "${presetClip}"`, "info");
+    } catch (e) {
+      toast(e);
+    }
+  }
+  // Paste lands in the edit buffer, like every other edit — Save commits it.
+  const onPastePreset = () => apply(invoke("paste_preset"));
+  async function onCopyBlock(slot) {
+    try {
+      blockClip = await invoke("copy_block", { slot });
+      toast(`Copied block "${blockClip}"`, "info");
+    } catch (e) {
+      toast(e);
+    }
+  }
+  const onPasteBlock = (slot) => apply(invoke("paste_block", { slot }));
   function confirmDelete() {
     const slot = deleteDlg;
     deleteDlg = null;
@@ -235,28 +445,61 @@
   }
 
   // ---- preset management ----
-  async function refreshPresets() {
+  // A device may hold several setlists (the Helix Floor has eight; the Stomp one flat list).
+  // `viewBank` is the setlist the sidebar is showing, which is not necessarily the one the loaded
+  // preset came from — you can browse User 2 while sitting on a Factory 1 preset.
+  let setlists = $state([]);
+  let viewBank = $state(0);
+  const presetBank = $derived(preset?.bank ?? 0);
+  // Writing into a setlist the device isn't in is gated on the backend (FRETWIRE_SETLISTS=1) until
+  // a Helix Floor gets through a session cleanly. Mirror it here so Save As greys out with a reason
+  // rather than failing at the wire after the user has typed a name.
+  let crossSetlistWrite = $state(true);
+  const foreignSetlist = $derived(!crossSetlistWrite && viewBank !== presetBank);
+
+  async function refreshPresets(bank = viewBank) {
     try {
-      presets = await invoke("list_presets");
+      presets = await invoke("list_presets", { bank });
     } catch (e) {
       toast("preset list: " + e);
     }
   }
 
+  // Switch which setlist the sidebar lists. Browsing only — the device stays on its preset until
+  // one is actually clicked.
+  async function onPickSetlist(bank) {
+    viewBank = bank;
+    presets = [];
+    await refreshPresets(bank);
+  }
+
   async function onGoto(index) {
     selectedSlot = null;
-    await apply(invoke("goto_preset", { bank: 0, preset: index }));
+    await apply(invoke("goto_preset", { bank: viewBank, preset: index }));
     activeSnapshot = preset?.active_snapshot ?? 0;
   }
 
   async function onSave() {
     if (!preset) return;
-    await apply(invoke("save_preset", { bank: 0, slot: preset.index, name: preset.name ?? "" }));
+    // Overwrite in place — the bank the preset was read from, not the one being browsed.
+    await apply(
+      invoke("save_preset", { bank: presetBank, slot: preset.index, name: preset.name ?? "" }),
+    );
     await refreshPresets();
     status = `Saved to slot ${preset.index}.`;
   }
 
-  const onSaveAs = () => preset && (saveAsDlg = { slot: preset.index, name: preset.name ?? "" });
+  const onSaveAs = () => {
+    if (!preset) return;
+    if (foreignSetlist) {
+      toast(
+        `Save As is limited to ${setlists[presetBank] ?? "the device's setlist"} — writing into ` +
+          `another setlist is untested on this hardware. Set FRETWIRE_SETLISTS=1 to allow it.`,
+      );
+      return;
+    }
+    saveAsDlg = { slot: preset.index, name: preset.name ?? "" };
+  };
   // What the chosen Save As slot currently holds — shown so overwriting is always a visible choice.
   const saveAsTarget = $derived(
     saveAsDlg ? presets.find((p) => p.index === saveAsDlg.slot) : null,
@@ -265,7 +508,8 @@
     const { slot, name: rawName } = saveAsDlg;
     const name = rawName.trim();
     saveAsDlg = null;
-    await apply(invoke("save_preset", { bank: 0, slot, name }));
+    // Save As picks a slot out of the visible list, so it targets the browsed setlist.
+    await apply(invoke("save_preset", { bank: viewBank, slot, name }));
     await refreshPresets();
     status = `Saved to slot ${slot} as "${name}".`;
   }
@@ -276,7 +520,7 @@
     renameDlg = null;
     if (!name) return;
     try {
-      await invoke("rename_preset", { bank: 0, slot: preset.index, name });
+      await invoke("rename_preset", { bank: presetBank, slot: preset.index, name });
       await refreshPresets();
       status = `Renamed slot ${preset.index} to "${name}".`;
     } catch (e) {
@@ -348,9 +592,25 @@
     statusErr = false;
     try {
       preset = await invoke("connect");
+      // Claim this one so the re-state effect doesn't race the connect message below and replace it
+      // with the plainer per-preset line. Everything after connect is fair game for the effect.
+      announced = presetKey(preset);
       connected = true;
       activeSnapshot = preset.active_snapshot ?? 0;
-      await refreshPresets();
+      // Open the sidebar on the setlist the device is actually sitting in, not always Factory 1 —
+      // otherwise a Floor parked in User 1 lists names that have nothing to do with its screen.
+      try {
+        setlists = await invoke("setlists");
+      } catch (e) {
+        setlists = [];
+      }
+      try {
+        crossSetlistWrite = await invoke("cross_setlist_write_allowed");
+      } catch (e) {
+        crossSetlistWrite = true; // the mock has no such command; it can't touch hardware anyway
+      }
+      viewBank = preset.bank ?? 0;
+      await refreshPresets(viewBank);
       try {
         splitTypes = await invoke("split_types");
       } catch (e) {
@@ -373,8 +633,43 @@
     connected = false;
     preset = null;
     presets = [];
+    setlists = [];
+    viewBank = 0;
     selectedSlot = null;
     status = "Disconnected — pedal back to standalone.";
+  }
+
+  // The backend dropped the session because the pedal went unresponsive. Same teardown as an
+  // explicit disconnect, but the status says what happened and what to do about it — there is no
+  // "reconnect" that works here until the unit is power-cycled.
+  function onDeviceLost(message) {
+    connected = false;
+    preset = null;
+    presets = [];
+    setlists = [];
+    viewBank = 0;
+    selectedSlot = null;
+    status = message ?? "The pedal stopped responding. Power-cycle it, then reconnect.";
+    toast(status);
+  }
+
+  // ---- mock-only device switch ----
+  // Which unit the mock backend is pretending to be. Only ever rendered under IS_MOCK; in a real
+  // Tauri build `window.fretwireMock` doesn't exist and none of this runs.
+  let mockDevice = $state(IS_MOCK ? (window.fretwireMock?.device() ?? "floor") : "floor");
+
+  // Switching device rebuilds the mock's setlists and current preset, so the open session's state
+  // (setlist names, preset, grids) is stale afterwards. Reconnect for the user rather than leaving
+  // a half-updated UI behind — that footgun is the whole reason this control exists.
+  async function onPickMockDevice(mode) {
+    if (mode === mockDevice) return;
+    mockDevice = window.fretwireMock?.device(mode) ?? mode;
+    if (connected) {
+      await disconnect();
+      await connect();
+    } else {
+      status = `Mock is now a ${mode === "floor" ? "Helix Floor" : "HX Stomp"}. Connect to see it.`;
+    }
   }
 </script>
 
@@ -399,6 +694,16 @@
 <header>
   <h1>fretwire</h1>
   <span class="spacer"></span>
+  {#if IS_MOCK}
+    <!-- Mock builds only: which unit to pretend to be. Never present in a real Tauri build. -->
+    <label class="mockdev" title="Mock backend only — which device to simulate">
+      <span>Mock</span>
+      <select value={mockDevice} onchange={(e) => onPickMockDevice(e.currentTarget.value)}>
+        <option value="floor">Helix Floor</option>
+        <option value="stomp">HX Stomp</option>
+      </select>
+    </label>
+  {/if}
   <button class="secondary" onclick={detect}>Detect</button>
   {#if connected}
     <button
@@ -425,7 +730,7 @@
 <main>
   {#if preset}
     <div class="workspace">
-      <PresetList {presets} currentIndex={preset.index} dirty={preset.dirty} {onGoto} {onSave} {onSaveAs} {onRename} {onBackup} {onRestore} />
+      <PresetList {presets} currentIndex={preset.index} dirty={preset.dirty} {setlists} {viewBank} currentBank={presetBank} writeBlocked={foreignSetlist} {onPickSetlist} {onGoto} {onSave} {onSaveAs} {onRename} {onBackup} {onRestore} {onCopyPreset} {onPastePreset} {presetClip} />
       <div class="content">
         <div class="meta">
           <span>
@@ -435,7 +740,20 @@
           <span>device <b>{preset.device_model ?? "—"}</b></span>
           <span>fw <b>{preset.firmware ?? "—"}</b></span>
           <span>routing <b>{preset.split ? "parallel (split)" : "serial"}</b></span>
-          <span>DSP <b>{preset.dsp_load.toFixed(1)}%</b></span>
+          {#each dspViews as v (v.dsp)}
+            <span
+              class="dsp-chip"
+              class:tight={dspTight(v)}
+              title="{dspViews.length > 1 ? `DSP ${v.dsp + 1}` : 'DSP'}: {dspUsed(v).toFixed(
+                1,
+              )}% of what the pedal will accept, {dspFree(v).toFixed(1)}% free"
+            >
+              <span class="dsp-name">{dspViews.length > 1 ? `DSP ${v.dsp + 1}` : "DSP"}</span>
+              <span class="dsp-bar"><span class="fill" style="width:{dspUsed(v)}%"></span></span>
+              <b>{dspUsed(v).toFixed(1)}%</b>
+              <span class="dsp-free">{dspFree(v).toFixed(1)}% free</span>
+            </span>
+          {/each}
         </div>
         {#if preset.snapshot_names.length}
           <div class="snapshots">
@@ -444,9 +762,16 @@
               <button
                 class="snap"
                 class:active={i === activeSnapshot}
-                title="Click to switch — double-click to rename"
+                title="Click to switch — right-click (or double-click) to rename"
                 onclick={() => onSnapshot(i)}
                 ondblclick={() => onSnapRename(i)}
+                oncontextmenu={(e) => {
+                  // The webview would otherwise pop its own menu (Reload/Inspect), which is both
+                  // useless here and hides ours. Double-click still works; right-click is what
+                  // people reach for, and it was undiscoverable behind a tooltip.
+                  e.preventDefault();
+                  onSnapRename(i);
+                }}
               >
                 {name || `SS${i + 1}`}
               </button>
@@ -461,24 +786,41 @@
         {#if addTarget != null}
           <ModelPicker
             title={addTarget >= 0 ? `Add block — slot ${addTarget}` : "Add block"}
-            remaining={BUDGET - preset.dsp_load}
+            remaining={BUDGET -
+              (addTarget >= 0 ? loadForSlot(addTarget) : Math.min(...dspViews.map((v) => v.dsp_load)))}
+            budget={BUDGET}
             onpick={onAdd}
             oncancel={() => (addTarget = null)}
           />
         {/if}
-        <Chain
-          {preset}
-          {selectedSlot}
-          onselect={(slot) => (selectedSlot = slot)}
-          onplace={onPlace}
-          oninsert={onInsert}
-          onmovenode={onMoveNode}
-          onaddat={(slot) => (addTarget = slot)}
-        />
+        {#each dspViews as dspView (dspView.dsp)}
+          {#if dspViews.length > 1}
+            <div class="dsp-head" class:tight={dspTight(dspView)}>
+              DSP {dspView.dsp + 1}
+              <span class="dsp-bar"
+                ><span class="fill" style="width:{dspUsed(dspView)}%"></span></span
+              >
+              <span class="dsp-load"
+                >{dspUsed(dspView).toFixed(1)}% used · {dspFree(dspView).toFixed(1)}% free</span
+              >
+            </div>
+          {/if}
+          <Chain
+            {preset}
+            dsp={dspView}
+            {selectedSlot}
+            onselect={(slot) => (selectedSlot = slot)}
+            onplace={onPlace}
+            oninsert={onInsert}
+            onmovenode={onMoveNode}
+            onaddat={(slot) => (addTarget = slot)}
+          />
+        {/each}
         {#if selectedBlock}
           <ParamPanel
             block={selectedBlock}
-            dspLoad={preset.dsp_load}
+            dspLoad={selectedBlock ? loadForSlot(selectedBlock.slot) : preset.dsp_load}
+            budget={BUDGET}
             isNode={selectedIsNode}
             isSplit={selectedIsSplit}
             {splitTypes}
@@ -489,6 +831,9 @@
             {onSwap}
             {onSplitType}
             {onDelete}
+            {onCopyBlock}
+            {onPasteBlock}
+            {blockClip}
           />
         {:else}
           <p class="hint">Click a block to edit its parameters.</p>
@@ -696,6 +1041,32 @@
   .spacer {
     flex: 1;
   }
+  /* Mock-only device switch. Deliberately understated and dashed — it must never read as a real
+     control of the hardware. */
+  .mockdev {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px 3px 10px;
+    border: 1px dashed #3a4050;
+    border-radius: 6px;
+  }
+  .mockdev span {
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #7a8296;
+  }
+  .mockdev select {
+    font: inherit;
+    font-size: 12px;
+    background: #23262e;
+    color: #c8cdd8;
+    border: 1px solid #2a2e37;
+    border-radius: 5px;
+    padding: 3px 5px;
+    cursor: pointer;
+  }
   button {
     font: inherit;
     color: #e6e8ec;
@@ -781,8 +1152,67 @@
     font-size: 12px;
     margin-left: 6px;
   }
+  /* One per DSP. The bar is what makes two of them tell apart at a glance — the numbers alone
+     read as one run-on figure, which is how "96.9% · 3.1% free · 0.0% · 100.0% free" happened. */
+  .dsp-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .dsp-chip .dsp-name {
+    font-variant-numeric: tabular-nums;
+  }
+  .dsp-bar {
+    width: 60px;
+    height: 6px;
+    border-radius: 3px;
+    background: #2a2f3a;
+    overflow: hidden;
+  }
+  .dsp-bar .fill {
+    display: block;
+    height: 100%;
+    background: #5b8dd6;
+  }
+  .dsp-chip b {
+    font-variant-numeric: tabular-nums;
+  }
+  .dsp-chip .dsp-free {
+    font-size: 12px;
+    color: #6d7688;
+    font-variant-numeric: tabular-nums;
+  }
+  /* Nearly full: the same warning colour the model picker uses on a model that won't fit. */
+  .dsp-chip.tight .dsp-bar .fill {
+    background: #e0785f;
+  }
+  .dsp-chip.tight b {
+    color: #e0785f;
+  }
   .hint {
     color: #9aa3b2;
+  }
+  /* Per-DSP label above each routing grid — only shown on multi-DSP devices (the Floor). */
+  .dsp-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 14px 0 6px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: #9aa3b2;
+    text-transform: uppercase;
+  }
+  .dsp-head.tight .dsp-bar .fill {
+    background: #e0785f;
+  }
+  .dsp-head .dsp-load {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0;
+    color: #6d7688;
+    text-transform: none;
   }
   .dlg-field {
     display: flex;

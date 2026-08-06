@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::str::FromStr;
 
 /// A whole `*.models` file: a flat list of models.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,13 +24,17 @@ impl ModelFile {
         Ok(serde_json::from_value(value)?)
     }
 
-    pub fn from_str(s: &str) -> crate::Result<Self> {
-        Self::from_slice(s.as_bytes())
-    }
-
     /// Find a model by its `symbolicID` (e.g. `"HD2_AmpGermanMahadeva"`).
     pub fn get(&self, symbolic_id: &str) -> Option<&Model> {
         self.models.iter().find(|m| m.symbolic_id == symbolic_id)
+    }
+}
+
+impl FromStr for ModelFile {
+    type Err = crate::Error;
+
+    fn from_str(s: &str) -> crate::Result<Self> {
+        Self::from_slice(s.as_bytes())
     }
 }
 

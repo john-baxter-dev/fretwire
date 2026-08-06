@@ -8,9 +8,14 @@
 //! Cross-platform compile, but only usable where the OS lets us claim the interface — i.e. **Linux**
 //! (on Windows the Line 6 driver owns interface 0).
 
+use fretwire_protocol::{CONTROL_INTERFACE, EP_IN, EP_OUT, Frame, VID_LINE6};
+pub use fretwire_protocol::{Device, Support};
 use futures_lite::future::{self, block_on};
-use fretwire_protocol::{Frame, CONTROL_INTERFACE, EP_IN, EP_OUT, PID_HX_STOMP, VID_LINE6};
 use nusb::transfer::RequestBuffer;
+
+// Re-exported so callers can name what `present_devices`/`Transport::device` return without
+// depending on `fretwire-protocol` directly.
+pub use fretwire_protocol::{DEVICES, VID_LINE6 as VENDOR_ID};
 
 /// Max bytes to request on a bulk IN. Frames are ≤272 bytes (16 header + 256 payload chunk);
 /// 1024 leaves headroom.
@@ -21,6 +26,12 @@ const IN_BUF: usize = 1024;
 /// gaps well under a second; 3 s turns a desync into a clean error (and keeps connect-retry snappy).
 const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// How long to wait for a bulk OUT to complete before giving up. A healthy device drains a 512-byte
+/// frame in well under a millisecond, so this only ever fires when the device has stopped reading —
+/// which, unbounded, is an unkillable hang rather than an error. Kept short: unlike a read, there is
+/// no legitimate reason for the host's write to sit in the queue.
+const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Max unsolicited frames to skip while waiting for a request's matching reply. The status
 /// channel emits meters/keepalives that interleave with our solicited replies; this bounds how
 /// many we'll discard before giving up so a chatty device can't hang us.
@@ -28,7 +39,7 @@ const MAX_SKIP: usize = 64;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("no HX Stomp found on the USB bus")]
+    #[error("no HX device found on the USB bus")]
     NotFound,
     #[error("usb error: {0}")]
     Usb(#[from] nusb::Error),
@@ -40,47 +51,116 @@ pub enum Error {
     Unmatched { dst: u16, seq: u8 },
     #[error("timed out waiting for a bulk IN")]
     Timeout,
+    /// A bulk **OUT** timed out — the device has stopped draining its endpoint. Distinct from
+    /// [`Error::Timeout`], which is a missing *reply*: this one means the pedal never took the bytes,
+    /// which no amount of waiting fixes and which a caller should treat as "device gone".
+    #[error("timed out sending a bulk OUT — the pedal stopped accepting data (power-cycle it)")]
+    WriteTimeout,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Returns whether an HX Stomp is currently enumerated. A first, dependency-free smoke test that
-/// `nusb` can see the device before we attempt to claim its interface.
-pub fn hx_stomp_present() -> Result<bool> {
-    let found = nusb::list_devices()?
-        .any(|d| d.vendor_id() == VID_LINE6 && d.product_id() == PID_HX_STOMP);
-    Ok(found)
+/// Every known HX device currently enumerated on the bus, in [`fretwire_protocol::DEVICES`] order.
+/// A dependency-free smoke test that `nusb` can see a device before we attempt to claim it.
+pub fn present_devices() -> Result<Vec<&'static Device>> {
+    let pids: Vec<u16> = nusb::list_devices()?
+        .filter(|d| d.vendor_id() == VID_LINE6)
+        .map(|d| d.product_id())
+        .collect();
+    Ok(fretwire_protocol::DEVICES
+        .iter()
+        .filter(|d| pids.contains(&d.pid))
+        .collect())
 }
 
-/// A claimed bulk pipe to the HX Stomp's control interface.
+/// Returns whether any known HX device is currently enumerated.
+pub fn hx_device_present() -> Result<bool> {
+    Ok(!present_devices()?.is_empty())
+}
+
+/// A claimed bulk pipe to an HX device's control interface.
 pub struct Transport {
     iface: nusb::Interface,
+    /// Which device we opened — its DSP/snapshot counts drive the layers above.
+    device: &'static Device,
     /// Frames decoded from a prior bulk IN but not yet consumed — a single IN transfer can
     /// concatenate several frames (the handshake batches 3 in one read).
     pending: std::collections::VecDeque<Frame>,
 }
 
 impl Transport {
-    /// Find the HX Stomp, open it, and claim the control interface.
+    /// Find the first known HX device, open it, and claim the control interface.
+    ///
+    /// Devices are tried in [`fretwire_protocol::DEVICES`] order, so a [`Support::Verified`] one is
+    /// always preferred over an untested one when both are plugged in. The vendor control interface
+    /// and its bulk endpoints are identical across the family — confirmed for the Stomp and the
+    /// Floor from their descriptors — so one code path serves all of them.
     pub fn open() -> Result<Transport> {
-        let info = nusb::list_devices()?
-            .find(|d| d.vendor_id() == VID_LINE6 && d.product_id() == PID_HX_STOMP)
-            .ok_or(Error::NotFound)?;
-        let device = info.open()?;
-        // On Linux nothing should hold this vendor interface, but detach defensively if it does.
-        let iface = match device.claim_interface(CONTROL_INTERFACE) {
-            Ok(i) => i,
-            Err(_) => device.detach_and_claim_interface(CONTROL_INTERFACE)?,
-        };
-        tracing::info!("claimed HX Stomp control interface {CONTROL_INTERFACE}");
-        Ok(Transport { iface, pending: std::collections::VecDeque::new() })
+        let present = present_devices()?;
+        let device = present.first().copied().ok_or(Error::NotFound)?;
+        Transport::open_device(device)
     }
 
-    /// Send raw bytes on the bulk OUT endpoint.
+    /// Open one specific device.
+    pub fn open_device(device: &'static Device) -> Result<Transport> {
+        let info = nusb::list_devices()?
+            .find(|d| d.vendor_id() == VID_LINE6 && d.product_id() == device.pid)
+            .ok_or(Error::NotFound)?;
+        if device.support == Support::Untested {
+            // Reading and the handshake are low-risk (worst case a power cycle — see docs/safety.md),
+            // but say so rather than pretending this device is known-good.
+            tracing::warn!(
+                "{} is untested — its protocol is assumed to match the rest of the HX family",
+                device.name
+            );
+        }
+        let dev = info.open()?;
+        // On Linux nothing should hold this vendor interface, but detach defensively if it does.
+        let iface = match dev.claim_interface(CONTROL_INTERFACE) {
+            Ok(i) => i,
+            Err(_) => dev.detach_and_claim_interface(CONTROL_INTERFACE)?,
+        };
+        tracing::info!(
+            "claimed {} control interface {CONTROL_INTERFACE}",
+            device.name
+        );
+        Ok(Transport {
+            iface,
+            device,
+            pending: std::collections::VecDeque::new(),
+        })
+    }
+
+    /// The device this transport is connected to.
+    pub fn device(&self) -> &'static Device {
+        self.device
+    }
+
+    /// Send raw bytes on the bulk OUT endpoint, bounded by [`WRITE_TIMEOUT`].
+    ///
+    /// The bound is not a formality. A wedged device stops draining its OUT endpoint, and an
+    /// unbounded `bulk_out` then blocks **forever** — observed twice in the field on 2026-07-31,
+    /// where a whole-preset write hung the editor with the last log line reading "Submitted URB on
+    /// ep 1" and nothing after it. Racing a timer the way [`Transport::recv_timeout`] does turns
+    /// that permanent hang into an [`Error::WriteTimeout`] the caller can report.
     pub fn send(&self, bytes: Vec<u8>) -> Result<()> {
         tracing::trace!(len = bytes.len(), "bulk OUT {:02x?}", bytes);
-        block_on(self.iface.bulk_out(EP_OUT, bytes)).into_result()?;
-        Ok(())
+        let transfer = self.iface.bulk_out(EP_OUT, bytes);
+        let outcome = block_on(future::or(
+            async move { Some(transfer.await.into_result()) },
+            async move {
+                futures_timer::Delay::new(WRITE_TIMEOUT).await;
+                None
+            },
+        ));
+        match outcome {
+            Some(Ok(_)) => Ok(()),
+            Some(Err(e)) => Err(e.into()),
+            None => {
+                tracing::error!("bulk OUT timed out — the device stopped draining its endpoint");
+                Err(Error::WriteTimeout)
+            }
+        }
     }
 
     /// Read one bulk IN transfer (up to [`IN_BUF`] bytes), bounded by [`READ_TIMEOUT`].
@@ -120,7 +200,10 @@ impl Transport {
         let mut frames = Frame::decode_all(&raw)?.into_iter();
         let first = frames
             .next()
-            .ok_or(Error::Frame(fretwire_protocol::Error::Short { need: 16, got: raw.len() }))?;
+            .ok_or(Error::Frame(fretwire_protocol::Error::Short {
+                need: 16,
+                got: raw.len(),
+            }))?;
         self.pending.extend(frames);
         Ok(first)
     }
@@ -156,19 +239,53 @@ impl Transport {
         accept: impl Fn(&Frame) -> bool,
     ) -> Result<Frame> {
         self.send(frame.encode())?;
+        // Frames that aren't the reply are put *back*, not thrown away. Most are keepalives and
+        // meters that nobody misses, but the status channel's panel mirror comes down this same
+        // pipe — every footswitch, knob and preset change the player makes on the pedal. Dropping
+        // those is why the editor only ever caught up with the hardware after the user did
+        // something in the GUI: the push had arrived, mid-request, and gone in the bin.
+        // `zadtheinhaler57` discarded 111 status frames in one session.
+        //
+        // They go back in arrival order and ahead of anything that queued behind them, so the next
+        // `drain_collect`/`poll_status` sees the same sequence the device sent. Collected in a
+        // local first — re-queueing inside the loop would just hand them straight back to
+        // `next_frame_within` and spin.
+        let mut skipped: Vec<Frame> = Vec::new();
+        let mut out = Err(Error::Unmatched {
+            dst: frame.src,
+            seq: frame.seq,
+        });
         for _ in 0..MAX_SKIP {
-            let reply = self.next_frame_within(timeout)?;
-            if reply.dst == frame.src && reply.cmd != fretwire_protocol::cmd::IDLE && accept(&reply) {
-                return Ok(reply);
+            let reply = match self.next_frame_within(timeout) {
+                Ok(r) => r,
+                Err(e) => {
+                    out = Err(e);
+                    break;
+                }
+            };
+            if reply.dst == frame.src && reply.cmd != fretwire_protocol::cmd::IDLE && accept(&reply)
+            {
+                out = Ok(reply);
+                break;
             }
             tracing::debug!(
                 want_dst = format_args!("{:#06x}", frame.src),
-                got_dst = format_args!("{:#06x}", reply.dst), got_src = format_args!("{:#06x}", reply.src),
-                got_seq = reply.seq, cmd = reply.cmd, body = reply.body.len(),
-                "skipping non-reply frame",
+                got_dst = format_args!("{:#06x}", reply.dst),
+                got_src = format_args!("{:#06x}", reply.src),
+                got_seq = reply.seq,
+                cmd = reply.cmd,
+                body = reply.body.len(),
+                "set aside non-reply frame",
             );
+            skipped.push(reply);
         }
-        Err(Error::Unmatched { dst: frame.src, seq: frame.seq })
+        // Keepalives are pure noise and the one thing that would grow this queue without bound —
+        // a long session interleaves thousands. Anything with a body is a push worth keeping.
+        skipped.retain(|f| f.cmd != fretwire_protocol::cmd::IDLE && !f.body.is_empty());
+        for f in skipped.into_iter().rev() {
+            self.pending.push_front(f);
+        }
+        out
     }
 
     /// Discard any already-buffered frames (e.g. the device's post-transaction epilogue that got

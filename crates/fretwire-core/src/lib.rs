@@ -27,6 +27,12 @@ pub enum Error {
     Protocol(#[from] fretwire_protocol::Error),
     #[error("usb: {0}")]
     Usb(#[from] fretwire_usb::Error),
+    #[error("the pedal refused the {0}")]
+    Rejected(String),
+    /// A chunked whole-preset write was abandoned because the device stopped granting flow-control
+    /// credits. Distinct from [`Error::Usb`]: the transport is fine, the pedal isn't.
+    #[error("preset write stalled: {0}")]
+    WriteStalled(String),
     #[error("backup file: {0}")]
     Backup(String),
     #[error("reference data: {0}")]

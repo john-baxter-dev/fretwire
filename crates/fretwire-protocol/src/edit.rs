@@ -203,19 +203,29 @@ impl EditBody {
         let op = get(&root, K_OP).and_then(Value::as_i64).unwrap_or(-1);
         let target = get(&root, K_TARGET);
         let slot = target.and_then(|t| get(t, K_SLOT)).and_then(Value::as_i64);
-        let param_index = target.and_then(|t| get(t, K_PARAM_INDEX)).and_then(Value::as_i64);
+        let param_index = target
+            .and_then(|t| get(t, K_PARAM_INDEX))
+            .and_then(Value::as_i64);
         let value = target
             .and_then(|t| get(t, K_VALUE).or_else(|| get(t, K_BYPASS_VALUE)))
             .map(EditValue::from_value)
             .unwrap_or(EditValue::None);
 
-        Ok(EditBody { txn, op, slot, param_index, value, raw: root })
+        Ok(EditBody {
+            txn,
+            op,
+            slot,
+            param_index,
+            value,
+            raw: root,
+        })
     }
 
     /// Re-encode this body to MessagePack (round-trips a parsed body byte-exact).
     pub fn to_msgpack(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        rmpv::encode::write_value(&mut out, &self.raw).expect("msgpack encode to Vec is infallible");
+        rmpv::encode::write_value(&mut out, &self.raw)
+            .expect("msgpack encode to Vec is infallible");
         out
     }
 
@@ -260,7 +270,13 @@ pub fn set_value(slot: i64, param_index: i64, value: f32, txn: u16) -> Vec<u8> {
 /// order) of the block in `slot` to `value`. Same envelope as [`set_value`] but selects the paired
 /// model (`26:1`). Reproduces the device's bytes exactly (cab mic-distance/position/angle captures).
 pub fn set_paired_value(slot: i64, param_index: i64, value: f32, txn: u16) -> Vec<u8> {
-    set_value_on(slot, MODEL_PAIRED, param_index, EditValue::Float(value), txn)
+    set_value_on(
+        slot,
+        MODEL_PAIRED,
+        param_index,
+        EditValue::Float(value),
+        txn,
+    )
 }
 
 /// Build a **set-value** edit body, fully parameterized: choose the sub-model (`model_sel` —
@@ -270,6 +286,27 @@ pub fn set_paired_value(slot: i64, param_index: i64, value: f32, txn: u16) -> Ve
 pub fn set_value_on(
     slot: i64,
     model_sel: i64,
+    param_index: i64,
+    value: EditValue,
+    txn: u16,
+) -> Vec<u8> {
+    set_value_flagged(slot, model_sel, true, param_index, value, txn)
+}
+
+/// [`set_value_on`] with the addressing flag (target key 29) exposed.
+///
+/// **Key 29 chooses what key 28 indexes.** `true` — every ordinary edit — means "the parameter's
+/// position in the model's `Helix.sym` order". `false` selects the block's *extra* values, the ones
+/// the symbol doesn't list, and there `28: 0` is `Trails`. HX Edit toggles a reverb's trails with
+/// `{98: slot, 29: false, 26: 0, 28: 0, 119: <bool>}` and nothing else — six of them in
+/// `captures/dynamic_ambience_trails_on_off.pcapng`, against `29: true, 28: 5` for the same block's
+/// Mix knob in `dynamic_ambience_mix_modify.pcapng`. Sending `29: true` for one of these is refused
+/// with `-3`, which is what made `Trails` look unreachable.
+/// [solid — 2026-08-02, capture + confirmed live on an HX Stomp]
+pub fn set_value_flagged(
+    slot: i64,
+    model_sel: i64,
+    by_param_index: bool,
     param_index: i64,
     value: EditValue,
     txn: u16,
@@ -287,7 +324,7 @@ pub fn set_value_on(
             Value::from(K_TARGET),
             Value::Map(vec![
                 (Value::from(K_SLOT), Value::from(slot)),
-                (Value::from(K_FLAG_29), Value::from(true)),
+                (Value::from(K_FLAG_29), Value::from(by_param_index)),
                 (Value::from(K_MODEL_SEL), Value::from(model_sel)),
                 (Value::from(K_PARAM_INDEX), Value::from(param_index)),
                 (Value::from(K_VALUE), wire_value),
@@ -413,9 +450,14 @@ pub fn write_preset(blob: &[u8], txn: u16) -> Vec<u8> {
     // {102: txn(cd u16), 100: 21, 101: {110: str<blob>}}
     let mut out = vec![
         0x83, // fixmap 3
-        0x66, 0xcd, (txn >> 8) as u8, txn as u8, // 102 => cd u16 txn
-        0x64, OP_WRITE_PRESET as u8, // 100 => 21
-        0x65, 0x81, // 101 => fixmap 1
+        0x66,
+        0xcd,
+        (txn >> 8) as u8,
+        txn as u8, // 102 => cd u16 txn
+        0x64,
+        OP_WRITE_PRESET as u8, // 100 => 21
+        0x65,
+        0x81,               // 101 => fixmap 1
         K_WRITE_BLOB as u8, // 110
     ];
     push_str_header(&mut out, blob.len());
@@ -460,7 +502,10 @@ pub fn delete_block(slot: i64, txn: u16) -> Vec<u8> {
     encode(Value::Map(vec![
         (Value::from(K_TXN), Value::from(txn)),
         (Value::from(K_OP), Value::from(OP_DELETE_BLOCK)),
-        (Value::from(K_TARGET), Value::Map(vec![(Value::from(K_SLOT), Value::from(slot))])),
+        (
+            Value::from(K_TARGET),
+            Value::Map(vec![(Value::from(K_SLOT), Value::from(slot))]),
+        ),
     ]))
 }
 
@@ -546,7 +591,10 @@ pub fn switch_snapshot(index: i64, txn: u16) -> Vec<u8> {
     encode(Value::Map(vec![
         (Value::from(K_TXN), Value::from(txn)),
         (Value::from(K_OP), Value::from(OP_SWITCH_SNAPSHOT)),
-        (Value::from(K_TARGET), Value::Map(vec![(Value::from(K_SNAPSHOT), Value::from(index))])),
+        (
+            Value::from(K_TARGET),
+            Value::Map(vec![(Value::from(K_SNAPSHOT), Value::from(index))]),
+        ),
     ]))
 }
 
@@ -567,7 +615,10 @@ pub fn read_prep(txn: u16) -> Vec<u8> {
     encode(Value::Map(vec![
         (Value::from(K_TXN), Value::from(txn)),
         (Value::from(K_OP), Value::from(OP_READ_PREP)),
-        (Value::from(K_TARGET), Value::Map(vec![(Value::from(K_READ_PREP), Value::from(128))])),
+        (
+            Value::from(K_TARGET),
+            Value::Map(vec![(Value::from(K_READ_PREP), Value::from(128))]),
+        ),
     ]))
 }
 
@@ -622,15 +673,19 @@ pub fn presets_open(txn: u16) -> Vec<u8> {
     ]))
 }
 
-/// Build the **presets-stream-start** body (op 1): `{102:txn, 100:1, 101:{107:0, 101:2}}`.
-pub fn presets_stream(txn: u16) -> Vec<u8> {
+/// Build the **presets-stream-start** body (op 1): `{102:txn, 100:1, 101:{107:bank, 101:2}}`.
+///
+/// `bank` is the **setlist** to list — the same index `select_preset`/`save_preset` take, and the
+/// one a preset reports as [`fretwire_data::stream::PresetInfo::bank`]. This was hardcoded to 0,
+/// which is why a Helix Floor sitting in User 1 (bank 2) still listed the Factory 1 names.
+pub fn presets_stream(txn: u16, bank: i64) -> Vec<u8> {
     encode(Value::Map(vec![
         (Value::from(K_TXN), Value::from(txn)),
         (Value::from(K_OP), Value::from(OP_PRESETS_STREAM)),
         (
             Value::from(K_TARGET),
             Value::Map(vec![
-                (Value::from(K_SELECT_BANK), Value::from(0)),
+                (Value::from(K_SELECT_BANK), Value::from(bank)),
                 (Value::from(K_LIST_KIND), Value::from(2)),
             ]),
         ),
@@ -639,7 +694,10 @@ pub fn presets_stream(txn: u16) -> Vec<u8> {
 
 fn get(v: &Value, key: i64) -> Option<&Value> {
     match v {
-        Value::Map(m) => m.iter().find(|(k, _)| k.as_i64() == Some(key)).map(|(_, val)| val),
+        Value::Map(m) => m
+            .iter()
+            .find(|(k, _)| k.as_i64() == Some(key))
+            .map(|(_, val)| val),
         _ => None,
     }
 }
@@ -650,8 +708,9 @@ mod tests {
 
     // From captures (tools/dump-control.ps1): tremolo bypass on (slot 4); Dynamic Ambience Mix=0.62
     // (slot 7, Mix is param index 5 in VIC_ReverbDynAmbience).
-    const BYPASS_ON: &[u8] =
-        &[0x83, 0x66, 0xcd, 0x03, 0xf2, 0x64, 0x29, 0x65, 0x82, 0x62, 0x04, 0x3b, 0xc3];
+    const BYPASS_ON: &[u8] = &[
+        0x83, 0x66, 0xcd, 0x03, 0xf2, 0x64, 0x29, 0x65, 0x82, 0x62, 0x04, 0x3b, 0xc3,
+    ];
     const AMBIENCE_MIX: &[u8] = &[
         0x83, 0x66, 0xcd, 0x04, 0xa1, 0x64, 0x1e, 0x65, 0x85, 0x62, 0x07, 0x1d, 0xc3, 0x1a, 0x00,
         0x1c, 0x05, 0x77, 0xca, 0x3f, 0x1e, 0xb8, 0x52,
@@ -731,9 +790,13 @@ mod tests {
     // delete-block (op 28): from the delete captures — slot 5 (txn 0x0401) and slot 6 (txn 0x0410).
     #[test]
     fn delete_block_reproduces_captured_bytes() {
-        let slot5 = [0x83, 0x66, 0xcd, 0x04, 0x01, 0x64, 0x1c, 0x65, 0x81, 0x62, 0x05];
+        let slot5 = [
+            0x83, 0x66, 0xcd, 0x04, 0x01, 0x64, 0x1c, 0x65, 0x81, 0x62, 0x05,
+        ];
         assert_eq!(delete_block(5, 0x0401), slot5);
-        let slot6 = [0x83, 0x66, 0xcd, 0x04, 0x10, 0x64, 0x1c, 0x65, 0x81, 0x62, 0x06];
+        let slot6 = [
+            0x83, 0x66, 0xcd, 0x04, 0x10, 0x64, 0x1c, 0x65, 0x81, 0x62, 0x06,
+        ];
         assert_eq!(delete_block(6, 0x0410), slot6);
     }
 
@@ -747,7 +810,10 @@ mod tests {
             0x83, 0x66, 0xcd, 0x04, 0xf9, 0x64, 0x1e, 0x65, 0x85, 0x62, 0x06, 0x1d, 0xc3, 0x1a,
             0x01, 0x1c, 0x00, 0x77, 0x01,
         ];
-        assert_eq!(set_value_on(6, MODEL_PAIRED, 0, EditValue::Int(1), 0x04f9), mic);
+        assert_eq!(
+            set_value_on(6, MODEL_PAIRED, 0, EditValue::Int(1), 0x04f9),
+            mic
+        );
         let distance = [
             0x83, 0x66, 0xcd, 0x04, 0xbe, 0x64, 0x1e, 0x65, 0x85, 0x62, 0x06, 0x1d, 0xc3, 0x1a,
             0x01, 0x1c, 0x02, 0x77, 0xca, 0x3f, 0xe0, 0x00, 0x00,
@@ -768,7 +834,9 @@ mod tests {
         let body = write_preset(&blob, 0x04c6);
         assert_eq!(
             &body[..13],
-            &[0x83, 0x66, 0xcd, 0x04, 0xc6, 0x64, 0x15, 0x65, 0x81, 0x6e, 0xda, 0x0b, 0x9a]
+            &[
+                0x83, 0x66, 0xcd, 0x04, 0xc6, 0x64, 0x15, 0x65, 0x81, 0x6e, 0xda, 0x0b, 0x9a
+            ]
         );
         assert_eq!(body.len(), 13 + 2970);
     }
@@ -840,7 +908,9 @@ mod tests {
     // HX Edit switching to snapshot 1, {102: 0x03f3, 100: 88, 101: {92: 1}}.
     #[test]
     fn switch_snapshot_reproduces_captured_bytes() {
-        let expect = [0x83, 0x66, 0xcd, 0x03, 0xf3, 0x64, 0x58, 0x65, 0x81, 0x5c, 0x01];
+        let expect = [
+            0x83, 0x66, 0xcd, 0x03, 0xf3, 0x64, 0x58, 0x65, 0x81, 0x5c, 0x01,
+        ];
         assert_eq!(switch_snapshot(1, 0x03f3), expect);
     }
 
@@ -848,7 +918,9 @@ mod tests {
     // preset, {102: 0x043a, 100: 20, 101: {107: 0, 108: 19}}.
     #[test]
     fn select_preset_reproduces_captured_bytes() {
-        let expect = [0x83, 0x66, 0xcd, 0x04, 0x3a, 0x64, 0x14, 0x65, 0x82, 0x6b, 0x00, 0x6c, 0x13];
+        let expect = [
+            0x83, 0x66, 0xcd, 0x04, 0x3a, 0x64, 0x14, 0x65, 0x82, 0x6b, 0x00, 0x6c, 0x13,
+        ];
         assert_eq!(select_preset(0, 19, 0x043a), expect);
     }
 
@@ -857,27 +929,57 @@ mod tests {
     #[test]
     fn read_sequence_reproduces_connect_capture() {
         // op 76, target {}  ->  83 66 cd03e8 64 4c 65 80
-        assert_eq!(read_open(0x03e8), [0x83, 0x66, 0xcd, 0x03, 0xe8, 0x64, 0x4c, 0x65, 0x80]);
+        assert_eq!(
+            read_open(0x03e8),
+            [0x83, 0x66, 0xcd, 0x03, 0xe8, 0x64, 0x4c, 0x65, 0x80]
+        );
         // op 24, target {118:128}  ->  83 66 cd03e9 64 18 65 81 76 cc80
-        assert_eq!(read_prep(0x03e9),
-            [0x83, 0x66, 0xcd, 0x03, 0xe9, 0x64, 0x18, 0x65, 0x81, 0x76, 0xcc, 0x80]);
+        assert_eq!(
+            read_prep(0x03e9),
+            [
+                0x83, 0x66, 0xcd, 0x03, 0xe9, 0x64, 0x18, 0x65, 0x81, 0x76, 0xcc, 0x80
+            ]
+        );
         // op 23, target nil  ->  83 66 cd03ea 64 17 65 c0
-        assert_eq!(read_info(0x03ea), [0x83, 0x66, 0xcd, 0x03, 0xea, 0x64, 0x17, 0x65, 0xc0]);
+        assert_eq!(
+            read_info(0x03ea),
+            [0x83, 0x66, 0xcd, 0x03, 0xea, 0x64, 0x17, 0x65, 0xc0]
+        );
         // op 22, target nil  ->  83 66 cd03eb 64 16 65 c0
-        assert_eq!(stream_start(0x03eb), [0x83, 0x66, 0xcd, 0x03, 0xeb, 0x64, 0x16, 0x65, 0xc0]);
+        assert_eq!(
+            stream_start(0x03eb),
+            [0x83, 0x66, 0xcd, 0x03, 0xeb, 0x64, 0x16, 0x65, 0xc0]
+        );
     }
 
     // The preset-list browse sequence, decoded from startup.pcapng (primary channel, txns 0x3e8..0x3ea).
     #[test]
     fn browse_sequence_reproduces_capture() {
         // op 254, target {}  ->  83 66 cd03e8 64 ccfe 65 80
-        assert_eq!(browse_open(0x03e8),
-            [0x83, 0x66, 0xcd, 0x03, 0xe8, 0x64, 0xcc, 0xfe, 0x65, 0x80]);
+        assert_eq!(
+            browse_open(0x03e8),
+            [0x83, 0x66, 0xcd, 0x03, 0xe8, 0x64, 0xcc, 0xfe, 0x65, 0x80]
+        );
         // op 0, target nil  ->  83 66 cd03e9 64 00 65 c0
-        assert_eq!(presets_open(0x03e9), [0x83, 0x66, 0xcd, 0x03, 0xe9, 0x64, 0x00, 0x65, 0xc0]);
+        assert_eq!(
+            presets_open(0x03e9),
+            [0x83, 0x66, 0xcd, 0x03, 0xe9, 0x64, 0x00, 0x65, 0xc0]
+        );
         // op 1, target {107:0, 101:2}  ->  83 66 cd03ea 64 01 65 82 6b 00 65 02
-        assert_eq!(presets_stream(0x03ea),
-            [0x83, 0x66, 0xcd, 0x03, 0xea, 0x64, 0x01, 0x65, 0x82, 0x6b, 0x00, 0x65, 0x02]);
+        assert_eq!(
+            presets_stream(0x03ea, 0),
+            [
+                0x83, 0x66, 0xcd, 0x03, 0xea, 0x64, 0x01, 0x65, 0x82, 0x6b, 0x00, 0x65, 0x02
+            ]
+        );
+        // Same frame for a different setlist: only the 107 value moves (bank 2 = "User 1" on the
+        // Helix Floor). The bank was hardcoded to 0 here, so every list came back as Factory 1.
+        assert_eq!(
+            presets_stream(0x03ea, 2),
+            [
+                0x83, 0x66, 0xcd, 0x03, 0xea, 0x64, 0x01, 0x65, 0x82, 0x6b, 0x02, 0x65, 0x02
+            ]
+        );
     }
 
     #[test]

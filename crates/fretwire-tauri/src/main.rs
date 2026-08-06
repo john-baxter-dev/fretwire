@@ -14,10 +14,7 @@ use tauri::Manager;
 fn main() {
     // Logs go to the terminal; run with `RUST_LOG=trace cargo run -p fretwire-tauri` to trace USB I/O.
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
-        )
+        .with_env_filter(fretwire_log_filter())
         .init();
 
     // WebKitGTK's default dmabuf renderer hits a fatal Wayland protocol error on this GPU/compositor
@@ -26,7 +23,11 @@ fn main() {
     // explicit override if the user already set it.
     #[cfg(target_os = "linux")]
     if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        // SAFETY (Rust 2024 made `set_var` unsafe: mutating the environment races other threads
+        // reading it): this runs at the very top of `main`, before `tauri::Builder` — and thus
+        // before GTK/WebKit or the async runtime spawn any thread — so the process is still
+        // single-threaded and no concurrent env access is possible.
+        unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
     }
 
     tauri::Builder::default()
@@ -73,12 +74,20 @@ fn main() {
             commands::rename_preset,
             commands::rename_snapshot,
             commands::list_presets,
+            commands::setlists,
+            commands::cross_setlist_write_allowed,
             commands::backup_setlist,
             commands::backup_show,
             commands::restore_preset,
             commands::split_types,
             commands::categories,
             commands::models_in_category,
+            commands::copy_preset,
+            commands::paste_preset,
+            commands::clipboard_preset,
+            commands::copy_block,
+            commands::paste_block,
+            commands::clipboard_block,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -93,4 +102,23 @@ fn main() {
                 }
             }
         });
+}
+
+/// The log filter, with `nusb` damped unless the user asked for it by name.
+///
+/// `RUST_LOG=debug` turns on nusb's per-URB tracing, which is **94% of a bug-report log** by volume
+/// (7.2 MB of a Floor session's 7.7 MB) and buries the protocol lines a report is actually about.
+/// An explicit `nusb=…` directive still wins, so `RUST_LOG=debug,nusb=debug` gets the URBs back.
+fn fretwire_log_filter() -> tracing_subscriber::EnvFilter {
+    match std::env::var("RUST_LOG") {
+        Ok(v) if !v.is_empty() => {
+            let damped = if v.contains("nusb") {
+                v
+            } else {
+                format!("{v},nusb=warn")
+            };
+            tracing_subscriber::EnvFilter::new(damped)
+        }
+        _ => tracing_subscriber::EnvFilter::new("info,nusb=warn"),
+    }
 }

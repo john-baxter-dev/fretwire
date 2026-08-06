@@ -104,8 +104,11 @@ Re-run `npm run build` after any frontend change; the Rust side won't pick it up
 **3. Run it.**
 
 ```
-cargo run -p fretwire-tauri
+cargo run -p fretwire-tauri --release
 ```
+
+To work on the UI with hot reload instead, run `npm run tauri:dev` from `crates/fretwire-tauri/ui`,
+which starts the dev server and the app together.
 
 Connect, browse presets, edit blocks and parameters, drag blocks around the routing grid, manage
 snapshots, save, back up and restore. It live-follows the hardware, so footswitch and panel changes

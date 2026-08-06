@@ -191,7 +191,8 @@ Decoded structure (confirmed across many single-knob captures, `captures/param_m
   PreDelay→1 / Mix→5 / LowCut→6 / Level→8 (each = its index in the block's mono/stereo `Helix.sym`
   list). The same param has different indices on different models, exactly as its position differs.
 - **Value = target key 119** (float32 for knobs; int for enums; bool for switches). Key `29: true`
-  is a constant descriptor on knob edits.
+  is a constant descriptor on knob edits. The type is **not** coerced — sending the wrong one is
+  refused outright; see "The value's wire type must match the parameter's type exactly" below.
 - **★ Sub-model selector = target key 26** [solid]: `0` = the block's **main model** (amp/effect),
   `1` = the **paired cab/IR** fused into the same slot (amp+cab blocks). A cab-param edit is byte-for-byte
   a main edit with `26:1`; the param index (key 28) is then positional in the *cab's* `Helix.sym`
@@ -203,6 +204,350 @@ Decoded structure (confirmed across many single-knob captures, `captures/param_m
   block's main param list). TBD; normal knob/continuous params follow the index rule above.
 - Builders `fretwire_protocol::edit::bypass()` / `set_value()` regenerate these bytes exactly.
 - The `f003` status channel echoes the same msgpack back (state mirror) — useful for reading state.
+
+### An edit ACK must be matched by its transaction id, not by arrival order [solid] — 2026-08-01
+"The next non-keepalive frame on the edit channel" is **not** the reply to the edit you just sent.
+The device interleaves two other things on that channel: empty `cmd 0x08` credit frames, and — after
+a browse/list read — leftover chunks of the previous stream. Take one of those as the ACK and two
+things go wrong at once: the edit is reported applied on the strength of a frame that says nothing
+about it, and every later reply is off by one, so a refusal is attributed to the wrong command. The
+mismatch then *suppresses* the refusal check (`sent_txn == txn` fails), which is how an edit the
+pedal threw away reached the GUI as a success.
+
+Measured over the 2026-07-30/31 field logs — 353 edit ACKs across ops 20/28/30/39/40/41/43/71/78:
+
+| | count | |
+|---|---:|---|
+| correlated (reply echoes the txn we sent) | 233 | |
+| **empty body** | 86 | a `cmd 0x08` credit taken as an ACK |
+| **echoes an earlier txn** | 50 | the desync, lag 1–5 |
+| cross-stream | 1 | an op-20 reply carrying preset-*list* bytes |
+
+Per op, the structural path was the worst affected: **op 43 `move_block` never once correlated**
+(0 of 21) and op 78 `begin_structural` managed 6 of 24, while op 30 `set_value` — the slider drag —
+ran about 63% correct. op 71 `save_preset` was 0 of 21: every save we have ever "confirmed" was
+confirmed by a credit frame. Its real ACK is `{102: txn, 103: 0, 104: nil}` and arrives right after,
+so it was being read one frame too early.
+
+`Session::send_edit` now correlates every edit by the txn echoed at key 102
+(`Transport::request_matching`), skipping credit and cross-stream frames instead of consuming them.
+Verified on an HX Stomp 2026-08-01: 46 consecutive op-40 swaps plus ops 30/39/41/43/71 all matched
+their own transaction, save included.
+
+> This was floated as a mechanism for the op-21 write freezes on the reading that a structural drag
+> is `op 78 → op 43 → op 21`. **That sequence is not in any capture** (checked 2026-08-02, all 43):
+> `move_EQ_right_two_slots` is a bare op-21 with no bracket, `one_by_one_move_all_blocks_one_right`
+> is `78,43` eleven times with no op-21, and `move_simple_eq_to_parallel_path` is `43,23`. HX Edit
+> sends a whole-preset write on its own, exactly as we do. Dropped as a lead.
+
+### The reply's key 103 is a status, and `255` means refused [solid] — from the 2026-07-30 Floor log
+Every reply envelope is `{102: txn, 103: kind, 104: payload}`, and until now we read key 103 as a
+don't-care (`103:_` in the notes below). It is the **kind of answer**, and one of its values is a
+refusal:
+
+| 103 | 104 | meaning |
+|---|---|---|
+| `0` | the payload | data reply — the read-info identity, a stream chunk, the echo of an applied edit |
+| `1` | `nil` | plain ack (bypass, whole-preset write) |
+| `255` | `{111: code}` | **the device refused the command** |
+
+A refusal is silent in every other respect: no error frame, no state change, and the next read
+returns the preset byte-identical. Observed twice in one session — `{102:44, 103:255, 104:{111:-21}}`
+and the same again at `102:60` — while the 6778-byte stream stayed 6778 across both. The meaning of
+`fretwire_data::stream::parse_edit_rejection` reads it, and `Session::send_edit` turns it into
+`Error::Rejected` — before this, `send_edit` logged the reply and returned `Ok`, so the GUI reported
+success for edits the pedal had thrown away.
+
+Two refusal codes are observed so far. Both are refusals of an op that is *valid in general* but not
+for that target, so the code looks like "wrong shape for this thing" rather than a transport error:
+
+| code | seen on | meaning [hypothesis] |
+|---:|---|---|
+| `-21` | op 39 `add_block` carrying a `paired_index`; op 40 swapping to a `*WithPan` twin | a model-ref the op will not take for that target |
+| `-3` | op 30 `set_value` writing a split node's `bypass` param; op 30 sending the **wrong wire type** for the param; op 30 addressing a param **past the model's symbol list** | that parameter is not writable *as asked* — wrong op, wrong type, or no such index |
+| `-306` | op 40 swapping to a model the DSP has no room for; op 40 swapping any block to a `*WithPan` dual-cab twin | **out of DSP** — see below. The dual-cab twins are a separate case (a different block type, not an in-place swap target) that answers `-21` in some device states, so there treat the refusal, not the code, as the signal |
+
+The `-3` case is worth knowing about because `bypass` **is** a real entry in the split's stored param
+array, and the four split models are the only ones in the whole catalog (4 of 681) that carry it. So
+the editor will happily offer it as a knob; `Session::set_param` now recognises it and sends op 41
+instead. [solid — 2026-07-31, two op-30 writes to a Split Y's bypass, both refused with `-3`]
+
+### `-306` on op 40 means the model does not fit in the DSP budget [solid]
+The field logs made this look like a property of the *model* — a Room reverb refusing to become a
+Euclidean Delay, a Bleat Chop Trem refusing to become an Elephant Man. It is a property of the
+**preset's total DSP load** at the moment of the swap, and nothing else.
+
+Measured on an HX Stomp (fw 3.71, 2026-08-02), same preset, same block, same target model, only the
+free DSP changed:
+
+| slot 4 → `HD2_DelayElephantManMono` | preset before | result |
+|---|---:|---|
+| as loaded | 71.8% | refused, `-306` |
+| after freeing 6.5% elsewhere | 65.3% | **accepted** (→ 68.8%) |
+
+A ladder of targets on one slot from a fixed baseline brackets the ceiling. The number is the total
+the preset *would land on*, by our meter:
+
+| landing total | result |
+|---:|---|
+| 73.3%, 73.8%, 74.4%, 74.9% | accepted |
+| 75.3%, 75.6%, 76.5% | refused, `-306` |
+
+So the device fills up at **~75% on our meter**, not 100%: "28% free" can mean no room at all. This
+is `fretwire_core::editor::DSP_CEILING`, and it is what every fit check and headroom figure now
+compares against; `EditorPreset::dsp_free_on` returns `DSP_CEILING - load`, never `100 - load`.
+
+The ceiling holds on the Helix Floor too, from the other direction: the tester's `somehinged3` sits
+at **72.7%** on DSP1 and refused both Elephant Man Mono (`load` 6.02) and Euclidean Delay (10.5),
+which puts that device's ceiling under 78.7 — and above 72.7, since the preset itself loads and
+plays. Two different devices, same neighbourhood. **The ceiling is per DSP**, not per preset: a
+Floor preset can total 120% across two DSPs and be nowhere near a refusal.
+
+#### The missing quarter is a flat reserve, not the routing nodes [solid — 2026-08-04]
+The standing theory was the fixed nodes we never add in, and `io.models` does price them — so the
+numbers were finally in hand to check it:
+
+| node | `load` |
+|---|---:|
+| `HelixStomp_AppDSPFlowInput`, `…OutputMain`, `…OutputSend` | 10.99 each |
+| `HD2_AppDSPFlow1Input` / `2Input` | 10.99 |
+| `HD2_AppDSPFlowOutput` | 8.00 |
+| `HD2_AppDSPFlowJoin` (mixer) | 10.99 |
+| `HD2_AppDSPFlowSplitY` / `SplitAB` 1.50 · `SplitXOver` 2.27 · `SplitDyn` 3.50 | |
+
+They are real nodes in a real preset, not bookkeeping: slots `0`, `9`, `10` and `19` of each DSP's
+slot array are the input, output, split and mixer (`19 => 0/1/2/3` where an ordinary block is `6`),
+each with its own params. **They are also not what we are missing**, and the arithmetic said so
+before the census did: the ladder preset is parallel, so the four together are `10.99 + 8.00 + 1.50
++ 10.99 = 31.48`, which would put the ceiling at 68.5 — but 73.3 was *accepted*. No subset lands on
+the ~25 the bracket demands.
+
+**The census settles it.** The tester's `.hxb` backup holds 363 presets across eight setlists,
+including Line 6's own two factory setlists — 458 DSPs carrying blocks, every one of them a preset
+the hardware accepted and plays. Summing each DSP's block loads the way our meter does:
+
+| slice | n | max load |
+|---|---:|---:|
+| everything | 458 | **74.84** |
+| parallel DSPs | 151 | 74.84 |
+| serial DSPs | 307 | 74.80 |
+| DSP1 | 302 | 74.84 |
+| DSP2 | 156 | 74.77 |
+
+**The wall is flat.** If the split and mixer were billed against this budget, serial presets would
+run to ~87 and parallel ones stop at ~75; instead both stop at 74.8, a difference of 0.04. The same
+holds across split types and across the two DSPs. Nothing that varies with the preset is being
+charged, so the missing ~25 is a fixed reserve — the device keeps a quarter of each DSP for itself
+and lets blocks have the rest.
+
+Two corollaries worth having. The distribution has 46 DSPs in the 70–74.84 band and **none above**,
+so Line 6's own designers build right up to this number — the best available evidence that ~75 is
+the real limit and not an artefact of our load table. And combined with the Stomp ladder (74.9
+accepted, 75.3 refused) the ceiling is pinned to **[74.9, 75.3)**, which is why `DSP_CEILING` is
+75.0.
+
+Consequence for the code: we do **not** fold the node loads into the meter — there is now positive
+evidence they do not belong there, and the raw block sum is quoted in every log and capture note on
+record. The correction lives entirely in the ceiling.
+
+**Two scales, deliberately.** Every load figure in this document, in the `.models` files and in the
+tester's logs is *raw* — a percentage of a budget the hardware never hands over, which is why 72.7
+read as "27% free" when it was nearly full. What a user is shown is `blocks ÷ 75 × 100`
+(`editor::dsp_percent`), so the ceiling reads 100%. **Everything on a given screen is scaled**,
+per-block costs and model-picker costs included, so the figures in a listing sum to its total. The
+one raw number kept in front of a user is the CLI header's bracket — `DSP 97.0% · 3.0% free  [raw
+72.7 of ~75]` — which is the anchor between a pasted log and the tables here. Fit comparisons stay
+in raw units throughout; scaling is strictly presentation.
+
+It remains a guess that this is also what HX Edit displays. One screenshot would confirm it
+(`captures/_RUNBOOK-hx-edit-session.md`); nothing depends on the answer.
+
+##### Reproducing the census
+The `.hxb` payload is concatenated raw zlib streams; streams `130..=137` are the setlists, and each
+preset's `tone` object carries `dsp0`/`dsp1`, each with `block0..7`, `cab0..`, `inputA`, `inputB`,
+`outputA`, `outputB`, `split` and `join`. A DSP is parallel when any of its blocks has `@path == 1`;
+a block's load is its `@model` at `load`/`load_stereo` per `@stereo`, and an amp's paired cab is a
+sibling `cabN` entry (count it once — that is where our meter's fused amp+cab figure comes from).
+Note **each DSP has two inputs and two outputs**, not one, which is worth knowing independently of
+the DSP question.
+
+Eight probes were needed to kill the first theory, that op 40 cannot cross a model *category*. It
+cannot: tremolo→delay, reverb→delay and delay→reverb all succeed with DSP free, and the one
+category-preserving swap that failed (70s Chorus Mono→Stereo) failed on capacity like the rest.
+
+`Session::send_edit` glosses the code rather than guarding against it locally — the pedal decides
+what fits, we only explain the answer. (Out-guarding the pedal is how the row-B stranding and node
+enclosure mistakes happened; see `docs/helix-floor.md`.)
+
+### The value's wire type must match the parameter's type exactly [solid]
+Key 119 is not coerced. A **switch** takes a MessagePack bool and *only* a bool: an int or a float
+carrying the same 0/1 is refused with `-3` and nothing is applied. Measured on an HX Stomp (fw 3.71,
+2026-08-02) against `HD2_DelayBucketBrigade`'s `TempoSync1`:
+
+| sent | result |
+|---|---|
+| `Float(1.0)` | refused, `-3` |
+| `Int(1)` | refused, `-3` |
+| `Bool(true)` | **accepted**, reads back `true` |
+
+This is a footgun rather than an obstacle: nothing about the refusal says "wrong type", and a client
+that picks one wire type per control (a float for every slider, an int for every switch) gets a
+parameter class that can never be written. Ours did — the GUI's on/off switch sent an int, so every
+switch in the editor was a guaranteed refusal until 2026-08-02. `Session` now reads the param's type
+out of the device's own last preset blob and coerces, so the reference data isn't needed for it.
+
+### Target key 29 chooses what key 28 indexes [solid]
+Some blocks send **one more value than their symbol names** — `Trails` on a delay/reverb, the mic
+index on a legacy (non-`CabMicIr_*`) cab. These have no position in the symbol's param order, so the
+ordinary addressing cannot reach them and op 30 refuses every wire type with `-3`:
+
+    Trails, index 8 of 9, HD2_DelayBucketBrigade, 29:true — Bool(true) -3, Int(1) -3, Float(1.0) -3
+    TempoSync1, index 7, 29:true — Bool(true) OK
+
+**Key 29 is the switch between two addressing modes.** `true` — every ordinary edit — means key 28
+is the param's index in the model's `Helix.sym` order. `false` selects the block's *extra* values,
+and there the lone trailing value is index `0`:
+
+| what | body |
+|---|---|
+| Dynamic Ambience `Mix` (`dynamic_ambience_mix_modify`) | `{98: 7, 29: true, 26: 0, 28: 5, 119: 0.5}` |
+| Dynamic Ambience `Trails` (`dynamic_ambience_trails_on_off`) | `{98: 7, 29: false, 26: 0, 28: 0, 119: <bool>}` |
+
+Six trails toggles in that capture, all the same shape. Confirmed live on an HX Stomp (fw 3.71,
+2026-08-02): `{98: 2, 29: false, 26: 0, 28: 0, 119: true}` turns a Bucket Brigade's trails on and it
+reads back `true`. Builder `edit::set_value_flagged`; `Session::set_trails` and the CLI's `trails`
+wrap it, and the ordinary setters route a param whose `extra_index` is set through the same path, so
+the GUI's Trails switch works like any other.
+
+A block with **two or more** values past its symbol list has never been seen, and there is no
+evidence for what a second one's extras index would be — those stay unaddressable rather than
+guessed (`EditorParam::settable == false`).
+
+### op 39 will not add a paired cab; add then swap [solid] — same log
+`add_block` (op 39) is refused whenever the model-ref carries a real `paired_index` — i.e. every pick
+from the synthetic **Amp+Cab** category, since each amp's `amp.models` `ircablink` cab sits at
+`Helix.sym` index 687–829. The refused frames are 56 bytes on the wire, which is op 39's 51-byte
+frame plus the two bytes a `uint16` paired index costs; both successful adds in the same session
+carried `26: -1`, and the preset the tester saved has the amp and a cab as two separate, unpaired
+blocks — the fallback you make after the paired add refuses twice.
+
+`swap_model` (op 40) *does* take a paired index — that path is byte-exact against the capture tests,
+including a `uint16` index — so `Session::add_block` now adds the amp bare and pairs it with a
+following op 40, which is the order HX Edit uses.
+
+### The empty `cmd 0x08` frames during an op-21 write are flow-control credits [solid]
+*2026-07-31 Floor logs — two lockups reproduced on one user action.*
+
+Sending a whole preset (op 21) means ~14 OUT `cmd 0x04` data frames of 496 bytes. The device answers
+each with an **empty `cmd 0x08` frame**, and that reply is a credit: it means "I consumed that one".
+
+| write outcome | credits per chunk | worst deficit |
+|---|---|---|
+| completed (14 chunks) | `0 3 1 1 1 1 2 1 1 1 1 1 1 1` | **1** |
+| froze after chunk 1 | `2 0 0 0 0` | 3 |
+| froze after chunk 7 | `1 2 1 1 1 1 1 0 0 0 0` | 3 |
+| completed, *after* the pacing fix | `1 2 1 1 1 1 1 1 1 1 1 1 1 1` | **0** |
+| froze after chunk 2, *after* the pacing fix | `1 1 0 0 0` | 3 |
+
+A healthy transfer never runs more than **one** chunk ahead of its credits, and none at all once the
+host waits for them. Every lockup shows the credits stopping dead and the host running 3+ ahead — and
+once the device stops draining its OUT endpoint, an unbounded `bulk_out` **never returns** (the
+pre-fix logs end on `Submitted URB … on ep 1` with no completion). Wait for each chunk's credit;
+abort the transfer while the pedal is still recoverable.
+
+**Pacing is not the cause.** [solid] With the host waiting properly for every credit, the same action
+still kills the device at the same place — 2,480 of 6,817 bytes, credits stopping after chunk 2. So
+the credits are how you *detect* a wedged device, not how you avoid wedging one. What actually
+triggers it is still open; the blob that does it is ~1 KB in by then, so the device is reacting to
+something it has already consumed rather than to the finished preset. [hypothesis]
+
+#### The credit **latency** predicts it a chunk early [solid]
+*2026-08-05, `fretwire55`/`56` + `zadtheinhaler57`/`58` — 20 writes with per-chunk timings.*
+
+The device doesn't stop dead; it slows down first, and one chunk is all the warning there is. The
+**chunk-2** credit separates the outcomes with no overlap:
+
+| chunk-2 credit | writes | outcome |
+|---|---:|---|
+| 1–3 ms | 17 | all completed |
+| 28 / 32 / 94 ms | 3 | all wedged |
+
+Two things make this easy to measure wrong. Chunk **one**'s credit predicts nothing (0–5 ms in both
+groups) — an earlier analysis found the right signal but computed it from the gap between the first
+two chunk log lines, which is chunk two's wait, and the field added to record it was then named and
+implemented for chunk one. And a slow credit on the **final** chunk is normal: 2–195 ms on writes
+that complete perfectly, because that is the device committing the preset. Only non-final chunks
+count.
+
+**Backing off does not rescue it.** [solid] The obvious reading — the device has fallen behind, so
+stop feeding it and it recovers — was shipped as a 120 ms stand-off and failed 3 for 3. Every wedge
+went from one slow credit to total silence on the very next chunk, and not a single credit arrived
+during the pause. So a slow credit is not a queue you can drain by waiting; it is the endpoint on
+its way out. The useful response is to stop while the next chunk is still in hand, which at least
+stops pushing bytes at a device that has stopped taking them.
+
+**Careful: our "credits" have never been credits.** [solid] The host's credit wait accepts *any*
+frame — no filter on channel or opcode — so keepalives (`cmd 0x10`) and status-channel pushes
+(`cmd 0x04` from `0x03F0`) satisfy it as readily as the device's `cmd 0x08`. Every completed write
+in the 08-05 logs ends with **more credits counted than chunks sent** (+1 to +4), which means at
+least one of these is true, and they point in opposite directions:
+
+- **Strays** — non-credit traffic is landing in the wait, so the host has been running ahead of a
+  device that never acked those units. That would be a mechanism for the wedge, and it matches its
+  character: intermittent, indifferent to the blob, worse in a session someone is actively driving.
+- **Per-frame credits** — a unit goes out as two frames (496 + 16), so a device that sometimes acks
+  the *frame* rather than the unit can legitimately return up to 28 credits for 14 chunks, and the
+  pacing is fine.
+
+Every log to date recorded the count and never what the frames were, which is why this sat unseen
+under a number everyone trusted. The write loop now classifies each one (`real` vs `other`, plus
+`stray_src`/`stray_cmd` naming the first offender), so one field session separates the two. Pacing
+still runs off the loose count until then — tightening it on a guess would fail closed at chunk one
+if the device labels a credit differently than we expect. [hypothesis — 2026-08-05]
+
+### A credit unit is **512 payload bytes, sent as 496 + 16** [solid]
+*2026-08-02, re-read of `move_EQ_right_two_slots.pcapng` and `import_ir.pcapng`.*
+
+The credit is not per frame. HX Edit sends **512 payload bytes per credit**, and it splits them
+across two frames — one of 496 bytes, then one of 16:
+
+```
+OUT  cmd=0x04  blen=496      OUT  cmd=0x04  blen=496
+OUT  cmd=0x04  blen=16       OUT  cmd=0x04  blen=8      ← whatever is left of the 512
+IN   cmd=0x08  blen=0        IN   cmd=0x08  blen=0      ← one credit for the pair
+```
+
+The reason is USB, not the protocol. The bulk endpoints declare `wMaxPacketSize` **512**, and a frame
+is a 16-byte header plus its body — so a 496-byte body is a packet of *exactly* the maximum size.
+A bulk transfer made only of maximum-size packets never terminates; it takes a short packet to close
+it. Splitting 512 into 496 + 16 makes the second frame a 32-byte packet, and that is what ends each
+unit. Both captures that carry a bulk upload do it without exception: the op-21 preset write
+(`496,16,496,16,496,16,8,496,8,8,496,16,423` for a 2991-byte TLV) and the IR upload (fifteen 496+16
+pairs). Nothing else in the protocol ever sends a 512-byte packet.
+
+We sent 496-byte bodies back to back and so emitted an unbroken run of maximum-size packets —
+measured on a Stomp, `512 512 512 512 512 224` where HX Edit would send
+`512 32 512 32 512 32 512 32 512 32 144`. That is a candidate mechanism for the Floor's
+"stopped draining its endpoint" lockup, which arrives two or three units in and cares nothing for
+the blob. Fixed in `Session::write_preset`. [hypothesis for the lockup — the framing itself is
+[solid]; a Floor run confirms or kills the connection]
+
+### A refused *stream* looks exactly like a refused *edit* [solid]
+*2026-08-02, HX Stomp.*
+
+Asking for a setlist the device doesn't have does not produce a malformed stream. It produces a
+complete, well-formed 20-byte one carrying the ordinary refusal envelope:
+
+```
+00 00 06 00  0c 00 00 00        marker/type/len
+83 66 cd 00 03  67 cc ff  68 81 6f fd
+   {102: 3, 103: 255, 104: {111: -3}}
+```
+
+Same `103: 255` / `104: {111: code}` shape an edit rejection uses, on the browse stream. We were
+reporting it as `envelope key 104 is not an array` and, on the preset stream, `envelope key 104
+missing or not bytes` — which sent us looking for a decoder bug and is very likely the launch-time
+error the field kept reporting. Both readers check `parse_edit_rejection` before blaming themselves.
 
 ### Bypass is set-state, not a blind toggle [solid] — resolves prior "open"
 The two frames of one tremolo bypass press carry `101 → 59: true` then `101 → 59: false` (wire bytes
@@ -262,15 +607,120 @@ is usually nested under an inner key `106`. Decoded:
 | **bypass** (footswitch/panel) | `{105:49, 106:{82:_,68:_,121:_, 106:{98:slot, 59:enabled}}}` | slot + `enabled` (key 59) |
 | **snapshot** | `{105:42 (and 46), 106:{92:index}}` | `92` = new snapshot index |
 | **preset** | `{105:4 (and 8), 106:{…, 106:{107:bank, 108:index}}}` | `108` = new preset index |
-| param/setting | `{105:22, 106:{…, 106:{118:id, 119:value}}}` | `118`/`119` (mostly global settings) |
-| footswitch/scene state | `{105:41, 106:{70:_, 63:bool, 66:int}}` | (not decoded further) |
+| **panel parameter** | `{105:30, 106:{82:_,68:_,121:_, 106:{98:slot, 29:true, 26:_, 28:index, 119:value}}}` | slot + param index + value |
+| global setting | `{105:22, 106:{…, 106:{118:id, 119:value}}}` | `118`/`119` (mostly global settings) |
+| **idle mirror** | `{105:22, 106:{82:0, 68:10, 121:27, 106:nil}}` | none — `StatusPush::Idle`, sent continuously |
+| footswitch press | `{105:41, 106:{70:fs_index, 63:bool, 66:int}}` | key 70 = **footswitch**, 63 = new state |
+| snapshot committed | `{105:23, 106:{23:0}}` | none — payload is constant |
+| block added | `{105:39, 106:{82:1, …, 106:{98:slot, 26:_}}}` | (not decoded further) |
+
+Types 41, 23 and 39 arrive *alongside* pushes we already decode and carry nothing the editor needs:
+a footswitch press emits type 49 (the bypass we use) plus a type 41, a snapshot switch emits type 42
+and 46 plus a type 23, and a preset change emits type 4 **and** 8 plus a type 39 naming a slot. Left
+undecoded deliberately — acting on them would double-apply what the decoded push already says. Note
+the type numbers are the **edit op numbers** (30 = set value, 39 = add block, 41 = bypass): the
+device mirrors panel actions in the same vocabulary it accepts commands in.
+
+**Type 41's key 70 is the footswitch, not a bitmask.** [solid — 2026-08-02, HX Stomp, four presses]
+An earlier reading had key 66 down as a state bitmask; it isn't one — across four presses it went
+458496, 13055, 1037, 67840, which no four-block state fits. What *is* legible is key 70. On a preset
+whose own layout is FS1 → slot 2 and FS2 → slot 4, pressing FS1 twice and FS2 twice gave:
+
+| type 41 | the type 49 that followed |
+|---|---|
+| `{70: 0, 63: true,  66: 458496}` | `Bypass { slot: 2, enabled: true }` |
+| `{70: 1, 63: true,  66: 13055}`  | `Bypass { slot: 4, enabled: true }` |
+| `{70: 1, 63: false, 66: 1037}`   | `Bypass { slot: 4, enabled: false }` |
+| `{70: 0, 63: false, 66: 67840}`  | `Bypass { slot: 2, enabled: false }` |
+
+Key 70 tracks the **0-based footswitch** (FS1 → 0, FS2 → 1) and key 63 the state the press produced,
+matching the type-49 mirror every time. That is the live FS → block mapping, which is what an
+"assign block to a footswitch" feature would need; key 66 stays unexplained.
+
+**Type 23 rides every snapshot switch**, exactly once, always `{23: 0}` — seven switches, seven
+copies, no variation. Ordering is fixed: type 42, then a type 49 bypass mirror per changed block,
+then type 23, then type 46. A constant payload says nothing about its meaning, so "snapshot
+committed" is a guess from position alone. [solid on the shape and the ordering; the name is
+[hypothesis]]
+[observed 2026-08-02, HX Stomp]
+
+**A panel parameter change (type 30) is the op-30 edit reflected back.** Its payload is the *same*
+`{98: slot, 28: param index, 119: value}` triple `edit::set_value` sends, under the same op number —
+the device mirrors panel edits in the vocabulary it accepts them in. Identified by sweeping the
+Drive knob of a `HD2_AmpUSPrincess` in slot 5 and watching fifteen pushes arrive with slot 5,
+index 0 and a descending f32. That is what lets the GUI follow a knob without re-reading the preset:
+the push carries the value, so it is applied in place, exactly like a bypass mirror.
+[solid — 2026-08-02, HX Stomp, `fretwire watch`; byte-exact test]
+
+### The device's push window must be paged, or the channel goes dead [solid]
+
+The device mirrors panel activity only until ~4 KiB of it is unacknowledged, then stops. Measured
+four times before the cause was found:
+
+| capture | mirror frames | bytes delivered before silence | wall clock |
+|---|---:|---:|---:|
+| idle + interaction | 179 | **4075** | 44.6 s |
+| scripted interaction | 191 | **4075** | 44.9 s |
+| interaction, `arg` advanced | 195 | **4075** | 47.5 s |
+| knob sweeps every ~25 s | 386 | 4040 | 29.7 s |
+
+Different frame counts, the same total — and 4075 + 21 = 4096, the body of the next frame it
+declined to send. Afterwards the channel carries only empty `cmd 16` keepalives; footswitches, knobs
+and preset changes stop reaching the host until the session is reopened. A session that stays *idle*
+never reaches the ceiling (2037 bytes in 75 s) and keeps pushing to the end, which is why this hid
+for so long: it only bites a session someone is actually using.
+
+**The window is re-opened the same way a paged read pulls its next chunk** — a `cmd 0x08` on the
+channel, carrying the offset advanced by the bytes just received. The device's own `arg` on these
+frames stays pinned (at 521) exactly as it does mid-read, which is what suggested it.
+`Session::poll_events` now sends one per tick on the status channel whenever bytes arrived.
+
+| | mirror frames | bytes | pushes span |
+|---|---:|---:|---|
+| without the page request | 179–386 | 4075 | died at 30–47 s |
+| **with it** | **1117** | **23457** | **4.3 s → 299.9 s (whole run)** |
+
+Status channel only: that is where the pushes live and where every measurement was taken, and it
+keeps the extra frame off the edit channel. In the verifying capture all 501 requests went to the
+status channel anyway — the other two never leave unacknowledged bytes here, because their reads
+consume and acknowledge their own frames.
+
+**Refuted on the way:** advancing the idle beat's `arg` without sending the page request. It changes
+nothing (4075 → 4040, inside the noise), so the ack is the request, not the cursor.
+[solid — 2026-08-02, HX Stomp, `fretwire watch`]
+
+Type 22 also arrives continuously while nothing is happening (`{82:0, 68:10, 121:27, 106:nil}`, 154
+identical copies in a two-minute idle capture, 100 in 30 seconds of an untouched pedal). It must
+never be read as a change — but it isn't "undecoded" either, and filing it there had a cost: it was
+**100% of a debug session's push log**, ~3.3 lines a second once the push window is paged properly,
+which would have buried the write-stall evidence in the next field log. It parses to
+`StatusPush::Idle` now, distinct from `Other`, so logging the genuinely undecoded pushes stays worth
+doing. `fretwire watch` counts them instead of printing them, and still reports the count — a live
+channel going quiet is exactly what the ~4 KiB stall looked like, so "0 idle" and "75 idle" mean
+very different things. The idle copy and the carrying one differ in their **outer** keys, which
+looks like a sub-type: idle is `68:10, 121:27, 106:nil`, while a real notification is
+`68:9, 121:25, 106:{118:id, 119:value}`. In a 90-second session, 492 idle copies and 4 carrying
+`{118: 21, 119: 0..3}` — 1, 2 and 3 in that order while the tester was working the pedal's footswitch
+modes before switching snapshots, which makes "id 21 = footswitch mode" a tempting read and an
+unverified one; nobody recorded what was actually pressed. [2026-08-02, HX Stomp]
 
 Observed live: switching a snapshot pushes the new index **and** a `type 49` bypass mirror for each
 block the snapshot changed; HX Edit then re-reads the preset. So our editor: parse these into typed
 events and (a) apply bypass mirrors in place, (b) on a snapshot/preset push, re-read to catch the
 block/param changes. Parser: `fretwire_data::stream::parse_status_push` → `StatusPush` (byte-exact tests);
 collected by `Session::poll_events` (same heartbeat as `keepalive`, but returns the pushes); the GUI
-applies them on its tick (live-follow), no manual Refresh needed.
+applies them on its tick (live-follow), no manual Refresh needed. **`fretwire watch`** holds a
+session and prints the pushes as you touch the pedal, and `FRETWIRE_TRACE_STATUS=1` logs every
+status frame body decoded or not — the pair that identified type 30.
+
+**Coalesce the pushes before reacting.** A single preset change emits a *flurry* — the preset push,
+then the snapshot and per-block bypass mirrors as the new preset settles — spread over roughly a
+second, and the heartbeat delivers them in 250 ms batches. Reading on every batch cost about three
+full preset streams plus a preset-list re-read per knob turn (~530 KB across 21 preset changes in
+the 2026-07-26 Floor session), aimed at a unit that was still reconfiguring both DSPs; it stopped
+responding twice. The GUI now waits for ~300 ms of quiet (capped at 1.2 s) and reads once. Bypass
+pushes are applied in place and trigger **no** read at all — the push fully describes the change,
+and the device's readable stream lags its own push anyway.
 
 ## Resolved vs. still open
 - [x] Endpoints / framing / channels / sequence.
@@ -301,6 +751,7 @@ The MessagePack envelope keys 100/101 are an **operation + target**, and op 20 i
 | **20** | `{107: bank, 108: preset}` | **SELECT PRESET** — loads it; **changes device state** |
 | **76** | `{}` | open the current edit buffer for a (non-destructive) read |
 | **24** | `{118: 128}` | read-sequence prepare (purpose TBD; replicated from capture) |
+| **23** | reply `{107:bank, 108:index, 109:name, 92:snapshot, 117:?, 83:[u32,0]}` | read-info: current preset identity **and the live active snapshot** (key 92 — the authority; the preset blob's own `10 → 8` is the *stored* one and can differ). [solid] |
 | **23** | `nil` | read-sequence query — **reply carries the current preset identity** (see below) |
 | **22** | `nil` | start the paged stream — reply = chunk #0 |
 
@@ -312,6 +763,37 @@ Amp". This is how the host learns which preset is loaded at connect (the streame
 carries **no** index/name). Parsed by `fretwire_data::stream::parse_preset_info`; surfaced as
 `EditorPreset::current` (filled by `Session::read_preset`). The same reply also rides every
 `read_preset`, so a post-navigation read reports the device's authoritative current preset for free.
+
+> **The op-23 identity lags the blob by one preset change [solid].** The first read after the preset
+> changes serves the **new** preset's stream under the **previous** preset's identity; the next read
+> reports both consistently. Evidence — the tester's Helix Floor session of 2026-07-26: 19 of the 21
+> distinct stream lengths in that log were reported under exactly two *consecutive* identities, and
+> in every case the later of the two is the one all subsequent stable reads keep (e.g. a 7233-byte
+> stream reported first as `DUSTED` (index 53) and then three times as `BMBLFOOT PRINCE` (index 67),
+> while `DUSTED`'s own stream is 7297 bytes).
+>
+> This matters beyond the displayed name: the **live snapshot rides the same reply** (key 92), so an
+> uncorrected read paints the previous preset's active snapshot. `read_preset_inner` therefore
+> re-issues op 23 **after** the stream and reports whether the identity moved across the read; when
+> it did, the blob can't be attributed to either preset and `Session::read_preset` re-reads. Asking
+> again afterwards leaves the proven open/prep/info/stream sequence untouched.
+
+> **The browse listing is numbered globally and is *not* sorted [solid].** A listing reply numbers
+> presets `bank × setlist_size + slot` (a TEMPLATES listing on a Floor starts at 896 = 7 × 128),
+> whereas a preset's own identity (key 108), `goto_preset` and `save_preset` all use the
+> bank-relative slot — passing a global index through as a slot is what reached the device as
+> `goto_preset(7, 906)` and locked it up.
+>
+> Separately, the entries **do not arrive in slot order**. A preset the user has *moved* keeps its
+> old position in the stream while carrying its new index. In the tester's 2026-07-29 dump of all
+> eight banks (1024 entries), bank 0 emits slot 68 at stream position 101 and bank 1 emits slot 95
+> at position 84; the other six banks are strictly ascending, which is why it went unnoticed.
+> `Session::list_presets_in` normalises to slots **and** sorts, since callers render the array
+> positionally.
+>
+> Those same 1024 entries otherwise match the unit's own `.hxb` backup slot-for-slot — the three
+> exceptions are exactly the three moved presets — which is what finally closed the "browse index
+> drift" question as device state rather than a parser bug. See `docs/helix-floor.md`.
 
 `open_two_presets_one_after_another.pcapng` is HX Edit **selecting** presets (op 20) — that's why an
 earlier draft mistook op 20 for "open for read". The **non-destructive read** is what HX Edit does on

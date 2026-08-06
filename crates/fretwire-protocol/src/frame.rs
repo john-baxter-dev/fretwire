@@ -18,7 +18,7 @@
 //! 16  ..   body    significant bytes only; frame is zero-padded to a 4-byte boundary
 //! ```
 
-use crate::{u16le, u32le, Error, Result};
+use crate::{Error, Result, u16le, u32le};
 
 /// Standard frame magic (header offset 3).
 pub const MAGIC: u8 = 0x18;
@@ -45,13 +45,24 @@ pub struct Frame {
 impl Frame {
     /// Build a standard (`0x18` magic) frame.
     pub fn new(src: u16, dst: u16, seq: u8, cmd: u8, arg: u32, body: Vec<u8>) -> Self {
-        Frame { magic: MAGIC, src, dst, seq, cmd, arg, body }
+        Frame {
+            magic: MAGIC,
+            src,
+            dst,
+            seq,
+            cmd,
+            arg,
+            body,
+        }
     }
 
     /// Decode one frame from a bulk transfer buffer. Trailing padding is ignored.
     pub fn decode(buf: &[u8]) -> Result<Frame> {
         if buf.len() < HEADER_LEN {
-            return Err(Error::Short { need: HEADER_LEN, got: buf.len() });
+            return Err(Error::Short {
+                need: HEADER_LEN,
+                got: buf.len(),
+            });
         }
         let len = u16::from_le_bytes([buf[0], buf[1]]) as usize;
         // significant body length is `len` minus the 8 header bytes it also covers.
@@ -61,7 +72,10 @@ impl Frame {
         })?;
         let end = HEADER_LEN + body_len;
         if end > buf.len() {
-            return Err(Error::BadLength { declared: end, avail: buf.len() });
+            return Err(Error::BadLength {
+                declared: end,
+                avail: buf.len(),
+            });
         }
         Ok(Frame {
             magic: buf[3],
@@ -100,7 +114,10 @@ impl Frame {
     /// Encode to wire bytes, zero-padded to a 4-byte boundary (exactly as HX Edit emits).
     pub fn encode(&self) -> Vec<u8> {
         let len = LEN_HEADER_TAIL + self.body.len();
-        debug_assert!(len <= u16::MAX as usize, "frame body too large for the len field");
+        debug_assert!(
+            len <= u16::MAX as usize,
+            "frame body too large for the len field"
+        );
 
         let mut out = Vec::with_capacity(HEADER_LEN + self.body.len() + 3);
         out.extend_from_slice(&(len as u16).to_le_bytes());

@@ -3,7 +3,12 @@
   // targets) laid out by the device's real grid columns, with SVG wires behind. Each cell maps to
   // exactly one slot; dropping a block onto an empty cell is a single `place_block` to that slot,
   // and the device recomputes the split/mixer columns from where blocks land (we re-read after).
-  let { preset, selectedSlot = null, onselect, onplace, oninsert, onmovenode, onaddat } = $props();
+  // `preset` supplies the global block list (slots run `dsp * 20 + index`); `dsp` is the one DSP's
+  // routing view this instance draws (grid + split/mixer/io nodes for that DSP). The Helix Floor
+  // renders two Chains, one per DSP; a single-DSP device (or the mock) passes no `dsp` and we fall
+  // back to the preset's flat, DSP-0 fields.
+  let { preset, dsp = null, selectedSlot = null, onselect, onplace, oninsert, onmovenode, onaddat } = $props();
+  const d = $derived(dsp ?? preset);
 
   // Block accent color by device model category (ids from fretwire-core editor::category_name) — so the
   // chain reads at a glance: amps warm red, drives yellow, delays green, reverbs orange, etc.
@@ -47,9 +52,9 @@
   let nodeOver = $state(null);
 
   const view = $derived.by(() => {
-    const allCells = preset.grid ?? [];
+    const allCells = d.grid ?? [];
     const bySlot = new Map(preset.blocks.map((b) => [b.slot, b]));
-    const split = preset.split && preset.split_pos != null && preset.mixer_pos != null;
+    const split = d.split && d.split_pos != null && d.mixer_pos != null;
     // The grid carries the empty row-B cells even on a serial preset (the split/mixer node slots
     // always exist in the device's fixed slot array). Normally we hide that row when serial — but
     // while a drag is in flight we reveal it as drop targets: dropping a block there is how the
@@ -63,14 +68,41 @@
     const lastOcc = allCells.reduce((m, c) => (c.occupied ? Math.max(m, c.column) : m), 0);
     const maxCol = dragging
       ? maxAllCol
-      : Math.max(1, Math.min(Math.max(lastOcc + 1, split ? preset.mixer_pos : 1), maxAllCol));
+      : Math.max(1, Math.min(Math.max(lastOcc + 1, split ? d.mixer_pos : 1), maxAllCol));
+    // Every row-B cell is a legal drop target, including the ones past the mixer column. It is
+    // tempting to hide those — the bracket wire stops at the mixer, so they look disconnected — and
+    // for a few hours on 2026-08-02 we did. The device says otherwise: a Floor preset with the
+    // mixer before column 3 and its two loop blocks moved out to columns 3 and 4 accepted the move,
+    // saved it, and both blocks still passed audio. Whatever key 13 means, it is not "signal stops
+    // here". Don't act on the drawing. [refuted — `somehinged3_var1.bin` + `somehinged2.log`]
     const cells = allCells.filter(
       (c) => c.column <= maxCol && (showB || c.row === 0),
     );
 
+    // A block on the B row outside the split→mixer bracket. HX Edit cannot draw this layout at all —
+    // its path B always spans exactly the bracket — so it is worth marking. But the pedal stores it,
+    // saves it, and **plays it**: the tester put a reverb left of the split and heard it fine.
+    //
+    // It briefly said "no feed" here, on the theory that a cell left of the split has nothing
+    // branched into it yet. That was wrong, and the same evening's logs say why: every block he
+    // called dead was an envelope filter (Tron Up, Mystery Filter, Autofilter — all sweep on input
+    // level), and every block he called merely quiet was a delay or reverb. Split Y sits at Balance
+    // 0.5 per leg, so path B runs ~6 dB down and an envelope filter there may never open, wherever
+    // it sits. Position was a coincidence; level was the cause. Don't out-guard the pedal.
+    // [refuted — 2026-08-03, `fretwire49`/`50` + `Somehinged4_var2.png`.]
+    const strandedSide = (c) =>
+      !split || c.row !== 1 || !c.occupied
+        ? null
+        : c.column < d.split_pos
+          ? "before"
+          : c.column >= d.mixer_pos
+            ? "after"
+            : null;
+
     const items = cells.map((c) => {
       const b = bySlot.get(c.slot);
       const name = b ? b.user_label || b.model_name : "";
+      const side = strandedSide(c);
       return {
         slot: c.slot,
         occupied: c.occupied,
@@ -79,6 +111,13 @@
         name: name.length > 13 ? name.slice(0, 12) + "…" : name,
         bypassed: b ? !!b.bypassed : false,
         color: catColor(b?.category),
+        stranded: side,
+        strandedWhy:
+          side === "before"
+            ? "Left of the split, so outside the parallel path. The pedal keeps it and it still plays — HX Edit just can't draw a path B this shape."
+            : side === "after"
+              ? "Right of the mixer, so outside the parallel path. The pedal keeps it and it still plays."
+              : null,
       };
     });
 
@@ -90,8 +129,8 @@
     // The fixed input/output nodes (slots 0 and 9) — clickable to edit gate/threshold/decay and
     // level/pan in the param panel.
     const io = [];
-    if (preset.input_node) io.push({ slot: preset.input_node.slot, x: 4, label: "IN" });
-    if (preset.output_node) io.push({ slot: preset.output_node.slot, x: topRight + 8, label: "OUT" });
+    if (d.input_node) io.push({ slot: d.input_node.slot, x: 4, label: "IN" });
+    if (d.output_node) io.push({ slot: d.output_node.slot, x: topRight + 8, label: "OUT" });
     // Serial preset + drag in flight: a dashed ghost of the would-be parallel path under the B row,
     // hinting that a drop there creates the split.
     const ghosts =
@@ -100,33 +139,43 @@
         : [];
     let nodes = [];
     let nodeDrops = [];
+    // Shown while a split/mixer node drags. The valid gaps are a subset of the visible ones, and
+    // with nothing to explain the gap you wanted the absence reads as a rendering bug — the tester
+    // who hit it concluded the drop target was being covered by the row below (2026-08-02).
+    let nodeHint = null;
     if (split) {
-      const xSplit = gapX(preset.split_pos);
-      const xMixer = gapX(preset.mixer_pos);
+      const xSplit = gapX(d.split_pos);
+      const xMixer = gapX(d.mixer_pos);
       const yT = midY(TOP_Y), yB = midY(BOT_Y);
       wires.push(`M ${xSplit} ${yT} V ${yB} H ${xMixer} V ${yT}`);
       // Seat the node glyphs in the vertical gap between the two rows (on the branch wire), where no
       // cell lives — so they never overlap blocks however tight the columns are.
       const yNode = (TOP_Y + CH + BOT_Y) / 2;
       nodes = [
-        { kind: "split", x: xSplit, y: yNode, text: "⋔", slot: preset.split_node?.slot },
-        { kind: "mixer", x: xMixer, y: yNode, text: "⋉", slot: preset.mixer_node?.slot },
+        { kind: "split", x: xSplit, y: yNode, text: "⋔", slot: d.split_node?.slot },
+        { kind: "mixer", x: xMixer, y: yNode, text: "⋉", slot: d.mixer_node?.slot },
       ];
-      // While a node drags, offer the valid gap positions as drop zones — same constraints as the
-      // backend: the bracket must keep enclosing the occupied B row, and split < mixer.
+      // While a node drags, offer the valid gap positions as drop zones — same range as the
+      // backend, which is now only "split stays left of the mixer". The bracket does **not** have
+      // to enclose the occupied B row: op 43 moves a loop block out past the mixer and the pedal
+      // keeps and plays it, so refusing to *drag a node* into that arrangement was our rule, not
+      // the device's, and it cost the tester three attempts in one evening. [2026-08-02]
       if (dragNode) {
-        const bCols = allCells.filter((c) => c.row === 1 && c.occupied).map((c) => c.column);
         const [lo, hi] =
-          dragNode === "split"
-            ? [1, Math.min(bCols.length ? Math.min(...bCols) : Infinity, preset.mixer_pos - 1)]
-            : [
-                Math.max(bCols.length ? Math.max(...bCols) + 1 : 0, preset.split_pos + 1),
-                maxCol + 1,
-              ];
-        const cur = dragNode === "split" ? preset.split_pos : preset.mixer_pos;
+          dragNode === "split" ? [1, d.mixer_pos - 1] : [d.split_pos + 1, maxCol + 1];
+        const cur = dragNode === "split" ? d.split_pos : d.mixer_pos;
         for (let p = lo; p <= hi; p++) {
           if (p !== cur) nodeDrops.push({ pos: p, x: gapX(p) });
         }
+        // The only rule left is split-before-mixer, so say what a drop *does* rather than what is
+        // forbidden. The two sides are not the same: a loop block left of the split has nothing
+        // feeding it, one right of the mixer keeps playing (verified by ear), so only warn about the
+        // side that costs you audio — and only when a drop could actually strand something.
+        nodeHint =
+          `Drop the ${dragNode} on a gap` +
+          (dragNode === "split"
+            ? " — it has to stay left of the mixer."
+            : " — it has to stay right of the split.");
       }
     }
 
@@ -136,6 +185,7 @@
       ghosts,
       nodes,
       nodeDrops,
+      nodeHint,
       io,
       split,
       width: Math.max(colX(maxCol) + CW + 52, 560),
@@ -151,6 +201,7 @@
 </script>
 
 <div class="wrap">
+  {#if view.nodeHint}<div class="nodehint">{view.nodeHint}</div>{/if}
   <div class="inner" style="width:{view.width}px; height:{view.height}px;">
     <svg class="wires" width={view.width} height={view.height}>
       {#each view.wires as d}<path class="wire" {d} />{/each}
@@ -172,6 +223,9 @@
         class="node"
         class:sel={n.slot != null && n.slot === selectedSlot}
         draggable="true"
+        title={n.kind === "split"
+          ? "Split — click to edit its A/B balance, drag to move it"
+          : "Mixer — click to edit the A/B levels, pans and polarity, drag to move it"}
         style="left:{n.x - 18}px; top:{n.y - 16}px;"
         ondragstart={(e) => {
           e.dataTransfer.effectAllowed = "move";
@@ -207,7 +261,7 @@
         }}
         ondrop={(e) => {
           e.preventDefault();
-          if (dragNode) onmovenode?.(dragNode, d.pos);
+          if (dragNode) onmovenode?.(dragNode, d.pos, dsp?.dsp ?? 0);
           dragNode = null;
           nodeOver = null;
         }}
@@ -220,6 +274,8 @@
         class="cell"
         class:sel={c.slot === selectedSlot}
         class:bypassed={c.bypassed}
+        class:stranded={c.stranded != null}
+        title={c.strandedWhy}
         class:insb={dragOver === c.slot && dragSide === "l" && dragSrc != null && dragSrc !== c.slot}
         class:insa={dragOver === c.slot && dragSide === "r" && dragSrc != null && dragSrc !== c.slot}
         draggable="true"
@@ -264,6 +320,7 @@
       >
         <span class="name">{c.name}</span>
         <span class="slot">slot {c.slot}</span>
+        {#if c.stranded != null}<span class="unfed">outside path B</span>{/if}
       </button>
     {:else}
       <div
@@ -304,6 +361,15 @@
   .inner {
     position: relative;
     transition: height 140ms ease;
+  }
+  /* Pinned left: .wrap scrolls horizontally, and a hint that scrolls off is no hint. */
+  .nodehint {
+    position: sticky;
+    left: 0;
+    padding: 6px 10px;
+    border-bottom: 1px solid #2a2e37;
+    font-size: 12px;
+    color: #8b93a7;
   }
   .wires {
     position: absolute;
@@ -350,6 +416,23 @@
   }
   .cell.bypassed .name {
     color: #626a77;
+  }
+  /* A row-B block outside the split→mixer bracket — a layout HX Edit can't draw. Deliberately a
+     muted grey and not amber: the block plays, so this is a note about the drawing, not a fault. */
+  .cell.stranded {
+    border-style: dashed;
+  }
+  .cell .unfed {
+    position: absolute;
+    top: -8px;
+    right: -6px;
+    padding: 0 4px;
+    border-radius: 7px;
+    background: #3a4049;
+    color: #98a1ae;
+    font-size: 9px;
+    font-weight: 600;
+    white-space: nowrap;
   }
   /* A dragged block hovering another block: an insertion bar on the half it will land on. */
   .cell.insb::before,

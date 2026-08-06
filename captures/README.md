@@ -5,6 +5,10 @@ isolate each message type on the MI_00 control interface.
 
 Device: Line 6 HX Stomp — **VID 0x0E41 / PID 0x4246**.
 
+> **Sitting down for a session?** `_RUNBOOK-hx-edit-session.md` lists everything currently blocked
+> on watching HX Edit, in priority order, with the exact clicks. Work down it and stop wherever you
+> run out of time — it's ordered so the valuable ones are done first.
+
 ## One-time setup
 1. Close HX Edit.
 2. Launch **Wireshark** (as Administrator — USBPcap needs it).

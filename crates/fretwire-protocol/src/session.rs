@@ -9,7 +9,7 @@
 //! EP_IN and discard it, in order.
 
 use crate::channel::PRIMARY;
-use crate::{cmd, op, Frame, Tlv, MAGIC_HANDSHAKE};
+use crate::{Frame, MAGIC_HANDSHAKE, Tlv, cmd, op};
 
 /// The **observed** HX Edit session bring-up for this device (HX Stomp / `P33`), reconstructed
 /// byte-exact from `startup.pcapng`. Brings up all three channels — primary (`ef03`), edit
@@ -42,13 +42,33 @@ pub fn device_handshake() -> Vec<Frame> {
             body: vec![0x00, 0x10, 0x00, 0x00],
         });
         // F2 — identity query (cmd 0x04, arg 0x1000, Tlv(id_op, [id_op])). Note: seq jumps to 2.
-        frames.push(Frame::new(src, dst, 0x02, cmd::OPEN, 0x0000_1000,
-            Tlv::command(id_op, vec![id_op as u8]).to_bytes()));
+        frames.push(Frame::new(
+            src,
+            dst,
+            0x02,
+            cmd::OPEN,
+            0x0000_1000,
+            Tlv::command(id_op, vec![id_op as u8]).to_bytes(),
+        ));
         // F3 — chunk read (cmd 0x08, no body).
-        frames.push(Frame::new(src, dst, 0x03, cmd::CHUNK, chunk_arg, Vec::new()));
+        frames.push(Frame::new(
+            src,
+            dst,
+            0x03,
+            cmd::CHUNK,
+            chunk_arg,
+            Vec::new(),
+        ));
         // The primary channel also sent a follow-up cmd 0x02 (seq 4, same arg as its chunk read).
         if extra_open {
-            frames.push(Frame::new(src, dst, 0x04, cmd::HANDSHAKE, chunk_arg, Vec::new()));
+            frames.push(Frame::new(
+                src,
+                dst,
+                0x04,
+                cmd::HANDSHAKE,
+                chunk_arg,
+                Vec::new(),
+            ));
         }
     }
     frames
@@ -70,16 +90,31 @@ pub fn primary_handshake() -> Vec<Frame> {
     };
 
     // Packet 2 — SESSION_OPEN_1: open first resource (TLV type 0x0002, value = resource id 2).
-    let p2 = Frame::new(src, dst, 0x02, cmd::OPEN, 0x0000_1000,
-        Tlv::command(op::SESSION_OPEN, vec![0x02]).to_bytes());
+    let p2 = Frame::new(
+        src,
+        dst,
+        0x02,
+        cmd::OPEN,
+        0x0000_1000,
+        Tlv::command(op::SESSION_OPEN, vec![0x02]).to_bytes(),
+    );
 
     // Packet 3 — SESSION_CHUNK_1: chunk request, no body.
     let p3 = Frame::new(src, dst, 0x03, cmd::CHUNK, 0x0000_1009, Vec::new());
 
     // Packet 4 — SESSION_OPEN_2: open second resource; value carries the context handle.
-    let p4 = Frame::new(src, dst, 0x04, cmd::OPEN, 0x0000_1009,
-        Tlv::command(op::SESSION_OPEN,
-            vec![0x83, 0x66, 0xCD, 0x03, 0xE8, 0x64, 0xCC, 0xFE, 0x65, 0x80]).to_bytes());
+    let p4 = Frame::new(
+        src,
+        dst,
+        0x04,
+        cmd::OPEN,
+        0x0000_1009,
+        Tlv::command(
+            op::SESSION_OPEN,
+            vec![0x83, 0x66, 0xCD, 0x03, 0xE8, 0x64, 0xCC, 0xFE, 0x65, 0x80],
+        )
+        .to_bytes(),
+    );
 
     // Packet 5 — SESSION_CHUNK_2: chunk request, no body.
     let p5 = Frame::new(src, dst, 0x05, cmd::CHUNK, 0x0000_101A, Vec::new());

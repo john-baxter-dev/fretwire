@@ -10,6 +10,24 @@ description = "fretwire GUI on a Tauri (WebKitGTK) webview"
 name = "fretwire-gui"
 path = "src/main.rs"
 
+[features]
+# ON BY DEFAULT so that a plain `cargo build --release` / `cargo install` produces a *working*
+# binary. Tauri picks dev-vs-embedded from this feature alone —
+# `dev: cfg!(not(feature = "custom-protocol"))` in tauri-macros, nothing to do with debug/release —
+# so without it the webview points at `devUrl` (http://localhost:5173) and the window opens on
+# "Could not connect to localhost: Connection refused". DO NOT REMOVE.
+#
+# The Tauri template ships this as a non-default feature because its CLI always passes it; that
+# only works if you exclusively build via `tauri build`/`tauri dev`, and leaves plain cargo builds
+# broken. We default it instead and turn it *off* for the dev loop:
+#
+#     npm exec --prefix ui tauri dev -- --no-default-features    (see `npm run tauri:dev`)
+#
+# Note this makes `crates/fretwire-tauri/dist/` a build-time requirement for any default build —
+# the codegen panics if it's missing — so run `npm run build` in `ui/` first.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

@@ -1,27 +1,52 @@
 name: CI
 
 on:
+  # Every branch, not just master/main — feature branches (helix_floor, …) are where the
+  # work actually happens, and a check that never runs is a check that doesn't exist.
   push:
-    branches: [master, main]
+    branches: ['**']
   pull_request:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
 
-# CI builds only the offline crates. The reference data (model/param names) is Line 6's and is
-# never in the repo, so the data-gated tests compile out here (have_bundled_data is unset) and the
-# suite runs on the in-repo capture fixtures alone. The GUI (fretwire-tauri) is excluded to avoid
-# pulling the WebKitGTK system-dependency tree — and its built frontend — into CI.
+# The offline crates. The GUI (fretwire-tauri) needs WebKitGTK + a built frontend, so it
+# gets its own job below.
 jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
   build-test:
     name: build & test (offline crates)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
 
+      - name: Install Rust toolchain with Clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
       - name: Rust toolchain info
         run: rustc --version && cargo --version
+
+      # NB: the -p flags must come *before* the `--`; everything after it goes to the
+      # clippy driver, where `-p` is not a valid option.
+      - name: Clippy check
+        run: >
+          cargo clippy --locked --all-targets
+          -p fretwire -p fretwire-data -p fretwire-protocol
+          -p fretwire-usb -p fretwire-core -p fretwire-cli
+          -- -D warnings
 
       - name: Build
         run: >
@@ -34,3 +59,38 @@ jobs:
           cargo test --locked --verbose
           -p fretwire -p fretwire-data -p fretwire-protocol
           -p fretwire-usb -p fretwire-core -p fretwire-cli
+
+  gui:
+    name: clippy (GUI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # WebKitGTK and a C toolchain: what the *-sys crates in the GUI's tree need to link.
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libwebkit2gtk-4.1-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: crates/fretwire-tauri/ui/package-lock.json
+
+      # The crate embeds ./dist at compile time via generate_context! and dist/ isn't in
+      # git, so the frontend has to exist before clippy can even expand the macro.
+      - name: Build the frontend
+        working-directory: crates/fretwire-tauri/ui
+        run: |
+          npm ci
+          npm run build
+
+      - name: Clippy check
+        run: cargo clippy --locked --all-targets -p fretwire-tauri -- -D warnings

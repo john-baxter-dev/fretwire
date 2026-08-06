@@ -6,7 +6,10 @@ use fretwire_protocol::Frame;
 
 fn hx(s: &str) -> Vec<u8> {
     let s: String = s.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
 }
 
 // Idle keepalives (cmd 0x10) — body empty.
@@ -16,7 +19,8 @@ const IDLE_ED03_2095: &str = "080000188010ed0300630010d9230000";
 // Data frames on the edit channel (open + paged chunk reads).
 const OPEN_2321: &str =
     "1d0000188010ed0300640004d9230000010006000d0000008366cd043a641465826b006c13000000";
-const STREAM_2419: &str = "190000188010ed030067000c1a24000001000600090000008366cd043c641665c0000000";
+const STREAM_2419: &str =
+    "190000188010ed030067000c1a24000001000600090000008366cd043c641665c0000000";
 const CHUNK_2427: &str = "080000188010ed03006800081a250000";
 
 #[test]
@@ -34,9 +38,19 @@ fn decodes_real_frame_fields() {
 
 #[test]
 fn all_real_frames_round_trip_byte_exact() {
-    for s in [IDLE_F003_299, IDLE_ED03_585, OPEN_2321, STREAM_2419, CHUNK_2427] {
+    for s in [
+        IDLE_F003_299,
+        IDLE_ED03_585,
+        OPEN_2321,
+        STREAM_2419,
+        CHUNK_2427,
+    ] {
         let raw = hx(s);
-        assert_eq!(Frame::decode(&raw).unwrap().encode(), raw, "round-trip failed for {s}");
+        assert_eq!(
+            Frame::decode(&raw).unwrap().encode(),
+            raw,
+            "round-trip failed for {s}"
+        );
     }
 }
 

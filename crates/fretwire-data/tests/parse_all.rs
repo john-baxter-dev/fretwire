@@ -55,9 +55,11 @@ fn parses_hx_stomp_default_preset() {
 fn preset_round_trips_losslessly() {
     // Parse → serialize → parse and require the JSON value to be identical, proving we
     // drop nothing in the dynamic `tone` tree (needed for sending edits back to the unit).
-    let original: serde_json::Value =
-        serde_json::from_slice(&read("default_preset.hlx")).unwrap();
+    let original: serde_json::Value = serde_json::from_slice(&read("default_preset.hlx")).unwrap();
     let preset: fretwire_data::Preset = serde_json::from_value(original.clone()).unwrap();
     let reserialized = serde_json::to_value(&preset).unwrap();
-    assert_eq!(original, reserialized, "preset did not round-trip losslessly");
+    assert_eq!(
+        original, reserialized,
+        "preset did not round-trip losslessly"
+    );
 }

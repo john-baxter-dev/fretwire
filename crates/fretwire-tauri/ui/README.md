@@ -8,14 +8,14 @@ compile time (see `../tauri.conf.json`).
 | you want | command | what you get |
 |---|---|---|
 | iterate on the UI | `npm run dev` (here) | browser + mock device, hot reload, no Rust |
-| UI against the real pedal | `cargo tauri dev` (from `..`) | real backend in a real window, hot reload |
+| UI against the real pedal | `npm run tauri:dev` (here) | real backend in a real window, hot reload |
 | the shipped app | `npm run build` then `cargo build --release -p fretwire-tauri` | `dist/` embedded into the binary |
 
-`cargo tauri dev` starts this dev server itself (`beforeDevCommand` in `tauri.conf.json`) and points
-the app at `http://localhost:5173` instead of the embedded `dist/`. The port is pinned with
-`strictPort`, so if something else holds 5173 Vite fails loudly rather than moving to 5174 and
-leaving the app staring at a dead URL. It needs the Tauri CLI —
-`npm exec tauri dev`, or `cargo install tauri-cli` for the `cargo tauri` form.
+`npm run tauri:dev` starts this dev server itself (`beforeDevCommand` in `tauri.conf.json`) and
+points the app at `http://localhost:5173` instead of the embedded `dist/`. It runs
+`tauri dev -- --no-default-features` from the crate root — the flag matters, see "Building for the
+real app" below. The port is pinned with `strictPort`, so if something else holds 5173 Vite fails
+loudly rather than moving to 5174 and leaving the app staring at a dead URL.
 
 ## Working on the frontend without hardware (or a Rust toolchain)
 
@@ -51,6 +51,40 @@ in the console and reload. The mock's `import_data` fakes a successful import af
 (and throws if you give it `/`, so the error state is reachable). A browser can't open a native file
 picker, so `pickPath()` falls back to a prompt for a typed path.
 
+### Choosing which device to mock
+
+fretwire supports two units whose UI differs, so the mock can present as either:
+
+```js
+fretwireMock.device()          // what am I right now?
+fretwireMock.device("floor")   // Helix Floor: two DSPs, eight setlists  (the default)
+fretwireMock.device("stomp")   // HX Stomp: one DSP, one flat preset list
+```
+
+**Reload after switching** — it applies on the next connect. The choice is saved to `localStorage`,
+so it survives the reload.
+
+What actually changes:
+
+| | HX Stomp | Helix Floor |
+|---|---|---|
+| Routing grids | 1 | 2, stacked with per-DSP load |
+| Setlists | one flat list | 8 (Factory 1/2, User 1–5, Templates) |
+| Setlist picker | **hidden** | shown in the sidebar |
+| Snapshots | 3 | 8 |
+
+The picker is hidden on a one-setlist device on purpose — HX Edit shows no setlist control for the
+Stomp either. Floor mode leaves User 3–5 empty, which is what a stock unit looks like and exercises
+the empty-list state.
+
+> **Setlist browsing is on everywhere; cross-setlist *writing* is not.** The numbering that
+> originally gated browsing is settled (a browse index is global, `bank × 128 + slot`, verified
+> across all 1024 slots of a real Floor against its own backup), so the picker and `goto` ship
+> unguarded. **Save As into a setlist the device isn't in** still needs `FRETWIRE_SETLISTS=1` — that
+> path has never run against a Floor, and overwriting someone's preset is the one action here that
+> can't be undone. The mock allows it (it can't touch hardware), so don't treat the mock as evidence
+> of shipped behaviour. See the INCIDENT entries in `STATUS.md`.
+
 ### Simulating live device pushes
 
 To exercise live-follow (changes the UI mirrors when they originate on the hardware, e.g. a
@@ -62,6 +96,12 @@ fretwireMock.snapshot(2)        // panel switches to snapshot 3
 fretwireMock.preset(1)          // panel switches to preset #1
 fretwireMock.state()            // inspect the current in-memory preset
 ```
+
+Pushes are **coalesced**: the panel waits for ~300 ms of quiet (capped at 1.2 s) before re-reading,
+so a change takes a beat to land and a rapid burst produces one refresh rather than one each. That
+is deliberate — refreshing per push was pulling ~530 KB off a real Helix Floor per handful of preset
+changes and appears to have contributed to lockups. A `bypass()` push needs no read at all and shows
+up immediately.
 
 ### Where the seam is
 
@@ -75,9 +115,17 @@ working. Keep the mock's return shapes in sync with `../src/dto.rs`.
 ## Building for the real app
 
 ```sh
-npm run build                       # → ../dist
-cargo run -p fretwire-tauri               # from the repo root, runs against real hardware
+npm run build                          # → ../dist
+cargo run -p fretwire-tauri --release  # from the repo root, runs against real hardware
 ```
+
+Build `../dist` first: the `custom-protocol` feature is on by default so that plain cargo builds
+work, and that makes `../dist` a build-time requirement — the codegen panics if it is missing.
+
+For hot-reloading UI work against the real backend, use `npm run tauri:dev` (from here), which is
+`tauri dev -- --no-default-features`. Turning the feature off is what points the webview at this
+dev server instead of the embedded `../dist`; a `tauri dev` *without* it would silently serve the
+last built `dist/` and your edits would appear to do nothing.
 
 In the real Tauri webview the mock is bundled but never used — `window.__TAURI_INTERNALS__` is
 present, so `ipc.js` routes to the real backend.

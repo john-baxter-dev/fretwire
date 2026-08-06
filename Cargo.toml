@@ -23,8 +23,8 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
-edition = "2021"
+version = "0.2.0"
+edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/john-baxter-dev/fretwire"
 rust-version = "1.96"
@@ -40,5 +40,11 @@ nusb = "0.1"
 futures-lite = "2"
 # Cancellable timeouts for bulk transfers (nusb 0.1 has no bulk timeout).
 futures-timer = "3"
+# zlib inflate for the `.hxb` backup container (pure-Rust miniz_oxide backend).
+flate2 = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# CLI argument parsing. The derive API keeps `--help` generated from the command definitions
+# rather than hand-maintained (it had already drifted), and makes a bad numeric argument an error
+# instead of a silent default — which on `save`/`rename` meant writing to the wrong setlist.
+clap = { version = "4", features = ["derive"] }

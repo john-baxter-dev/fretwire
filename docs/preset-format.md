@@ -9,31 +9,143 @@ against `captures/preset1_stream.msgpack.bin` (HX Stomp, fw v3.71). Integer keys
 Reassembled stream = `{102: <u32>, 103: 0, 104: <blob>}` (MessagePack, root ~8 bytes into the
 stream after a `marker/type/len` header). Key **104** is a `str`/`bin` blob = the preset.
 
+> **Byte 3 of the header is volatile — don't diff on it.** [solid — 2026-08-02] The high byte of
+> `type` changes between reads of an *unchanged* preset: twelve consecutive `dump-raw` runs on one
+> Stomp preset split into two groups differing at offset 3 alone (`0x00` / `0x28`), and the field
+> dumps a tester sent as three presets turned out to be one preset three times, differing at offset
+> 3 and nowhere else (`0x00` / `0x28` / `0x10`). Everything from offset 8 was byte-identical. The
+> parser skips the header, so this reaches nobody but a person running `cmp` — but it makes two
+> dumps of the same preset look different and, worse, made three dumps of one preset look like
+> three presets. Compare with `fretwire diff-stream`, which walks the tree, or from offset 8.
+
 ## Blob = a flat sequence of 3 MessagePack values
 1. `str "l6-helix\0"` — magic.
-2. `str` — a fixed header/uuid (kept verbatim, meaning TBD).
+2. `str` — the **offset table**, 48 bytes = 12 little-endian `u32`s. See below.
 3. `Map` — **the preset** (integer-keyed).
+
+### The header is an offset table, not a uuid  [solid — 2026-07-31]
+Every slot is a byte offset into the blob (offset 0 = the blob's first byte). On all four presets
+captured so far:
+
+| slot | value | points at |
+|---:|---|---|
+| 0 | 61 | the **preset map**'s first byte (always 61: 10-byte magic + 3-byte `str16` marker + 48-byte header) |
+| 1–9 | varies | the first byte of one **top-level preset entry** — the key byte, not its value. The slot→key mapping is a fixed permutation (`0,1,3,4,2,5,6,7,10` on a Floor preset), so slot 8 = 62 addresses whichever key the map happens to serialize first |
+| 10, 11 | blob length | the blob's **total size**, twice |
+
+The device seeks with this table rather than walking the MessagePack, which makes it load-bearing on
+write. **This cost us two device lockups.** `to_blob()` re-encodes the map with rmpv, which writes
+integers minimally where the device does not — the device emits `d1 00 00` (int16 zero) and `cc 00`
+freely — so an untouched preset re-serializes **117–216 bytes shorter**, with everything after the
+first such integer shifted left. We copied the header verbatim across that shift, so the device
+followed offsets that no longer began anything and a declared total length past the end of the
+buffer it had been given. It stopped draining its endpoint mid-transfer and needed a power cycle.
+
+`to_blob()` now rebuilds the table against the bytes it actually emits (`classify_header` records
+what each slot addressed at parse time; the offsets are re-derived on write). Byte-identity with the
+device's own encoding is not achievable through rmpv and is not required — **self-consistency is**.
+
+**Which sections the stale offsets pointed at matters.** On `fretwireTest2` the three wrong interior
+slots addressed keys **5, 6 and 10** — preset settings, the focused block, and *the snapshots*, whose
+`3` field is per-slot state for every block. A device reading those from wrong offsets keeps a
+plausible-looking block layout while its per-snapshot block state is garbage, which is a route to
+"the chain looks right and makes no sound". The offsets before the first shifted integer (the slot
+arrays, key 0/1) stayed correct, which is why the block list always survived. [hypothesis]
+
+### Serial vs parallel: what actually differs  [solid — 2026-07-31]
+The split (kind 2) and mixer (kind 3) nodes are **always present**, at slot-array indices **10 and
+19**, even on a fully serial preset. Only four fields distinguish the two topologies:
+
+| field | serial | parallel |
+|---|---|---|
+| DSP group key `21` (split type) | `0` | non-zero (`1` on both Stomp captures; `2`/`3` seen on a Floor) |
+| split node `20 → 18` | `false` | **`true`** |
+| split node `20 → 15 → 13` (column) | `0` | the split's column (2, 5) |
+| mixer node `20 → 18` | `false` | **`true`** |
+| mixer node `20 → 17 → 13` (column) | `0` | the mixer's column (7, 9) |
+
+Everything else is identical — a serial preset already carries the Y-split model (`15 → 8 = 257`) and
+the mixer model (`17 → 8 = 151`), both with `10 => true`. So "make this preset parallel" is not about
+creating nodes; it is about **enabling the two that are already there and giving them columns**.
+
+None of those five fields has a known surgical op — the column is documented as op-21-only. **The
+device sets all five itself on an op-43 move into a row-B slot** — verified 2026-07-31 against a dump
+taken straight after a drag, which came back structurally identical to a device-authored parallel
+preset (`key21=1`, both nodes `18: true`, columns 2 and 9, block at slot 12). So `move_block_to_row`
+sending op 43 alone is correct, and the doc comment claiming the device activates the split was right.
+
+### The split and mixer node parameters  [solid — 2026-07-31]
+Their param arrays live at `20 → <holder> → 7 → 4` (holder `15` for the split, `17` for the mixer),
+and the **`Enabled` param is not in that array** — it is the node content's key `18`. So the stored
+array is always one shorter than the model's param list:
+
+| node | model | stored params |
+|---|---|---|
+| Split Y | 257 `HD2_AppDSPFlowSplitY` | `Balance A` (def 0.5), `Balance B` (def 0.5), `bypass` |
+| Split A/B | 256 `HD2_AppDSPFlowSplitAB` | `Route To` (def 0.5), `bypass` |
+| Mixer | 151 `HD2_AppDSPFlowJoin` | `A Level` (def 0, −60..12 dB), `A Pan` (0.5), `B Level` (0), `B Pan` (0.5), `B Polarity` (false), `Level` (0) |
+
+The bool in each array (`bypass` / `B Polarity`) pins the alignment, so the mapping is not guesswork.
 
 ## Preset map (integer keys)
 | key | value | meaning (inferred) |
 |----:|-------|--------------------|
 | 7 | Map `{36: "P33", 35: 58720256, 37: "v3.71-32-g1039661"}` | device info: **36 = model code** (`P33` = HX Stomp family), 35 = version (0x03800000), 37 = firmware string |
-| 0 | Map `{21: 0, 22: Array[20]}` | **block slots** (`21` = split flag) — see below |
-| 1 | nil | ? |
+| 0 | Map `{21: split, 22: Array[20]}` | **block slots** of the first DSP (`21` = split type) — see below |
+| 1 | Map `{21: split, 22: Array[20]}` — or nil | **the second DSP's slot array**, same shape as key `0`. **nil on the HX Stomp** (one DSP), populated on the Helix Floor. [solid — 2026-07-22, Floor captures cross-checked against a `.hxb` backup] |
 | 2 | Map `{0: Array[13], 1: Array[13×Array[7]]}` | snapshot/controller matrices (13 = snapshots? all zero here) |
 | 3 | Map `{7: 0, 8: Array[5]}` | **footswitch / stomp layout** — bound blocks only; see below |
 | 4 | Array[10] (all nil) | **parameter-controller** assignments (separate from `3 → 8`; empty here) |
-| 5 | Map{15} | TBD |
-| 6 | Map{2} | TBD |
-| 10 | Map{6} | TBD |
+| 5 | Map{15} `{16: f32, 45..56: …, 30, 134}` | **preset-level settings**. Byte-identical across all three captures (all at defaults), so the fields aren't separable yet; `16` = f32 80 is most likely the preset tempo. [hypothesis] |
+| 6 | Map{2} `{98: <slot>, 26: 0}` | **the focused block** — key `98` is the same slot number the edit commands address, and it differs per capture (5, 7, 12), matching the block last selected. [solid] |
+| 10 | Map{6} `{6,7,8, 9: 20, 10: Array[n], 13: Array[20]}` | **snapshots**: `10` is the snapshot array (3 on a Stomp, 8 on a Floor), `9` = the slot count, `13` = a per-slot array. Each snapshot is `{0: enabled, 1: Array[11], 2: Array[64], 3: Array[20], 4: name, 5: f32 tempo, 12, 14}` — note `3` is **per-slot state**, one entry per block slot. [solid] |
 
-### Block slots (`0 → 22`, Array of 20)
+### Block slots (`0 → 22`, Array of 20 — and `1 → 22` for the second DSP)
 Each slot is `{19: type, 20: content}`:
 - `type 8` + `nil` → **empty slot**.
 - `type 6` + `Map{5}` → **populated effect block** (5 params). 6 such blocks in this preset,
   matching the names seen in the stream (Bucket Brigade, Harmonic Tremolo, Tremolo, 70s Chorus,
   Dynamic Hall, …).
+- `type 7` + `Map{4}` → **a Looper block**. Same *idea* as type 6 but a **different content shape**
+  — see below. Not device-specific: it simply never appeared in the Stomp fixtures (none of them
+  contain a Looper), and turned up in the Helix Floor captures.
+  **[solid — 2026-07-22, cross-checked against a `.hxb` backup]**
 - other types (`0,1,2,3`) → structural slots (input/split/join/output).
+
+**The array is 20 slots on both devices.** The Helix Floor does not widen it — it uses a *second*
+array at preset key `1` for DSP2. So a full block enumeration must walk **both** `0 → 22` and
+`1 → 22`; reading only key `0` silently drops every DSP2 block (verified: a Floor preset whose
+Looper lives on DSP2 came back one block short until key `1` was walked).
+
+#### The wire slot number is **global** across DSPs  [solid — 2026-07-23]
+
+Edit ops address a block by key `98` = a **single** slot integer with no DSP qualifier, and that
+integer spans both arrays:
+
+```
+wire_slot = dsp * 20 + index_in_that_dsp's_array
+```
+
+so DSP1 is slots **0–19** and DSP2 is slots **20–39**. This is device-independent framing: the Stomp
+simply never exceeds 19 because its key `1` is nil.
+
+Established from a Helix Floor capture of five DSP2 blocks being edited in HX Edit (`WinCap5`,
+`FACTORY 1` `12B` "Pull Me Under"). Each `op 78 {98: n}` / `op 30 {98: n, 28: p, 119: v}` pair
+resolves under this rule to a block whose stored value for param `p` is one UI increment from the
+first value on the wire — five independent matches across five models and three different parameter
+scales, including correctly picking the branch-B one of two identical `HD2_DelaySimpleDelayMono`
+blocks (index 17, not 7). It is also consistent with every earlier capture, whose slots were all
+< 20 and all resolved to DSP1. Full working in `docs/helix-floor.md`.
+
+Independently corroborated *inside* the preset: the **footswitch layout** (`3 → 8 → … → 11 → 8`)
+numbers its targets the same way. In that Floor preset FS4/FS5 point at slots 27/28 and FS10/FS11 at
+37/38, and each entry's name matches the model found at that **global** slot — including telling the
+two identical `Simple Delay` blocks apart as 27 and 37. Two different tables, one numbering.
+
+**Consequence:** `fretwire_protocol::edit` needs no change for multi-DSP devices. The `(dsp, index)`
+pair is an internal detail of preset traversal; flatten it with the formula above before it reaches
+the wire. Implemented in `fretwire_data::stream` as `wire_slot(dsp, index)` /
+`split_wire_slot(slot)`, with `DSP_SLOT_STRIDE = 20`.
 
 The block content maps hold the per-param **values** (seen as msgpack `float32`, e.g. `ca 3f800000`
 = 1.0) — the same big-endian f32s we set via op-0x06. Mapping these slots/params to the wire
@@ -48,6 +160,18 @@ A `type 6` block content is `Map{5}`:
 - `11` = `{2: count, 3: count, 4: [values]}` — **the ordered param vector** (msgpack `float32`
   for knobs, `int`/`bool` for enums/switches), in `.models` param order.
 - `12` = a second (usually empty) param bank; `9` = flag.
+
+### Block content for `type 7` (Looper) — a different shape
+A `type 7` slot's content is `Map{4}` and does **not** follow the type-6 layout:
+- `8` = **model index** into `Helix.sym` — directly, *not* nested under `24 → 25`
+  (e.g. `153` = `HD2_LooperStereo`).
+- `10` = **`enabled` bool** — same key as type 6.
+- `7` = `{2: count, 3: count, 4: [values]}` — the ordered param vector, at key **`7`**, not `11`
+  (e.g. `[0.0, 0.0, 20.0, 20000.0]` = `HD2_Looper`'s `Playback, Overdub, lowCut, highCut`).
+- `9` = a secondary id/flag.
+
+This is the same `{8: model, 10: enabled, 7: params}` shape the **structural** nodes use inside
+their sub-maps (`15`/`17`), so type 7 reads more like a structural node than an effect block.
 
 ### Signal path (`3 → 8`, the block identities)
 `Array[5]`, one entry per path position (`nil` = empty). Each populated position is `Array[1]`
@@ -75,8 +199,31 @@ of a `Map{7}` node:
   lists **only footswitch-bound blocks**, in FS order — it is empty when nothing's on a switch (a
   preset meant to be driven by snapshots/preset-changes), which is why block enumeration must come
   from the slot array, not here. Key `4` is the **separate** parameter-controller table.
-- **Snapshots:** names + active index in **key `10`** (`8` = active, `10` = `[{4: name, …}]`); the
-  per-block snapshot value matrix is in key `2` (and `10`'s sub-arrays). Names/active parsed; values TBD.
+- **Snapshots: key `10`.** `8` = stored active index, `9` = slot count (20), `10` = `Array` of
+  snapshot objects, `13` = `Array[20]` of per-slot flags (all `true` in every fixture).
+  Each snapshot object is `{0: in-use, 1: Array[11], 2: Array[64], 3: Array[20], 4: name,
+  5: tempo?, 12, 14}`:
+  - **`3` = the bypass matrix [solid]** — one `[_, enabled]` pair per slot; `enabled` is the
+    inverse of a block's `bypassed`. The first element of the pair is `false` throughout and
+    discriminates nothing. Proven against `preset1_stream`: its live blocks (2/3/4/7 bypassed,
+    5/6 active) are exactly snapshot 0's row, and `8` reports 0. Parsed by
+    `PresetStream::snapshot_details`.
+    - **Indexed by wire slot (`dsp × 20 + index`), as one flat array across the whole device**
+      — `Array[20]` on the Stomp but **`Array[40]` on a two-DSP Floor**, not one array per DSP.
+      [solid — the tester's `pullmeunder` Floor dump, 2026-07-29.] Reading it at the per-DSP index
+      makes every DSP2 block report DSP1's state, which is silent and looks like "all the
+      snapshots are the same"; it is what `show-preset`'s scene diagnosis did until 2026-07-29.
+  - **`8` is not reliably the *live* snapshot.** `dual_amp_stream` stores `8 = 1`, yet its live
+    block state matches snapshot **0** (snapshots 1/2 there are pristine "everything on"). Both
+    facts are locked in by tests. This is the standing lead on the GUI highlighting the wrong
+    snapshot on hardware. Deriving the live snapshot by matching the matrix against live block
+    state is a candidate fix but ambiguous when two snapshots hold identical scenes — which
+    `preset1_stream`'s snapshots 1 and 2 do.
+  - `2` = `Array[64]` of `[bool, int, nil]`, one per controller/param slot — the per-snapshot
+    **parameter** values. Almost entirely `[false, 64, nil]` in the fixtures (64 reads as a
+    midpoint default), so the encoding of an actually-varying value is still TBD: it needs a
+    capture of one knob moved between two snapshots.
+  - `1` = `Array[11]` of `[13, false, [0; 7]]` — uniform in every fixture, purpose unknown.
 
 ### Block enumeration: the slot array is authoritative  [solid]
 **Blocks are enumerated from the slot array `0 → 22`, not the signal path.** Each kind-6 slot is a
@@ -91,7 +238,11 @@ to that one capture. The path is now used only to *enrich* a block with its foot
 controller-node kind, and user label **when present** (keyed by slot via `11 → 8`).
 
 ### Split / parallel topology  [solid]
-- **`0 → 21`** is the split flag: `0` = serial, `1` = split (parallel rows).
+- **`<dsp> → 21`** is the split flag: `0` = serial, **non-zero = split, and the value is the split
+  *type***. The Stomp only ever uses `1`, so this was originally recorded as a `0`/`1` flag; the
+  Floor uses `2` and `3` for its other split types, and a DSP's two paths can differ within one
+  preset. Across the five presets we can check, `21 == 0` holds exactly when that DSP's row-B slots
+  are empty. Each DSP carries its own flag. [solid — 2026-07-23]
 - **Slot index encodes the row:** slots 0–15 = main (top) row, 16+ = the parallel (B) row.
   Proven by moving one block to path B and diffing: it relocated `0 → 22[6] → [16]`, `0 → 21`
   flipped `0 → 1`, and the pre-existing **kind-2 (split)** and **kind-3 (mixer)** nodes activated

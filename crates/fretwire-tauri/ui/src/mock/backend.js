@@ -7,6 +7,11 @@
 // It is wired in via `../lib/ipc.js`, which routes `invoke`/`listen` here whenever the app runs
 // outside a Tauri webview (i.e. the Vite dev server in a browser). The real backend is untouched.
 //
+// It can present as either supported unit, so the device-dependent UI is testable without hardware:
+//   fretwireMock.device("floor")   // two DSPs, eight setlists  (the default)
+//   fretwireMock.device("stomp")   // one DSP, one flat list, no setlist picker
+// The choice sticks across reloads; reload after switching, since it applies on the next connect.
+//
 // State is intentionally persistent for the session: edits mutate the in-memory setlist, so the app
 // feels stateful. Reload the page to reset. Trigger live-follow pushes by hand from the devtools
 // console via `window.fretwireMock` (see the bottom of this file).
@@ -205,32 +210,64 @@ const mixerNode = () => ({
 // derived from row-B occupancy, exactly like the device: dropping a block into an empty B slot
 // creates the split, moving the last B block out retires it.
 // ---------------------------------------------------------------------------------------------
-const TOP_SLOTS = [1, 2, 3, 4, 5, 6, 7, 8];
-const B_SLOTS = [11, 12, 13, 14, 15, 16, 17, 18];
-const SPLIT_SLOT = 10, MIXER_SLOT = 19;
-const bCol = (slot) => slot - SPLIT_SLOT + 1; // row-B display column, aligned under row A
+// A DSP occupies 20 wire slots (stride 20), addressed globally as `dsp * 20 + local`. Within a DSP
+// the local layout is [0=input, 1..8 top row, 9=output, 10=split node, 11..18 row B, 19=mixer node]
+// — the Floor's real per-DSP topology (Pull Me Under's DSP2 sits at 27/28 on the top row and 33..38
+// on row B, i.e. base 20 + those same local indices). A single-DSP HX Stomp preset uses only base 0.
+const STRIDE = 20;
+const SPLIT_LOCAL = 10, MIXER_LOCAL = 19;
+const dspOf = (slot) => Math.floor(slot / STRIDE);
+const baseOf = (slot) => dspOf(slot) * STRIDE;
+const localOf = (slot) => slot - baseOf(slot);
+const topSlots = (base) => [1, 2, 3, 4, 5, 6, 7, 8].map((i) => base + i);
+const bSlots = (base) => [11, 12, 13, 14, 15, 16, 17, 18].map((i) => base + i);
+const inputSlot = (base) => base + 0;
+const outputSlot = (base) => base + 9;
+const splitSlot = (base) => base + SPLIT_LOCAL;
+const mixerSlot = (base) => base + MIXER_LOCAL;
+// Display column within the DSP: top slot base+n → col n; row-B slot base+10+n → col n+1.
+// The grid is 8 columns wide in *both* rows: top slots 1..8 are columns 1..8, row-B slots 11..18
+// are columns 1..8 too, in the same absolute column space. Matches PresetStream::dsp_grid.
+const topCol = (slot) => localOf(slot);
+const bCol = (slot) => localOf(slot) - SPLIT_LOCAL;
+const isRowB = (slot) => localOf(slot) >= 11 && localOf(slot) <= 18;
+const rowSlots = (slot) => (isRowB(slot) ? bSlots(baseOf(slot)) : topSlots(baseOf(slot)));
+// The bases of every DSP this preset carries (one on the Stomp, two on the Floor).
+const dspBases = (p) => Array.from({ length: p.dspCount }, (_, k) => k * STRIDE);
+// Slots a block can occupy in one DSP / across the whole preset.
+const editSlots = (base) => [...topSlots(base), ...bSlots(base)];
+const allEditSlots = (p) => dspBases(p).flatMap(editSlots);
 
-const isSplit = (p) => B_SLOTS.some((i) => p.slots[i]?.kind === "effect");
+const isSplit = (p, base) => bSlots(base).some((i) => p.slots[i]?.kind === "effect");
 
-// The split/mixer signal columns (node key 13). User-set positions (set_node_pos, like dragging the
-// nodes in the UI) are stored on the preset and honored; otherwise they derive from where the B
-// blocks sit — and either way they're clamped so the bracket keeps enclosing the occupied B row,
-// approximating the device's recompute when blocks move.
-function splitMixerPos(p) {
-  const cols = B_SLOTS.filter((i) => p.slots[i]?.kind === "effect").map(bCol);
+// The split/mixer signal columns (node key 13) for one DSP. User-set positions (set_node_pos, like
+// dragging the nodes in the UI) are stored per-DSP on the preset and honored; otherwise they derive
+// from where the B blocks sit — and either way they're clamped so the bracket keeps enclosing the
+// occupied B row, approximating the device's recompute when blocks move.
+function splitMixerPos(p, base) {
+  const cols = bSlots(base).filter((i) => p.slots[i]?.kind === "effect").map(bCol);
   if (!cols.length) return { splitPos: null, mixerPos: null };
   const minB = Math.min(...cols), maxB = Math.max(...cols);
-  const splitPos = Math.min(p.nodePos?.split ?? minB, minB);
-  const mixerPos = Math.max(p.nodePos?.mixer ?? Math.min(maxB + 2, 10), maxB + 1, splitPos + 1);
+  const np = p.nodePos[dspOf(base)] ?? {};
+  const splitPos = Math.min(np.split ?? minB, minB);
+  // Column 9 — one past the 8-wide grid — is as far right as the mixer goes.
+  const mixerPos = Math.max(np.mixer ?? Math.min(maxB + 2, 9), maxB + 1, splitPos + 1);
   return { splitPos, mixerPos };
 }
 
-function makePreset(name, index, slots, snapshot_names = []) {
-  slots[0] = inputNode();
-  slots[9] = outputNode();
-  slots[SPLIT_SLOT] = splitNode();
-  slots[MIXER_SLOT] = mixerNode();
-  return { name, index, active_snapshot: 0, snapshot_names, slots, nodePos: { split: null, mixer: null } };
+function makePreset(name, index, slots, opts = {}) {
+  const dspCount = opts.dspCount ?? 1;
+  for (const base of Array.from({ length: dspCount }, (_, k) => k * STRIDE)) {
+    slots[inputSlot(base)] = inputNode();
+    slots[outputSlot(base)] = outputNode();
+    slots[splitSlot(base)] = splitNode();
+    slots[mixerSlot(base)] = mixerNode();
+  }
+  return {
+    name, index, active_snapshot: 0, snapshot_names: opts.snapshot_names ?? [], slots,
+    nodePos: {}, dspCount,
+    deviceModel: opts.deviceModel ?? "HX Stomp", firmware: opts.firmware ?? "3.80 (mock)",
+  };
 }
 
 function serialPreset(name, index, defs, snapshot_names = []) {
@@ -238,7 +275,7 @@ function serialPreset(name, index, defs, snapshot_names = []) {
   defs.forEach((d, i) => {
     slots[i + 1] = makeBlock(d.sym, d);
   });
-  return makePreset(name, index, slots, snapshot_names);
+  return makePreset(name, index, slots, { snapshot_names });
 }
 
 function dualAmpPreset() {
@@ -247,11 +284,58 @@ function dualAmpPreset() {
   slots[3] = makeBlock("amp_princess", { cab: "cab_112", label: "Amp A" }); // path A (col 3)
   slots[5] = makeBlock("reverb_glitz"); // common-after (col ≥ mixer pos)
   slots[12] = makeBlock("amp_placater", { cab: "cab_412", label: "Amp B" }); // row B (col 3)
-  return makePreset("Dual Amp", 0, slots, ["Verse", "Chorus", "Solo"]);
+  return makePreset("Dual Amp", 1, slots, { snapshot_names: ["Verse", "Chorus", "Solo"] });
 }
 
-// The setlist. Index 0 is the split preset (shows the routing grid on connect).
-const presets = [
+// A two-DSP Helix Floor preset, so the mock exercises the same dual-grid path a real Floor drives —
+// modeled on "Pull Me Under": DSP1 an amp path that splits to a parallel drive, DSP2 a second amp
+// that splits into a wide reverb/delay wash. Blocks sit at the same global slots the Floor reports.
+function floorPreset() {
+  const slots = {};
+  // DSP1 (base 0): top row 1..5, split to row B 11..12.
+  slots[1] = makeBlock("vol_pedal", { label: "Volume" });
+  slots[2] = makeBlock("drive_minotaur");
+  slots[3] = makeBlock("amp_jazz", { cab: "cab_212", label: "Amp A" });
+  slots[4] = makeBlock("mod_chorus");
+  slots[5] = makeBlock("eq_param");
+  slots[11] = makeBlock("drive_teemah", { label: "Weeper" });
+  slots[12] = makeBlock("boost_kinky", { label: "Scream 808" });
+  // DSP2 (base 20): top row 27/28, split to a parallel wash on row B 33..37 (38 left free to demo
+  // dropping/adding a block). Kept under the per-DSP ~100% budget so nothing renders impossible.
+  slots[27] = makeBlock("amp_placater", { cab: "cab_412", label: "Amp B" });
+  slots[28] = makeBlock("comp_deluxe");
+  slots[33] = makeBlock("mod_chorus");
+  slots[34] = makeBlock("delay_simple");
+  slots[35] = makeBlock("mod_phaser");
+  slots[36] = makeBlock("eq_graphic");
+  slots[37] = makeBlock("reverb_hall");
+  return makePreset("Pull Me Under", 0, slots, {
+    dspCount: 2,
+    deviceModel: "P21",
+    firmware: "7d01f5e (mock)",
+    snapshot_names: ["Intro", "B&C", "Solo", "", "", "", "", ""],
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Device modes. The mock can present as either unit so the UI differences are visible without
+// hardware: an HX Stomp has one flat preset list (HX Edit shows no setlist control at all), while
+// a Helix Floor has eight setlists and two DSPs. Switch with `fretwireMock.device("stomp")`.
+// ---------------------------------------------------------------------------------------------
+const DEVICES = {
+  stomp: {
+    name: "HX Stomp",
+    // One unnamed list — matches Device::setlist_names() falling back to ["Presets"].
+    setlists: ["Presets"],
+  },
+  floor: {
+    name: "Helix Floor",
+    setlists: ["Factory 1", "Factory 2", "User 1", "User 2", "User 3", "User 4", "User 5", "Templates"],
+  },
+};
+
+// The Stomp's single flat list. Index 0 is the split "Dual Amp" preset.
+const stompPresets = () => [
   dualAmpPreset(),
   serialPreset("Crunch Lead", 1, [
     { sym: "gate" }, { sym: "drive_minotaur" },
@@ -269,13 +353,63 @@ const presets = [
   serialPreset("Clean DI", 5, [{ sym: "comp_la" }, { sym: "eq_graphic" }]),
   serialPreset("Lead Boost", 6, [{ sym: "boost_kinky" }, { sym: "amp_brit", cab: "cab_212" }, { sym: "reverb_hall" }]),
   serialPreset("Init Tone", 7, [{ sym: "amp_cali", cab: "cab_412" }]),
-];
+].map((p, i) => ({ ...p, index: i }));
+
+// The Floor's eight setlists. Only some are populated — User 3..5 are empty on a stock unit, which
+// is worth being able to see. Preset indices restart at 0 in every setlist, exactly as the wire
+// reports them (PresetInfo.index is relative to its bank).
+function floorSetlists() {
+  const bank = (...ps) => ps.map((p, i) => ({ ...p, index: i }));
+  return [
+    // Factory 1 — index 0 is the two-DSP preset, so connecting shows both routing grids.
+    bank(floorPreset(), dualAmpPreset(), serialPreset("Riffs And Beards", 0, [
+      { sym: "gate" }, { sym: "drive_teemah" }, { sym: "amp_placater", cab: "cab_412", label: "Amp" },
+    ]), serialPreset("Felix Mark IV", 0, [
+      { sym: "comp_la" }, { sym: "amp_brit", cab: "cab_212", label: "Amp" }, { sym: "reverb_hall" },
+    ])),
+    // Factory 2
+    bank(serialPreset("Bumble Acoustic", 0, [{ sym: "comp_deluxe" }, { sym: "eq_graphic" }]),
+      serialPreset("The Blue Agave", 0, [{ sym: "wah_teardrop" }, { sym: "amp_jazz", cab: "cab_112" }])),
+    // User 1 — where the tester's "Sludge" lives.
+    bank(serialPreset("Sludge", 0, [
+      { sym: "gate" }, { sym: "drive_minotaur" }, { sym: "amp_placater", cab: "cab_412", label: "Amp" },
+      { sym: "delay_simple" },
+    ]), serialPreset("Richeese", 0, [{ sym: "boost_kinky" }, { sym: "amp_cali", cab: "cab_212" }])),
+    // User 2
+    bank(serialPreset("Scratch Pad", 0, [{ sym: "amp_cali", cab: "cab_412" }])),
+    [], // User 3 — empty
+    [], // User 4 — empty
+    [], // User 5 — empty
+    // Templates
+    bank(serialPreset("Blank", 0, []), serialPreset("Basic Amp", 0, [{ sym: "amp_jazz", cab: "cab_112" }])),
+  ];
+}
 
 // ---------------------------------------------------------------------------------------------
 // Session state
 // ---------------------------------------------------------------------------------------------
 let connected = false;
-let current = presets[0];
+
+// Which unit the mock is pretending to be, and its setlists: banks[bank] is a list of presets.
+// The choice is remembered across reloads (`fretwireMock.device(…)` writes it), because switching
+// device only takes effect on the next connect — so you reload anyway, and losing the setting on
+// every reload would make Stomp mode almost impossible to actually sit in.
+const MODE_KEY = "fretwire.mock.device";
+const storage = (() => {
+  try {
+    return typeof localStorage !== "undefined" ? localStorage : null;
+  } catch {
+    return null; // e.g. a sandboxed iframe, or Node
+  }
+})();
+const savedMode = storage?.getItem(MODE_KEY);
+let deviceMode = savedMode && DEVICES[savedMode] ? savedMode : "floor";
+const buildBanks = () => (deviceMode === "floor" ? floorSetlists() : [stompPresets()]);
+let banks = buildBanks();
+let currentBank = 0;
+const setlistNames = () => DEVICES[deviceMode].setlists;
+const bankOf = (b) => banks[b] ?? [];
+let current = bankOf(0)[0];
 // Backup/restore round-trip (see the backup_setlist handler): the last backup made this session.
 let lastBackup = null;
 
@@ -284,7 +418,6 @@ const hexEncode = (str) =>
 const hexDecode = (hex) =>
   new TextDecoder().decode(new Uint8Array(hex.match(/.{2}/g)?.map((h) => parseInt(h, 16)) ?? []));
 
-const allSlots = () => [...TOP_SLOTS, ...B_SLOTS];
 
 // ---------------------------------------------------------------------------------------------
 // Edit history — mirrors the real backend: a labeled timeline of full-state snapshots with a
@@ -391,10 +524,10 @@ const EDIT_LABELS = {
 const clone = (x) => structuredClone(x);
 
 function blockDto(p, slot, e) {
-  const row = slot > SPLIT_SLOT && slot < MIXER_SLOT ? 1 : 0;
   const cab = e.paired_index != null ? findModel(e.paired_index) : null;
   return {
-    slot, row, model_name: e.model_name, user_label: e.user_label, symbolic_id: e.symbolic_id,
+    slot, dsp: dspOf(slot), row: isRowB(slot) ? 1 : 0,
+    model_name: e.model_name, user_label: e.user_label, symbolic_id: e.symbolic_id,
     model_index: e.modelIndex,
     category: e.category, bypassed: e.bypassed, variant: e.variant, is_controller: false,
     footswitch: e.footswitch, dsp_load: e.dsp_load, params: clone(e.params),
@@ -406,7 +539,7 @@ function blockDto(p, slot, e) {
 
 function nodeDto(p, slot, e) {
   return {
-    slot, row: 0, model_name: e.model_name, user_label: null, symbolic_id: e.symbolic_id,
+    slot, dsp: dspOf(slot), row: 0, model_name: e.model_name, user_label: null, symbolic_id: e.symbolic_id,
     category: null, bypassed: null, variant: null, is_controller: false, footswitch: 0,
     dsp_load: e.dsp_load ?? 0, params: clone(e.params), paired_model_name: null, paired_index: null, paired_params: [],
   };
@@ -414,34 +547,54 @@ function nodeDto(p, slot, e) {
 
 // The real `PresetStream::grid()` emits the empty row-B cells **even on serial presets** (the node
 // slots always exist in the fixed array) — that's what lets a drop into B create the split.
-function toGrid(p) {
+function toGrid(p, base) {
   const cells = [];
-  for (const i of TOP_SLOTS) {
-    cells.push({ slot: i, row: 0, column: i, occupied: p.slots[i]?.kind === "effect" });
+  for (const i of topSlots(base)) {
+    cells.push({ dsp: dspOf(base), slot: i, row: 0, column: topCol(i), occupied: p.slots[i]?.kind === "effect" });
   }
-  for (const i of B_SLOTS) {
-    cells.push({ slot: i, row: 1, column: bCol(i), occupied: p.slots[i]?.kind === "effect" });
+  for (const i of bSlots(base)) {
+    cells.push({ dsp: dspOf(base), slot: i, row: 1, column: bCol(i), occupied: p.slots[i]?.kind === "effect" });
   }
   return cells;
 }
 
-function toDto(p) {
-  const occupied = allSlots().filter((i) => p.slots[i]?.kind === "effect");
-  const dsp = occupied.reduce((s, i) => s + (p.slots[i].dsp_load ?? 0), 0);
-  const split = isSplit(p);
-  const { splitPos, mixerPos } = splitMixerPos(p);
+// One DSP's routing view — mirrors the backend's DspDto.
+function dspDto(p, base) {
+  const split = isSplit(p, base);
+  const { splitPos, mixerPos } = splitMixerPos(p, base);
+  const load = editSlots(base)
+    .filter((i) => p.slots[i]?.kind === "effect")
+    .reduce((s, i) => s + (p.slots[i].dsp_load ?? 0), 0);
   return {
-    name: p.name, index: p.index, bank: 0, device_model: "HX Stomp", firmware: "3.80 (mock)",
-    split, dsp_load: dsp,
-    split_pos: splitPos, mixer_pos: mixerPos,
+    dsp: dspOf(base),
+    split,
+    split_pos: splitPos,
+    mixer_pos: mixerPos,
+    // Like EditorPreset: the node slots exist regardless, but are surfaced only when split.
+    split_node: split ? nodeDto(p, splitSlot(base), p.slots[splitSlot(base)]) : null,
+    mixer_node: split ? nodeDto(p, mixerSlot(base), p.slots[mixerSlot(base)]) : null,
+    input_node: nodeDto(p, inputSlot(base), p.slots[inputSlot(base)]),
+    output_node: nodeDto(p, outputSlot(base), p.slots[outputSlot(base)]),
+    grid: toGrid(p, base),
+    dsp_load: load,
+  };
+}
+
+function toDto(p) {
+  const dsps = dspBases(p).map((base) => dspDto(p, base));
+  const d0 = dsps[0];
+  const occupied = allEditSlots(p).filter((i) => p.slots[i]?.kind === "effect");
+  return {
+    name: p.name, index: p.index, bank: currentBank, device_model: p.deviceModel, firmware: p.firmware,
+    // Flat fields mirror DSP 0, exactly like the real PresetDto, so a single-DSP UI still works.
+    split: d0.split, dsp_load: dsps.reduce((s, v) => s + v.dsp_load, 0),
+    split_pos: d0.split_pos, mixer_pos: d0.mixer_pos,
     active_snapshot: p.active_snapshot, snapshot_names: p.snapshot_names,
     blocks: occupied.map((i) => blockDto(p, i, p.slots[i])),
-    // Like EditorPreset: the node slots exist regardless, but are surfaced only when split.
-    split_node: split ? nodeDto(p, SPLIT_SLOT, p.slots[SPLIT_SLOT]) : null,
-    mixer_node: split ? nodeDto(p, MIXER_SLOT, p.slots[MIXER_SLOT]) : null,
-    input_node: nodeDto(p, 0, p.slots[0]),
-    output_node: nodeDto(p, 9, p.slots[9]),
-    grid: toGrid(p),
+    split_node: d0.split_node, mixer_node: d0.mixer_node,
+    input_node: d0.input_node, output_node: d0.output_node,
+    grid: d0.grid,
+    dsps,
     undo_depth: historyCursor,
     redo_depth: Math.max(0, history.length - historyCursor - 1),
     history: history.map((e) => e.label),
@@ -574,11 +727,17 @@ const HANDLERS = {
     // Like Session::add_block_append: end of row A first, then any free A slot, then row B.
     const md = findModel(modelIndex);
     const cab = pairedIndex >= 0 ? findModel(pairedIndex) : null;
-    const lastTop = Math.max(0, ...TOP_SLOTS.filter((i) => current.slots[i]?.kind === "effect"));
-    const free =
-      TOP_SLOTS.find((i) => i > lastTop && !current.slots[i]) ??
-      TOP_SLOTS.find((i) => !current.slots[i]) ??
-      B_SLOTS.find((i) => !current.slots[i]);
+    // Append into the first DSP with room (row A first, then row B) — DSP 0 preferred.
+    let free = null;
+    for (const base of dspBases(current)) {
+      const tops = topSlots(base);
+      const lastTop = Math.max(base, ...tops.filter((i) => current.slots[i]?.kind === "effect"));
+      free =
+        tops.find((i) => i > lastTop && !current.slots[i]) ??
+        tops.find((i) => !current.slots[i]) ??
+        bSlots(base).find((i) => !current.slots[i]);
+      if (free != null) break;
+    }
     if (md && free != null) current.slots[free] = makeBlock(md.symbolic_id, { cab: cab?.symbolic_id });
     return toDto(current);
   },
@@ -586,7 +745,7 @@ const HANDLERS = {
     const md = findModel(modelIndex);
     const cab = pairedIndex >= 0 ? findModel(pairedIndex) : null;
     if (current.slots[slot]) throw new Error(`slot ${slot} is not an empty grid slot (refusing add — it would overwrite)`);
-    if (md && allSlots().includes(slot)) current.slots[slot] = makeBlock(md.symbolic_id, { cab: cab?.symbolic_id });
+    if (md && editSlots(baseOf(slot)).includes(slot)) current.slots[slot] = makeBlock(md.symbolic_id, { cab: cab?.symbolic_id });
     return toDto(current);
   },
   delete_block: ({ slot }) => {
@@ -608,15 +767,17 @@ const HANDLERS = {
   // shift the suffix right into free slots, like plan_row_insert).
   insert_block: ({ srcSlot, dstSlot, before }) => {
     if (srcSlot === dstSlot) return toDto(current);
-    const rowOf = (s) => (s >= 11 && s <= 18 ? B_SLOTS : TOP_SLOTS);
-    const row = rowOf(dstSlot);
+    // The routing planner is per-DSP; the UI can't drag across DSPs (each grid has its own drag
+    // state), but guard anyway so a bad call is a clear error, not a corrupt move.
+    if (baseOf(srcSlot) !== baseOf(dstSlot)) throw new Error("cross-DSP move is not supported");
+    const row = rowSlots(dstSlot);
     if (current.slots[srcSlot]?.kind !== "effect" || current.slots[dstSlot]?.kind !== "effect")
       throw new Error("both slots must hold a block");
     const occ = row.filter((i) => current.slots[i]?.kind === "effect" && i !== srcSlot);
     const pos = occ.indexOf(dstSlot) + (before ? 0 : 1);
-    if (rowOf(srcSlot) === row) {
+    if (isRowB(srcSlot) === isRowB(dstSlot)) {
       // Same row: reorder the blocks among the row's occupied slots (slot set unchanged).
-      if (!allSlots().some((i) => !current.slots[i])) throw new Error("no empty slot to reorder through");
+      if (!editSlots(baseOf(srcSlot)).some((i) => !current.slots[i])) throw new Error("no empty slot to reorder through");
       const slots = row.filter((i) => current.slots[i]?.kind === "effect");
       const order = slots.map((i) => current.slots[i]);
       const [moved] = order.splice(slots.indexOf(srcSlot), 1);
@@ -653,27 +814,30 @@ const HANDLERS = {
   move_block_to_row: () => toDto(current),
   move_before_split: () => toDto(current),
 
-  set_node_pos: ({ node, pos }) => {
-    if (!isSplit(current)) throw new Error("preset is not split");
-    const cols = B_SLOTS.filter((i) => current.slots[i]?.kind === "effect").map(bCol);
-    const { splitPos, mixerPos } = splitMixerPos(current);
+  set_node_pos: ({ node, pos, dsp = 0 }) => {
+    const base = dsp * STRIDE;
+    if (!isSplit(current, base)) throw new Error("preset is not split");
+    const cols = bSlots(base).filter((i) => current.slots[i]?.kind === "effect").map(bCol);
+    const { splitPos, mixerPos } = splitMixerPos(current, base);
+    const np = (current.nodePos[dsp] ??= {});
     // Same guards as Session::set_node_pos: the bracket must keep enclosing the B row.
     if (node === "split") {
       const hi = Math.min(Math.min(...cols), mixerPos - 1);
       if (pos < 1 || pos > hi) throw new Error(`node position ${pos} out of range 1..=${hi} (bracket must enclose the B row)`);
-      current.nodePos.split = pos;
+      np.split = pos;
     } else if (node === "mixer") {
       const lo = Math.max(Math.max(...cols) + 1, splitPos + 1);
       if (pos < lo || pos > 16) throw new Error(`node position ${pos} out of range ${lo}..=16 (bracket must enclose the B row)`);
-      current.nodePos.mixer = pos;
+      np.mixer = pos;
     } else {
       throw new Error(`unknown node kind "${node}" (want "split" or "mixer")`);
     }
     return toDto(current);
   },
-  set_split_type: ({ modelIndex }) => {
+  set_split_type: ({ splitSlot: slot, modelIndex }) => {
+    const base = slot != null ? baseOf(slot) : 0;
     const t = SPLIT_TYPES.find((s) => s.index === modelIndex);
-    const node = isSplit(current) ? current.slots[SPLIT_SLOT] : null;
+    const node = isSplit(current, base) ? current.slots[splitSlot(base)] : null;
     if (t && node) {
       node.modelIndex = t.index;
       node.symbolic_id = t.symbolic_id;
@@ -685,10 +849,11 @@ const HANDLERS = {
     current.active_snapshot = index;
     return toDto(current);
   },
-  goto_preset: ({ preset }) => {
-    const target = presets.find((p) => p.index === preset);
+  goto_preset: ({ bank = currentBank, preset }) => {
+    const target = bankOf(bank).find((p) => p.index === preset);
     if (target) {
       current = target;
+      currentBank = bank;
       clearHistory(); // the history belongs to the old preset
       seedHistory();
     }
@@ -703,26 +868,27 @@ const HANDLERS = {
     return historyJump(historyCursor + 1);
   },
   history_jump: ({ index }) => historyJump(index),
-  save_preset: ({ slot, name }) => {
+  save_preset: ({ bank = currentBank, slot, name }) => {
     savedCursor = historyCursor; // the buffer's current state is now "in flash"
-    if (slot === current.index) {
+    if (bank === currentBank && slot === current.index) {
       if (name) current.name = name;
     } else {
-      // Save As to a different slot: deep-copy the current preset into that slot.
+      // Save As to a different slot: deep-copy the current preset into that slot of that setlist.
       const copy = {
         ...current, index: slot, name: name || current.name,
         slots: clone(current.slots), nodePos: { ...current.nodePos },
         snapshot_names: [...current.snapshot_names],
       };
-      const at = presets.findIndex((p) => p.index === slot);
-      if (at >= 0) presets[at] = copy;
-      else presets.push(copy);
-      presets.sort((a, b) => a.index - b.index);
+      const list = bankOf(bank);
+      const at = list.findIndex((p) => p.index === slot);
+      if (at >= 0) list[at] = copy;
+      else list.push(copy);
+      list.sort((a, b) => a.index - b.index);
     }
     return toDto(current);
   },
-  rename_preset: ({ slot, name }) => {
-    const target = presets.find((p) => p.index === slot);
+  rename_preset: ({ bank = currentBank, slot, name }) => {
+    const target = bankOf(bank).find((p) => p.index === slot);
     if (target && name) target.name = name;
     return null;
   },
@@ -730,19 +896,29 @@ const HANDLERS = {
     if (index >= 0 && index < current.snapshot_names.length) current.snapshot_names[index] = name;
     return toDto(current);
   },
-  list_presets: () => presets.map((p) => ({ index: p.index, name: p.name })),
+  list_presets: ({ bank = currentBank } = {}) =>
+    bankOf(bank).map((p) => ({ index: p.index, name: p.name })),
+  // The connected device's setlist names. One entry on a Stomp, so the UI hides the picker.
+  setlists: () => setlistNames().slice(),
+  // Browsing setlists is ungated everywhere now; only *writing* into one the device isn't in is
+  // held back on real hardware (FRETWIRE_SETLISTS=1 — see commands.rs `cross_setlist_write_enabled`).
+  // The mock allows it: it can't touch a device, and the Save As path still needs to be workable in
+  // the browser. Don't read the mock as proof of what ships against hardware.
+  cross_setlist_write_allowed: () => true,
 
   // ---- backup / restore -----------------------------------------------------------------------
   // The real backend sweeps the device and writes a `fretwire-backup` JSON file at `path`. The mock
   // mirrors the file *shape* exactly (its "raw" is hex of the mock preset state instead of a
   // MessagePack stream), triggers a browser download of it, and keeps it in memory so
   // backup_show/restore_preset work in the same session — a browser can't read arbitrary paths.
+  // Backs up the *currently browsed* setlist, which is what the real sweep walks.
   backup_setlist: async ({ path }) => {
     const entries = [];
-    for (let i = 0; i < presets.length; i++) {
-      const p = presets[i];
+    const list = bankOf(currentBank);
+    for (let i = 0; i < list.length; i++) {
+      const p = list[i];
       await sleep(120); // the real sweep takes ~a second per preset; make the progress UI visible
-      emit("backup-progress", { done: i + 1, total: presets.length, name: p.name });
+      emit("backup-progress", { done: i + 1, total: list.length, name: p.name });
       entries.push({
         index: p.index,
         name: p.name,
@@ -752,7 +928,10 @@ const HANDLERS = {
         })),
       });
     }
-    lastBackup = { format: "fretwire-backup", version: 1, device: "HX Stomp (mock)", presets: entries };
+    lastBackup = {
+      format: "fretwire-backup", version: 1,
+      device: `${DEVICES[deviceMode].name} (mock)`, presets: entries,
+    };
     // Offer the file as a download, named like the requested path.
     const blob = new Blob([JSON.stringify(lastBackup, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
@@ -776,11 +955,12 @@ const HANDLERS = {
       name: state.name, index: slot, active_snapshot: state.active_snapshot ?? 0,
       snapshot_names: state.snapshot_names ?? [], slots: state.slots, nodePos: state.nodePos,
     };
-    const at = presets.findIndex((p) => p.index === slot);
-    if (at >= 0) presets[at] = restored;
+    const list = bankOf(currentBank);
+    const at = list.findIndex((p) => p.index === slot);
+    if (at >= 0) list[at] = restored;
     else {
-      presets.push(restored);
-      presets.sort((a, b) => a.index - b.index);
+      list.push(restored);
+      list.sort((a, b) => a.index - b.index);
     }
     // Like Session::restore_preset: the device ends up on the restored slot, history reset.
     current = restored;
@@ -845,14 +1025,42 @@ if (typeof window !== "undefined") {
       current.active_snapshot = index;
       emit("device-pushes", [{ kind: "Snapshot", index }]);
     },
-    /** Switch preset as if from the panel. */
-    preset(index) {
-      const target = presets.find((p) => p.index === index);
+    /** Switch preset as if from the panel, optionally in another setlist. */
+    preset(index, bank = currentBank) {
+      const target = bankOf(bank).find((p) => p.index === index);
       if (target) {
         current = target;
+        currentBank = bank;
         clearHistory(); // like the heartbeat clearing on a panel preset push
       }
       emit("device-pushes", [{ kind: "Preset", index }]);
+    },
+    /**
+     * Pretend to be the other unit: "stomp" (one DSP, one flat preset list, no setlist picker) or
+     * "floor" (two DSPs, eight setlists). Reload or reconnect after switching.
+     */
+    device(mode) {
+      if (mode === undefined) {
+        console.info(
+          `[fretwire] mock device: ${DEVICES[deviceMode].name} (${deviceMode}). ` +
+            `Switch with fretwireMock.device("stomp") or ("floor").`,
+        );
+        return deviceMode;
+      }
+      if (!DEVICES[mode]) {
+        console.warn(`[fretwire] unknown device ${mode} — use "stomp" or "floor"`);
+        return deviceMode;
+      }
+      deviceMode = mode;
+      storage?.setItem(MODE_KEY, mode); // remembered across reloads
+      banks = buildBanks();
+      currentBank = 0;
+      current = bankOf(0)[0];
+      clearHistory();
+      console.info(
+        `[fretwire] mock is now a ${DEVICES[mode].name} — reload the page (the setting sticks).`,
+      );
+      return mode;
     },
     /** Pretend the reference data was never imported, so the first-run screen shows. */
     needsData() {

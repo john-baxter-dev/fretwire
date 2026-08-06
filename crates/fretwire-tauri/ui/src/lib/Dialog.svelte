@@ -12,24 +12,23 @@
   role="presentation"
   onclick={(e) => e.target === e.currentTarget && oncancel?.()}
 >
-  <form
-    class="box"
-    style="width:{width}px"
-    role="dialog"
-    aria-modal="true"
-    aria-label={title}
-    onsubmit={(e) => {
-      e.preventDefault();
-      onconfirm?.();
-    }}
-  >
-    <div class="title">{title}</div>
-    {@render children?.()}
-    <div class="actions">
-      <button type="button" class="cancel" onclick={() => oncancel?.()}>Cancel</button>
-      <button type="submit" class="confirm" class:danger disabled={confirmDisabled}>{confirmLabel}</button>
-    </div>
-  </form>
+  <!-- role="dialog" belongs on a neutral element, not the <form> (which a11y treats as
+       non-interactive); the form inside still drives Enter-to-submit. -->
+  <div class="box" style="width:{width}px" role="dialog" aria-modal="true" aria-label={title}>
+    <form
+      onsubmit={(e) => {
+        e.preventDefault();
+        onconfirm?.();
+      }}
+    >
+      <div class="title">{title}</div>
+      {@render children?.()}
+      <div class="actions">
+        <button type="button" class="cancel" onclick={() => oncancel?.()}>Cancel</button>
+        <button type="submit" class="confirm" class:danger disabled={confirmDisabled}>{confirmLabel}</button>
+      </div>
+    </form>
+  </div>
 </div>
 
 <style>

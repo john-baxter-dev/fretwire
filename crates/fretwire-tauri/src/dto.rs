@@ -6,26 +6,45 @@ use fretwire_core::fretwire_data::stream::{ParamValue, StatusPush};
 use fretwire_core::{EditorBlock, EditorParam, EditorPreset, ModelChoice};
 use serde::Serialize;
 
-/// A device-originated state change (footswitch bypass, panel snapshot/preset switch), forwarded to
-/// the frontend so the GUI follows the hardware live. `Other` pushes are dropped.
+/// A device-originated state change (footswitch bypass, panel snapshot/preset switch, panel knob),
+/// forwarded to the frontend so the GUI follows the hardware live. `Other` pushes are dropped.
 #[derive(Serialize, Clone, Debug)]
 #[serde(tag = "kind")]
 pub enum PushDto {
     Bypass { slot: i64, enabled: bool },
     Snapshot { index: i64 },
     Preset { index: i64 },
+    Param { slot: i64, param: i64, value: f64 },
 }
 
 pub fn push_dtos(pushes: &[StatusPush]) -> Vec<PushDto> {
     pushes
         .iter()
         .filter_map(|p| match p {
-            StatusPush::Bypass { slot, enabled } => {
-                Some(PushDto::Bypass { slot: *slot, enabled: *enabled })
-            }
+            StatusPush::Bypass { slot, enabled } => Some(PushDto::Bypass {
+                slot: *slot,
+                enabled: *enabled,
+            }),
             StatusPush::Snapshot(i) => Some(PushDto::Snapshot { index: *i }),
             StatusPush::Preset(i) => Some(PushDto::Preset { index: *i }),
-            StatusPush::Other(_) => None,
+            // The frontend renders every parameter as a number, so flatten the three wire types the
+            // same way the param DTOs do rather than teaching the UI a tagged value.
+            StatusPush::Param { slot, param, value } => Some(PushDto::Param {
+                slot: *slot,
+                param: *param,
+                value: fin(match value {
+                    ParamValue::Float(f) => *f as f64,
+                    ParamValue::Int(i) => *i as f64,
+                    ParamValue::Bool(b) => {
+                        if *b {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
+                }),
+            }),
+            StatusPush::Idle | StatusPush::Other(_) => None,
         })
         .collect()
 }
@@ -33,11 +52,7 @@ pub fn push_dtos(pushes: &[StatusPush]) -> Vec<PushDto> {
 /// JSON can't represent NaN/Infinity — `serde_json` errors on them, which for an async Tauri command
 /// leaves the invoke promise hanging. Coerce any non-finite float to a safe finite value.
 fn fin(x: f64) -> f64 {
-    if x.is_finite() {
-        x
-    } else {
-        0.0
-    }
+    if x.is_finite() { x } else { 0.0 }
 }
 
 fn fin_opt(x: Option<f64>) -> Option<f64> {
@@ -85,12 +100,36 @@ pub struct ParamDto {
     /// For segmented floats (cab mic Angle: 0°/45°): the discrete stops — render as buttons; the
     /// stop's `value` is written via the ordinary float path. Empty for continuous params.
     pub stops: Vec<SegStopDto>,
+    /// `false` when op 30 cannot address this param at all (see [`EditorParam::settable`]) — show
+    /// the value, but no control.
+    pub settable: bool,
+    /// How to render this value with its unit. Sent as rules rather than a finished string because
+    /// the panel re-formats continuously while a slider is dragged, before any value reaches Rust.
+    pub format: Option<NumFormatDto>,
 }
 
 #[derive(Serialize)]
 pub struct SegStopDto {
     pub value: f64,
     pub label: String,
+}
+
+/// Display recipe for a continuous param — see [`fretwire_core::editor::NumFormat`]. The panel
+/// applies `scale`, picks the first rule bracketing the result, multiplies by its `mult`, and fills
+/// the printf-ish `template`.
+#[derive(Serialize)]
+pub struct NumFormatDto {
+    pub scale: f64,
+    pub rules: Vec<FormatRuleDto>,
+}
+
+#[derive(Serialize)]
+pub struct FormatRuleDto {
+    /// `null` for an unbounded end — JSON has no infinity.
+    pub lo: Option<f64>,
+    pub hi: Option<f64>,
+    pub mult: f64,
+    pub template: String,
 }
 
 impl From<&EditorParam> for ParamDto {
@@ -109,16 +148,36 @@ impl From<&EditorParam> for ParamDto {
                 .meta
                 .stops
                 .iter()
-                .map(|s| SegStopDto { value: fin(s.value), label: s.label.clone() })
+                .map(|s| SegStopDto {
+                    value: fin(s.value),
+                    label: s.label.clone(),
+                })
                 .collect(),
+            settable: p.settable,
+            format: p.meta.format.as_ref().map(|f| NumFormatDto {
+                scale: f.scale,
+                rules: f
+                    .rules
+                    .iter()
+                    .map(|r| FormatRuleDto {
+                        lo: fin_opt(Some(r.lo)),
+                        hi: fin_opt(Some(r.hi)),
+                        mult: r.mult,
+                        template: r.template.clone(),
+                    })
+                    .collect(),
+            }),
         }
     }
 }
 
 #[derive(Serialize)]
 pub struct BlockDto {
+    /// Wire slot — global across DSPs (`dsp * 20 + index`), and the edit address.
     pub slot: i64,
-    /// 0 = main (top) row, 1 = parallel (B / bottom) row.
+    /// Which DSP holds this block (0 for every HX Stomp block).
+    pub dsp: usize,
+    /// 0 = main (top) row, 1 = parallel (B / bottom) row, **within this block's DSP**.
     pub row: u8,
     pub model_name: String,
     pub user_label: Option<String>,
@@ -144,6 +203,7 @@ impl From<&EditorBlock> for BlockDto {
     fn from(b: &EditorBlock) -> Self {
         BlockDto {
             slot: b.slot,
+            dsp: b.dsp,
             row: b.row,
             model_name: b.model_name.clone(),
             user_label: b.user_label.clone(),
@@ -167,10 +227,44 @@ impl From<&EditorBlock> for BlockDto {
 
 #[derive(Serialize)]
 pub struct GridCellDto {
+    /// Which DSP this cell belongs to (0 for every HX Stomp cell).
+    pub dsp: usize,
+    /// Wire slot — global across DSPs, and the drop-target address.
     pub slot: i64,
+    /// Row **within** this DSP: 0 = path A, 1 = path B.
     pub row: u8,
     pub column: i64,
     pub occupied: bool,
+}
+
+impl From<&fretwire_core::fretwire_data::stream::GridCell> for GridCellDto {
+    fn from(c: &fretwire_core::fretwire_data::stream::GridCell) -> Self {
+        GridCellDto {
+            dsp: c.dsp,
+            slot: c.slot,
+            row: c.row,
+            column: c.column,
+            occupied: c.occupied,
+        }
+    }
+}
+
+/// One DSP's routing structure. A single-DSP device (HX Stomp) sends one of these; the Helix Floor
+/// sends two. The flat `split_node`/`grid`/… fields on [`PresetDto`] mirror `dsps[0]` so a UI that
+/// only knows about one DSP keeps working.
+#[derive(Serialize)]
+pub struct DspDto {
+    pub dsp: usize,
+    pub split: bool,
+    pub split_pos: Option<i64>,
+    pub mixer_pos: Option<i64>,
+    pub split_node: Option<BlockDto>,
+    pub mixer_node: Option<BlockDto>,
+    pub input_node: Option<BlockDto>,
+    pub output_node: Option<BlockDto>,
+    pub grid: Vec<GridCellDto>,
+    /// DSP load drawn by this DSP's blocks alone (each DSP has its own ~100% budget).
+    pub dsp_load: f64,
 }
 
 #[derive(Serialize)]
@@ -178,10 +272,21 @@ pub struct PresetDto {
     pub name: Option<String>,
     pub index: Option<i64>,
     pub bank: Option<i64>,
+    /// Model code stamped into the preset by the device that wrote it (e.g. `"P33"`).
     pub device_model: Option<String>,
+    /// Human name of the **connected** device, from the USB PID — stamped by the command layer
+    /// (`From` leaves it `None`, since an offline decode has no device).
+    pub device_name: Option<String>,
+    /// `false` only when the connected device's model code and the preset's disagree; `None` when
+    /// either is unknown. Stamped by the command layer.
+    pub device_matches: Option<bool>,
     pub firmware: Option<String>,
     pub split: bool,
     pub dsp_load: f64,
+    /// The load a DSP fills up at, on `dsp_load`'s scale — **~75, not 100** (see
+    /// `fretwire_core::editor::DSP_CEILING`). Sent so the UI's meters and "does it fit" greying
+    /// read the measured ceiling instead of carrying their own copy of the number.
+    pub dsp_ceiling: f64,
     pub split_pos: Option<i64>,
     pub mixer_pos: Option<i64>,
     pub active_snapshot: Option<i64>,
@@ -194,6 +299,9 @@ pub struct PresetDto {
     pub input_node: Option<BlockDto>,
     pub output_node: Option<BlockDto>,
     pub grid: Vec<GridCellDto>,
+    /// Every populated DSP, in order — one entry on the HX Stomp, two on the Helix Floor. The flat
+    /// fields above mirror `dsps[0]`; a multi-DSP UI should read this instead.
+    pub dsps: Vec<DspDto>,
     /// Undo/redo stack depths — stamped by the command layer (`From` leaves them 0), so the UI can
     /// enable/disable its history buttons.
     pub undo_depth: i64,
@@ -213,23 +321,48 @@ impl From<&EditorPreset> for PresetDto {
             index: p.current.as_ref().map(|c| c.index),
             bank: p.current.as_ref().map(|c| c.bank),
             device_model: p.device_model.clone(),
+            device_name: None,
+            device_matches: None,
             firmware: p.firmware.clone(),
-            split: p.split,
+            split: p.split(),
             dsp_load: fin(p.dsp_load),
-            split_pos: p.split_pos,
-            mixer_pos: p.mixer_pos,
+            dsp_ceiling: fretwire_core::editor::DSP_CEILING,
+            split_pos: p.split_pos(),
+            mixer_pos: p.mixer_pos(),
             active_snapshot: p.active_snapshot,
             snapshot_names: p.snapshot_names.clone(),
             blocks: p.blocks.iter().map(BlockDto::from).collect(),
-            split_node: p.split_node.as_ref().map(BlockDto::from),
-            mixer_node: p.mixer_node.as_ref().map(BlockDto::from),
-            input_node: p.input_node.as_ref().map(BlockDto::from),
-            output_node: p.output_node.as_ref().map(BlockDto::from),
+            split_node: p.split_node().map(BlockDto::from),
+            mixer_node: p.mixer_node().map(BlockDto::from),
+            input_node: p.input_node().map(BlockDto::from),
+            output_node: p.output_node().map(BlockDto::from),
+            // Flat `grid` stays DSP 0 only, so a single-DSP UI never sees two DSPs' cells collide
+            // at the same (row, column). Multi-DSP UIs read `dsps`.
             grid: p
-                .grid
-                .iter()
-                .map(|c| GridCellDto { slot: c.slot, row: c.row, column: c.column, occupied: c.occupied })
-                .collect(),
+                .dsp(0)
+                .map(|d| d.grid.iter().map(GridCellDto::from).collect())
+                .unwrap_or_default(),
+            dsps: {
+                let loads = p.dsp_load_by_dsp();
+                p.dsps
+                    .iter()
+                    .map(|d| DspDto {
+                        dsp: d.dsp,
+                        split: d.split,
+                        split_pos: d.split_pos,
+                        mixer_pos: d.mixer_pos,
+                        split_node: d.split_node.as_ref().map(BlockDto::from),
+                        mixer_node: d.mixer_node.as_ref().map(BlockDto::from),
+                        input_node: d.input_node.as_ref().map(BlockDto::from),
+                        output_node: d.output_node.as_ref().map(BlockDto::from),
+                        grid: d.grid.iter().map(GridCellDto::from).collect(),
+                        dsp_load: fin(loads
+                            .iter()
+                            .find(|(i, _)| *i == d.dsp)
+                            .map_or(0.0, |(_, l)| *l)),
+                    })
+                    .collect()
+            },
             undo_depth: 0,
             redo_depth: 0,
             history: Vec::new(),

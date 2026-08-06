@@ -27,7 +27,11 @@ fn data_dir() -> PathBuf {
 #[test]
 fn model_defs_parse() {
     let defs = ModelDefs::parse(&data("HelixModelDefs.bin")).unwrap();
-    assert!(defs.len() > 600, "expected ~681 model defs, got {}", defs.len());
+    assert!(
+        defs.len() > 600,
+        "expected ~681 model defs, got {}",
+        defs.len()
+    );
     // First entry is the German Mahadeva amp (seen in the hexdump).
     assert_eq!(defs.symbolic_id(0), Some("HD2_AmpGermanMahadeva"));
 }
@@ -39,7 +43,12 @@ fn model_table_is_complete_and_findable() {
     let defs = ModelDefs::parse(&data("HelixModelDefs.bin")).unwrap();
     let find = |name: &str| (0..defs.len()).find(|&i| defs.name(i) == Some(name));
 
-    for name in ["Bucket Brigade", "70s Chorus", "Harmonic Tremolo", "Dynamic Hall"] {
+    for name in [
+        "Bucket Brigade",
+        "70s Chorus",
+        "Harmonic Tremolo",
+        "Dynamic Hall",
+    ] {
         let idx = find(name).unwrap_or_else(|| panic!("{name} missing from model table"));
         eprintln!("{name:<20} -> table index {idx}");
     }

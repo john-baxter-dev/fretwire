@@ -17,7 +17,9 @@ fn data(name: &str) -> Vec<u8> {
 // Our own captured preset streams live in the in-repo `captures/` dir (not Line 6 data, so not
 // part of the import cache).
 fn capture(name: &str) -> Vec<u8> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../captures").join(name);
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../captures")
+        .join(name);
     std::fs::read(p).unwrap()
 }
 
@@ -40,15 +42,25 @@ fn syms() -> DeviceSymbols {
 #[test]
 fn parses_device_symbols() {
     let s = syms();
-    assert!(s.len() > 800, "expected ~833 device symbols, got {}", s.len());
+    assert!(
+        s.len() > 800,
+        "expected ~833 device symbols, got {}",
+        s.len()
+    );
     // Device symbols carry a Mono/Stereo suffix and differ in order/length.
     let mono = s.params("HD2_TremoloHarmonicMono").unwrap();
     let stereo = s.params("HD2_TremoloHarmonicStereo").unwrap();
     assert_eq!(mono.len(), 10);
     assert_eq!(stereo.len(), 11);
     assert!(mono.contains(&"Mix".to_string()));
-    assert!(!mono.contains(&"Spread".to_string()), "mono tremolo has no Spread");
-    assert!(stereo.contains(&"Spread".to_string()), "stereo tremolo has Spread");
+    assert!(
+        !mono.contains(&"Spread".to_string()),
+        "mono tremolo has no Spread"
+    );
+    assert!(
+        stereo.contains(&"Spread".to_string()),
+        "stereo tremolo has Spread"
+    );
 }
 
 #[test]
@@ -85,7 +97,11 @@ fn device_order_fixes_harmonic_tremolo_mislabel() {
         .find(|p| p.model_name == "Harmonic Tremolo")
         .unwrap();
     let blocks = ps.blocks();
-    let vals = &blocks.iter().find(|b| b.index as i64 == ht.slot.unwrap()).unwrap().params;
+    let vals = &blocks
+        .iter()
+        .find(|b| b.index as i64 == ht.slot.unwrap())
+        .unwrap()
+        .params;
 
     let (variant, order) = s.resolve_order("HD2_TremoloHarmonic", vals.len()).unwrap();
     assert_eq!(variant, "Mono");
@@ -110,9 +126,16 @@ fn reverb_extra_value_is_named_trails() {
         .find(|p| p.model_name == "Dynamic Hall")
         .unwrap();
     let blocks = ps.blocks();
-    let n = blocks.iter().find(|b| b.index as i64 == dh.slot.unwrap()).unwrap().params.len();
+    let n = blocks
+        .iter()
+        .find(|b| b.index as i64 == dh.slot.unwrap())
+        .unwrap()
+        .params
+        .len();
     assert_eq!(n, 13);
-    let (_variant, names) = s.resolve_order("VIC_ReverbRotating", n).expect("reverb +1 should match");
+    let (_variant, names) = s
+        .resolve_order("VIC_ReverbRotating", n)
+        .expect("reverb +1 should match");
     assert_eq!(names.len(), 13);
     assert_eq!(names[0], "Decay");
     assert_eq!(names[12], "Trails");
@@ -142,40 +165,113 @@ fn split_and_mixer_node_symbols() {
 fn structural_node_parses_split_and_mixer() {
     let ps = PresetStream::parse(&capture("split_preset_stream.msgpack.bin")).unwrap();
     assert!(ps.is_split());
-    let split = ps.structural_node(fretwire_data::stream::slot_kind::SPLIT).expect("split node");
-    assert_eq!(split.model_index, Some(257), "default split type is Split Y");
-    assert_eq!(split.params.len(), 3, "Split Y has BalanceA, BalanceB, bypass");
-    let mixer = ps.structural_node(fretwire_data::stream::slot_kind::MIXER).expect("mixer node");
+    let split = ps
+        .structural_node(fretwire_data::stream::slot_kind::SPLIT)
+        .expect("split node");
+    assert_eq!(
+        split.model_index,
+        Some(257),
+        "default split type is Split Y"
+    );
+    assert_eq!(
+        split.params.len(),
+        3,
+        "Split Y has BalanceA, BalanceB, bypass"
+    );
+    let mixer = ps
+        .structural_node(fretwire_data::stream::slot_kind::MIXER)
+        .expect("mixer node");
     assert_eq!(mixer.model_index, Some(151), "mixer is HD2_AppDSPFlowJoin");
-    assert_eq!(mixer.params.len(), 6, "join has A/B level+pan, B polarity, level");
+    assert_eq!(
+        mixer.params.len(),
+        6,
+        "join has A/B level+pan, B polarity, level"
+    );
 }
 
-// The routing grid maps every draggable slot to exactly one (row, column) cell: top-row cells carry
-// `column == slot`, row-B cells align under their A column (`slot − split_idx + 1`), and the input
-// slot and split/mixer nodes are excluded. Every effect block shows up as an occupied cell.
+// The routing grid maps every draggable slot to exactly one (row, column) cell. The grid is 8
+// columns wide in both rows (slots 1..=8 on top, 11..=18 on B), so a cell's column is its slot
+// index within its own row: `column == slot` on top, `column == slot − 10` on B — putting B in the
+// same absolute column space as A. The input slot and the split/mixer nodes are excluded, and
+// every effect block shows up as an occupied cell.
 #[test]
 fn grid_maps_slots_to_rows_and_columns() {
     use fretwire_data::stream::slot_kind;
     let ps = PresetStream::parse(&capture("split_preset_stream.msgpack.bin")).unwrap();
     let blocks = ps.blocks();
-    let split_idx =
-        blocks.iter().find(|b| b.kind == slot_kind::SPLIT).map(|b| b.index).unwrap() as i64;
+    let split_idx = blocks
+        .iter()
+        .find(|b| b.kind == slot_kind::SPLIT)
+        .map(|b| b.index)
+        .unwrap() as i64;
     let cells = ps.grid();
     assert!(!cells.is_empty(), "split preset has grid cells");
-    assert!(cells.iter().all(|c| c.slot != 0), "input slot is not a cell");
+    assert!(
+        cells.iter().all(|c| c.slot != 0),
+        "input slot is not a cell"
+    );
     for c in &cells {
         if c.row == 0 {
             assert_eq!(c.column, c.slot, "top cell column == slot");
             assert!(c.slot < split_idx, "top cells are before the split node");
         } else {
             assert_eq!(c.row, 1, "only rows 0 and 1 exist");
-            assert_eq!(c.column, c.slot - split_idx + 1, "row-B column aligns under A");
+            assert_eq!(c.column, c.slot - split_idx, "row-B column aligns under A");
             assert!(c.slot > split_idx, "row-B cells are after the split node");
         }
     }
     for b in blocks.iter().filter(|b| b.kind == slot_kind::EFFECT) {
-        let cell = cells.iter().find(|c| c.slot == b.index as i64).expect("effect block has a cell");
+        let cell = cells
+            .iter()
+            .find(|c| c.slot == b.index as i64)
+            .expect("effect block has a cell");
         assert!(cell.occupied, "effect block's cell is occupied");
+    }
+}
+
+// The grid's two coordinate systems have to agree: a cell's column comes from its slot index,
+// while the split/mixer glyphs are drawn at their signal-flow positions (holder key 13). If those
+// disagree, blocks on the parallel path render *outside* the bracket that is supposed to contain
+// them — which is exactly what a `slot − split_idx + 1` row-B column did on Helix Floor presets,
+// where it shifted every B block one column right of where the device put it.
+//
+// The bracket invariant holds only when **both** ends of the split are on the same DSP, which is
+// true of every fixture here. It is not universal: a Floor split can open on DSP1 and rejoin on
+// DSP2 (`pullmeunder`: DSP1 split=2/mixer=0, DSP2 split=0/mixer=9), and the absent end reads back
+// as 0. See `PresetStream::dsp_structural_node_pos`.
+#[test]
+fn row_b_cells_sit_inside_the_split_bracket() {
+    use fretwire_data::stream::slot_kind;
+    for fixture in [
+        "dual_amp_stream.msgpack.bin",
+        "split_preset_stream.msgpack.bin",
+    ] {
+        let ps = PresetStream::parse(&capture(fixture)).unwrap();
+        for d in ps.dsps() {
+            for c in ps.dsp_grid(d) {
+                assert!(
+                    (1..=8).contains(&c.column),
+                    "{fixture} dsp{d}: column {} outside the 8-column grid",
+                    c.column,
+                );
+            }
+            if !ps.dsp_is_split(d) {
+                continue;
+            }
+            let split = ps
+                .dsp_structural_node_pos(d, slot_kind::SPLIT)
+                .expect("split pos");
+            let mixer = ps
+                .dsp_structural_node_pos(d, slot_kind::MIXER)
+                .expect("mixer pos");
+            for c in ps.dsp_grid(d).iter().filter(|c| c.row == 1 && c.occupied) {
+                assert!(
+                    split <= c.column && c.column < mixer,
+                    "{fixture} dsp{d}: row-B block at column {} escapes the bracket {split}..{mixer}",
+                    c.column,
+                );
+            }
+        }
     }
 }
 
@@ -196,7 +292,10 @@ fn serial_preset_grid_still_has_row_b_cells() {
     );
     let b_cells: Vec<_> = ps.grid().into_iter().filter(|c| c.row == 1).collect();
     assert_eq!(b_cells.len(), 8, "row B is the full 11–18 slot window");
-    assert!(b_cells.iter().all(|c| !c.occupied), "row B is empty on a serial preset");
+    assert!(
+        b_cells.iter().all(|c| !c.occupied),
+        "row B is empty on a serial preset"
+    );
 }
 
 // The fixed input (kind 0, slot 0) / output (kind 1, slot 9) nodes carry their preset-side params
@@ -209,12 +308,24 @@ fn io_nodes_expose_their_params() {
     let input = ps.io_node(0).expect("input node");
     assert_eq!(input.slot, 0);
     assert_eq!(input.params.len(), 3, "gate, threshold, decay");
-    assert_eq!(input.params[0], fretwire_data::stream::ParamValue::Bool(false), "gate off");
-    assert_eq!(input.params[1], fretwire_data::stream::ParamValue::Float(-48.0), "threshold");
+    assert_eq!(
+        input.params[0],
+        fretwire_data::stream::ParamValue::Bool(false),
+        "gate off"
+    );
+    assert_eq!(
+        input.params[1],
+        fretwire_data::stream::ParamValue::Float(-48.0),
+        "threshold"
+    );
     let output = ps.io_node(1).expect("output node");
     assert_eq!(output.slot, 9);
     assert_eq!(output.params.len(), 2, "pan, gain");
-    assert_eq!(output.params[0], fretwire_data::stream::ParamValue::Float(0.5), "pan centered");
+    assert_eq!(
+        output.params[0],
+        fretwire_data::stream::ParamValue::Float(0.5),
+        "pan centered"
+    );
     assert!(ps.io_node(6).is_none(), "only kinds 0/1 are io nodes");
 }
 
@@ -225,18 +336,44 @@ fn io_nodes_expose_their_params() {
 fn set_node_pos_round_trips_through_blob() {
     use fretwire_data::stream::slot_kind;
     let mut ps = PresetStream::parse(&capture("dual_amp_stream.msgpack.bin")).unwrap();
-    assert_eq!(ps.structural_node_pos(slot_kind::SPLIT), Some(5), "fixture split pos");
-    assert_eq!(ps.structural_node_pos(slot_kind::MIXER), Some(7), "fixture mixer pos");
+    assert_eq!(
+        ps.structural_node_pos(slot_kind::SPLIT),
+        Some(5),
+        "fixture split pos"
+    );
+    assert_eq!(
+        ps.structural_node_pos(slot_kind::MIXER),
+        Some(7),
+        "fixture mixer pos"
+    );
     let (blocks_before, grid_before) = (ps.blocks(), ps.grid());
 
-    assert!(ps.set_node_pos(slot_kind::SPLIT, 4), "split node found and mutated");
-    assert!(ps.set_node_pos(slot_kind::MIXER, 8), "mixer node found and mutated");
+    assert!(
+        ps.set_node_pos(slot_kind::SPLIT, 4),
+        "split node found and mutated"
+    );
+    assert!(
+        ps.set_node_pos(slot_kind::MIXER, 8),
+        "mixer node found and mutated"
+    );
 
-    assert_eq!(ps.structural_node_pos(slot_kind::SPLIT), Some(4), "split pos written");
-    assert_eq!(ps.structural_node_pos(slot_kind::MIXER), Some(8), "mixer pos written");
+    assert_eq!(
+        ps.structural_node_pos(slot_kind::SPLIT),
+        Some(4),
+        "split pos written"
+    );
+    assert_eq!(
+        ps.structural_node_pos(slot_kind::MIXER),
+        Some(8),
+        "mixer pos written"
+    );
     assert!(ps.is_split(), "split flag untouched");
     assert_eq!(ps.blocks(), blocks_before, "blocks untouched");
-    assert_eq!(ps.grid(), grid_before, "grid cells untouched (columns are array-based)");
+    assert_eq!(
+        ps.grid(),
+        grid_before,
+        "grid cells untouched (columns are array-based)"
+    );
 
     // The blob carries the mutated preset map verbatim (`to_blob` fidelity is pinned by
     // `to_blob_round_trips_the_preset`; here we just confirm the mutation is inside it).
@@ -250,7 +387,9 @@ fn set_node_pos_round_trips_through_blob() {
     let pos_of = |kind: i64| {
         let s = slots
             .iter()
-            .find(|s| fretwire_data::stream::map_get(s, 19).and_then(rmpv::Value::as_i64) == Some(kind))
+            .find(|s| {
+                fretwire_data::stream::map_get(s, 19).and_then(rmpv::Value::as_i64) == Some(kind)
+            })
             .unwrap();
         let content = fretwire_data::stream::map_get(s, 20).unwrap();
         let holder = match content {
@@ -263,6 +402,151 @@ fn set_node_pos_round_trips_through_blob() {
         };
         fretwire_data::stream::map_get(holder, 13).and_then(rmpv::Value::as_i64)
     };
-    assert_eq!(pos_of(slot_kind::SPLIT), Some(4), "blob carries the new split pos");
-    assert_eq!(pos_of(slot_kind::MIXER), Some(8), "blob carries the new mixer pos");
+    assert_eq!(
+        pos_of(slot_kind::SPLIT),
+        Some(4),
+        "blob carries the new split pos"
+    );
+    assert_eq!(
+        pos_of(slot_kind::MIXER),
+        Some(8),
+        "blob carries the new mixer pos"
+    );
+}
+
+// The per-snapshot bypass matrix (preset key `10 → 10 → [i] → 3`): one `[_, enabled]` pair per
+// slot, `enabled` being the inverse of `Block::bypassed`. Pinned against the live block state,
+// which is the only ground truth available — a preset's loaded blocks *are* its active snapshot's
+// scene.
+#[test]
+fn snapshot_matrix_matches_the_live_block_state() {
+    let ps = PresetStream::parse(&capture("preset1_stream.msgpack.bin")).unwrap();
+    let snaps = ps.snapshot_details();
+    assert_eq!(snaps.len(), 3, "the Stomp has 3 snapshots");
+    assert_eq!(snaps[0].name, "SNAPSHOT 1");
+    assert_eq!(snaps[0].block_enabled.len(), 20, "one entry per slot");
+
+    // preset1's live blocks: 2/3/4/7 bypassed, 5/6 active. `key 10 → 8` says snapshot 0 is active,
+    // and snapshot 0's matrix agrees exactly — which is what makes the decode [solid].
+    assert_eq!(ps.snapshots().0, Some(0));
+    for b in ps.blocks().iter().filter(|b| b.is_block()) {
+        let bypassed = b.bypassed.expect("block has a bypass flag");
+        assert_eq!(
+            snaps[0].block_enabled[b.index], !bypassed,
+            "slot {} disagrees with snapshot 0's matrix",
+            b.index
+        );
+    }
+}
+
+// ...and the fixture that shows the stored active index can't be trusted on its own: dual_amp
+// reports snapshot 1 active, but its live block state is snapshot 0's scene. Locked in as a
+// regression so the discrepancy can't be "tidied away" without noticing — it is the standing lead
+// on the GUI highlighting the wrong snapshot on hardware.
+#[test]
+fn dual_amp_stored_active_snapshot_disagrees_with_its_scene() {
+    let ps = PresetStream::parse(&capture("dual_amp_stream.msgpack.bin")).unwrap();
+    let snaps = ps.snapshot_details();
+    assert_eq!(ps.snapshots().0, Some(1), "stored active index is 1");
+
+    let live: Vec<(usize, bool)> = ps
+        .blocks()
+        .iter()
+        .filter(|b| b.is_block())
+        .map(|b| (b.index, !b.bypassed.unwrap()))
+        .collect();
+    let matches = |s: &fretwire_data::stream::SnapshotInfo| {
+        live.iter().all(|&(slot, on)| s.block_enabled[slot] == on)
+    };
+    assert!(matches(&snaps[0]), "the live scene is snapshot 0's");
+    assert!(
+        !matches(&snaps[1]),
+        "but the stored active index points at snapshot 1, whose scene differs"
+    );
+}
+
+// The preset header is an **offset table**, not an opaque uuid, and `to_blob` has to rebuild it.
+// rmpv writes integers minimally where the device writes `d1 00 00`, so a re-encode is 4–8% shorter
+// and every offset past the first such integer is stale. Copying the device's table across that
+// shift pointed it into the middle of a value — and its total-length slot past the end of the buffer
+// entirely — which is what froze a Helix Floor twice on 2026-07-31 during an op-21 mixer move.
+//
+// Guard the invariant on every capture we have, before and after the mutation that did it: the table
+// must describe the bytes we actually emit.
+#[test]
+fn to_blob_rebuilds_the_header_offset_table() {
+    use fretwire_data::stream::slot_kind;
+
+    fn offsets(blob: &[u8]) -> Vec<u32> {
+        // fixstr "l6-helix\0" (10 bytes) + str16 marker (3) = the header starts at 13.
+        blob[13..61]
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect()
+    }
+    // Where each top-level entry of the emitted map really begins.
+    fn entry_offsets(blob: &[u8], map_at: usize) -> Vec<usize> {
+        let n = (blob[map_at] & 0x0f) as usize;
+        assert!(
+            (0x80..=0x8f).contains(&blob[map_at]),
+            "expected a fixmap header"
+        );
+        let mut pos = map_at + 1;
+        let mut cur = &blob[pos..];
+        (0..n)
+            .map(|_| {
+                let before = cur.len();
+                rmpv::decode::read_value(&mut cur).unwrap();
+                rmpv::decode::read_value(&mut cur).unwrap();
+                let at = pos;
+                pos += before - cur.len();
+                at
+            })
+            .collect()
+    }
+
+    for name in [
+        "preset1_stream.msgpack.bin",
+        "dual_amp_stream.msgpack.bin",
+        "split_preset_stream.msgpack.bin",
+    ] {
+        for mutate in [false, true] {
+            let raw = capture(name);
+            let mut ps = PresetStream::parse(&raw).unwrap();
+            if mutate && !ps.dsp_is_split(0) {
+                continue; // the mixer only exists on a split preset
+            }
+            if mutate {
+                assert!(ps.set_dsp_node_pos(0, slot_kind::MIXER, 4));
+            }
+            let blob = ps.to_blob();
+            let what = format!("{name}{}", if mutate { " [mixer moved]" } else { "" });
+
+            let offs = offsets(&blob);
+            let map_at = 61; // fixed: the magic and the 48-byte header never change length
+            let entries = entry_offsets(&blob, map_at);
+
+            assert_eq!(offs[0] as usize, map_at, "{what}: slot 0 is the map offset");
+            assert_eq!(
+                *offs.last().unwrap() as usize,
+                blob.len(),
+                "{what}: the last slot is the blob's own length"
+            );
+            for (i, &o) in offs.iter().enumerate() {
+                assert!(
+                    (o as usize) <= blob.len(),
+                    "{what}: slot {i} ({o}) points past the end of the {} byte blob",
+                    blob.len()
+                );
+                let o = o as usize;
+                if i == 0 || o == blob.len() {
+                    continue;
+                }
+                assert!(
+                    entries.contains(&o),
+                    "{what}: slot {i} ({o}) is not the start of a top-level entry"
+                );
+            }
+        }
+    }
 }

@@ -13,10 +13,40 @@ use fretwire_data::stream::{ParamValue, PresetStream};
 use fretwire_data::symbols::DeviceSymbols;
 use std::path::Path;
 
-/// The HX Stomp's DSP budget, as a percentage (single DSP). **Unconfirmed** — inferred from the
-/// per-model load cap (40%) and busy-preset sums; should be validated against HX Edit's own meter.
-/// Used for fit *warnings*, not hard enforcement (the device is the final arbiter).
-pub const DSP_BUDGET: f64 = 100.0;
+/// Where a DSP actually stops accepting blocks, on the same scale [`EditorPreset::dsp_load`]
+/// reports: **about 75%, not 100%.** Measured on hardware, not derived — so "28% free" on our
+/// meter can mean no room at all, and this is the number a fit check must compare against.
+///
+/// The missing quarter is a **flat reserve, not something the preset spends**. It was long
+/// assumed to be the fixed nodes we never sum — the input, the output, and on a parallel preset
+/// the split and mixer, which `io.models` does price (`HD2_AppDSPFlow1Input` 10.99,
+/// `HD2_AppDSPFlowOutput` 8.00, `HD2_AppDSPFlowSplitY` 1.50, `HD2_AppDSPFlowJoin` 10.99). A
+/// census of 363 real presets says otherwise: serial and parallel DSPs stop at the *same* number,
+/// so the split and mixer's 12.49 is not billed here, and neither is anything else that varies
+/// with the preset. See `docs/protocol.md`. So the raw sum keeps its old meaning — every log,
+/// capture note and doc on record quotes it — and the ceiling carries the whole correction.
+///
+/// Used for *warnings*, never enforcement: the device is the final arbiter (out-guarding it is
+/// how the row-B stranding and node-enclosure mistakes happened).
+///
+/// [solid — three independent lines, 2026-08-02/04.
+/// **1.** HX Stomp fw 3.71: one preset, one slot, a ladder of swap targets, by the total each
+/// would land on — 73.3 / 73.8 / 74.4 / 74.9 accepted, 75.3 / 75.6 / 76.5 refused `-306`.
+/// **2.** The tester's Helix Floor: `somehinged3` sits at 72.7% on DSP1 and refused Elephant Man
+/// Mono (+6.02) and Euclidean Delay (+10.5), putting that device's ceiling under 78.7 too.
+/// **3.** His `.hxb` backup — 363 presets, 458 DSPs carrying blocks, including Line 6's own two
+/// factory setlists. **Nothing exceeds 74.84**, and the wall is flat: 74.84 parallel vs 74.80
+/// serial, 74.84 on DSP1 vs 74.77 on DSP2, with 46 presets sitting in the 70–74.84 band. Line 6
+/// builds right up to it, which is the best evidence there is that this is the real limit.]
+pub const DSP_CEILING: f64 = 75.0;
+
+/// A raw block-load sum as the **percentage of capacity** to show a user: [`DSP_CEILING`] reads
+/// 100%. Raw loads are a percentage of a budget the hardware never hands over, so 72.7 reads as
+/// plenty of room when it is nearly none — the GUI shows only this scaled figure. The CLI prints
+/// both, because its output is what bug reports quote and every load in `docs/` is raw.
+pub fn dsp_percent(load: f64) -> f64 {
+    load / DSP_CEILING * 100.0
+}
 
 /// The shipped reference data needed to interpret a preset: the model table + device param orders.
 pub struct Catalog {
@@ -60,6 +90,10 @@ pub struct ParamMeta {
     /// the cab mic `Angle`: 0°/45°): the allowed stops. The value written is the stop's `value`
     /// via the ordinary float path — the wire type stays float. Empty for continuous params.
     pub stops: Vec<SegStop>,
+    /// How to display a continuous value with its unit ("1.373 s" for a stored `1.3728`). `None`
+    /// for params whose control isn't described, and for enums/switches, which read as labels.
+    /// See [`NumFormat`].
+    pub format: Option<NumFormat>,
 }
 
 /// One position of a segmented float control (see [`ParamMeta::stops`]).
@@ -81,12 +115,26 @@ pub struct EditorParam {
     /// `default` (empty meta) for params the `.models` files don't cover (e.g. the trailing
     /// `Trails` switch). See [`ParamMeta`].
     pub meta: ParamMeta,
+    /// Whether an op-30 write can reach this param at all.
+    pub settable: bool,
+    /// Set for a value the block carries **past the end of its symbol's param list** — `Trails` on
+    /// a delay/reverb, the mic index on a legacy cab. These have no index in the model's `Helix.sym`
+    /// order, so the ordinary addressing (target key 29 `true`, key 28 = param index) is refused
+    /// with `-3`. They are reached instead with key 29 `false`, where key 28 indexes the block's
+    /// extra values — and this is that index.
+    /// [solid — `captures/dynamic_ambience_trails_on_off.pcapng`, confirmed live on an HX Stomp
+    /// 2026-08-02: `{98:2, 29:false, 26:0, 28:0, 119:true}` turns a Bucket Brigade's trails on]
+    pub extra_index: Option<i64>,
 }
 
 /// A block as the editor sees it: identity, resolved model, current state, named params.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EditorBlock {
-    /// Preset slot index — also the wire address (edit target key 98).
+    /// Which DSP holds this block. `0` for every HX Stomp block; a two-DSP device (Helix Floor)
+    /// also has `1`. Purely informational for edits — `slot` already encodes it.
+    pub dsp: usize,
+    /// Preset **wire slot** — global across DSPs (`dsp * 20 + index`), and the edit address
+    /// (target key 98). See [`fretwire_data::stream::DSP_SLOT_STRIDE`].
     pub slot: i64,
     /// Display name from the preset (`Harmonic Tremolo`).
     pub model_name: String,
@@ -167,46 +215,171 @@ pub struct EditorPreset {
     /// Active snapshot index and snapshot names (preset key `10`).
     pub active_snapshot: Option<i64>,
     pub snapshot_names: Vec<String>,
-    /// Parallel (split) topology — preset key `0 → 21`.
-    pub split: bool,
-    /// Total DSP load (% of the device budget) — sum of the blocks' `dsp_load`. The HX Stomp's
-    /// budget is ~100% per DSP; HX Edit greys out models that wouldn't fit the remainder.
+    /// Total DSP load — sum of the blocks' `dsp_load`, and **only** the blocks': the fixed
+    /// input/output/split/mixer nodes draw DSP too and are not in here. The device fills up at
+    /// [`DSP_CEILING`] on this scale, not 100, so read headroom with
+    /// [`EditorPreset::dsp_free_on`] rather than subtracting from 100.
+    ///
+    /// On a two-DSP device this sums **both** DSPs, which is not how the device budgets them —
+    /// each DSP has its own. Use [`EditorPreset::dsp_load_by_dsp`] for the per-DSP figure.
     pub dsp_load: f64,
     /// Identity (bank/index/name) of the preset this edit buffer was read from, when known. Set by
     /// `Session::read_preset` from the op-23 read-info reply; `None` for offline decodes (no device
     /// to ask). The `index` matches `list_presets`/`goto_preset`.
     pub current: Option<fretwire_data::stream::PresetInfo>,
+    /// One entry per **populated DSP**, in DSP order — its routing nodes and its grid. A single
+    /// entry on the HX Stomp; two on the Helix Floor. The convenience accessors below
+    /// ([`Self::split_node`] etc.) read DSP 0, which is what a one-DSP device has.
+    pub dsps: Vec<DspView>,
+}
+
+/// The routing structure of **one DSP**: its split/mixer/input/output nodes and its grid. A
+/// two-DSP device has one of these per DSP, each with its own A/B branch.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DspView {
+    /// DSP index (position in [`fretwire_data::stream::DSP_GROUP_KEYS`]).
+    pub dsp: usize,
+    /// This DSP has a parallel (split) topology — its group key `21` is non-zero.
+    pub split: bool,
     /// The parallel **split** node (kind 2) as an editable block, on split presets — its model is the
     /// split *type* ([`SPLIT_TYPES`]) and its params configure that type. `None` on serial presets.
     pub split_node: Option<EditorBlock>,
     /// The parallel **mixer/join** node (kind 3) as an editable block, on split presets — its params
     /// are the A/B level, pan, polarity and master level. `None` on serial presets.
     pub mixer_node: Option<EditorBlock>,
-    /// The fixed **input node** (slot 0): gate on/off, threshold, decay — edited with ordinary
-    /// set-value on slot 0. Always present on a well-formed preset.
+    /// The fixed **input node** (this DSP's slot 0): gate on/off, threshold, decay — edited with
+    /// ordinary set-value on its slot. Always present on a well-formed preset.
     pub input_node: Option<EditorBlock>,
-    /// The fixed **output node** (slot 9): pan, level — edited on slot 9.
+    /// The fixed **output node** (this DSP's slot 9): pan, level.
     pub output_node: Option<EditorBlock>,
     /// Signal-flow column of the split node (its holder key `13`): a top-row block at slot `< this` is
     /// common (pre-split), `≥ this` (and `< mixer_pos`) is on **path A**. `None` on serial presets.
     pub split_pos: Option<i64>,
     /// Signal-flow column of the mixer node: a top-row block at slot `≥ this` is common (post-mixer).
     pub mixer_pos: Option<i64>,
-    /// The routing grid: one cell per draggable slot (row/column/occupancy). Drives the drag-routing
-    /// UI; see [`fretwire_data::stream::PresetStream::grid`].
+    /// This DSP's routing grid: one cell per draggable slot (row/column/occupancy). Drives the
+    /// drag-routing UI; see [`fretwire_data::stream::PresetStream::dsp_grid`].
     pub grid: Vec<fretwire_data::stream::GridCell>,
 }
 
+impl DspView {
+    /// Every routing node this DSP has, in a fixed order.
+    fn nodes(&self) -> impl Iterator<Item = &EditorBlock> {
+        self.split_node
+            .iter()
+            .chain(self.mixer_node.iter())
+            .chain(self.input_node.iter())
+            .chain(self.output_node.iter())
+    }
+
+    fn nodes_mut(&mut self) -> impl Iterator<Item = &mut EditorBlock> {
+        self.split_node
+            .iter_mut()
+            .chain(self.mixer_node.iter_mut())
+            .chain(self.input_node.iter_mut())
+            .chain(self.output_node.iter_mut())
+    }
+}
+
 impl EditorPreset {
-    /// Find a block by slot, **including** the split/mixer routing nodes (which live outside
+    /// The routing view of one DSP.
+    pub fn dsp(&self, dsp: usize) -> Option<&DspView> {
+        self.dsps.iter().find(|d| d.dsp == dsp)
+    }
+
+    /// DSP 0's split node — the only one a single-DSP device has. See [`DspView::split_node`].
+    pub fn split_node(&self) -> Option<&EditorBlock> {
+        self.dsp(0).and_then(|d| d.split_node.as_ref())
+    }
+
+    /// DSP 0's mixer node. See [`DspView::mixer_node`].
+    pub fn mixer_node(&self) -> Option<&EditorBlock> {
+        self.dsp(0).and_then(|d| d.mixer_node.as_ref())
+    }
+
+    /// DSP 0's input node. See [`DspView::input_node`].
+    pub fn input_node(&self) -> Option<&EditorBlock> {
+        self.dsp(0).and_then(|d| d.input_node.as_ref())
+    }
+
+    /// DSP 0's output node. See [`DspView::output_node`].
+    pub fn output_node(&self) -> Option<&EditorBlock> {
+        self.dsp(0).and_then(|d| d.output_node.as_ref())
+    }
+
+    /// DSP 0's split-node column. See [`DspView::split_pos`].
+    pub fn split_pos(&self) -> Option<i64> {
+        self.dsp(0).and_then(|d| d.split_pos)
+    }
+
+    /// DSP 0's mixer-node column. See [`DspView::mixer_pos`].
+    pub fn mixer_pos(&self) -> Option<i64> {
+        self.dsp(0).and_then(|d| d.mixer_pos)
+    }
+
+    /// Whether **any** DSP has a parallel (split) topology.
+    pub fn split(&self) -> bool {
+        self.dsps.iter().any(|d| d.split)
+    }
+
+    /// DSP load broken down per DSP — `(dsp, load)` in DSP order. Each DSP is budgeted on its own,
+    /// so this is the meaningful figure on a two-DSP device; [`Self::dsp_load`] is the whole-preset
+    /// sum and means nothing to the hardware.
+    pub fn dsp_load_by_dsp(&self) -> Vec<(usize, f64)> {
+        self.dsps
+            .iter()
+            .map(|d| (d.dsp, self.dsp_load_on(d.dsp)))
+            .collect()
+    }
+
+    /// DSP load drawn by one DSP's blocks. A DSP with no blocks (or no such index) reads `0.0`.
+    pub fn dsp_load_on(&self, dsp: usize) -> f64 {
+        let load: f64 = self
+            .blocks
+            .iter()
+            .filter(|b| b.dsp == dsp)
+            .filter_map(|b| b.dsp_load)
+            .sum();
+        // An empty f64 sum is -0.0, which formats as "-0.0%" for an unused DSP.
+        load + 0.0
+    }
+
+    /// Room left on one DSP before the device starts refusing blocks — [`DSP_CEILING`] minus what
+    /// that DSP already draws, floored at zero. This, not `100 - load`, is the headroom a user has.
+    pub fn dsp_free_on(&self, dsp: usize) -> f64 {
+        (DSP_CEILING - self.dsp_load_on(dsp)).max(0.0)
+    }
+
+    /// One DSP's load as the percentage of capacity a user should see — the ceiling reads 100%.
+    /// See [`dsp_percent`].
+    pub fn dsp_percent_on(&self, dsp: usize) -> f64 {
+        dsp_percent(self.dsp_load_on(dsp))
+    }
+
+    /// Room left per DSP — `(dsp, free)` in DSP order. See [`Self::dsp_free_on`].
+    pub fn dsp_free_by_dsp(&self) -> Vec<(usize, f64)> {
+        self.dsps
+            .iter()
+            .map(|d| (d.dsp, self.dsp_free_on(d.dsp)))
+            .collect()
+    }
+
+    /// Every DSP's grid cells concatenated, in DSP order. Each cell carries its own `dsp`, so a
+    /// two-DSP device's four rows are `(cell.dsp, cell.row)`. Identical to DSP 0's grid on a
+    /// single-DSP device.
+    pub fn grid(&self) -> Vec<fretwire_data::stream::GridCell> {
+        self.dsps
+            .iter()
+            .flat_map(|d| d.grid.iter().cloned())
+            .collect()
+    }
+
+    /// Find a block by wire slot, **including** the routing nodes of every DSP (which live outside
     /// `blocks`). Lets the param-editing UI treat a node's params the same as any block's.
     pub fn block(&self, slot: i64) -> Option<&EditorBlock> {
         self.blocks
             .iter()
-            .chain(self.split_node.iter())
-            .chain(self.mixer_node.iter())
-            .chain(self.input_node.iter())
-            .chain(self.output_node.iter())
+            .chain(self.dsps.iter().flat_map(DspView::nodes))
             .find(|b| b.slot == slot)
     }
 
@@ -214,21 +387,22 @@ impl EditorPreset {
     pub fn block_mut(&mut self, slot: i64) -> Option<&mut EditorBlock> {
         self.blocks
             .iter_mut()
-            .chain(self.split_node.iter_mut())
-            .chain(self.mixer_node.iter_mut())
-            .chain(self.input_node.iter_mut())
-            .chain(self.output_node.iter_mut())
+            .chain(self.dsps.iter_mut().flat_map(DspView::nodes_mut))
             .find(|b| b.slot == slot)
     }
 
-    /// Whether `slot` is the split routing node (selecting it offers the split-type picker).
+    /// Whether `slot` is a split routing node (selecting it offers the split-type picker).
     pub fn is_split_node(&self, slot: i64) -> bool {
-        self.split_node.as_ref().is_some_and(|n| n.slot == slot)
+        self.dsps
+            .iter()
+            .any(|d| d.split_node.as_ref().is_some_and(|n| n.slot == slot))
     }
 
-    /// Whether `slot` is the mixer/join routing node.
+    /// Whether `slot` is a mixer/join routing node.
     pub fn is_mixer_node(&self, slot: i64) -> bool {
-        self.mixer_node.as_ref().is_some_and(|n| n.slot == slot)
+        self.dsps
+            .iter()
+            .any(|d| d.mixer_node.as_ref().is_some_and(|n| n.slot == slot))
     }
 }
 
@@ -244,16 +418,31 @@ pub const SPLIT_TYPES: &[(i64, &str, &str)] = &[
     (563, "HD2_AppDSPFlowSplitDyn", "Dynamic"),
 ];
 
+/// Fold `.models` category ids that HX Edit presents as one picker entry.
+///
+/// Category **5** holds exactly one model — `HD2_SynthSubtractive`, the 3 Osc Synth — while every
+/// other synth sits in 7. HX Edit files it under **Pitch/Synth › Stereo**
+/// (`HX_ModelCatalog.json` `categories[7].subcategories[1]`), so a separate "Synth" entry is ours,
+/// not the device's: it showed up as a category containing one model, with the 3 Osc Synth missing
+/// from the Pitch/Synth list where a user would look for it. [solid — 2026-08-01, from the shipped
+/// catalog; reported from the field the same day.]
+fn canonical_category(id: i64) -> i64 {
+    match id {
+        5 => 7,
+        other => other,
+    }
+}
+
 /// Human name for a `.models` `category` id. This is the **device effect-type** enum (distinct from
 /// `HX_ModelCatalog.json`'s ids), derived from the shipped `.models` files: each id maps to one
 /// effect type. Unknown ids fall back to `None`.
 pub fn category_name(id: i64) -> Option<&'static str> {
+    let id = canonical_category(id);
     Some(match id {
         1 => "Amp",
         2 => "Cab",
         3 => "Distortion",
         4 => "Dynamics",
-        5 => "Synth",
         6 => "Filter",
         7 => "Pitch/Synth",
         8 => "Modulation",
@@ -305,8 +494,10 @@ struct RawData {
     models: Vec<(String, Vec<u8>)>,
 }
 
-/// The `.models` files the catalog reads for DSP loads, per-param ranges, and cab links. `io.models`
-/// carries no block loads but its params (input gate, output level/pan) are wanted, so it's included.
+/// The `.models` files the catalog reads for DSP loads, per-param ranges, and cab links.
+/// `io.models` is in here for its params (input gate, output level/pan) and for the fixed
+/// input/output/split/mixer nodes' own `load` figures — which the loads table carries but
+/// [`EditorPreset::dsp_load`] does not sum; see [`DSP_CEILING`].
 const MODEL_FILES: &[&str] = &[
     "amp.models",
     "cab.models",
@@ -385,7 +576,10 @@ impl Catalog {
     pub fn bundled() -> crate::Result<Catalog> {
         macro_rules! model {
             ($f:literal) => {
-                ($f.to_string(), include_bytes!(concat!("../../fretwire-data/data/", $f)).to_vec())
+                (
+                    $f.to_string(),
+                    include_bytes!(concat!("../../fretwire-data/data/", $f)).to_vec(),
+                )
             };
         }
         let raw = RawData {
@@ -431,7 +625,11 @@ impl Catalog {
     /// The `Helix.sym` index of an exact device symbol, if present.
     fn symbol_index(&self, symbolic_id: &str) -> Option<i64> {
         (0..self.symbols.len())
-            .find(|&i| self.symbols.by_index(i).is_some_and(|(s, _)| s == symbolic_id))
+            .find(|&i| {
+                self.symbols
+                    .by_index(i)
+                    .is_some_and(|(s, _)| s == symbolic_id)
+            })
             .map(|i| i as i64)
     }
 
@@ -468,20 +666,24 @@ impl Catalog {
     pub fn categories(&self) -> Vec<(i64, &'static str)> {
         let mut seen = std::collections::BTreeSet::new();
         for idx in 0..self.symbols.len() {
-            let Some((sym, _)) = self.symbols.by_index(idx) else { continue };
+            let Some((sym, _)) = self.symbols.by_index(idx) else {
+                continue;
+            };
             let (base, _) = split_variant(sym);
-            if let Some(id) = self.models.id_by_symbolic_id(base) {
-                if let Some(cat) = self.models.category(id) {
-                    seen.insert(cat);
-                }
+            if let Some(id) = self.models.id_by_symbolic_id(base)
+                && let Some(cat) = self.models.category(id)
+            {
+                seen.insert(canonical_category(cat));
             }
         }
         // The synthetic Amp+Cab list exists whenever there are amps to pair.
         if seen.contains(&1) {
             seen.insert(CATEGORY_AMP_CAB);
         }
-        let mut out: Vec<(i64, &'static str)> =
-            seen.into_iter().filter_map(|id| category_name(id).map(|n| (id, n))).collect();
+        let mut out: Vec<(i64, &'static str)> = seen
+            .into_iter()
+            .filter_map(|id| category_name(id).map(|n| (id, n)))
+            .collect();
         out.sort_by(|a, b| a.1.cmp(b.1));
         out
     }
@@ -512,13 +714,24 @@ impl Catalog {
         let mut chosen: std::collections::HashMap<String, ModelChoice> =
             std::collections::HashMap::new();
         for idx in 0..self.symbols.len() {
-            let Some((sym, _)) = self.symbols.by_index(idx) else { continue };
+            let Some((sym, _)) = self.symbols.by_index(idx) else {
+                continue;
+            };
             let (base, var) = split_variant(sym);
-            let Some(id) = self.models.id_by_symbolic_id(base) else { continue };
-            if self.models.category(id) != Some(category) {
+            let Some(id) = self.models.id_by_symbolic_id(base) else {
+                continue;
+            };
+            if self.models.category(id).map(canonical_category) != Some(category) {
                 continue;
             }
-            let name = self.models.name(id).map(str::to_string).unwrap_or_else(|| base.to_string());
+            if is_dual_cab(base) {
+                continue;
+            }
+            let name = self
+                .models
+                .name(id)
+                .map(str::to_string)
+                .unwrap_or_else(|| base.to_string());
             if name.is_empty() {
                 continue;
             }
@@ -542,7 +755,11 @@ impl Catalog {
         // Deterministic order: by name, then symbolic id (so same-named models don't shuffle between
         // renders — the `HashMap` iteration order is otherwise arbitrary).
         let mut out: Vec<ModelChoice> = chosen.into_values().collect();
-        out.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.symbolic_id.cmp(&b.symbolic_id)));
+        out.sort_by(|a, b| {
+            a.name
+                .cmp(&b.name)
+                .then_with(|| a.symbolic_id.cmp(&b.symbolic_id))
+        });
 
         // Disambiguate genuinely-distinct models that share a display name (e.g. the amp vs preamp
         // "EV Panama Red", both in this category) by appending their type token (`Amp`/`Preamp`/…).
@@ -571,24 +788,58 @@ impl Catalog {
             .map(|b| self.build_block(b))
             .collect();
         let dsp_load = blocks.iter().filter_map(|b| b.dsp_load).sum();
-        // Split/mixer routing nodes are meaningful only on a parallel preset; expose them as
-        // editable blocks (they carry a model-ref + params like any block) for the routing panel.
-        let (split_node, mixer_node, split_pos, mixer_pos) = if ps.is_split() {
-            use fretwire_data::stream::slot_kind;
-            (
-                ps.structural_node(slot_kind::SPLIT).map(|n| self.build_block(n)),
-                ps.structural_node(slot_kind::MIXER).map(|n| self.build_block(n)),
-                ps.structural_node_pos(slot_kind::SPLIT),
-                ps.structural_node_pos(slot_kind::MIXER),
-            )
-        } else {
-            (None, None, None, None)
-        };
-        // The fixed input (slot 0) / output (slot 9) nodes: no model-ref; identity is the device
-        // symbol, params are the leading entries of its order (io.models carries the meta). Edited
-        // with the ordinary set-value op on their slot [solid — input-gate capture].
-        let input_node = self.build_io_node(&ps, 0, "HelixStomp_AppDSPFlowInput", "Input");
-        let output_node = self.build_io_node(&ps, 1, "HelixStomp_AppDSPFlowOutputMain", "Output");
+        // One view per populated DSP. On the Stomp that's a single entry; the Helix Floor has two,
+        // each with its own split/mixer/input/output nodes and its own A/B branch.
+        let dsps = ps
+            .dsps()
+            .into_iter()
+            .map(|d| {
+                use fretwire_data::stream::slot_kind;
+                let split = ps.dsp_is_split(d);
+                // Split/mixer routing nodes are meaningful only on a parallel DSP; expose them as
+                // editable blocks (they carry a model-ref + params like any block) for the routing
+                // panel.
+                let (split_node, mixer_node, split_pos, mixer_pos) = if split {
+                    (
+                        ps.dsp_structural_node(d, slot_kind::SPLIT)
+                            .map(|n| self.build_block(n)),
+                        ps.dsp_structural_node(d, slot_kind::MIXER)
+                            .map(|n| self.build_block(n)),
+                        ps.dsp_structural_node_pos(d, slot_kind::SPLIT),
+                        ps.dsp_structural_node_pos(d, slot_kind::MIXER),
+                    )
+                } else {
+                    (None, None, None, None)
+                };
+                // The fixed input (index 0) / output (index 9) nodes: no model-ref; identity is the
+                // device symbol, params are the leading entries of its order (io.models carries the
+                // meta). Edited with the ordinary set-value op on their slot [solid — input-gate
+                // capture].
+                DspView {
+                    dsp: d,
+                    split,
+                    split_node,
+                    mixer_node,
+                    split_pos,
+                    mixer_pos,
+                    input_node: self.build_io_node(
+                        &ps,
+                        d,
+                        0,
+                        "HelixStomp_AppDSPFlowInput",
+                        "Input",
+                    ),
+                    output_node: self.build_io_node(
+                        &ps,
+                        d,
+                        1,
+                        "HelixStomp_AppDSPFlowOutputMain",
+                        "Output",
+                    ),
+                    grid: ps.dsp_grid(d),
+                }
+            })
+            .collect();
         Ok(EditorPreset {
             device_model: ps.device_model(),
             firmware: ps.firmware(),
@@ -596,16 +847,9 @@ impl Catalog {
             assignments: ps.assignments(),
             active_snapshot: ps.snapshots().0,
             snapshot_names: ps.snapshots().1,
-            split: ps.is_split(),
             dsp_load,
             current: None, // offline decode has no device to ask; `Session::read_preset` fills this
-            split_node,
-            mixer_node,
-            split_pos,
-            mixer_pos,
-            input_node,
-            output_node,
-            grid: ps.grid(),
+            dsps,
         })
     }
 
@@ -615,6 +859,7 @@ impl Catalog {
     fn build_io_node(
         &self,
         ps: &PresetStream,
+        dsp: usize,
         kind: i64,
         sym: &str,
         display: &str,
@@ -626,14 +871,21 @@ impl Catalog {
             ("pan", "Pan"),
             ("gain", "Level"),
         ];
-        let b = ps.io_node(kind)?;
-        let mut params = name_params(&b.params, self.symbols.params(sym), self.param_meta.get(sym));
+        let b = ps.dsp_io_node(dsp, kind)?;
+        // IO nodes (gate / level-pan) have no category and no trailing-extra quirk.
+        let mut params = name_params(
+            &b.params,
+            self.symbols.params(sym),
+            self.param_meta.get(sym),
+            None,
+        );
         for p in &mut params {
             if let Some((_, d)) = DISPLAY_NAMES.iter().find(|(k, _)| *k == p.name) {
                 p.name = d.to_string();
             }
         }
         Some(EditorBlock {
+            dsp: b.dsp,
             slot: b.slot,
             model_name: display.to_string(),
             user_label: None,
@@ -658,7 +910,9 @@ impl Catalog {
     fn build_block(&self, b: fretwire_data::stream::LoadedBlock) -> EditorBlock {
         // Identity comes from the Helix.sym index: it gives the exact device symbol (with the
         // Mono/Stereo variant) and that symbol's authoritative param order.
-        let sym = b.model_index.and_then(|i| self.symbols.by_index(i as usize));
+        let sym = b
+            .model_index
+            .and_then(|i| self.symbols.by_index(i as usize));
         let (symbolic_id, variant) = match sym {
             Some((s, _)) => {
                 let (base, v) = split_variant(s);
@@ -668,10 +922,12 @@ impl Catalog {
         };
         let (model_name, category) = self.resolve_name(symbolic_id.as_deref());
         let meta = symbolic_id.as_deref().and_then(|s| self.param_meta.get(s));
-        let params = name_params(&b.params, sym.map(|(_, p)| p), meta);
+        let params = name_params(&b.params, sym.map(|(_, p)| p), meta, category);
 
         // Paired cab/IR (amp+cab blocks): resolve its name + name its param group too.
-        let paired_sym = b.paired_index.and_then(|i| self.symbols.by_index(i as usize));
+        let paired_sym = b
+            .paired_index
+            .and_then(|i| self.symbols.by_index(i as usize));
         let paired_variant = paired_sym.and_then(|(s, _)| split_variant(s).1);
         let paired_symbolic = paired_sym.map(|(s, _)| split_variant(s).0.to_string());
         let (paired_model_name, paired_category) = self.resolve_name(paired_symbolic.as_deref());
@@ -681,8 +937,12 @@ impl Catalog {
         let dsp_load = if b.node_kind == Some(2) {
             None
         } else {
-            let block = symbolic_id.as_deref().and_then(|s| self.model_load(s, variant));
-            let cab = paired_symbolic.as_deref().and_then(|s| self.model_load(s, paired_variant));
+            let block = symbolic_id
+                .as_deref()
+                .and_then(|s| self.model_load(s, variant));
+            let cab = paired_symbolic
+                .as_deref()
+                .and_then(|s| self.model_load(s, paired_variant));
             match (block, cab) {
                 (None, None) => None,
                 (a, b) => Some(a.unwrap_or(0.0) + b.unwrap_or(0.0)),
@@ -690,6 +950,7 @@ impl Catalog {
         };
 
         EditorBlock {
+            dsp: b.dsp,
             slot: b.slot,
             model_name,
             user_label: b.user_label,
@@ -702,15 +963,26 @@ impl Catalog {
             footswitch: b.footswitch,
             row: b.row,
             params,
-            paired_model_name: if b.paired_index.is_some() { Some(paired_model_name) } else { None },
+            paired_model_name: if b.paired_index.is_some() {
+                Some(paired_model_name)
+            } else {
+                None
+            },
             paired_index: b.paired_index,
             paired_params: name_params(
                 &b.paired_params,
                 paired_sym.map(|(_, p)| p),
-                paired_symbolic.as_deref().and_then(|s| self.param_meta.get(s)),
+                paired_symbolic
+                    .as_deref()
+                    .and_then(|s| self.param_meta.get(s)),
+                paired_category,
             ),
             paired_symbolic_id: paired_symbolic,
-            paired_category: if b.paired_index.is_some() { paired_category } else { None },
+            paired_category: if b.paired_index.is_some() {
+                paired_category
+            } else {
+                None
+            },
             dsp_load,
         }
     }
@@ -724,7 +996,11 @@ impl Catalog {
             .map(str::to_string)
             .or_else(|| symbolic_id.map(str::to_string))
             .unwrap_or_else(|| "<unknown>".to_string());
-        (name, id.and_then(|id| self.models.category(id)))
+        (
+            name,
+            id.and_then(|id| self.models.category(id))
+                .map(canonical_category),
+        )
     }
 }
 
@@ -736,7 +1012,9 @@ fn loads_from(
 ) -> std::collections::HashMap<String, (Option<f64>, Option<f64>)> {
     let mut map = std::collections::HashMap::new();
     for (_, bytes) in models {
-        let Ok(mf) = fretwire_data::models::ModelFile::from_slice(bytes) else { continue };
+        let Ok(mf) = fretwire_data::models::ModelFile::from_slice(bytes) else {
+            continue;
+        };
         for m in mf.models {
             if m.load.is_some() || m.load_stereo.is_some() {
                 map.insert(m.symbolic_id, (m.load, m.load_stereo));
@@ -756,12 +1034,15 @@ fn param_meta_from(
 ) -> std::collections::HashMap<String, std::collections::HashMap<String, ParamMeta>> {
     let discrete = discrete_control_labels(controls);
     let segmented = segmented_float_controls(controls);
+    let numeric = numeric_control_formats(controls);
     let mut map: std::collections::HashMap<String, std::collections::HashMap<String, ParamMeta>> =
         std::collections::HashMap::new();
     for (_, bytes) in models {
-        let Ok(mf) = fretwire_data::models::ModelFile::from_slice(bytes) else { continue };
+        let Ok(mf) = fretwire_data::models::ModelFile::from_slice(bytes) else {
+            continue;
+        };
         for m in mf.models {
-            let params = m
+            let params: std::collections::HashMap<String, ParamMeta> = m
                 .params
                 .iter()
                 .map(|p| {
@@ -786,6 +1067,16 @@ fn param_meta_from(
                     } else {
                         Vec::new()
                     };
+                    // Continuous floats get their unit-bearing display recipe. Enums and switches
+                    // read as labels, and a segmented float shows its stop labels instead.
+                    let format = if p.value_type == Some(1) {
+                        p.display_type
+                            .as_deref()
+                            .and_then(|dt| numeric.get(dt))
+                            .cloned()
+                    } else {
+                        None
+                    };
                     let meta = ParamMeta {
                         min: p.min_f64(),
                         max: p.max_f64(),
@@ -793,10 +1084,23 @@ fn param_meta_from(
                         value_type: p.value_type,
                         enum_labels,
                         stops,
+                        format,
                     };
                     (p.symbolic_id.clone(), meta)
                 })
                 .collect();
+            // Key by the id as written *and* by its variant-stripped base. Blocks look meta up by
+            // the base (`load_preset` runs the device symbol through `split_variant` first), so a
+            // model the reference data only ever names in its suffixed form — the eight legacy DL4
+            // delays are the whole set — would otherwise resolve to no meta at all, and a param
+            // with no range falls back to a span far wider than the device accepts.
+            //
+            // The alias never overwrites: an exact entry is the better answer wherever both exist.
+            if let (base, Some(_)) = split_variant(&m.symbolic_id)
+                && !map.contains_key(base)
+            {
+                map.insert(base.to_string(), params.clone());
+            }
             map.insert(m.symbolic_id, params);
         }
     }
@@ -804,13 +1108,26 @@ fn param_meta_from(
     // The parallel routing nodes (split types + mixer/join) aren't in the `.models` files, so their
     // float params have no range → they'd be read-only. Give them best-effort ranges here so the
     // mixer A/B levels/pans and the split params are adjustable. Param names match the `Helix.sym`
-    // order (`name_params` keys meta by name). LIVE: ranges are estimates pending a range capture —
-    // the device clamps, so an off estimate only mis-scales the slider, not the sent value.
+    // order (`name_params` keys meta by name). LIVE: ranges are estimates pending a range capture.
+    //
+    // These being estimates matters more than it looks: the device does **not** clamp what it is
+    // sent. An earlier note here assumed it did, and that an off estimate could therefore only
+    // mis-scale the slider rather than the value — that is false. An out-of-range integer hung a
+    // Helix Floor hard enough to drop it off USB. [solid — 2026-07-30 Floor session]
+    // `Session::clamp_param` now bounds every write by whatever range lands here, so an estimate
+    // that is too *narrow* costs reach, while one too *wide* is what carries risk. Prefer narrow.
     let flow = |pairs: &[(&str, f64, f64)]| -> std::collections::HashMap<String, ParamMeta> {
         pairs
             .iter()
             .map(|&(n, lo, hi)| {
-                (n.to_string(), ParamMeta { min: Some(lo), max: Some(hi), ..ParamMeta::default() })
+                (
+                    n.to_string(),
+                    ParamMeta {
+                        min: Some(lo),
+                        max: Some(hi),
+                        ..ParamMeta::default()
+                    },
+                )
             })
             .collect()
     };
@@ -824,12 +1141,25 @@ fn param_meta_from(
             ("Level", -60.0, 12.0),
         ]),
     );
-    map.insert("HD2_AppDSPFlowSplitY".into(), flow(&[("BalanceA", 0.0, 1.0), ("BalanceB", 0.0, 1.0)]));
-    map.insert("HD2_AppDSPFlowSplitAB".into(), flow(&[("RouteTo", 0.0, 1.0)]));
-    map.insert("HD2_AppDSPFlowSplitXOver".into(), flow(&[("Frequency", 100.0, 8000.0)]));
+    map.insert(
+        "HD2_AppDSPFlowSplitY".into(),
+        flow(&[("BalanceA", 0.0, 1.0), ("BalanceB", 0.0, 1.0)]),
+    );
+    map.insert(
+        "HD2_AppDSPFlowSplitAB".into(),
+        flow(&[("RouteTo", 0.0, 1.0)]),
+    );
+    map.insert(
+        "HD2_AppDSPFlowSplitXOver".into(),
+        flow(&[("Frequency", 100.0, 8000.0)]),
+    );
     map.insert(
         "HD2_AppDSPFlowSplitDyn".into(),
-        flow(&[("Threshold", -60.0, 0.0), ("Attack", 0.0, 1.0), ("Decay", 0.0, 1.0)]),
+        flow(&[
+            ("Threshold", -60.0, 0.0),
+            ("Attack", 0.0, 1.0),
+            ("Decay", 0.0, 1.0),
+        ]),
     );
     map
 }
@@ -839,8 +1169,12 @@ fn param_meta_from(
 /// these fields, so scanning `amp.models` is sufficient.
 fn cab_links_from(models: &[(String, Vec<u8>)]) -> std::collections::HashMap<String, String> {
     let mut out = std::collections::HashMap::new();
-    let Some((_, amps)) = models.iter().find(|(n, _)| n == "amp.models") else { return out };
-    let Ok(mf) = fretwire_data::models::ModelFile::from_slice(amps) else { return out };
+    let Some((_, amps)) = models.iter().find(|(n, _)| n == "amp.models") else {
+        return out;
+    };
+    let Ok(mf) = fretwire_data::models::ModelFile::from_slice(amps) else {
+        return out;
+    };
     for m in mf.models {
         if let Some(cab) = m.ircablink.or(m.cablink) {
             out.insert(m.symbolic_id, cab);
@@ -856,20 +1190,30 @@ fn cab_links_from(models: &[(String, Vec<u8>)]) -> std::collections::HashMap<Str
 /// shape from the shipped file rather than hardcoding the param.
 fn segmented_float_controls(controls: &[u8]) -> std::collections::HashMap<String, (f64, String)> {
     let mut out = std::collections::HashMap::new();
-    let Ok(root) = serde_json::from_slice::<serde_json::Value>(controls) else { return out };
-    let Some(obj) = root.as_object() else { return out };
+    let Ok(root) = serde_json::from_slice::<serde_json::Value>(controls) else {
+        return out;
+    };
+    let Some(obj) = root.as_object() else {
+        return out;
+    };
     for (name, ctrl) in obj {
         if ctrl.get("controlType").and_then(serde_json::Value::as_str) != Some("segmented")
             || ctrl.get("isDiscrete").and_then(serde_json::Value::as_bool) == Some(true)
         {
             continue;
         }
-        let Some(scale) = ctrl.get("displayToWidgetScale").and_then(serde_json::Value::as_f64)
+        let Some(scale) = ctrl
+            .get("displayToWidgetScale")
+            .and_then(serde_json::Value::as_f64)
         else {
             continue;
         };
         if scale > 0.0 {
-            let fmt = ctrl.get("format").and_then(serde_json::Value::as_str).unwrap_or("").into();
+            let fmt = ctrl
+                .get("format")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .into();
             out.insert(name.clone(), (scale, fmt));
         }
     }
@@ -879,7 +1223,11 @@ fn segmented_float_controls(controls: &[u8]) -> std::collections::HashMap<String
 /// The discrete stops of a segmented float param, evenly spaced over its range (Angle 0–45 with
 /// scale 1/45 → 2 stops: 0 and 45). `None` when the range/scale don't describe a sane segment
 /// count — the param then falls back to a slider.
-fn segment_stops(min: Option<f64>, max: Option<f64>, (scale, fmt): &(f64, String)) -> Option<Vec<SegStop>> {
+fn segment_stops(
+    min: Option<f64>,
+    max: Option<f64>,
+    (scale, fmt): &(f64, String),
+) -> Option<Vec<SegStop>> {
     let (min, max) = (min?, max?);
     let span = max - min;
     if span <= 0.0 {
@@ -893,7 +1241,10 @@ fn segment_stops(min: Option<f64>, max: Option<f64>, (scale, fmt): &(f64, String
         (0..n)
             .map(|i| {
                 let value = min + span * i as f64 / (n - 1) as f64;
-                SegStop { value, label: seg_label(fmt, value) }
+                SegStop {
+                    value,
+                    label: seg_label(fmt, value),
+                }
             })
             .collect(),
     )
@@ -904,13 +1255,180 @@ fn segment_stops(min: Option<f64>, max: Option<f64>, (scale, fmt): &(f64, String
 fn seg_label(fmt: &str, v: f64) -> String {
     if let Some(pos) = fmt.find("%.") {
         let rest = &fmt[pos + 2..];
-        if let Some(fpos) = rest.find('f') {
-            if let Ok(prec) = rest[..fpos].parse::<usize>() {
-                return format!("{}{:.prec$}{}", &fmt[..pos], v, &rest[fpos + 1..]);
-            }
+        if let Some(fpos) = rest.find('f')
+            && let Ok(prec) = rest[..fpos].parse::<usize>()
+        {
+            return format!("{}{:.prec$}{}", &fmt[..pos], v, &rest[fpos + 1..]);
         }
     }
     format!("{v}")
+}
+
+/// How a numeric parameter should be shown. The device stores DSP values — a delay time is
+/// `1.3728`, a mix is `0.5` — and HX Edit displays them scaled and carrying a unit ("1.373 s",
+/// "50 %"). `HelixControls.json` holds that recipe, keyed by the param's `displayType`.
+///
+/// This is not cosmetic. The tester spent part of a session on an Adriatic Delay reading `1.3728`,
+/// couldn't tell what it meant, and nearly filed it as "the delay isn't working" — it was a 1.4
+/// second delay time, which "1.373 s" would have said outright.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NumFormat {
+    /// `dspToDisplayScale`: stored value × this = display units (seconds → ms, 0–1 → percent).
+    pub scale: f64,
+    /// Range rules in file order; the first whose bounds contain the scaled value wins. A control
+    /// with one unranged format has a single rule spanning everything.
+    pub rules: Vec<FormatRule>,
+}
+
+/// One range of a [`NumFormat`] — the file splits a control by magnitude so that, say, a delay
+/// reads in ms up to a second and in seconds past it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FormatRule {
+    pub lo: f64,
+    pub hi: f64,
+    /// `unitsMultiplier`: applied on top of `scale` for this range only (ms → s past 1000).
+    pub mult: f64,
+    /// printf-ish template — `formatUnits` where the file has one, so the unit comes with it.
+    pub template: String,
+}
+
+impl NumFormat {
+    /// Render `raw` (the stored value) the way HX Edit would. `None` only if there are no rules.
+    pub fn display(&self, raw: f64) -> Option<String> {
+        let scaled = raw * self.scale;
+        let rule = self
+            .rules
+            .iter()
+            .find(|r| scaled >= r.lo && scaled < r.hi)
+            .or_else(|| self.rules.last())?;
+        Some(printf_f(&rule.template, scaled * rule.mult))
+    }
+}
+
+/// Substitute a float into a printf-ish template: `%[+][.N]f`, with `%%` for a literal percent.
+/// Only these forms appear in the reference data; anything else is passed through untouched (some
+/// templates are pure text, e.g. `blend`'s "Equal").
+fn printf_f(template: &str, v: f64) -> String {
+    let mut out = String::with_capacity(template.len() + 8);
+    let b = template.as_bytes();
+    let mut i = 0;
+    let mut used = false;
+    while i < b.len() {
+        if b[i] != b'%' {
+            out.push(b[i] as char);
+            i += 1;
+            continue;
+        }
+        if i + 1 < b.len() && b[i + 1] == b'%' {
+            out.push('%');
+            i += 2;
+            continue;
+        }
+        // %[+][.N]f — anything that doesn't match is copied verbatim.
+        let mut j = i + 1;
+        let plus = j < b.len() && b[j] == b'+';
+        if plus {
+            j += 1;
+        }
+        let mut prec = 0usize;
+        if j < b.len() && b[j] == b'.' {
+            j += 1;
+            let s = j;
+            while j < b.len() && b[j].is_ascii_digit() {
+                j += 1;
+            }
+            prec = template[s..j].parse().unwrap_or(0);
+        }
+        if j < b.len() && b[j] == b'f' && !used {
+            if plus && v >= 0.0 {
+                out.push('+');
+            }
+            out.push_str(&format!("{v:.prec$}"));
+            used = true;
+            i = j + 1;
+        } else {
+            out.push('%');
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Parse `HelixControls.json` into control name → [`NumFormat`] for the **continuous** controls
+/// (the discrete ones are label lists — see [`discrete_control_labels`]). Resolves the `alias`
+/// indirection the file uses for its 58 range-specialised aliases (`time_ms_20_1800` → `time_ms`).
+fn numeric_control_formats(controls: &[u8]) -> std::collections::HashMap<String, NumFormat> {
+    let mut out = std::collections::HashMap::new();
+    let Ok(root) = serde_json::from_slice::<serde_json::Value>(controls) else {
+        return out;
+    };
+    let Some(obj) = root.as_object() else {
+        return out;
+    };
+    for name in obj.keys() {
+        // Follow `alias` hops, bounded so a cycle in the data can't hang the import.
+        let mut ctrl = &obj[name];
+        for _ in 0..8 {
+            match ctrl.get("alias").and_then(serde_json::Value::as_str) {
+                Some(target) => match obj.get(target) {
+                    Some(next) => ctrl = next,
+                    None => break,
+                },
+                None => break,
+            }
+        }
+        if ctrl.get("isDiscrete").and_then(serde_json::Value::as_bool) == Some(true) {
+            continue;
+        }
+        let scale = ctrl
+            .get("dspToDisplayScale")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(1.0);
+        let units = |v: &serde_json::Value| {
+            v.get("formatUnits")
+                .or_else(|| v.get("format"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        };
+        let mut rules = Vec::new();
+        match ctrl.get("format") {
+            Some(serde_json::Value::Array(arr)) => {
+                for e in arr {
+                    let Some(t) = units(e) else { continue };
+                    rules.push(FormatRule {
+                        lo: e
+                            .get("lowerBound")
+                            .and_then(serde_json::Value::as_f64)
+                            .unwrap_or(f64::NEG_INFINITY),
+                        hi: e
+                            .get("upperBound")
+                            .and_then(serde_json::Value::as_f64)
+                            .unwrap_or(f64::INFINITY),
+                        mult: e
+                            .get("unitsMultiplier")
+                            .and_then(serde_json::Value::as_f64)
+                            .unwrap_or(1.0),
+                        template: t,
+                    });
+                }
+            }
+            // A scalar `format`, or none at all but a bare `formatUnits`: one rule for everything.
+            _ => {
+                if let Some(t) = units(ctrl) {
+                    rules.push(FormatRule {
+                        lo: f64::NEG_INFINITY,
+                        hi: f64::INFINITY,
+                        mult: 1.0,
+                        template: t,
+                    });
+                }
+            }
+        }
+        if !rules.is_empty() {
+            out.insert(name.clone(), NumFormat { scale, rules });
+        }
+    }
+    out
 }
 
 /// Parse `HelixControls.json` into a map of **discrete** control name → ordered option labels (the
@@ -919,8 +1437,12 @@ fn seg_label(fmt: &str, v: f64) -> String {
 /// here. Best-effort: returns an empty map if the bundled file can't be parsed.
 fn discrete_control_labels(controls: &[u8]) -> std::collections::HashMap<String, Vec<String>> {
     let mut out = std::collections::HashMap::new();
-    let Ok(root) = serde_json::from_slice::<serde_json::Value>(controls) else { return out };
-    let Some(obj) = root.as_object() else { return out };
+    let Ok(root) = serde_json::from_slice::<serde_json::Value>(controls) else {
+        return out;
+    };
+    let Some(obj) = root.as_object() else {
+        return out;
+    };
     for (name, ctrl) in obj {
         if ctrl.get("isDiscrete").and_then(serde_json::Value::as_bool) != Some(true) {
             continue;
@@ -928,8 +1450,10 @@ fn discrete_control_labels(controls: &[u8]) -> std::collections::HashMap<String,
         // `format` is the discrete label list (an array of strings). Some controls instead carry
         // per-range format objects — those aren't enum label lists, so skip non-string arrays.
         if let Some(arr) = ctrl.get("format").and_then(serde_json::Value::as_array) {
-            let labels: Vec<String> =
-                arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
+            let labels: Vec<String> = arr
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect();
             if labels.len() == arr.len() && !labels.is_empty() {
                 out.insert(name.clone(), labels);
             }
@@ -943,7 +1467,10 @@ fn discrete_control_labels(controls: &[u8]) -> std::collections::HashMap<String,
 /// camelCase boundary. Used to disambiguate models that share a display name. Falls back to the
 /// whole body when there's no clean boundary.
 fn type_token(symbolic_id: &str) -> &str {
-    let body = symbolic_id.split_once('_').map(|(_, b)| b).unwrap_or(symbolic_id);
+    let body = symbolic_id
+        .split_once('_')
+        .map(|(_, b)| b)
+        .unwrap_or(symbolic_id);
     let bytes = body.as_bytes();
     for i in 1..bytes.len() {
         if bytes[i].is_ascii_uppercase() && bytes[i - 1].is_ascii_lowercase() {
@@ -955,6 +1482,24 @@ fn type_token(symbolic_id: &str) -> &str {
 
 /// Split a device symbol into its `symbolicID` base and `Mono`/`Stereo` variant (some models —
 /// e.g. amps — carry no suffix, giving `None`).
+/// Whether `symbol` is the **dual** twin of a Cab (Mic+IR) model — HX Edit's `Cab › Dual`
+/// subcategory, a two-cab block with per-cab pan.
+///
+/// The 46 `HD2_CabMicIr_*WithPan` symbols each shadow a plain `HD2_CabMicIr_*` single cab of the
+/// same display name, so a flat category listing shows every cab twice. The twins are not
+/// interchangeable: they are a different block type, and the pedal **refuses an in-place swap** to
+/// one — device code `-306`, and `-21` in some states. Selecting a duplicate therefore did
+/// nothing and the block snapped back to what it was. Editing a dual cab is not supported yet
+/// (it needs two model refs and the pan params), so keep them out of the swap list rather than
+/// offering a choice that cannot be taken. Name resolution is deliberately left alone — a preset
+/// that already contains one must still read back with its own name and params.
+///
+/// [solid — 2026-08-01: reproduced on the HX Stomp, every dual twin refused; matches the
+/// field report and the shipped `HX_ModelCatalog.json` `Cab › Dual` grouping.]
+fn is_dual_cab(symbol: &str) -> bool {
+    symbol.starts_with("HD2_CabMicIr_") && symbol.ends_with("WithPan")
+}
+
 fn split_variant(symbol: &str) -> (&str, Option<&'static str>) {
     if let Some(base) = symbol.strip_suffix("Mono") {
         (base, Some("Mono"))
@@ -965,21 +1510,46 @@ fn split_variant(symbol: &str) -> (&str, Option<&'static str>) {
     }
 }
 
-/// Name a value vector against an ordered name list. Values past the named list become `#i`,
-/// except a lone trailing extra — the time-based-fx `Trails` switch the symbol doesn't list.
+/// Name the lone trailing value a model sends beyond its symbol's listed params, chosen by category:
+/// time-based fx (delay/reverb) append a `Trails` on/off switch, while legacy (non-`CabMicIr_*`) cabs
+/// append a **mic-index** value the symbol omits. Labeling the cab's mic index `Trails` was a bug
+/// (seen on the Floor's `HD2_Cab2x12MailC12Q`, and on any Stomp preset using an old-style cab).
+fn trailing_extra_name(category: Option<i64>) -> &'static str {
+    match category {
+        // 2 = Cab, 19 = Cab (Mic+IR). Native CabMicIr cabs list the mic, so they never hit this
+        // branch; legacy cabs don't, and their trailing value is the mic index.
+        Some(2) | Some(19) => "Mic",
+        _ => "Trails",
+    }
+}
+
+/// Name a value vector against an ordered name list. Values past the named list become `#i`, except
+/// a lone trailing extra the symbol doesn't list — named by [`trailing_extra_name`] from the model's
+/// `category`.
 fn name_params(
     values: &[ParamValue],
     order: Option<&[String]>,
     meta: Option<&std::collections::HashMap<String, ParamMeta>>,
+    category: Option<i64>,
 ) -> Vec<EditorParam> {
     let names = order.unwrap_or(&[]);
     values
         .iter()
         .enumerate()
         .map(|(i, &value)| {
+            // A value past the symbol's list is addressed through the extras table rather than by
+            // param index. A block has exactly one such value in every case seen so far — that is
+            // the branch that names it below — so its extras index is 0. If a block ever sends two,
+            // we have no evidence for what the second one's index is: leave it unaddressable rather
+            // than guess. With no reference data at all there is no list to be past, so nothing is
+            // an extra and every param keeps the ordinary path.
+            let is_extra = order.is_some() && i >= names.len();
+            let lone_extra = i == names.len() && values.len() == names.len() + 1;
+            let extra_index = (is_extra && lone_extra).then_some(0);
+            let settable = !is_extra || extra_index.is_some();
             let name = names.get(i).cloned().unwrap_or_else(|| {
                 if i == names.len() && values.len() == names.len() + 1 {
-                    "Trails".to_string()
+                    trailing_extra_name(category).to_string()
                 } else {
                     format!("#{i}")
                 }
@@ -987,9 +1557,94 @@ fn name_params(
             // The param's name is its `.models` `symbolicID`, so the range/widget metadata is a
             // direct lookup. Unknown params (e.g. the trailing `Trails`) get default (empty) meta.
             let meta = meta.and_then(|m| m.get(&name)).cloned().unwrap_or_default();
-            EditorParam { index: i, name, value, meta }
+            EditorParam {
+                index: i,
+                name,
+                value,
+                meta,
+                settable,
+                extra_index,
+            }
         })
         .collect()
+}
+
+// Pure naming tests — no reference data needed, so they always run.
+#[cfg(test)]
+mod trailing_extra_tests {
+    use super::{name_params, trailing_extra_name};
+    use fretwire_data::stream::ParamValue;
+
+    #[test]
+    fn cab_categories_name_the_trailing_extra_mic_not_trails() {
+        assert_eq!(trailing_extra_name(Some(2)), "Mic"); // Cab
+        assert_eq!(trailing_extra_name(Some(19)), "Mic"); // Cab (Mic+IR)
+        assert_eq!(trailing_extra_name(Some(10)), "Trails"); // Reverb
+        assert_eq!(trailing_extra_name(Some(9)), "Trails"); // Delay
+        assert_eq!(trailing_extra_name(None), "Trails");
+    }
+
+    #[test]
+    fn legacy_cab_trailing_value_is_named_mic() {
+        // A legacy cab: the symbol lists 5 params but the device sends 6 — the extra is the mic
+        // index. It must be "Mic", not "Trails".
+        let order: Vec<String> = ["Distance", "LowCut", "HighCut", "EarlyReflections", "Level"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let values = vec![ParamValue::Float(0.0); 6];
+        let params = name_params(&values, Some(&order), None, Some(2));
+        assert_eq!(params.last().unwrap().name, "Mic");
+
+        // Same shape, but a reverb (category 10) keeps the Trails name.
+        let params = name_params(&values, Some(&order), None, Some(10));
+        assert_eq!(params.last().unwrap().name, "Trails");
+    }
+
+    /// A value past the symbol's list has no param index, so it is addressed through the extras
+    /// table instead (target key 29 `false`, key 28 = the extras index). A block sends exactly one
+    /// such value, so that index is 0 — the wire form HX Edit uses to toggle Trails.
+    #[test]
+    fn the_trailing_extra_is_addressed_as_an_extra() {
+        let order: Vec<String> = ["Time", "Feedback", "Mix"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let values = vec![ParamValue::Float(0.0); 4];
+        let params = name_params(&values, Some(&order), None, Some(9));
+        assert!(
+            params[..3]
+                .iter()
+                .all(|p| p.settable && p.extra_index.is_none()),
+            "listed params keep the ordinary param-index path"
+        );
+        assert_eq!(params[3].name, "Trails");
+        assert_eq!(params[3].extra_index, Some(0));
+        assert!(params[3].settable);
+    }
+
+    /// Two values past the list is a shape we have never seen and have no wire evidence for. Leave
+    /// those unaddressable rather than guessing an extras index for each.
+    #[test]
+    fn several_values_past_the_list_stay_unsettable() {
+        let order: Vec<String> = ["Time", "Mix"].iter().map(|s| s.to_string()).collect();
+        let values = vec![ParamValue::Float(0.0); 4];
+        let params = name_params(&values, Some(&order), None, Some(9));
+        assert!(
+            params[2..]
+                .iter()
+                .all(|p| !p.settable && p.extra_index.is_none())
+        );
+    }
+
+    /// …but with no reference data there is no symbol list to check against, and marking every
+    /// param read-only would make a clean clone useless. Fail open.
+    #[test]
+    fn without_a_name_list_every_param_stays_settable() {
+        let values = vec![ParamValue::Float(0.0); 4];
+        let params = name_params(&values, None, None, Some(9));
+        assert!(params.iter().all(|p| p.settable));
+    }
 }
 
 // These tests validate against the (unshipped) Line 6 reference data, so they only compile when a
@@ -1004,6 +1659,44 @@ mod tests {
     fn dev_catalog() -> Catalog {
         Catalog::from_data_dir(&crate::data_dir())
             .expect("load reference data (run `fretwire import-data`)")
+    }
+
+    /// The case that sent the tester chasing a delay he thought was broken: stored `1.3728` is a
+    /// 1.4-second delay time, and the raw number said none of that. Also pins the two shapes the
+    /// recipe has to handle — a range switch with a `unitsMultiplier` (ms → s past 1000) and the
+    /// plain scaled percent.
+    #[test]
+    fn a_delay_time_reads_in_seconds_not_raw_dsp_units() {
+        let meta = dev_catalog().param_meta;
+        let delay = meta
+            .get("HD2_DelayAdriaticDelay")
+            .expect("bundled delay model present");
+
+        let time = delay.get("Time").expect("delay has a Time param");
+        let f = time.format.as_ref().expect("Time has a display format");
+        assert_eq!(f.display(1.3728).as_deref(), Some("1.373 s"));
+        // Under a second it stays in milliseconds, and under 10 ms it gains a decimal.
+        assert_eq!(f.display(0.4).as_deref(), Some("400 ms"));
+        assert_eq!(f.display(0.005).as_deref(), Some("5.0 ms"));
+
+        let mix = delay.get("Mix").expect("delay has a Mix param");
+        let f = mix.format.as_ref().expect("Mix has a display format");
+        assert_eq!(f.display(0.5).as_deref(), Some("50 %"));
+
+        // A switch is read as a label, so it must not carry a numeric recipe.
+        let mic = meta["HD2_CabMicIr_2x12JazzRivet"]["Mic"].clone();
+        assert!(mic.format.is_none());
+    }
+
+    #[test]
+    fn a_volume_param_keeps_its_sign_and_unit() {
+        let meta = dev_catalog().param_meta;
+        let lvl = meta["HD2_DelayAdriaticDelay"]["Level"]
+            .format
+            .clone()
+            .expect("Level has a display format");
+        assert_eq!(lvl.display(0.0).as_deref(), Some("+0.0 dB"));
+        assert_eq!(lvl.display(-4.89).as_deref(), Some("-4.9 dB"));
     }
 
     #[test]
@@ -1026,7 +1719,9 @@ mod tests {
     #[test]
     fn cab_mic_angle_is_a_two_stop_segmented_float() {
         let meta = dev_catalog().param_meta;
-        let cab = meta.get("HD2_CabMicIr_2x12JazzRivet").expect("bundled cab model present");
+        let cab = meta
+            .get("HD2_CabMicIr_2x12JazzRivet")
+            .expect("bundled cab model present");
         let angle = cab.get("Angle").expect("cab has an Angle param");
         assert_eq!(angle.value_type, Some(1)); // still a float on the wire
         assert_eq!(angle.stops.len(), 2); // …but HX Edit renders exactly two positions
@@ -1036,6 +1731,32 @@ mod tests {
         assert_eq!(angle.stops[1].label, "45 deg");
         // Continuous floats must stay sliders.
         assert!(cab.get("Distance").unwrap().stops.is_empty());
+    }
+
+    /// A model whose `.models` id carries a `Mono`/`Stereo` suffix must still be reachable under
+    /// the **variant-stripped** id, because that is the only form a block ever asks for:
+    /// `load_preset` runs the device symbol through [`split_variant`] before looking meta up.
+    ///
+    /// The eight legacy DL4 delays are the only models in the reference data where the two forms
+    /// differ, and the miss was not cosmetic — with no meta the editor has no range, and its
+    /// fallback span (0..=127) let `Heads 1-2` (a 0..=3 enum) be set to 77, which hung the pedal
+    /// hard enough to drop it off USB. [solid — 2026-07-30 Floor session, `Massif`]
+    #[test]
+    fn legacy_dl4_ranges_survive_the_variant_suffix() {
+        let meta = dev_catalog().param_meta;
+        let dl4 = meta
+            .get("HD2_DL4Multihead")
+            .expect("legacy DL4 reachable under the stripped id the device sends");
+        let heads = dl4.get("Heads 1-2").expect("DL4 has a Heads 1-2 param");
+        assert_eq!(heads.value_type, Some(0));
+        assert_eq!(heads.min, Some(0.0));
+        assert_eq!(
+            heads.max,
+            Some(3.0),
+            "out-of-range writes here wedge the DSP"
+        );
+        // The suffixed form stays reachable too — nothing that already worked may regress.
+        assert!(meta.contains_key("HD2_DL4MultiheadStereo"));
     }
 
     // Only meaningful when the embed exists to compare against.
@@ -1048,8 +1769,16 @@ mod tests {
         let embed = Catalog::bundled().expect("bundled catalog");
         assert_eq!(disk.symbols.len(), embed.symbols.len(), "symbol count");
         assert_eq!(disk.loads.len(), embed.loads.len(), "DSP load table size");
-        assert_eq!(disk.cab_links.len(), embed.cab_links.len(), "cab link table size");
-        assert_eq!(disk.param_meta.len(), embed.param_meta.len(), "param meta model count");
+        assert_eq!(
+            disk.cab_links.len(),
+            embed.cab_links.len(),
+            "cab link table size"
+        );
+        assert_eq!(
+            disk.param_meta.len(),
+            embed.param_meta.len(),
+            "param meta model count"
+        );
         // A representative deep value: the cab Mic enum resolved from HelixControls.json on disk.
         let disk_mic = &disk.param_meta["HD2_CabMicIr_2x12JazzRivet"]["Mic"].enum_labels;
         let embed_mic = &embed.param_meta["HD2_CabMicIr_2x12JazzRivet"]["Mic"].enum_labels;
@@ -1059,7 +1788,11 @@ mod tests {
     #[test]
     fn mic_ir_cabs_are_listed_with_us_super() {
         let cat = dev_catalog();
-        assert!(cat.categories().iter().any(|&(id, name)| id == 19 && name == "Cab (Mic+IR)"));
+        assert!(
+            cat.categories()
+                .iter()
+                .any(|&(id, name)| id == 19 && name == "Cab (Mic+IR)")
+        );
         let cabs = cat.models_in_category(19, None);
         assert!(
             cabs.iter().any(|c| c.name.contains("4x10 US Super")),
@@ -1071,16 +1804,23 @@ mod tests {
     #[test]
     fn amp_cab_category_pairs_amps_with_their_linked_cab() {
         let cat = dev_catalog();
-        assert!(cat
-            .categories()
-            .iter()
-            .any(|&(id, name)| id == CATEGORY_AMP_CAB && name == "Amp+Cab"));
+        assert!(
+            cat.categories()
+                .iter()
+                .any(|&(id, name)| id == CATEGORY_AMP_CAB && name == "Amp+Cab")
+        );
         let combos = cat.models_in_category(CATEGORY_AMP_CAB, None);
         assert!(!combos.is_empty());
         // Every entry carries a resolvable paired cab, and its load includes the cab's cost.
         for c in &combos {
-            let cab_idx = c.default_paired_index.expect("amp+cab entry has a paired cab") as usize;
-            assert!(cat.symbols.by_index(cab_idx).is_some(), "{}: bad cab index", c.name);
+            let cab_idx = c
+                .default_paired_index
+                .expect("amp+cab entry has a paired cab") as usize;
+            assert!(
+                cat.symbols.by_index(cab_idx).is_some(),
+                "{}: bad cab index",
+                c.name
+            );
         }
         // Spot-check the German Mahadeva → 4x12 Uber V30 link from amp.models.
         let mahadeva = combos
@@ -1093,7 +1833,10 @@ mod tests {
             .unwrap();
         assert_eq!(cab_sym, "HD2_CabMicIr_4x12UberV30");
         let plain = cat.models_in_category(1, None);
-        let plain_mahadeva = plain.iter().find(|c| c.symbolic_id == "HD2_AmpGermanMahadeva").unwrap();
+        let plain_mahadeva = plain
+            .iter()
+            .find(|c| c.symbolic_id == "HD2_AmpGermanMahadeva")
+            .unwrap();
         assert!(mahadeva.dsp_load.unwrap() > plain_mahadeva.dsp_load.unwrap());
     }
 }

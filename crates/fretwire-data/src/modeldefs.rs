@@ -27,7 +27,9 @@ impl ModelDefs {
             .map_err(|e| crate::Error::Stream(format!("model defs msgpack: {e}")))?;
         match value {
             Value::Array(a) => Ok(ModelDefs(a)),
-            other => Err(crate::Error::Stream(format!("expected array, got {other:?}"))),
+            other => Err(crate::Error::Stream(format!(
+                "expected array, got {other:?}"
+            ))),
         }
     }
 
@@ -41,7 +43,9 @@ impl ModelDefs {
 
     fn field(&self, id: usize, key: &str) -> Option<&str> {
         // Keys and string values in this blob carry a trailing NUL — trim on both sides.
-        self.raw(id, key).and_then(|v| v.as_str()).map(|s| s.trim_end_matches('\0'))
+        self.raw(id, key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim_end_matches('\0'))
     }
 
     /// Raw value of a (NUL-padded) string key within an entry's map.
@@ -94,7 +98,9 @@ impl ModelDefs {
     /// (163 collide: cab mic/pan variants, amp vs preamp, legacy vs modern delays, per-device
     /// I/O), so this can return several. Use [`resolve`](Self::resolve) to narrow with a category.
     pub fn ids_by_name(&self, name: &str) -> Vec<usize> {
-        (0..self.len()).filter(|&i| self.name(i) == Some(name)).collect()
+        (0..self.len())
+            .filter(|&i| self.name(i) == Some(name))
+            .collect()
     }
 
     /// Resolve a block to a single unambiguous model id from its display name plus, optionally,
@@ -105,11 +111,18 @@ impl ModelDefs {
     /// category this is unique for every real model except the `2x12 Match H30` / `Match G25`
     /// cab pair (a duplicate-name defect in Line 6's own data) and the per-device I/O blocks
     /// (which are disambiguated by the device family, not modeled here).
-    pub fn resolve(&self, name: &str, category: Option<i64>) -> std::result::Result<usize, Vec<usize>> {
+    pub fn resolve(
+        &self,
+        name: &str,
+        category: Option<i64>,
+    ) -> std::result::Result<usize, Vec<usize>> {
         let mut candidates = self.ids_by_name(name);
         if let Some(cat) = category {
-            let filtered: Vec<usize> =
-                candidates.iter().copied().filter(|&i| self.category(i) == Some(cat)).collect();
+            let filtered: Vec<usize> = candidates
+                .iter()
+                .copied()
+                .filter(|&i| self.category(i) == Some(cat))
+                .collect();
             // Only narrow if the category actually matched something; otherwise keep the name
             // candidates so a caller still sees the real options.
             if !filtered.is_empty() {

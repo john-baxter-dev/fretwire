@@ -1,6 +1,6 @@
 # fretwire
 
-An independent, from-scratch **Linux editor for the Line 6 HX Stomp**, written in Rust.
+An independent, from-scratch **Linux editor for the Line 6 HX Stomp and Helix Floor**, written in Rust.
 
 fretwire talks to the pedal over its `MI_00` USB control interface (VID `0x0E41` / PID `0x4246`).
 The wire protocol was recovered by **observing USB traffic to and from the device**; the model,

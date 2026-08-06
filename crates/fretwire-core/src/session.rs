@@ -973,6 +973,10 @@ impl Session {
         // field log says how close a completed write came, not just that it finished.
         let mut slow = 0usize;
         let mut worst_credit_ms = 0u128;
+        // Real `cmd 0x08` credits on the edit channel, and everything else that got counted as one.
+        // Diagnostic for now — see the classification in the loop.
+        let mut real_credits = 0usize;
+        let mut stray_frames = 0usize;
         // How long the *first* chunk's credit took. On this device that single number predicts the
         // whole transfer (see the doc comment), so every write reports it whether it succeeds or
         // not — it is the one field a bug report needs and the cheapest one to collect.
@@ -1009,15 +1013,62 @@ impl Session {
             // device's backlog doesn't accumulate. Waiting for the *first* frame is what paces us;
             // the second call only mops up and must not add latency.
             let waited = std::time::Instant::now();
-            let got = self.transport.drain_collect(CREDIT_WAIT, 1).len();
+            let first = self.transport.drain_collect(CREDIT_WAIT, 1);
             // How long *this* chunk's credit took. Measured before the mop-up sweep, which is a
             // fixed 2 ms and would otherwise smear the number that matters.
             let credit_ms = waited.elapsed();
-            let got = got
-                + self
-                    .transport
-                    .drain_collect(std::time::Duration::from_millis(2), 8)
-                    .len();
+            let mut batch = first;
+            batch.extend(
+                self.transport
+                    .drain_collect(std::time::Duration::from_millis(2), 8),
+            );
+            let got = batch.len();
+            // **What we have been calling a credit is "any frame at all".** `drain_collect` filters
+            // nothing — not by channel, not by opcode — so a keepalive or a status-channel push
+            // satisfies the wait exactly as well as the device's `cmd 0x08`. That is wrong on its
+            // face: these numbers gate how fast we push at an endpoint that wedges when outrun.
+            //
+            // The counts say something is being miscounted, but not yet what. Every one of the 17
+            // completed writes in the 08-05 logs ends with **more "credits" than chunks sent**
+            // (+1 to +4). Two readings fit, and they have opposite consequences:
+            //
+            //  - **Strays.** Keepalives and status pushes are landing in the credit wait, so we are
+            //    running ahead of the device on a transfer it never actually acked. That is a
+            //    mechanism for the wedge, and it fits everything else known about it: intermittent,
+            //    indifferent to the blob, worse in a session someone is actively driving.
+            //  - **Per-frame credits.** A unit goes out as two frames (496 + 16), so if the device
+            //    sometimes acks the frame rather than the unit, up to 28 credits for 14 chunks is
+            //    correct behaviour and nothing is wrong with the pacing at all.
+            //
+            // Both produce the same surplus in a log that never wrote down what the frames were.
+            // The `real`/`other` split settles it in one session: if the surplus is all `cmd 0x08`
+            // it is per-frame crediting, and if it is `cmd 0x10`/`0x03F0` traffic it is strays.
+            //
+            // Until then `got` — the loose count — still paces the loop and feeds the silence
+            // guard. Demanding a strict credit the device might label differently would fail closed
+            // at chunk one and take the tester's ability to save a preset with it, and stacking a
+            // second untested change on this path would make the next logs unreadable: we would not
+            // know which change moved the wedge rate.
+            let real = batch
+                .iter()
+                .filter(|f| f.src == dst && f.cmd == cmd::CHUNK)
+                .count();
+            let other: Vec<&Frame> = batch
+                .iter()
+                .filter(|f| !(f.src == dst && f.cmd == cmd::CHUNK))
+                .collect();
+            if let Some(f) = other.first() {
+                tracing::debug!(
+                    stray_src = format_args!("{:#06x}", f.src),
+                    stray_cmd = f.cmd,
+                    stray_body = f.body.len(),
+                    strays = other.len(),
+                    "counted a non-credit frame as a write credit"
+                );
+            }
+            let other = other.len();
+            real_credits += real;
+            stray_frames += other;
             if n == 0 {
                 first_credit_ms = credit_ms.as_millis();
             }
@@ -1042,6 +1093,8 @@ impl Session {
                 sent,
                 total,
                 credits,
+                real,
+                other,
                 silent,
                 credit_ms = credit_ms.as_millis(),
                 slow,
@@ -1125,6 +1178,9 @@ impl Session {
             acked,
             first_credit_ms,
             worst_credit_ms,
+            chunks,
+            real_credits,
+            stray_frames,
             "write-preset sent"
         );
         Ok(())

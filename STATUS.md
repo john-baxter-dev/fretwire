@@ -1840,3 +1840,32 @@ assignments (works). A cab switched to Cab › Mic+IR costs *less* DSP, not more
 matches what he hears: a block left outside the split bracket goes quiet or drops low in the mix, so
 that warning is earning its place. Minor UI nit: the block-grid scroll bar doesn't come back after
 the window is narrowed again.
+
+### The credit counter has never counted credits (2026-08-05)
+
+Chasing why chunk 2 goes slow turned up something more basic: **`drain_collect` filters nothing**,
+so the write loop's credit wait is satisfied by *any* frame — keepalives (`cmd 0x10`), status pushes
+(`cmd 0x04` from `0x03F0`), anything. `credits` has always meant "frames seen", and it is the number
+that decides how fast we push at the one endpoint that wedges when it is outrun.
+
+It shows up as a surplus that cannot be explained away: **all 17 completed writes in the 08-05 logs
+end with more credits than chunks sent** (+1 to +4). Two readings fit, with opposite consequences:
+
+- **Strays** — non-credit traffic is landing in the wait, so we have been running ahead of a device
+  that never acked those units. That is a mechanism for the wedge, and it fits its character:
+  intermittent, indifferent to the blob, worse in a session someone is actively driving. It would
+  also explain the slow chunk-2 credit — the wait at chunk 2 is the *chunk-1* credit finally
+  arriving, because something else was counted in its place.
+- **Per-frame credits** — a unit ships as two frames (496 + 16), so a device that sometimes acks the
+  frame rather than the unit legitimately returns up to 28 credits for 14 chunks, and pacing is fine.
+
+Both look identical in a log that records the count and never the frames, which is exactly why this
+hid under a number we had been reading confidently for weeks. The loop now classifies every frame
+(`real` = empty `cmd 0x08` on the edit channel vs `other`, plus `stray_src`/`stray_cmd` naming the
+first non-credit frame counted as one) and reports `real_credits`/`stray_frames` per write.
+
+**Pacing deliberately unchanged.** Demanding a strict credit the device might label differently
+would fail closed at chunk one and take the tester's ability to save a preset with it — and a second
+untested change on this path would make the next logs unreadable, since the stop-on-slow-credit
+change is already in flight. One session of `real`/`other` settles which reading is right, and then
+the guard moves with evidence behind it.

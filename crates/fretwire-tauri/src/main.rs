@@ -16,6 +16,12 @@ fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(fretwire_log_filter())
         .init();
+    // First line of every log, so a pasted log says which build produced it.
+    tracing::info!(
+        version = fretwire_core::VERSION,
+        commit = fretwire_core::BUILD_ID,
+        "fretwire-gui starting"
+    );
 
     // WebKitGTK's default dmabuf renderer hits a fatal Wayland protocol error on this GPU/compositor
     // (the same dmabuf/EGL path that ruled out wgpu for iced). Force WebKitGTK's non-dmabuf fallback

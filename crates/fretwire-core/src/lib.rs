@@ -6,6 +6,27 @@
 //! and `fretwire-protocol` (edit command building). The live USB session (sync over `fretwire-usb`) is still
 //! to come (Phase 5).
 
+/// The crate version this binary was built from — the workspace version, shared by every crate.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The commit this binary was built from: a 12-char SHA, `-dirty` if the tracked tree had
+/// uncommitted changes, or `unknown` outside a git checkout. Set by `build.rs`.
+pub const BUILD_ID: &str = env!("FRETWIRE_BUILD_ID");
+
+/// One line naming exactly what is running, for the top of a log and for `--version`.
+///
+/// Every binary logs this at startup. A version alone does not identify a build when testers run
+/// from source between releases — which is most of the time on this project — and a log you cannot
+/// tie to a commit costs more to interpret than it saves to omit.
+///
+/// A `const` rather than a function because both halves are compile-time literals and clap's
+/// `version` wants a `&'static str`. No program name in it — clap prefixes its own.
+pub const BUILD_BANNER: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("FRETWIRE_BUILD_ID"),
+    ")"
+);
+
 pub mod backup;
 pub mod editor;
 pub mod import;

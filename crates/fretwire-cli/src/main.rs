@@ -39,7 +39,8 @@ enum Row {
 /// Offline commands work anywhere; **live** commands need the pedal on USB (see `install-udev`
 /// if they fail with a permissions error). Commands marked ⚠ write to the device's flash.
 #[derive(Parser)]
-#[command(name = "fretwire", version)]
+// `--version` carries the commit too, so a bug report that quotes it identifies the build exactly.
+#[command(name = "fretwire", version = fretwire_core::BUILD_BANNER)]
 struct Cli {
     /// Defaults to `detect` when omitted, so a bare `fretwire` still reports what's plugged in.
     #[command(subcommand)]
@@ -264,8 +265,17 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(log_filter())
         .init();
+    // After `parse`, not before: `--version` and `--help` exit inside it, and neither wants a log
+    // line on top of its output.
+    let cli = Cli::parse();
+    // First line of every real run, so a pasted log says which build produced it.
+    tracing::info!(
+        version = fretwire_core::VERSION,
+        commit = fretwire_core::BUILD_ID,
+        "fretwire-cli starting"
+    );
 
-    match Cli::parse().command.unwrap_or(Command::Detect) {
+    match cli.command.unwrap_or(Command::Detect) {
         Command::Detect => match fretwire_usb::present_devices() {
             Ok(found) if found.is_empty() => println!("no HX device found"),
             Ok(found) => {

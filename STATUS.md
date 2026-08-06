@@ -1869,3 +1869,44 @@ would fail closed at chunk one and take the tester's ability to save a preset wi
 untested change on this path would make the next logs unreadable, since the stop-on-slow-credit
 change is already in flight. One session of `real`/`other` settles which reading is right, and then
 the guard moves with evidence behind it.
+
+### Settled on hardware: the credit counter was counting panel pushes (2026-08-06)
+
+Run against the HX Stomp with the classification from the previous section in place. **The strays
+reading is right and the per-frame-credit reading is wrong.** Eight `write-roundtrip` writes across
+two presets, every one of them exact:
+
+    chunks=5  real_credits=5  stray_frames=3      (ClaudeTest, 2273 bytes)
+    chunks=6  real_credits=6  stray_frames=1..3   (factory 0, 2767 bytes, split preset)
+
+One `cmd 0x08` per 512-byte unit, never per frame. The three strays are named now:
+
+    0x03f0  cmd 4  body 21    status-channel panel push
+    0x03ed  cmd 4  body 17    the edit apply-ACK, {102: txn, 103: 1}
+    0x03f0  cmd 8  body 0     the status channel's own page frame
+
+The last is `cmd 0x08` on the *status* channel — so matching on opcode alone would still be wrong,
+and the source check earns its place.
+
+**Changed:** the wait is for a real credit; strays are set aside and returned to the queue when the
+transfer ends; `slow`/`silent` both run off the strict count. Verified live — 8 writes, no aborts,
+no false positive from `SLOW_CREDIT` (the only slow credits were final-chunk commits, 82–100 ms,
+correctly ignored), plus four `node-pos` split moves — the op-21 node move that wedges Floors —
+all of which completed and read back correctly.
+
+**Two bugs fell out of it.** `acked` had been reporting **false on every write**: the apply-ACK
+arrives mid-transfer, so the credit wait ate it and the closing sweep never saw it. It reads `true`
+now. And two of the three strays are status-channel frames, so the write path had been swallowing
+the panel mirror for the length of every save — the same loss as `request_matching`, by a different
+route. Both are now returned to the queue.
+
+**Also fixed, found live:** the requeue from the previous round had no ceiling, and a set-aside
+frame is re-examined by *every* subsequent request until something drains it — the log showed one
+frame (`got_seq=4`) rescanned ten times in a row. Past `MAX_SKIP` (64) that would starve a request
+of its skip budget and fail a reply that had actually arrived. Capped at `MAX_PENDING` (32),
+dropping oldest first, since these frames mirror current state and the newest are the ones worth
+keeping.
+
+**Still open:** whether this is *the* Floor wedge. A Stomp has never wedged, so it cannot be shown
+here. What can be said is that the host can no longer get ahead of the device by mistaking a panel
+push for permission to send — which was a real mechanism, and is now closed.

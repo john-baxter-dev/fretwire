@@ -486,24 +486,38 @@ during the pause. So a slow credit is not a queue you can drain by waiting; it i
 its way out. The useful response is to stop while the next chunk is still in hand, which at least
 stops pushing bytes at a device that has stopped taking them.
 
-**Careful: our "credits" have never been credits.** [solid] The host's credit wait accepts *any*
-frame — no filter on channel or opcode — so keepalives (`cmd 0x10`) and status-channel pushes
-(`cmd 0x04` from `0x03F0`) satisfy it as readily as the device's `cmd 0x08`. Every completed write
-in the 08-05 logs ends with **more credits counted than chunks sent** (+1 to +4), which means at
-least one of these is true, and they point in opposite directions:
+#### One credit per unit, and our "credits" were never credits [solid]
+*2026-08-06, HX Stomp, `write-roundtrip` at `ccfd3d2`, 8 writes on two presets.*
 
-- **Strays** — non-credit traffic is landing in the wait, so the host has been running ahead of a
-  device that never acked those units. That would be a mechanism for the wedge, and it matches its
-  character: intermittent, indifferent to the blob, worse in a session someone is actively driving.
-- **Per-frame credits** — a unit goes out as two frames (496 + 16), so a device that sometimes acks
-  the *frame* rather than the unit can legitimately return up to 28 credits for 14 chunks, and the
-  pacing is fine.
+The host's credit wait accepted *any* frame — no filter on channel or opcode — so keepalives
+(`cmd 0x10`) and status-channel pushes (`cmd 0x04` from `0x03F0`) satisfied it as readily as the
+device's `cmd 0x08`, and the loop pushed the next 512 bytes on the strength of it. Every completed
+write in the 08-05 logs ends with **more credits counted than chunks sent** (+1 to +4).
 
-Every log to date recorded the count and never what the frames were, which is why this sat unseen
-under a number everyone trusted. The write loop now classifies each one (`real` vs `other`, plus
-`stray_src`/`stray_cmd` naming the first offender), so one field session separates the two. Pacing
-still runs off the loose count until then — tightening it on a guess would fail closed at chunk one
-if the device labels a credit differently than we expect. [hypothesis — 2026-08-05]
+Measuring it directly settles what the surplus is. Classifying every frame in the wait gives
+**5 chunks / 5 real credits / 3 strays** and **6 chunks / 6 real credits** across eight writes:
+the device credits **exactly one `cmd 0x08` per 512-byte unit**, never per frame. The strays:
+
+```
+0x03f0  cmd 4  body 21    status-channel panel push
+0x03ed  cmd 4  body 17    the edit apply-ACK, {102: txn, 103: 1}
+0x03f0  cmd 8  body 0     the status channel's own page frame
+```
+
+That third one is `cmd 0x08` on the *status* channel, so matching on opcode alone is not enough —
+the source check is doing real work. It also refutes the competing reading, that the device credits
+each of the two frames a unit ships as (496 + 16), which would have made the surplus correct.
+
+Two consequences beyond the pacing. The apply-ACK is a stray by this definition, so a write whose
+ACK arrives mid-transfer was reporting `acked=false` while the device had plainly taken it — the
+ACK has to be looked for in the set-aside pile as well as the closing sweep. And two of the three
+strays are status-channel frames, which means the write path was swallowing the panel mirror for
+the length of every save, the same data `request_matching` was discarding by a different route.
+
+The wait is now for a real credit, strays are held and put back when the transfer ends, and both
+guards run off the strict count. Whether this is *the* Floor wedge is still open — a Stomp has
+never wedged, so it cannot be shown here — but the host can no longer get ahead of the device by
+mistaking a panel push for permission to send.
 
 ### A credit unit is **512 payload bytes, sent as 496 + 16** [solid]
 *2026-08-02, re-read of `move_EQ_right_two_slots.pcapng` and `import_ir.pcapng`.*

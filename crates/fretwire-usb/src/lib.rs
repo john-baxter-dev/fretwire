@@ -37,6 +37,17 @@ const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 /// many we'll discard before giving up so a chatty device can't hang us.
 const MAX_SKIP: usize = 64;
 
+/// Ceiling on frames held for a later reader (see [`Transport::requeue`]).
+///
+/// Set-aside frames are re-examined by every request until something drains them, so an undrained
+/// backlog is a cost paid over and over — and once it passes [`MAX_SKIP`] a request can burn its
+/// whole skip budget on stale frames and fail to see a reply that did arrive. Comfortably under
+/// that, and over the ~10 a busy `poll_status` interval collects.
+///
+/// When it overflows the **oldest** go. These frames are a mirror of the device's current state, so
+/// the newest are the ones worth having; a status push from two seconds ago has been superseded.
+const MAX_PENDING: usize = 32;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("no HX device found on the USB bus")]
@@ -282,9 +293,7 @@ impl Transport {
         // Keepalives are pure noise and the one thing that would grow this queue without bound —
         // a long session interleaves thousands. Anything with a body is a push worth keeping.
         skipped.retain(|f| f.cmd != fretwire_protocol::cmd::IDLE && !f.body.is_empty());
-        for f in skipped.into_iter().rev() {
-            self.pending.push_front(f);
-        }
+        self.requeue(skipped);
         out
     }
 
@@ -341,5 +350,29 @@ impl Transport {
     /// Send a frame without waiting for a reply (fire-and-forget OUT).
     pub fn send_frame(&self, frame: &Frame) -> Result<()> {
         self.send(frame.encode())
+    }
+
+    /// Put frames back at the head of the queue, in the order given, so the next reader sees them
+    /// as the device sent them. For a caller that had to look at a frame to find out it wanted
+    /// something else — the write loop sorting flow-control credits from status pushes, which would
+    /// otherwise swallow every panel change made during a save.
+    pub fn requeue(&mut self, frames: impl IntoIterator<Item = Frame>) {
+        for f in frames.into_iter().collect::<Vec<_>>().into_iter().rev() {
+            self.pending.push_front(f);
+        }
+        self.bound_pending();
+    }
+
+    /// Trim the held-frame queue to [`MAX_PENDING`], dropping the oldest first.
+    fn bound_pending(&mut self) {
+        let over = self.pending.len().saturating_sub(MAX_PENDING);
+        if over > 0 {
+            tracing::debug!(
+                dropped = over,
+                held = MAX_PENDING,
+                "status backlog over the cap — dropping the oldest frames"
+            );
+            self.pending.drain(..over);
+        }
     }
 }

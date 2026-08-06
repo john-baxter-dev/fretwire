@@ -977,6 +977,11 @@ impl Session {
         // Diagnostic for now — see the classification in the loop.
         let mut real_credits = 0usize;
         let mut stray_frames = 0usize;
+        // Non-credit frames pulled out of the credit waits — mostly the status channel's panel
+        // mirror. Held until the transfer is done and then put back, so a footswitch pressed during
+        // a save still reaches the UI. Not restored on the failure paths: those end with the
+        // session being dropped, and a wedged pedal's backlog is not worth replaying.
+        let mut set_aside: Vec<Frame> = Vec::new();
         // How long the *first* chunk's credit took. On this device that single number predicts the
         // whole transfer (see the doc comment), so every write reports it whether it succeeds or
         // not — it is the one field a bug report needs and the cheapest one to collect.
@@ -1009,64 +1014,77 @@ impl Session {
                 ))?;
                 sent += part.len();
             }
-            // Block for this chunk's credit, then sweep up anything else already queued so the
-            // device's backlog doesn't accumulate. Waiting for the *first* frame is what paces us;
-            // the second call only mops up and must not add latency.
+            // **Wait for an actual credit — an empty `cmd 0x08` back on the edit channel — and not
+            // merely for a frame.** `drain_collect` filters nothing, so until 2026-08-05 a
+            // keepalive or a status-channel push ended this wait just as well as a credit, and the
+            // loop pushed the next 512 bytes on the strength of it. That is the number gating how
+            // fast we feed an endpoint that wedges when it is outrun.
+            //
+            // Measured on an HX Stomp, `write-roundtrip` at `ccfd3d2`: **5 chunks, 5 real credits,
+            // 3 strays** — one credit per 512-byte unit exactly, and three frames that were being
+            // counted as credits and are not:
+            //
+            //     0x03f0 cmd 4 body 21   a status-channel panel push
+            //     0x03ed cmd 4 body 17   the edit apply-ACK, {102: txn, 103: 1}
+            //     0x03f0 cmd 8 body 0    the status channel's own page frame
+            //
+            // Note the last one: `cmd 0x08` but on the *status* channel, so the src check is doing
+            // real work and matching on opcode alone would still be wrong. This also kills the
+            // competing reading — that the device credits each of the two frames a unit ships as
+            // (496 + 16), which would have made the surplus correct and the pacing fine.
+            //
+            // Strays are set aside rather than dropped, and go back on the queue once the transfer
+            // is done. Two of the three above are status-channel frames, so the write path had been
+            // swallowing the panel mirror for the duration of every save — the same data
+            // `request_matching` was throwing away, arriving by a different route.
             let waited = std::time::Instant::now();
-            let first = self.transport.drain_collect(CREDIT_WAIT, 1);
-            // How long *this* chunk's credit took. Measured before the mop-up sweep, which is a
-            // fixed 2 ms and would otherwise smear the number that matters.
-            let credit_ms = waited.elapsed();
-            let mut batch = first;
-            batch.extend(
-                self.transport
-                    .drain_collect(std::time::Duration::from_millis(2), 8),
-            );
-            let got = batch.len();
-            // **What we have been calling a credit is "any frame at all".** `drain_collect` filters
-            // nothing — not by channel, not by opcode — so a keepalive or a status-channel push
-            // satisfies the wait exactly as well as the device's `cmd 0x08`. That is wrong on its
-            // face: these numbers gate how fast we push at an endpoint that wedges when outrun.
-            //
-            // The counts say something is being miscounted, but not yet what. Every one of the 17
-            // completed writes in the 08-05 logs ends with **more "credits" than chunks sent**
-            // (+1 to +4). Two readings fit, and they have opposite consequences:
-            //
-            //  - **Strays.** Keepalives and status pushes are landing in the credit wait, so we are
-            //    running ahead of the device on a transfer it never actually acked. That is a
-            //    mechanism for the wedge, and it fits everything else known about it: intermittent,
-            //    indifferent to the blob, worse in a session someone is actively driving.
-            //  - **Per-frame credits.** A unit goes out as two frames (496 + 16), so if the device
-            //    sometimes acks the frame rather than the unit, up to 28 credits for 14 chunks is
-            //    correct behaviour and nothing is wrong with the pacing at all.
-            //
-            // Both produce the same surplus in a log that never wrote down what the frames were.
-            // The `real`/`other` split settles it in one session: if the surplus is all `cmd 0x08`
-            // it is per-frame crediting, and if it is `cmd 0x10`/`0x03F0` traffic it is strays.
-            //
-            // Until then `got` — the loose count — still paces the loop and feeds the silence
-            // guard. Demanding a strict credit the device might label differently would fail closed
-            // at chunk one and take the tester's ability to save a preset with it, and stacking a
-            // second untested change on this path would make the next logs unreadable: we would not
-            // know which change moved the wedge rate.
-            let real = batch
-                .iter()
-                .filter(|f| f.src == dst && f.cmd == cmd::CHUNK)
-                .count();
-            let other: Vec<&Frame> = batch
-                .iter()
-                .filter(|f| !(f.src == dst && f.cmd == cmd::CHUNK))
-                .collect();
-            if let Some(f) = other.first() {
-                tracing::debug!(
-                    stray_src = format_args!("{:#06x}", f.src),
-                    stray_cmd = f.cmd,
-                    stray_body = f.body.len(),
-                    strays = other.len(),
-                    "counted a non-credit frame as a write credit"
-                );
+            let deadline = waited + CREDIT_WAIT;
+            let mut real = 0usize;
+            let mut other = 0usize;
+            let mut got = 0usize;
+            loop {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                if left.is_zero() {
+                    break;
+                }
+                let batch = self.transport.drain_collect(left, 1);
+                if batch.is_empty() {
+                    break; // device went quiet
+                }
+                for f in batch {
+                    got += 1;
+                    if f.src == dst && f.cmd == cmd::CHUNK {
+                        real += 1;
+                    } else {
+                        tracing::debug!(
+                            stray_src = format_args!("{:#06x}", f.src),
+                            stray_cmd = f.cmd,
+                            stray_body = f.body.len(),
+                            "set aside a non-credit frame during a write"
+                        );
+                        other += 1;
+                        set_aside.push(f);
+                    }
+                }
+                if real > 0 {
+                    break;
+                }
             }
-            let other = other.len();
+            // How long this chunk's credit took. Measured before the mop-up sweep, which is a fixed
+            // 2 ms and would otherwise smear the number that matters.
+            let credit_ms = waited.elapsed();
+            for f in self
+                .transport
+                .drain_collect(std::time::Duration::from_millis(2), 8)
+            {
+                got += 1;
+                if f.src == dst && f.cmd == cmd::CHUNK {
+                    real += 1;
+                } else {
+                    other += 1;
+                    set_aside.push(f);
+                }
+            }
             real_credits += real;
             stray_frames += other;
             if n == 0 {
@@ -1074,19 +1092,23 @@ impl Session {
             }
             worst_credit_ms = worst_credit_ms.max(credit_ms.as_millis());
             credits += got;
+            // Both guards run off `real`, not `got`. A chunk answered only by a status push has not
+            // been consumed by anything, and treating that as progress is what let the host get
+            // ahead of the device in the first place.
+            //
             // A credit that arrived, but late. The device is still answering and has not gone
             // quiet, so this is not the silence guard's case — it is the window in which the
             // device can still be rescued, if it can be rescued at all.
-            slow = if got > 0 && credit_ms > SLOW_CREDIT {
+            slow = if real > 0 && credit_ms > SLOW_CREDIT {
                 slow + 1
             } else {
                 0
             };
-            // Count *consecutive* unanswered chunks, not the running total. The device batches its
+            // Count *consecutive* uncredited chunks, not the running total. The device batches its
             // credits — a healthy transfer can be several behind and catch up in one sweep — so a
             // cumulative deficit says "busy" as often as it says "dead". Going quiet and staying
             // quiet is the signature that actually distinguishes them.
-            silent = if got == 0 { silent + 1 } else { 0 };
+            silent = if real == 0 { silent + 1 } else { 0 };
             tracing::debug!(
                 arg,
                 len = unit.len(),
@@ -1170,7 +1192,23 @@ impl Session {
         let acks = self
             .transport
             .drain_collect(std::time::Duration::from_millis(80), 32);
-        let acked = acks.iter().any(|f| reply_txn(&f.body) == Some(txn));
+        // Look in both places. The apply-ACK is `0x03ed cmd 4` — not a credit — so when it lands
+        // mid-transfer the credit wait now sets it aside, and a sweep of `acks` alone would miss it
+        // and report `acked=false` on a write the device plainly took.
+        let acked = acks
+            .iter()
+            .chain(set_aside.iter())
+            .any(|f| reply_txn(&f.body) == Some(txn));
+        // The 80 ms ack sweep catches panel pushes too — same channel, same window. Keep those.
+        set_aside.extend(acks.into_iter().filter(|f| f.src == channel::STATUS.1));
+        // Hand the panel mirror back now the transfer is over, in the order the device sent it.
+        if !set_aside.is_empty() {
+            tracing::debug!(
+                frames = set_aside.len(),
+                "returning status frames set aside during the write"
+            );
+            self.transport.requeue(set_aside);
+        }
         // `worst_credit_ms` is the number to read in a field log: a completed write should show a
         // single-digit figure, and anything near SLOW_CREDIT means that write nearly died.
         tracing::info!(

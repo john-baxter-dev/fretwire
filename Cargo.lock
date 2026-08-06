@@ -925,11 +925,11 @@ dependencies = [
 
 [[package]]
 name = "fretwire"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "fretwire-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -943,7 +943,7 @@ dependencies = [
 
 [[package]]
 name = "fretwire-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "fretwire-data",
  "fretwire-protocol",
@@ -956,7 +956,7 @@ dependencies = [
 
 [[package]]
 name = "fretwire-data"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flate2",
  "rmpv",
@@ -967,7 +967,7 @@ dependencies = [
 
 [[package]]
 name = "fretwire-protocol"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rmpv",
  "thiserror 2.0.18",
@@ -975,7 +975,7 @@ dependencies = [
 
 [[package]]
 name = "fretwire-tauri"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "fretwire-core",
  "serde",
@@ -989,7 +989,7 @@ dependencies = [
 
 [[package]]
 name = "fretwire-usb"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "fretwire-protocol",
  "futures-lite",

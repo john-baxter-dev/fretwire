@@ -10,9 +10,9 @@
 # ssh://aur@aur.archlinux.org/fretwire.git.
 
 pkgname=fretwire
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
-pkgdesc="Independent editor for the Line 6 HX Stomp"
+pkgdesc="Independent editor for the Line 6 HX Stomp and Helix Floor"
 arch=('x86_64')
 url="https://github.com/john-baxter-dev/fretwire"
 license=('MIT' 'Apache-2.0')

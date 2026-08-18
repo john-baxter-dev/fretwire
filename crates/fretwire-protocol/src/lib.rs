@@ -28,6 +28,13 @@ pub const PID_HX_STOMP_XL: u16 = 0x4253;
 /// blocks on the second DSP (addressed by the same bare slot integer: `slot = dsp * 20 + index`).
 /// See `docs/helix-floor.md` and [`DEVICES`].
 pub const PID_HELIX_FLOOR: u16 = 0x4248;
+/// USB Product ID for the Helix LT, read off a physical unit on Linux (2026-08-18):
+/// USB product string `HELIX`, `bcdDevice 0x0200`, and the same six-interface layout the
+/// Floor has, interface 0 being the vendor control channel.
+///
+/// The unit identifies itself as `P21` — the Floor's model code — and every read path
+/// reconciles against it unchanged. See `docs/helix-lt.md`.
+pub const PID_HELIX_LT: u16 = 0x424A;
 /// Interface number of the vendor-specific control channel.
 pub const CONTROL_INTERFACE: u8 = 0x00;
 /// Bulk OUT endpoint (host → device).
@@ -127,6 +134,42 @@ pub const DEVICES: &[Device] = &[
         ]),
         setlist_size: Some(128),
         support: Support::Verified,
+    },
+    Device {
+        pid: PID_HELIX_LT,
+        name: "Helix LT",
+        // The LT stamps the Floor's code: the handshake identity reply reports "P21" and a
+        // pulled preset carries key `7 → 36` = "P21\0". `by_model_code("P21")` therefore
+        // resolves to the Floor, which is listed first — they are one data class.
+        model_code: Some("P21"),
+        // Unknown, not copied across: the handshake carries no `0x0021xxxx` device id and
+        // the wire preset stream has no such field. The Floor's value came from a `.hxb`,
+        // and we have no backup from an LT.
+        preset_device_id: None,
+        // Both DSPs — a pulled preset populates key `1` and holds blocks in slots 21..28
+        // (the unit reported DSP1 71.0% / DSP2 43.0%).
+        dsps: Some(2),
+        // The pulled preset carries SNAPSHOT 1..SNAPSHOT 8.
+        snapshots: Some(8),
+        // Banks 0..7 each list 128 presets and bank 8 is refused (code -3). Bank 0 holds the
+        // factory amp presets and bank 7 the templates ("Quick Start", "Parallel Spans",
+        // "SNP:4-Amp Spill") — the Floor's layout, so the Floor's names are used. Unlike the
+        // Floor's, these names are not corroborated by a backup; only the arity and the two
+        // end banks were observed.
+        setlists: Some(&[
+            "FACTORY 1",
+            "FACTORY 2",
+            "USER 1",
+            "USER 2",
+            "USER 3",
+            "USER 4",
+            "USER 5",
+            "TEMPLATES",
+        ]),
+        setlist_size: Some(128),
+        // Handshake, preset read, setlist and preset-list browse are all reconciled against a
+        // physical LT, but no edit has ever been sent to one.
+        support: Support::Untested,
     },
     Device {
         pid: PID_HX_STOMP_XL,

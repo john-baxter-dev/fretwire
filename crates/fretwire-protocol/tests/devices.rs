@@ -3,7 +3,9 @@
 //! Everything asserted here is either a USB ID from a real descriptor or a value read out of a real
 //! preset — nothing is inferred from another device in the family. See `docs/helix-floor.md`.
 
-use fretwire_protocol::{DEVICES, Device, PID_HELIX_FLOOR, PID_HX_STOMP, PID_HX_STOMP_XL, Support};
+use fretwire_protocol::{
+    DEVICES, Device, PID_HELIX_FLOOR, PID_HELIX_LT, PID_HX_STOMP, PID_HX_STOMP_XL, Support,
+};
 
 #[test]
 fn every_device_has_a_distinct_pid() {
@@ -27,6 +29,10 @@ fn lookup_by_pid() {
     assert_eq!(
         Device::by_pid(PID_HX_STOMP_XL).map(|d| d.name),
         Some("HX Stomp XL")
+    );
+    assert_eq!(
+        Device::by_pid(PID_HELIX_LT).map(|d| d.name),
+        Some("Helix LT")
     );
     assert!(Device::by_pid(0xFFFF).is_none());
 }
@@ -74,7 +80,7 @@ fn verified_devices_are_fully_described() {
 }
 
 #[test]
-fn the_untested_device_claims_nothing_it_hasnt_shown_us() {
+fn the_stomp_xl_claims_nothing_it_hasnt_shown_us() {
     let xl = Device::by_pid(PID_HX_STOMP_XL).unwrap();
     assert_eq!(xl.support, Support::Untested);
     // We have no capture, preset or backup from an XL — so none of this may be assumed to match
@@ -135,4 +141,27 @@ fn the_two_verified_devices_differ_where_we_measured_them() {
     assert_eq!(stomp.preset_device_id, Some(0x0021_0006));
     assert_eq!(floor.preset_device_id, Some(0x0021_0001));
     assert_ne!(stomp.model_code, floor.model_code);
+}
+
+/// The LT reports the Floor's model code and the same setlist geometry, but its own preset
+/// device id was never observed — it must stay unknown rather than inherit the Floor's.
+#[test]
+fn the_lt_shares_the_floors_data_class_without_inheriting_its_device_id() {
+    let floor = Device::by_pid(PID_HELIX_FLOOR).unwrap();
+    let lt = Device::by_pid(PID_HELIX_LT).unwrap();
+
+    // Measured on a physical LT: see docs/helix-lt.md.
+    assert_eq!(lt.model_code, Some("P21"));
+    assert_eq!((lt.dsps, lt.snapshots), (Some(2), Some(8)));
+    assert_eq!(lt.setlist_size, floor.setlist_size);
+    assert_eq!(lt.setlists, floor.setlists);
+
+    // Never seen on the wire, so never guessed.
+    assert_eq!(lt.preset_device_id, None);
+
+    // Both stamp "P21"; the lookup keeps resolving it to the Floor, which is listed first.
+    assert_eq!(
+        Device::by_model_code("P21").map(|d| d.pid),
+        Some(PID_HELIX_FLOOR)
+    );
 }

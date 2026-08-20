@@ -1125,10 +1125,49 @@ pub struct PathBlock {
 /// MessagePack key carrying a preset's display name in the preset-list stream.
 const PRESET_NAME_KEY: i64 = 109;
 
-/// Parse a reassembled **preset-list** stream into `(index, name)` pairs. The stream is an
-/// envelope `{.., 104: Array[ {index: {109: name, …}} ]}` (one entry per preset slot). Verified
-/// against `startup.pcapng` (HX Stomp, 126 presets).
-pub fn parse_preset_list(reassembled: &[u8]) -> crate::Result<Vec<(u16, String)>> {
+/// One row of a **preset-list** browse response.
+///
+/// It carries two numbers and they are **not** interchangeable — mistaking one for the other is
+/// what made a device with reordered presets unusable (see
+/// `fretwire_core::session::list_preset_entries_in`):
+///
+/// * `slot` is the row's **position in the stream**, and that is the preset's real slot: the
+///   number the pedal displays, the one `goto_preset`/`save_preset` take, and the one op-23
+///   reports back as [`PresetInfo::index`]. [solid — HX Edit's own listing of a Helix Floor with
+///   three moved presets matches that unit's `.hxb` backup position-for-position, and all 38
+///   op-23 identities across the field logs agree with it]
+/// * `key` is the row's MessagePack map key. It is the preset's index *before* it was last
+///   reordered, and no command on this protocol accepts it as an address. [solid] Most likely the
+///   physical storage slot, with the displayed order a permutation laid over it — reordering then
+///   costs an order-table write instead of relocating a ~7 KB blob [hypothesis]. **Diagnostics
+///   only:** `key != slot` is how we know the user has moved presets on this device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PresetListEntry {
+    /// The preset's slot, from this row's position in the stream. What `goto_preset` takes.
+    pub slot: u16,
+    /// The row's map key — the pre-reorder index. Never an address; see the type docs.
+    pub key: u16,
+    /// Display name, NUL-trimmed.
+    pub name: String,
+}
+
+impl PresetListEntry {
+    /// Whether this row's stored key disagrees with the slot the device actually lists it in — the
+    /// signature of a preset that has been moved on the pedal. Keys are numbered globally, so
+    /// `base` is the bank's offset (`bank * setlist_size`); pass `0` for a flat-list device.
+    ///
+    /// Diagnostic only. Nothing may address a preset by its key. See the type docs.
+    pub fn key_disagrees(&self, base: i64) -> bool {
+        self.key as i64 - base != self.slot as i64
+    }
+}
+
+/// Parse a reassembled **preset-list** stream into one [`PresetListEntry`] per slot, in slot
+/// order. The stream is an envelope `{.., 104: Array[ {key: {109: name, …}} ]}`, one entry per
+/// preset slot; the **array position is the slot** and the map key is not (see
+/// [`PresetListEntry`]). Verified against `startup.pcapng` (HX Stomp, 126 presets) and against
+/// HX Edit's own listing of a reordered Helix Floor.
+pub fn parse_preset_list(reassembled: &[u8]) -> crate::Result<Vec<PresetListEntry>> {
     let root = locate_root_where(reassembled, 32, |v| {
         matches!(map_get(v, ENVELOPE_PRESET_KEY), Some(Value::Array(_)))
     })
@@ -1153,22 +1192,29 @@ pub fn parse_preset_list(reassembled: &[u8]) -> crate::Result<Vec<(u16, String)>
         }
     };
     let mut out = Vec::with_capacity(list.len());
-    for entry in list {
-        // Each entry is a 1-key map: { <index>: { 109: name, … } }.
-        let (idx_key, inner) = match entry {
+    // The slot comes from `enumerate` over the *stream*, not from `out.len()`: a malformed row
+    // that hits one of the `continue`s below then leaves a hole in the numbering instead of
+    // shifting every slot after it down by one — one missing row rather than a whole listing that
+    // addresses the wrong presets.
+    for (pos, entry) in list.iter().enumerate() {
+        // Each entry is a 1-key map: { <key>: { 109: name, … } }.
+        let (map_key, inner) = match entry {
             Value::Map(m) => match m.first() {
                 Some((k, v)) => (k, v),
                 None => continue,
             },
             _ => continue,
         };
-        let index = idx_key.as_u64().unwrap_or(0) as u16;
         let name = map_get(inner, PRESET_NAME_KEY)
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .trim_end_matches('\0')
             .to_string();
-        out.push((index, name));
+        out.push(PresetListEntry {
+            slot: pos as u16,
+            key: map_key.as_u64().unwrap_or(0) as u16,
+            name,
+        });
     }
     Ok(out)
 }
@@ -1699,8 +1745,11 @@ mod list_tests {
         assert_eq!(parse_status_push(&frame), Some(StatusPush::Other(22)));
     }
 
+    /// The array position is the slot; the row's map key is not. Keyed deliberately out of order —
+    /// the shape a device with a moved preset really sends — so an implementation that trusts the
+    /// key fails here instead of in someone's setlist.
     #[test]
-    fn parses_preset_names() {
+    fn preset_names_are_numbered_by_position_not_by_key() {
         let entry = |i: i64, name: &str| {
             Value::Map(vec![(
                 Value::from(i),
@@ -1712,19 +1761,19 @@ mod list_tests {
             (Value::from(103), Value::from(0)),
             (
                 Value::from(104),
-                Value::Array(vec![entry(0, "Alpha"), entry(1, "Beta"), entry(2, "Gamma")]),
+                Value::Array(vec![entry(2, "Alpha"), entry(0, "Beta"), entry(1, "Gamma")]),
             ),
         ]);
         let mut stream = vec![0u8; 8]; // fake TLV header for locate_root to scan past
         stream.extend(enc(&env));
-        let list = parse_preset_list(&stream).unwrap();
+        let row = |slot: u16, key: u16, name: &str| PresetListEntry {
+            slot,
+            key,
+            name: name.to_string(),
+        };
         assert_eq!(
-            list,
-            vec![
-                (0, "Alpha".to_string()),
-                (1, "Beta".to_string()),
-                (2, "Gamma".to_string())
-            ]
+            parse_preset_list(&stream).unwrap(),
+            vec![row(0, 2, "Alpha"), row(1, 0, "Beta"), row(2, 1, "Gamma"),]
         );
     }
 

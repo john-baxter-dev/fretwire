@@ -544,17 +544,58 @@ the backup **exactly** — those are the banks a base offset would have exposed,
 > INCIDENT entries in `STATUS.md`) — nothing here bears on those, and the cross-setlist *write* path
 > has still never run against a Floor.
 
-### The device does not list presets in slot order  [solid] — FIXED
+### The device does not list presets in slot order  [RETRACTED 2026-08-19 — it does]
 
-A moved preset keeps its **old position in the stream** while carrying its **new index**: bank 0
-emits slot 68 at stream position 101, bank 1 emits slot 95 at position 84. The other six banks
-arrive strictly ascending, which is why this went unnoticed.
+> **This section was wrong, and the "fix" it describes was the bug.** Kept in full because the
+> observation underneath it is correct and still load-bearing; only the inference was backwards.
+> The correction is below.
 
-`parse_preset_list` returns stream order and the sidebar renders positionally, so on the tester's
-unit three presets drew in the wrong row under a correct number — a plausible contributor to the
-"the numbers don't line up" reports. `Session::list_presets_in` now sorts by slot after
-normalising, and logs `reordered=true` when the device's order differed
-(`normalise_preset_list`, unit-tested).
+The observation, which stands: on the tester's Floor, three rows arrive out of step with their own
+map key — bank 0 emits key 68 at stream position 101 and key 107 at position 108, bank 1 emits key
+95 at position 84. The other banks arrive strictly ascending, which is why it went unnoticed.
+
+The inference, which does not: this read the **key** as the preset's current index and the stream
+position as stale, on the strength of a `difflib` diff against the same unit's 2026-07-22 `.hxb`
+backup — assuming the tester had moved those presets *after* taking it. `Session::list_presets_in`
+was changed to sort by the key.
+
+It is the other way round. **The array position is the slot; the key is the preset's index before
+it was last reordered.** Three independent sources agree, and the moves predate the backup:
+
+* **HX Edit's own listing of the same unit** (`WinCap5.pcapng`, the Windows capture the tester sent
+  on 2026-07-23), reassembled whole with `tools/extract-preset-stream.py --list`. Compared
+  entry-by-entry against his `.hxb`: in **stream order** all 128 rows of FACTORY 1 and all 128 of
+  FACTORY 2 name the preset the backup holds at that position. Sorted by key they do not — 36 rows
+  of FACTORY 1 and 12 of FACTORY 2 carry a key that is not their slot (34 displaced by the 68 → 101
+  move, 2 by the 107/108 swap, and 12 by FACTORY 2's 95 → 84 move). HX Edit renders the list
+  positionally and ignores the key. Pinned by `crates/fretwire-data/tests/preset_list_order.rs`,
+  which skips when the contributor's files are absent.
+* **The device's own op-23 identity.** All 38 bank-0 identities across the field logs match the
+  backup slot, i.e. the position. `BULB RHYTHM` reports index 71 live; its key is 72, and the
+  pre-sort screenshot (`from_redditor/bmblfootPrince01.png`) labels that row `072`.
+* **The shape of the anomaly is a move, not a renumbering.** Bank 0's second anomaly is a bare
+  adjacent transposition — `…106, 108, 107, 109…`, one click of knob 1. The first is the same
+  operation applied 33 times: key 68 lifted out and reinserted after key 101, everything it passed
+  shifted one place. Keys stay welded to their preset while the order moves around them.
+
+There is no "UI order" field to consult, either: across 236 clean rows the inner map is
+`{109: name, 123: false, 124: false, 125: 0}` — the order *is* the array order.
+
+**What the key is.** The preset's index before it was reordered [solid], stable across a week,
+many sessions, power cycles and HX Edit's own backup run. Most likely its physical storage slot,
+with the displayed order a permutation table laid over it — reordering then costs a table write
+instead of relocating a ~7 KB blob [hypothesis]. Against that reading: no command on this protocol
+accepts the key as an address, so it may just be an implementation detail leaking into the wire
+format. Three cheap experiments would settle it, all on a device with reordered presets: move one
+preset twice and dump the listing after each (physical slot → the key never changes; stale index →
+it follows); save a preset after moving it and re-dump; restore a backup over a reordered setlist
+and see whether the keys come back identity-mapped.
+
+**Fixed 2026-08-19.** `parse_preset_list` numbers rows by their position in the stream and returns
+`PresetListEntry { slot, key, name }`; the sort is gone. The key never leaves `fretwire-core` — it
+feeds the `reordered` flag in the `preset listing parsed` log line and a footnote on
+`fretwire presets`, and nothing else, so it cannot be mistaken for an address again. Reported by an
+HX Stomp XL user who reorders presets on the pedal; the mechanism is device-independent.
 
 ### The snapshot bypass matrix is one flat 40-entry array  [solid] — FIXED
 

@@ -691,10 +691,11 @@ the short version:
   for — six blocks on DSP2's row B (wire 33..=38 → columns 3..=8) plus two on DSP1's (11/12 →
   columns 1/2). The `slot − 10` column mapping holds per DSP and everything stays inside the
   8-column grid.
-- **Bug found and fixed: the browse listing is not sorted.** A moved preset keeps its old *stream
-  position* while carrying its new *index*, so the sidebar drew three presets in the wrong row under
-  correct numbers. `Session::list_presets_in` now sorts after normalising
-  (`normalise_preset_list`, unit-tested) and logs `reordered=true` when the device's order differed.
+- **~~Bug found and fixed: the browse listing is not sorted.~~ RETRACTED 2026-08-19 — the listing
+  was already in slot order and the sort broke it.** The observation (three rows out of step with
+  their own map key) was right; reading the key as the current index was not. The array position is
+  the slot; the key is the preset's index before it was last reordered. See the RETRACTED section in
+  `docs/helix-floor.md` for the evidence, and the 2026-08-19 entry below for the fix.
 - **Bug found and fixed: the snapshot bypass matrix is a flat 40-entry array** indexed by wire slot,
   not one 20-entry array per DSP. `show-preset`'s scene diagnosis was indexing by the per-DSP index,
   so every DSP2 block reported DSP1's state — all eight snapshots looked alike and none matched the
@@ -741,8 +742,9 @@ blob. Two of the four sessions ended with the Floor dropping off USB. Full write
 - **First direct check of our routing grid against the pedal's own display.** A photo of
   `15D RC REINCARNATION` on the Floor's screen agrees with our render on every structural point —
   eight blocks on path 1, one parallel block under the later chain, path 2 empty.
-- **Listing order confirmed live.** `bank=0 … reordered=true`, `bank=2 … reordered=false` — exactly
-  what the 2026-07-29 dump predicted. The sort in `list_presets_in` does real work on this hardware.
+- **~~Listing order confirmed live.~~** `bank=0 … reordered=true`, `bank=2 … reordered=false` — the
+  flag fired exactly where the 2026-07-29 dump predicted, but what it was reporting was the sort
+  *damaging* bank 0, not repairing it. [retracted 2026-08-19 — see below]
 - **Logging gap closed.** `preset read/decode failed` now logs the error, not just the attempt
   number; without it a remote log can't separate a decode fault from a device that has stopped
   answering.
@@ -1910,3 +1912,61 @@ keeping.
 **Still open:** whether this is *the* Floor wedge. A Stomp has never wedged, so it cannot be shown
 here. What can be said is that the host can no longer get ahead of the device by mistaking a panel
 push for permission to send — which was a real mechanism, and is now closed.
+
+## Twenty-fourth round (2026-08-19): **the preset listing was in slot order all along**
+
+An HX Stomp XL user reported the preset browser showing presets in an order that doesn't match the
+pedal's own, on a unit whose presets he had reordered on the device (knob 1 in the preset list,
+manual p. 13). Editing "007" in fretwire touched the device's 007, but the two were different
+presets. Not XL-specific — it hits any device with a reordered setlist, and it was our regression.
+
+**The listing arrives in slot order and always did. The array position is the slot; each row's map
+key is the preset's index before it was last reordered.** The 2026-07-29 round read that backwards
+and added a sort by the key, which took a correct list and shuffled it into the device's pre-reorder
+order — mislabelling every row below the first move and sending `goto` one preset off. The three
+sources that settle it are written up in the RETRACTED section of `docs/helix-floor.md`: HX Edit's
+own listing of the tester's Floor (`WinCap5.pcapng`) aligns with his `.hxb` position-for-position
+and not at all by key; every op-23 identity in the field logs agrees with the position; and the
+anomalies are shaped like moves, one of them a bare adjacent transposition — a single knob click.
+
+The `reordered=true` line in the 2026-07-30 logs was this firing, not the fix working.
+
+**Fixed.** `parse_preset_list` numbers rows by stream position and returns
+`PresetListEntry { slot, key, name }` (`fretwire-data`); the sort and the base-subtraction
+arithmetic are gone — a position needs no normalising. The key stays inside `fretwire-core`: it
+feeds the `reordered` flag on the `preset listing parsed` log line and a footnote on
+`fretwire presets`, and never reaches the DTO or the UI, so it cannot be mistaken for an address
+again. `PresetListEntry::key_disagrees(base)` is the one place the comparison is written; keys are
+globally numbered (`bank * setlist_size + slot`), which is all `base` is still for.
+
+**Blast radius while it was broken:** sidebar order and numbering, `goto` landing on the neighbouring
+preset, the current-preset highlight on the wrong row — and, the one with teeth, Save As / Restore
+naming the wrong victim in their "this overwrites X" confirmations (`App.svelte:505,554` resolve the
+target slot's name through the listing). Backups were never corrupted: `backup_setlist` takes each
+name from the op-23 read-back and aborts on identity desync, and the key set is a permutation of
+every slot, so the sweep still covered the setlist correctly.
+
+**Confirmed live on an HX Stomp [solid — 2026-08-19].** With two presets moved on the pedal, bank 0
+returns 5 of 126 rows whose key isn't their slot, in the same two shapes the Floor showed: a
+rotation (`ClaudeTest` moved 22 → 24, so `ClaudeTest2`/`ClaudeTest3` shifted up one and kept keys
+23/24) and a bare adjacent transposition at 99/100 — one knob click. The op-23 identity reports
+`index: 24` for `ClaudeTest`, agreeing with the **position**, not its key of 22. Under the sort that
+preset listed at 22 and a click on it would have sent `goto 22` and loaded `ClaudeTest2`. Second
+device model, same mechanism.
+
+**What the key actually is** is settled only behaviourally: the pre-reorder index [solid], stable
+across a week of sessions and power cycles. Physical storage slot with the display order as a
+permutation on top is the likely mechanism [hypothesis]; three cheap experiments that would settle
+it are listed in `docs/helix-floor.md`. It doesn't gate anything — nothing may address a preset by
+it either way.
+
+**The assumption this rests on:** the device lists *every* slot, including empty ones. It does on
+both units we can see — a Stomp sends 126 rows for 126 slots, a Floor 128 for 128, empty ones named
+`New Preset` — and the XL report is the same shape. A device that omitted empty slots would break
+positional numbering, and would be the one case where the key was the better number. Nothing
+suggests one exists; writing it down so the next surprise has somewhere to land.
+
+**Deliberately not added:** a check that the entry count matches `setlist_stride()`. Position is
+load-bearing now, so a lost mid-stream chunk would shift slots — but `declared_stream_len` already
+turns a short stream into an error rather than a silent truncation, and the XL's setlist size is
+`None` (falls back to 128), so the check would fire spuriously on the very device that reported this.

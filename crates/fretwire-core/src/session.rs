@@ -19,7 +19,7 @@
 //! and per-block edits were already DSP-agnostic; this makes the planning layer so too.
 
 use crate::editor::{Catalog, EditorPreset};
-use fretwire_data::stream::ParamValue;
+use fretwire_data::stream::{ParamValue, PresetListEntry};
 use fretwire_protocol::{EditValue, Frame, Tlv, channel, cmd, edit, op};
 use fretwire_usb::Transport;
 use std::collections::HashMap;
@@ -2799,27 +2799,47 @@ impl Session {
         self.list_presets_in(0)
     }
 
-    /// [`Self::list_presets`] for a specific **setlist** (`bank`). The index of each returned
-    /// preset is relative to that setlist, and pairs with `goto_preset(bank, index)`.
+    /// [`Self::list_presets`] for a specific **setlist** (`bank`). The slot of each returned preset
+    /// is relative to that setlist, and pairs with `goto_preset(bank, slot)`.
     pub fn list_presets_in(&mut self, bank: i64) -> crate::Result<Vec<(u16, String)>> {
+        Ok(self
+            .list_preset_entries_in(bank)?
+            .into_iter()
+            .map(|e| (e.slot, e.name))
+            .collect())
+    }
+
+    /// [`Self::list_presets_in`] keeping the whole browse row: each preset's slot **and** the
+    /// stored key it arrived with. Only diagnostics want the key — `fretwire presets` footnotes a
+    /// device whose presets have been moved — and the editor path takes slots and names alone, so
+    /// the key can't be mistaken for an address downstream.
+    ///
+    /// The listing arrives in slot order and a row's *position* is its slot; the row's map key is
+    /// the preset's index before it was last reordered, and addresses nothing. See
+    /// [`PresetListEntry`]. Keys are numbered globally (`bank * setlist_size + slot`) — a TEMPLATES
+    /// (bank 7) listing keys from 896 = 7 × 128 — which is what `base` is for: it is the offset the
+    /// keys are compared against, and no longer arithmetic anything is numbered by.
+    ///
+    /// **This used to number the list by that key, and sort by it** — a 2026-07-29 reading of the
+    /// tester's Floor dump that took his `.hxb` backup to be the stale side of the disagreement.
+    /// It is the other way round: the backup, HX Edit's own listing of the same unit and all 38
+    /// op-23 identities in the field logs agree with the stream *position*, and the moves predate
+    /// the backup. So the sort took a correct list and shuffled it into the device's pre-reorder
+    /// order — mislabelling every row below the first move and sending `goto` to the neighbouring
+    /// preset. [solid — retracted 2026-08-19, see `docs/helix-floor.md`]
+    pub fn list_preset_entries_in(&mut self, bank: i64) -> crate::Result<Vec<PresetListEntry>> {
         let payload = self.list_presets_raw(bank)?;
-        // The browse numbers presets **globally** (`bank * setlist_size + slot`) — a TEMPLATES
-        // (bank 7) listing comes back starting at 896 = 7 × 128 — whereas a preset's own identity
-        // (`PresetInfo::index`) is the bank-relative slot, and that is what `goto_preset` /
-        // `save_preset` take. Normalise here so callers only ever see one numbering: passing a
-        // global index through as a slot is how `goto_preset(7, 906)` reached the device and
-        // locked it up.
+        let entries = fretwire_data::stream::parse_preset_list(&payload)?;
         let base = bank * self.device().setlist_stride();
-        let raw = fretwire_data::stream::parse_preset_list(&payload)?;
-        let (out, reordered) = normalise_preset_list(raw, base);
+        let reordered = listing_reordered(&entries, base);
         tracing::debug!(
             bank,
             base,
-            n = out.len(),
+            n = entries.len(),
             reordered,
-            "preset list normalised to slots"
+            "preset listing parsed"
         );
-        Ok(out)
+        Ok(entries)
     }
 
     /// The **raw reassembled preset-list stream** for `bank`, undecoded. Diagnostic hook: the
@@ -3187,82 +3207,64 @@ fn classify_chunk(n: usize, full: usize, have: usize, target: Option<usize>) -> 
     }
 }
 
-/// Turn a browse listing's **global** indices into bank-relative slots, and put the list in slot
-/// order. Returns the list and whether the device's own order needed changing.
+/// Whether the device's stored keys disagree with the slots its listing actually puts presets in —
+/// i.e. whether the user has moved presets around on the pedal.
 ///
-/// Two separate corrections, both load-bearing:
-///
-/// * **Numbering.** The browse numbers presets globally (`bank * stride + slot`) while a preset's
-///   own identity, `goto_preset` and `save_preset` all use the bank-relative slot. Passing a global
-///   index through as a slot is how `goto_preset(7, 906)` reached the device and locked it up.
-/// * **Order.** The device does not emit the listing in slot order. A preset the user has *moved*
-///   keeps its old position in the stream while carrying its new index — the tester's 2026-07-29
-///   eight-bank dump emits bank 0's slot 68 at stream position 101 and bank 1's slot 95 at position
-///   84, with all 1024 entries otherwise in order. [solid] Callers render this array positionally,
-///   so a moved preset would draw in the wrong row under a correct number.
-fn normalise_preset_list(raw: Vec<(u16, String)>, base: i64) -> (Vec<(u16, String)>, bool) {
-    let mut out: Vec<(u16, String)> = raw
-        .into_iter()
-        .map(|(global, name)| ((global as i64 - base).max(0) as u16, name))
-        .collect();
-    let reordered = out.windows(2).any(|w| w[0].0 > w[1].0);
-    // Stable, so if the device ever does repeat a slot the duplicates keep their relative order
-    // rather than being shuffled arbitrarily.
-    out.sort_by_key(|&(slot, _)| slot);
-    (out, reordered)
+/// Keys are globally numbered (`bank * setlist_size + slot`), so they are compared against `base`:
+/// on a device where nothing has been moved, every row satisfies `key - base == slot`. One moved
+/// preset breaks that for itself and for everything it was moved past, since the rows it displaced
+/// keep their old keys. Diagnostic only — nothing addresses a preset by its key. See
+/// [`PresetListEntry`] and [`Session::list_preset_entries_in`].
+fn listing_reordered(entries: &[PresetListEntry], base: i64) -> bool {
+    entries.iter().any(|e| e.key_disagrees(base))
 }
 
 #[cfg(test)]
 mod preset_list_tests {
-    use super::normalise_preset_list;
+    use super::listing_reordered;
+    use fretwire_data::stream::PresetListEntry;
 
-    fn named(entries: &[(u16, &str)]) -> Vec<(u16, String)> {
+    fn rows(entries: &[(u16, u16, &str)]) -> Vec<PresetListEntry> {
         entries
             .iter()
-            .map(|(i, n)| (*i, (*n).to_string()))
+            .map(|(slot, key, name)| PresetListEntry {
+                slot: *slot,
+                key: *key,
+                name: (*name).to_string(),
+            })
             .collect()
     }
 
     #[test]
-    fn global_indices_become_bank_relative_slots() {
-        // TEMPLATES (bank 7) lists from 896 = 7 × 128.
-        let (out, reordered) = normalise_preset_list(
-            named(&[(896, "Quick Start"), (897, "Parallel Spans")]),
-            7 * 128,
+    fn an_untouched_listing_is_not_flagged() {
+        // TEMPLATES (bank 7) keys from 896 = 7 × 128, in step with its slots.
+        let list = rows(&[(0, 896, "Quick Start"), (1, 897, "Parallel Spans")]);
+        assert!(
+            !listing_reordered(&list, 7 * 128),
+            "keys that track the slots mean nothing has been moved"
         );
-        assert_eq!(out, named(&[(0, "Quick Start"), (1, "Parallel Spans")]));
-        assert!(!reordered, "an in-order listing is left alone");
     }
 
     #[test]
-    fn a_moved_preset_is_put_back_in_slot_order() {
-        // The shape bank 0 of the tester's Floor really sends: slot 68 arrives late, after 100.
-        let (out, reordered) = normalise_preset_list(
-            named(&[
-                (67, "BMBLFOOT PRINCE"),
-                (69, "SHEEHAN PEARCE"),
-                (100, "REUTER LEAD"),
-                (68, "InSTANtgH0St/24"),
-            ]),
-            0,
-        );
-        assert_eq!(
-            out,
-            named(&[
-                (67, "BMBLFOOT PRINCE"),
-                (68, "InSTANtgH0St/24"),
-                (69, "SHEEHAN PEARCE"),
-                (100, "REUTER LEAD"),
-            ]),
-        );
-        assert!(reordered, "the device's order differed and we say so");
+    fn a_moved_preset_is_flagged() {
+        // Bank 0 of the tester's Floor. `InSTANtgH0St/24` was moved from 68 down to 101, so it
+        // still carries key 68 at slot 101 and everything it passed carries a key one too high.
+        let list = rows(&[
+            (67, 67, "BMBLFOOT PRINCE"),
+            (68, 69, "SHEEHAN PEARCE"),
+            (101, 68, "InSTANtgH0St/24"),
+        ]);
+        assert!(listing_reordered(&list, 0));
     }
 
     #[test]
-    fn an_index_below_the_bank_base_clamps_rather_than_wrapping() {
-        // Defensive: `as u16` on a negative would wrap to ~65k and address nothing.
-        let (out, _) = normalise_preset_list(named(&[(5, "Stray")]), 7 * 128);
-        assert_eq!(out, named(&[(0, "Stray")]));
+    fn a_bank_whose_keys_are_globally_numbered_is_not_flagged_for_that_alone() {
+        // Regression on the comparison itself: without `base`, every row of any bank but 0 would
+        // report as reordered.
+        assert!(!listing_reordered(
+            &rows(&[(3, 899, "Ext Amp & Pedals")]),
+            7 * 128
+        ));
     }
 }
 

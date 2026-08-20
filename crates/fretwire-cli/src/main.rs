@@ -404,10 +404,24 @@ fn main() -> Result<()> {
                 .get(bank as usize)
                 .map(|n| format!(" ({n})"))
                 .unwrap_or_default();
-            let presets = s.list_presets_in(bank)?;
+            let presets = s.list_preset_entries_in(bank)?;
             println!("{} presets in bank {bank}{label}:", presets.len());
-            for (i, name) in &presets {
-                println!("  [{i:>3}] {name}");
+            for p in &presets {
+                println!("  [{:>3}] {}", p.slot, p.name);
+            }
+            // A row's stored key is the preset's index before it was last moved on the pedal. It
+            // addresses nothing, but a disagreement is worth saying out loud: this is the device
+            // state that used to make the editor list presets in the wrong order, and it is the
+            // first thing to check when a remote report says the numbers don't line up.
+            let base = bank * s.device().setlist_stride();
+            let moved = presets.iter().filter(|p| p.key_disagrees(base)).count();
+            if moved > 0 {
+                println!(
+                    "  note: {moved} of {} entries carry a stored key other than their slot — \
+                     presets in this setlist have been reordered on the device. The slots above \
+                     are the ones the pedal shows.",
+                    presets.len()
+                );
             }
         }
         Command::ShowBackup {

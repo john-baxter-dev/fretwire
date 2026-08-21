@@ -136,3 +136,34 @@ fn the_two_verified_devices_differ_where_we_measured_them() {
     assert_eq!(floor.preset_device_id, Some(0x0021_0001));
     assert_ne!(stomp.model_code, floor.model_code);
 }
+
+/// The pedal's own preset numbering: `01A`, `01B`, `01C`, `02A`, … A label, never an address.
+#[test]
+fn preset_labels_read_the_way_the_stomps_screen_does() {
+    let stomp = Device::by_pid(PID_HX_STOMP).unwrap();
+    let label = |slot| stomp.preset_label(slot).unwrap();
+
+    assert_eq!(label(0), "01A");
+    assert_eq!(label(1), "01B");
+    assert_eq!(label(2), "01C");
+    assert_eq!(label(3), "02A");
+    // The preset the live tests sit on, and the last slot of the 126.
+    assert_eq!(label(24), "09A");
+    assert_eq!(label(125), "42C");
+    // 126 slots divide into whole banks — a leftover would mean the table's 3 is wrong.
+    assert_eq!(
+        stomp.setlist_size.unwrap() % stomp.presets_per_bank.unwrap(),
+        0
+    );
+}
+
+/// A device whose screen we have not seen gets no label rather than a plausible wrong one — the
+/// editor falls back to the slot number. See `Device::presets_per_bank`.
+#[test]
+fn devices_we_have_not_seen_banking_for_offer_no_label() {
+    for pid in [PID_HELIX_FLOOR, PID_HX_STOMP_XL] {
+        let d = Device::by_pid(pid).unwrap();
+        assert_eq!(d.presets_per_bank, None, "{}", d.name);
+        assert_eq!(d.preset_label(0), None, "{}", d.name);
+    }
+}

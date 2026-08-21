@@ -327,10 +327,15 @@ const DEVICES = {
     name: "HX Stomp",
     // One unnamed list — matches Device::setlist_names() falling back to ["Presets"].
     setlists: ["Presets"],
+    // Three per bank, so the list reads 01A/01B/01C/02A as the pedal's screen does.
+    presetsPerBank: 3,
   },
   floor: {
     name: "Helix Floor",
     setlists: ["Factory 1", "Factory 2", "User 1", "User 2", "User 3", "User 4", "User 5", "Templates"],
+    // Unknown for real, and the mock says so too: the list falls back to slot numbers, which is
+    // what a Floor shows today. See Device::presets_per_bank.
+    presetsPerBank: null,
   },
 };
 
@@ -408,6 +413,13 @@ const buildBanks = () => (deviceMode === "floor" ? floorSetlists() : [stompPrese
 let banks = buildBanks();
 let currentBank = 0;
 const setlistNames = () => DEVICES[deviceMode].setlists;
+// Device::preset_label — how the pedal's screen writes a slot (`09A`), or null where we don't know
+// this device's banking and the UI falls back to the slot number.
+const presetLabel = (slot) => {
+  const per = DEVICES[deviceMode].presetsPerBank;
+  if (!per) return null;
+  return String(Math.floor(slot / per) + 1).padStart(2, "0") + String.fromCharCode(65 + (slot % per));
+};
 const bankOf = (b) => banks[b] ?? [];
 let current = bankOf(0)[0];
 // Export/restore round-trip (see the export_setlists handler): the last export made this session,
@@ -899,7 +911,7 @@ const HANDLERS = {
     return toDto(current);
   },
   list_presets: ({ bank = currentBank } = {}) =>
-    bankOf(bank).map((p) => ({ index: p.index, name: p.name })),
+    bankOf(bank).map((p) => ({ index: p.index, name: p.name, label: presetLabel(p.index) })),
   // The connected device's setlist names. One entry on a Stomp, so the UI hides the picker.
   setlists: () => setlistNames().slice(),
   // Browsing setlists is ungated everywhere now; only *writing* into one the device isn't in is

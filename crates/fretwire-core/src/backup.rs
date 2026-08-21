@@ -103,7 +103,10 @@ impl Backup {
             .map(|a| {
                 a.iter()
                     .filter_map(|e| {
-                        Some((e["bank"].as_i64()?, e["name"].as_str().unwrap_or("").to_string()))
+                        Some((
+                            e["bank"].as_i64()?,
+                            e["name"].as_str().unwrap_or("").to_string(),
+                        ))
                     })
                     .collect()
             })

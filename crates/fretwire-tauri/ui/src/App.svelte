@@ -149,6 +149,15 @@
     !!preset && dspViews.some((v) => v.split_node?.slot === selectedSlot),
   );
 
+  // How the pedal writes the loaded preset's slot on its own screen (`09A`). Read off the listing
+  // rather than recomputed, so there is one source for it; falls back to `#24` on a device whose
+  // banking we haven't seen, and to nothing at all before the listing arrives.
+  const presetLabel = $derived.by(() => {
+    if (preset?.index == null) return null;
+    const row = presets.find((p) => p.index === preset.index && p.bank === presetBank);
+    return row?.label ?? "#" + preset.index;
+  });
+
   // The selected block, looked up fresh from the current preset (so it reflects live edits).
   const selectedBlock = $derived.by(() => {
     if (!preset || selectedSlot == null) return null;
@@ -759,7 +768,7 @@
       <div class="content">
         <div class="meta">
           <span>
-            preset <b>{preset.name ?? "—"}</b>{preset.index != null ? " #" + preset.index : ""}
+            preset <b>{preset.name ?? "—"}</b>{presetLabel ? " " + presetLabel : ""}
             {#if preset.dirty}<span class="edited" title="Edited — not saved to the device">● edited</span>{/if}
           </span>
           <span>device <b>{preset.device_model ?? "—"}</b></span>
@@ -894,7 +903,7 @@
           class:chosen={p.index === saveAsDlg.slot}
           onclick={() => (saveAsDlg.slot = p.index)}
         >
-          <span class="idx">{String(p.index).padStart(3, "0")}</span>
+          <span class="idx">{p.label ?? String(p.index).padStart(3, "0")}</span>
           <span class="nm">{p.name}</span>
           {#if p.index === preset?.index}<span class="cur">current</span>{/if}
         </button>
@@ -1004,7 +1013,7 @@
                 onclick={() =>
                   (restoreDlg = { ...restoreDlg, index: e.index, bank: e.bank, slot: e.index })}
               >
-                <span class="idx">{String(e.index).padStart(3, "0")}</span>
+                <span class="idx">{e.label ?? String(e.index).padStart(3, "0")}</span>
                 <span class="nm">{e.name}</span>
                 {#if e.setlist && setlists.length > 1}<span class="cur">{e.setlist}</span>{/if}
               </button>
@@ -1023,7 +1032,7 @@
                 class:chosen={p.index === restoreDlg.slot}
                 onclick={() => (restoreDlg = { ...restoreDlg, slot: p.index })}
               >
-                <span class="idx">{String(p.index).padStart(3, "0")}</span>
+                <span class="idx">{p.label ?? String(p.index).padStart(3, "0")}</span>
                 <span class="nm">{p.name}</span>
                 {#if p.index === preset?.index}<span class="cur">current</span>{/if}
               </button>

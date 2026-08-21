@@ -422,8 +422,16 @@ fn main() -> Result<()> {
                 .unwrap_or_default();
             let presets = s.list_preset_entries_in(bank)?;
             println!("{} presets in bank {bank}{label}:", presets.len());
+            let device = s.device();
             for p in &presets {
-                println!("  [{:>3}] {}", p.slot, p.name);
+                // Slot first — it is what `goto`/`save` take — then how the pedal's own screen
+                // writes it, where we know this device's banking. Reports paste this listing, so
+                // having both means "the numbers don't line up" can be checked against the panel
+                // without a second round trip.
+                match device.preset_label(p.slot as i64) {
+                    Some(l) => println!("  [{:>3}] {l}  {}", p.slot, p.name),
+                    None => println!("  [{:>3}] {}", p.slot, p.name),
+                }
             }
             // A row's stored key is the preset's index before it was last moved on the pedal. It
             // addresses nothing, but a disagreement is worth saying out loud: this is the device

@@ -2172,3 +2172,31 @@ a fact: every v1 file was written by a sweep that walked bank 0 and nothing else
 **Sidebar:** the tool rows had reached seven buttons. Save / Save As and Copy / Paste stay on the
 surface (Paste's label doubles as the clipboard readout); Rename, Export and Restore moved under a
 `⋯` menu, which is where the next one goes too.
+
+## Presets are numbered the way the pedal numbers them (2026-08-20)
+
+The sidebar listed slots (`000`, `001`, `024`). The HX Stomp's screen writes the same presets
+`01A`, `01B`, `01C`, `02A` — 42 banks of three, one per footswitch — so reading a preset off the
+hardware and finding it in the editor meant doing division in your head.
+
+`Device::presets_per_bank` + `Device::preset_label(slot)` produce the panel's string, and it rides
+the preset listing as `PresetListItem::label`: the sidebar, the Save As slot picker and the restore
+target column all show it, and the header reads `preset ClaudeTest 09A`. The CLI's `presets` keeps
+the slot in brackets and puts the label beside it — that listing is what we ask remote reporters to
+paste, and having both means "the numbers don't line up" can be checked against the panel without a
+second round trip:
+
+    126 presets in bank 0 (Presets):
+      [  0] 01A  Cleantinuum
+      [ 24] 09A  ClaudeTest
+      [125] 42C  New Preset
+
+**It is a label, never an address** — the same distinction the browse listing's map key needed.
+`goto_preset`/`save_preset` still take the slot, and nothing accepts `09A`.
+
+**Only the HX Stomp gets one.** `presets_per_bank` is `None` on the Floor and the XL, and those
+devices keep the slot numbers. 128 divides by 4 and by 8, the Floor has eight preset footswitches,
+and we have never seen its screen — a guess has two plausible answers and the wrong one mislabels
+every preset on the unit. One look at a Floor (and at the XL, which has more footswitches than the
+Stomp and so probably banks differently) settles each. This is the conservative direction on purpose:
+a label whose entire job is to match the hardware is worse than useless when it confidently doesn't.

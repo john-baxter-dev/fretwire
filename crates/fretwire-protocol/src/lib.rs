@@ -76,6 +76,15 @@ pub struct Device {
     /// [solid for the Floor — its `.hxb` holds exactly 128 slots in each of the 8 setlists, and a
     /// browse of TEMPLATES (bank 7) returned indices starting at 896 = 7 × 128]
     pub setlist_size: Option<usize>,
+    /// How many presets the pedal's own screen puts in one **bank** — the `3` in the HX Stomp's
+    /// `01A`/`01B`/`01C`/`02A`. Slot `n` is then bank `n / this + 1`, letter `'A' + n % this`.
+    ///
+    /// `None` where we have not seen the device's screen, and the editor then numbers presets by
+    /// slot instead. That is the conservative direction on purpose: this label's whole job is to
+    /// match what is written on the hardware, and a label that confidently disagrees with the panel
+    /// is worse than an honest slot number — it is the same failure as listing presets in an order
+    /// the pedal doesn't use.
+    pub presets_per_bank: Option<usize>,
     /// How much of the above is confirmed from real traffic.
     pub support: Support,
 }
@@ -101,6 +110,9 @@ pub const DEVICES: &[Device] = &[
         // One setlist, so bank is always 0 and the stride is never applied. 126 is what a live
         // browse returned.
         setlist_size: Some(126),
+        // 126 = 42 banks of three, which is what the three footswitches select.
+        // [solid — read off the pedal's screen, 2026-08-20]
+        presets_per_bank: Some(3),
         support: Support::Verified,
     },
     Device {
@@ -126,6 +138,10 @@ pub const DEVICES: &[Device] = &[
             "TEMPLATES",
         ]),
         setlist_size: Some(128),
+        // Unknown. 128 divides by 4 and by 8 and the Floor has eight preset footswitches, so a
+        // guess here has two plausible answers and no evidence — and the wrong one mislabels every
+        // preset on the unit. Needs one look at a Floor's screen.
+        presets_per_bank: None,
         support: Support::Verified,
     },
     Device {
@@ -136,7 +152,11 @@ pub const DEVICES: &[Device] = &[
         dsps: None,
         snapshots: None,
         setlists: None,
+        // Unknown, like everything else on this unit — the XL has more footswitches than the Stomp,
+        // so inheriting the Stomp's 3 is exactly the kind of assumption the rest of this entry
+        // refuses to make.
         setlist_size: None,
+        presets_per_bank: None,
         support: Support::Untested,
     },
 ];
@@ -170,6 +190,24 @@ impl Device {
     /// don't know — the conservative choice: bank 0 is the only bank every HX device answers on.
     pub fn setlist_names(&self) -> &'static [&'static str] {
         self.setlists.unwrap_or(&["Presets"])
+    }
+
+    /// How the pedal's own screen writes preset `slot` — `01A`, `01B`, `01C`, `02A`, … — or `None`
+    /// on a device whose banking we have not seen ([`Device::presets_per_bank`]).
+    ///
+    /// Banks are 1-based and zero-padded to **two** digits, matching the panel — the Stomp's 126
+    /// presets are 42 banks, so two is all it ever needs. The letter runs `A..` within the bank, so
+    /// a Stomp's slot 24 is `09A`: bank 9, first of three.
+    ///
+    /// This is a **label, not an address** — the same distinction the browse listing's map key
+    /// turned out to need. `goto_preset`/`save_preset` take the slot; nothing takes this.
+    pub fn preset_label(&self, slot: i64) -> Option<String> {
+        let per = self.presets_per_bank?;
+        let slot = usize::try_from(slot).ok()?;
+        // 26 letters is not a real constraint (no HX device banks more than a handful per bank),
+        // but a table typo that said 40 shouldn't produce `001{`.
+        let letter = char::from_digit((slot % per) as u32 + 10, 36)?.to_ascii_uppercase();
+        Some(format!("{:02}{letter}", slot / per + 1))
     }
 }
 

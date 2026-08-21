@@ -426,6 +426,10 @@ pub struct PresetListItem {
     /// The setlist's name where the export file recorded one — version-1 files didn't.
     #[serde(default)]
     pub setlist: Option<String>,
+    /// How the pedal's own screen writes this slot (`09A`), or `null` on a device whose banking we
+    /// haven't seen — the UI then shows the slot number. See `Device::preset_label`.
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 #[derive(Serialize)]

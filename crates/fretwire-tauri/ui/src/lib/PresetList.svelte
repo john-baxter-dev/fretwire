@@ -26,7 +26,10 @@
     presetClip = null,
   } = $props();
 
-  const pad = (n) => String(n).padStart(3, "0");
+  // How the pedal writes a slot on its own screen — `01A`, `01B`, `01C`, `02A` — when the
+  // backend knows this device's banking, and the plain slot number when it doesn't. Matching the
+  // panel is the point: someone reading a preset off the hardware should find the same string here.
+  const pad = (p) => p.label ?? String(p.index).padStart(3, "0");
 
   // Only a device with more than one setlist gets the picker — an HX Stomp has a single flat
   // preset list and HX Edit shows no setlist control at all for it.
@@ -111,7 +114,7 @@
   <div class="list">
     {#each presets as p (p.index)}
       <button class="row" class:current={viewingCurrent && p.index === currentIndex} onclick={() => onGoto(p.index)}>
-        <span class="idx">{pad(p.index)}</span>
+        <span class="idx">{pad(p)}</span>
         <span class="nm">{p.name}</span>
         {#if dirty && viewingCurrent && p.index === currentIndex}<span class="dirty" title="Edited — not saved">●</span>{/if}
       </button>

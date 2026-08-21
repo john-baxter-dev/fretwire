@@ -708,19 +708,21 @@ pub async fn rename_snapshot(state: State<'_, AppState>, index: i64, name: Strin
 #[tauri::command]
 pub async fn list_presets(state: State<'_, AppState>, bank: Option<i64>) -> R<Vec<PresetListItem>> {
     let bank = bank.unwrap_or(0);
-    run(&state, move |s| s.list_presets_in(bank))
-        .await
-        .map(|v| {
-            v.into_iter()
-                .map(|(index, name)| PresetListItem {
-                    index: index as i64,
-                    name,
-                    // A live listing is already one setlist's worth; the caller passed the bank.
-                    bank,
-                    setlist: None,
-                })
-                .collect()
-        })
+    run(&state, move |s| {
+        let device = s.device();
+        Ok(s.list_presets_in(bank)?
+            .into_iter()
+            .map(|(index, name)| PresetListItem {
+                label: device.preset_label(index as i64),
+                index: index as i64,
+                name,
+                // A live listing is already one setlist's worth; the caller passed the bank.
+                bank,
+                setlist: None,
+            })
+            .collect())
+    })
+    .await
 }
 
 /// Whether a **flash write** may target a setlist other than the one the device is in.
@@ -879,6 +881,9 @@ pub async fn backup_show(path: String) -> R<Vec<PresetListItem>> {
             .presets
             .into_iter()
             .map(|p| PresetListItem {
+                // An export file records no device banking, and the file may be from another unit,
+                // so its entries stay on slot numbers.
+                label: None,
                 index: p.index,
                 bank: p.bank,
                 setlist: backup

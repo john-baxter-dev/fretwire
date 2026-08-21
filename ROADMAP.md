@@ -257,6 +257,21 @@ libusb C dependency, clean on Linux; falls back fine for dev on Windows. Workspa
       decoded → op 28 `{98:slot}` = remove cab (not yet exposed in the GUI).
 - [ ] Knob widget option, keyboard nav (beyond Space/Ctrl+Z), polish.
 
+- [ ] **Tempo-sync as one control** (issue #5) — HX Edit and the pedal both fold `TempoSync{n}` /
+      `SyncSelect{n}` into the time knob: switch sync on and the knob becomes a note-value selector
+      (`1/4`, `1/8 Dotted`, …). We list all three as separate rows instead. Everything needed to
+      *render* it is already in hand — `sync_note` is a discrete control with its 19 labels, and the
+      dropdown works today.
+      **Blocked on evidence, not effort:** nothing in the shipped data says *which* param a sync pair
+      governs. Checked and refuted 2026-08-21 — position doesn't encode it (`Level` immediately
+      precedes `SyncSelect1` in 57 models), and `assign` is amp-knob ordering, not this (Dual Delay
+      assigns 3/4/5/6 against syncs 1/2; several sync-bearing models have no `assign` at all). 107
+      models carry a sync pair and 14 carry two, so a name heuristic would be guessing on ~14 models
+      where guessing wrong silently reassigns a control. Look in `HelixModelDefs.bin` or
+      `HX_ModelCatalog.json` for a stated grouping before writing UI.
+      Available now without any of that: hide `Note Sync` while `Tempo Sync` is off — that pairing
+      *is* unambiguous, being the same ordinal.
+
 ## Phase 7 — Preset & device management
 - [x] **Setlist export** — BUILT (2026-07-07; multi-setlist, cancellable and renamed 2026-08-20;
       live-verified on an HX Stomp). `Session::export_setlists` walks each requested setlist (goto +

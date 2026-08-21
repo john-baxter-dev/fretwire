@@ -74,11 +74,18 @@ fn verified_devices_are_fully_described() {
 }
 
 #[test]
-fn the_untested_device_claims_nothing_it_hasnt_shown_us() {
+fn the_unverified_device_claims_nothing_it_hasnt_shown_us() {
     let xl = Device::by_pid(PID_HX_STOMP_XL).unwrap();
-    assert_eq!(xl.support, Support::Untested);
+    // Reported, not Verified: an owner has it working, which is real information, but no traffic
+    // from one has been reconciled against our builders.
+    assert_eq!(xl.support, Support::Reported);
+    assert!(
+        xl.support.caveat().is_some(),
+        "an unverified device says so"
+    );
     // We have no capture, preset or backup from an XL — so none of this may be assumed to match
-    // the Stomp's just because the name is similar.
+    // the Stomp's just because the name is similar. "A user says it works" does not fill in a
+    // single field here, and that is the point of the middle tier.
     assert!(xl.model_code.is_none());
     assert!(xl.preset_device_id.is_none());
     assert!(xl.dsps.is_none());
@@ -93,19 +100,29 @@ fn the_untested_device_claims_nothing_it_hasnt_shown_us() {
 
 #[test]
 fn verified_devices_come_first_so_open_prefers_them() {
-    // `Transport::open` takes the first present device in this order.
-    let first_untested = DEVICES
+    // `Transport::open` takes the first present device in this order. Anything short of Verified
+    // sorts after — `Reported` is better than `Untested` but still not a device we would rather
+    // open than one whose traffic we have reconciled.
+    let first_unverified = DEVICES
         .iter()
-        .position(|d| d.support == Support::Untested)
+        .position(|d| d.support != Support::Verified)
         .unwrap_or(DEVICES.len());
     let last_verified = DEVICES
         .iter()
         .rposition(|d| d.support == Support::Verified)
         .unwrap_or(0);
     assert!(
-        last_verified < first_untested,
-        "verified devices must be listed before untested ones"
+        last_verified < first_unverified,
+        "verified devices must be listed before unverified ones"
     );
+}
+
+/// Only `Verified` is silent; everything else tells the user what it is.
+#[test]
+fn every_support_tier_but_verified_carries_a_caveat() {
+    assert_eq!(Support::Verified.caveat(), None);
+    assert!(Support::Reported.caveat().is_some());
+    assert!(Support::Untested.caveat().is_some());
 }
 
 /// The shipped udev rule is what lets a non-root user claim the interface, so a device in the

@@ -298,6 +298,7 @@ fn main() -> Result<()> {
                 for d in found {
                     let note = match d.support {
                         fretwire_usb::Support::Verified => String::new(),
+                        fretwire_usb::Support::Reported => " (reported working, unverified)".into(),
                         fretwire_usb::Support::Untested => " (untested device)".into(),
                     };
                     println!("{}: present{note}", d.name);

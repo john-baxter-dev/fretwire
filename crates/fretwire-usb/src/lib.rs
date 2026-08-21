@@ -117,13 +117,10 @@ impl Transport {
         let info = nusb::list_devices()?
             .find(|d| d.vendor_id() == VID_LINE6 && d.product_id() == device.pid)
             .ok_or(Error::NotFound)?;
-        if device.support == Support::Untested {
+        if let Some(caveat) = device.support.caveat() {
             // Reading and the handshake are low-risk (worst case a power cycle — see docs/safety.md),
             // but say so rather than pretending this device is known-good.
-            tracing::warn!(
-                "{} is untested — its protocol is assumed to match the rest of the HX family",
-                device.name
-            );
+            tracing::warn!("{}: {caveat}", device.name);
         }
         let dev = info.open()?;
         // On Linux nothing should hold this vendor interface, but detach defensively if it does.

@@ -393,9 +393,13 @@ real session.
       snapshot count and a `Support` flag; `Device::by_pid`/`by_model_code` do the lookups.
       `Transport::open` now matches **any** known device (verified ones first) and exposes which it
       opened via `Transport::device()` / `Session::device()`; `present_devices()` lists everything
-      plugged in. The HX Stomp XL is listed as `Untested` with its unknown fields honestly `None` —
-      we have no capture, preset or backup from one — and opening it logs a warning. Tests pin the
+      plugged in. The HX Stomp XL is `Reported` (2026-08-20) — an owner has the editor working
+      against one, and both bugs they filed reproduced on an HX Stomp — with its unknown fields
+      still honestly `None`, because "a user says it works" fills in none of them. We have no
+      capture, preset or backup from one, so opening it still logs a caveat. Tests pin the
       invariants, including that every table entry has a matching udev rule.
+      **Still open on the XL:** how many setlists it has, and how its screen banks presets (the
+      Stomp's 3-per-bank is not assumed), so it gets no `01A`-style preset labels yet.
 - [ ] **Session grid/routing planning is still DSP-0 only.** `add_block_at`, `place_block`,
       `insert_block`, `reorder_block` and `set_node_pos` plan slot moves inside one 20-slot array
       and read it via `dsp_blocks(0)`/`dsp_grid(0)` — complete for the Stomp, needs a `dsp` argument

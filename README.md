@@ -1,6 +1,7 @@
 # fretwire
 
-An independent, from-scratch **Linux editor for the Line 6 HX Stomp and Helix Floor**, written in Rust.
+An independent, from-scratch **Linux editor for the Line 6 HX Stomp, HX Stomp XL and Helix Floor**,
+written in Rust.
 
 fretwire talks to the pedal over its `MI_00` USB control interface (VID `0x0E41` / PID `0x4246`).
 The wire protocol was recovered by **observing USB traffic to and from the device**; the model,
@@ -156,6 +157,19 @@ cargo run -p fretwire-cli -- pull         # read the loaded preset (non-destruct
 ```
 
 The rule covers both the HX Stomp (`0x4246`) and HX Stomp XL (`0x4253`).
+
+## Devices
+
+| device | status |
+|--------|--------|
+| HX Stomp     | **verified** — developed against one; every builder reproduces its own wire bytes |
+| Helix Floor  | **verified** — ~70 logged sessions with a remote tester, two DSPs, eight setlists |
+| HX Stomp XL  | **reported working** — an owner runs it; we hold no capture from one, so its DSP and snapshot counts, setlist count and preset banking are left unknown rather than assumed |
+| Helix LT / Rack, HX Effects | untested — same USB protocol, but nobody has tried one |
+
+An unverified device logs a caveat when opened and is only ever picked after a verified one. Nothing
+in the device table is guessed: a field we have not seen is `None`, and the editor falls back rather
+than assuming it matches a sibling.
 
 ## The reference data
 

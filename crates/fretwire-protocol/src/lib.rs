@@ -40,9 +40,26 @@ pub const EP_IN: u8 = 0x81;
 pub enum Support {
     /// Wire traffic from this exact device has been observed and reconciled against our builders.
     Verified,
+    /// Someone has run the editor against one and reported back, but we hold no capture, preset or
+    /// backup from it — so the protocol is confirmed *by outcome* rather than reconciled, and every
+    /// unknown field below is still honestly unknown. Sits between the other two on purpose: "a
+    /// user has this working" is real information, and calling it [`Support::Untested`] understates
+    /// it while calling it [`Support::Verified`] would claim reconciliation we have not done.
+    Reported,
     /// Only the USB IDs are known. The device is in the HX family and very probably speaks the
     /// same protocol, but nothing has been checked against real traffic from one.
     Untested,
+}
+
+impl Support {
+    /// A short caveat to show the user, or `None` when there is nothing to warn about.
+    pub fn caveat(self) -> Option<&'static str> {
+        match self {
+            Support::Verified => None,
+            Support::Reported => Some("reported working, but not verified against a capture"),
+            Support::Untested => Some("untested — its protocol is assumed to match the HX family"),
+        }
+    }
 }
 
 /// Static facts about one HX-family device.
@@ -93,9 +110,9 @@ pub struct Device {
 ///
 /// The HX Stomp and Helix Floor are both [`Support::Verified`] — the handshake is byte-identical
 /// between them and every edit builder reproduces both devices' own wire bytes. The Stomp XL is
-/// listed for its PID only: we have no capture, no preset and no backup from one, so its model
-/// code, preset device id, DSP and snapshot counts are honestly unknown rather than assumed to
-/// match the Stomp's.
+/// [`Support::Reported`]: an owner has the editor working against one, but we still have no
+/// capture, preset or backup from it, so its model code, preset device id, DSP and snapshot counts
+/// stay honestly unknown rather than assumed to match the Stomp's.
 pub const DEVICES: &[Device] = &[
     Device {
         pid: PID_HX_STOMP,
@@ -157,7 +174,11 @@ pub const DEVICES: &[Device] = &[
         // refuses to make.
         setlist_size: None,
         presets_per_bank: None,
-        support: Support::Untested,
+        // An owner ran the 0.2.x editor against one over several sessions — browsing, editing,
+        // exporting — and the two bugs they filed were both device-independent and reproduced on an
+        // HX Stomp. That is enough to say it works and not enough to fill in anything above.
+        // [2026-08-20, issues #2 and #3]
+        support: Support::Reported,
     },
 ];
 

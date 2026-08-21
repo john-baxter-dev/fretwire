@@ -480,8 +480,10 @@ fn to_blob_rebuilds_the_header_offset_table() {
     fn offsets(blob: &[u8]) -> Vec<u32> {
         // fixstr "l6-helix\0" (10 bytes) + str16 marker (3) = the header starts at 13.
         blob[13..61]
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| u32::from_le_bytes(*c))
             .collect()
     }
     // Where each top-level entry of the emitted map really begins.

@@ -300,9 +300,11 @@ fn classify_header(header: &[u8], blob: &[u8], map_at: usize) -> Vec<HeaderSlot>
     }
     let entries = top_level_entry_offsets(blob, map_at).unwrap_or_default();
     header
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| {
-            let v = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+            let v = u32::from_le_bytes(*c);
             let at = v as usize;
             if at == blob.len() {
                 HeaderSlot::TotalLen

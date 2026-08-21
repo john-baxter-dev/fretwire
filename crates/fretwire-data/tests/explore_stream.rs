@@ -445,8 +445,10 @@ fn to_blob_round_trips_the_preset() {
     let hdr = value_bytes(&seq[1]).unwrap();
     assert_eq!(hdr.len(), ps.header.len(), "header length must be fixed");
     let offs: Vec<u32> = hdr
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| u32::from_le_bytes(*c))
         .collect();
     let map_at = {
         let (_, n) = read_sequence(&re, 2);

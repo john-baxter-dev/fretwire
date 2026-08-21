@@ -9,7 +9,10 @@ decode, and the setlist and preset-list browses all work unmodified once the PID
 The catalogue resolved every block and parameter of the loaded preset by name.
 
 **Nothing has been written to this device** — no edit, no save, no backup, no restore. That is why
-the entry is `Support::Untested` despite the reads reconciling cleanly.
+the entry is `Support::Reported` rather than `Support::Verified`: the reads are real traffic checked
+against real parsers, but `Verified` means the *edit builders* have been reconciled against a unit's
+own bytes too, and here they have not. (The PR proposed `Support::Untested`; that tier means "only
+the USB IDs are known", which undersells this survey. `Reported` was added on 2026-08-20.)
 
 ## USB identity  [solid]
 
@@ -53,17 +56,25 @@ pinned down against two known firmware versions, so this is data, not a conclusi
 
 Reading the loaded preset (8326 bytes, declared length matched):
 
-- **Both DSPs.** Preset key `1` is populated and blocks came back in slots 21–28 as well as 3–6,
-  i.e. the global `slot = dsp * 20 + index` numbering the Floor established. The unit reported
-  DSP1 71.0% used and DSP2 43.0%.
+- **Both DSPs.** Preset key `1` is populated and blocks came back in slots **≥ 20** as well as in
+  the first group, i.e. the global `slot = dsp * 20 + index` numbering the Floor established. The
+  unit reported DSP1 71.0% used and DSP2 43.0%.
 - **8 snapshots**, `SNAPSHOT 1`…`SNAPSHOT 8`, and the stored active index agreed with the live
   scene.
-- Every one of the 8 blocks resolved to a `.models` definition by name, with device-ordered named
-  parameters — no unmatched model, no unmatched parameter key.
+- Every block resolved to a `.models` definition by name, with device-ordered named parameters —
+  no unmatched model, no unmatched parameter key.
+
+> **Maintainer note (2026-08-20).** The survey as submitted gave two different block counts — a
+> slot list of `21–28` plus `3–6` (twelve slots) in one bullet and "all 8 blocks" in the next — and
+> the question went unanswered, so the exact figure is not recorded here. Nothing rests on it:
+> `dsps: Some(2)` needs only that *some* block occupies a slot ≥ 20, which both readings agree on,
+> and which preset key `1` being populated says independently. If you have an LT, `fretwire pull`
+> prints the slot list and settles it.
 
 ## Setlists  [arity solid; names not corroborated]
 
-Browsing each bank in turn:
+Browsing banks 0, 1, 2, 6, 7 and 8 (3–5 were not reported, and it is not recorded whether they were
+browsed and dropped in editing or never browsed):
 
 | bank | result |
 |---|---|
@@ -74,8 +85,10 @@ Browsing each bank in turn:
 | 7 | 128 presets — `Quick Start`, `Parallel Spans`, `SNP:4-Amp Spill` (templates) |
 | 8 | refused, code `-3` |
 
-So: **eight banks of 128**, bank 0 factory and bank 7 templates — the Floor's layout, and
-`setlist_stride()`'s 128 fallback was already correct for this device.
+So: **eight banks of 128**, bank 0 factory and bank 7 templates — the Floor's layout. Bank 8 being
+refused bounds the arity at eight on its own, so the three unreported banks do not weaken that.
+These browses ran with this PR's entry applied, i.e. against its explicit `setlist_size: Some(128)`;
+they corroborate that value rather than exercising `setlist_stride()`'s fallback, which never ran.
 
 The names in `DEVICES` are therefore the Floor's. Worth being explicit about the difference in
 evidence: the Floor's names came from the eight `L6Setlist` streams of a real `.hxb`, whereas here
@@ -88,13 +101,16 @@ up and disagrees, this is the field to fix.
   wire preset stream has no such field — the Floor's `0x210001` came from a `.hxb`. Left `None`
   rather than copied across.
 - **Every write path.** Nothing was sent to this unit beyond reads and the handshake.
+- **How the screen banks presets.** `Device::presets_per_bank` — the `3` in an HX Stomp's
+  `01A`/`01B`/`01C`/`02A` — is `None` for the LT, so its presets are listed by slot number. One look
+  at the unit's screen settles it. The Floor's is unknown too, so there is nothing to inherit.
 
 ## Reproducing
 
 With the LT connected and the udev rule installed:
 
 ```
-fretwire detect                 # Helix LT: present (untested device)
+fretwire detect                 # Helix LT: present (reported working, unverified)
 fretwire connect                # handshake OK — device reports "P21"
 fretwire pull                   # the preset above, blocks and params resolved
 fretwire setlists               # 8 setlists

@@ -78,7 +78,7 @@ enum Command {
         #[arg(long)]
         presets: bool,
     },
-    /// List what a `backup` file contains (indices + names), to pick a restore.
+    /// List what an export file contains (setlists, slots + names), to pick a restore.
     BackupShow { backup: String },
     /// Import Line 6's reference data from your own HX Edit install.
     ///
@@ -215,17 +215,33 @@ enum Command {
         #[arg(default_value_t = 0)]
         bank: i64,
     },
-    /// Read every preset on the device into a JSON backup file.
+    /// Export a setlist's presets to a file. Reads only.
     ///
-    /// Reads only — flash is never written — but the active-preset cursor sweeps the setlist
-    /// (it is put back afterwards).
-    Backup { out: String },
-    /// ⚠ PERSISTENT WRITE. Restore one preset from a backup file into a setlist slot.
+    /// This is a **setlist export**, not a device backup: it captures presets and nothing else —
+    /// no global settings, no IRs. Restoring from it will not make a wiped pedal whole. Flash is
+    /// never written, but the active-preset cursor sweeps the setlist (it is put back afterwards).
+    ///
+    /// Was called `backup`, which overpromised; the old name still works.
+    #[command(alias = "backup")]
+    ExportSetlist {
+        out: String,
+        /// Which setlist to export (see `setlists`). Ignored with `--all`.
+        #[arg(long, default_value_t = 0)]
+        bank: i64,
+        /// Export every setlist the device has. On a Helix Floor that is 1024 presets — expect it
+        /// to take the best part of an hour, and the pedal to step through all of them.
+        #[arg(long)]
+        all: bool,
+    },
+    /// ⚠ PERSISTENT WRITE. Restore one preset from an export file into a setlist slot.
     Restore {
         backup: String,
         index: i64,
         /// Target slot; defaults to the backup index.
         slot: Option<i64>,
+        /// Which setlist the preset was exported from, and the one it goes back to.
+        #[arg(long, default_value_t = 0)]
+        bank: i64,
     },
     /// PROBE: read the preset and write it back unchanged via op 21, then re-read.
     ///
@@ -697,11 +713,29 @@ fn main() -> Result<()> {
             println!("wrote {} bytes to {path}", raw.len());
             println!("  preset: {who}");
         }
-        Command::Backup { out: path } => {
+        Command::ExportSetlist {
+            out: path,
+            bank,
+            all,
+        } => {
             let mut s = fretwire_core::Session::connect()?;
-            println!("backing up the setlist (the pedal will step through every preset)…");
-            let backup = s.backup_setlist(|done, total, name| {
-                println!("  [{done:>3}/{total}] {name}");
+            let names = s.device().setlist_names();
+            let banks: Vec<i64> = if all {
+                (0..names.len() as i64).collect()
+            } else {
+                vec![bank]
+            };
+            println!(
+                "exporting {} (the pedal will step through every preset)…",
+                banks
+                    .iter()
+                    .map(|b| names.get(*b as usize).copied().unwrap_or("Presets"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            let backup = s.export_setlists(&banks, |p| {
+                println!("  [{:>4}/{}] {}: {}", p.done, p.total, p.setlist, p.name);
+                true
             })?;
             std::fs::write(&path, backup.to_json())?;
             println!("wrote {} presets to {path}", backup.presets.len());
@@ -710,26 +744,34 @@ fn main() -> Result<()> {
             let backup =
                 fretwire_core::backup::Backup::from_json(&std::fs::read_to_string(&path)?)?;
             println!("{} — {} presets:", backup.device, backup.presets.len());
-            for p in &backup.presets {
-                println!("  [{:>3}] {}  ({} bytes)", p.index, p.name, p.raw.len());
+            for bank in backup.banks() {
+                // A v1 file records no setlist names, and multi-setlist files are the only ones
+                // where the heading earns its line.
+                let label = backup.setlist_name(bank).unwrap_or("Presets");
+                println!("  {label} (bank {bank}):");
+                for p in backup.presets.iter().filter(|p| p.bank == bank) {
+                    println!("    [{:>3}] {}  ({} bytes)", p.index, p.name, p.raw.len());
+                }
             }
         }
         Command::Restore {
             backup: path,
             index,
             slot,
+            bank,
         } => {
             let slot = slot.unwrap_or(index);
             let backup =
                 fretwire_core::backup::Backup::from_json(&std::fs::read_to_string(&path)?)?;
-            let entry = backup.preset(index).ok_or_else(|| {
+            let entry = backup.preset(bank, index).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "backup has no preset at index {index} (see: fretwire backup-show {path})"
+                    "backup has no preset at bank {bank} index {index} \
+                     (see: fretwire backup-show {path})"
                 )
             })?;
             let mut s = fretwire_core::Session::connect()?;
             let current = s
-                .list_presets()?
+                .list_presets_in(bank)?
                 .into_iter()
                 .find(|(i, _)| *i as i64 == slot)
                 .map(|(_, n)| n)
@@ -738,7 +780,7 @@ fn main() -> Result<()> {
                 "⚠  PERSISTENT WRITE: restoring {:?} into slot {slot}, overwriting {current:?}.",
                 entry.name
             );
-            let preset = s.restore_preset(&entry.raw, slot, &entry.name)?;
+            let preset = s.restore_preset(&entry.raw, bank, slot, &entry.name)?;
             println!(
                 "restored {:?} to slot {slot}; device now shows:",
                 entry.name

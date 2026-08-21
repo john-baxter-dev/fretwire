@@ -174,6 +174,35 @@ fn reject_hint(op: Option<i64>, code: i64) -> String {
     hint.map_or_else(String::new, |h| format!(" ({h})"))
 }
 
+/// A setlist's name from the device table, falling back to the generic label for a bank the table
+/// doesn't name — a device whose setlists we haven't confirmed (the XL) reports one unnamed list.
+fn setlist_name(names: &'static [&'static str], bank: i64) -> &'static str {
+    usize::try_from(bank)
+        .ok()
+        .and_then(|b| names.get(b))
+        .copied()
+        .unwrap_or("Presets")
+}
+
+/// One step of an [`Session::export_setlists`] sweep, as the caller sees it.
+///
+/// A struct rather than positional arguments because the sweep can now span setlists: `done`/`total`
+/// count the **whole job**, and `bank`/`setlist` say which list this preset came from, so a progress
+/// bar reads continuously across all eight of a Floor's rather than restarting eight times.
+#[derive(Debug, Clone, Copy)]
+pub struct ExportProgress<'a> {
+    /// Presets read so far, including this one.
+    pub done: usize,
+    /// Presets in the whole sweep, across every setlist requested.
+    pub total: usize,
+    /// The setlist this preset came from.
+    pub bank: i64,
+    /// That setlist's name, as the device reports it (`"Presets"` when the device has just one).
+    pub setlist: &'a str,
+    /// This preset's name.
+    pub name: &'a str,
+}
+
 /// Does the identity the device reported (`got`) confirm the one we asked [`Session::goto_preset`]
 /// for (`want`)?
 ///
@@ -2509,52 +2538,101 @@ impl Session {
         }
     }
 
-    /// Back up every preset in the setlist to a [`crate::backup::Backup`]. Walks the whole list
-    /// (`goto` each slot → read its stream), then returns the device to the preset it started on.
-    /// Reads only — flash is never written — but the active preset *cursor* moves during the sweep
-    /// (audible if you're playing through the unit). `progress` is called once per preset with
-    /// `(done, total, name)`.
+    /// [`Self::export_setlists`] for a single setlist — the common case, and what the GUI's
+    /// "Export setlist" does for the list you are looking at.
     pub fn backup_setlist(
         &mut self,
-        mut progress: impl FnMut(usize, usize, &str),
+        bank: i64,
+        progress: impl FnMut(ExportProgress) -> bool,
     ) -> crate::Result<crate::backup::Backup> {
-        let listing = self.list_presets()?;
-        let total = listing.len();
+        self.export_setlists(&[bank], progress)
+    }
+
+    /// Read every preset of every setlist in `banks` into one [`crate::backup::Backup`]. Walks each
+    /// listed setlist in turn (`goto` each slot → read its stream), then returns the device to the
+    /// preset it started on. Reads only — flash is never written — but the active preset *cursor*
+    /// moves during the sweep (audible if you're playing through the unit).
+    ///
+    /// `progress` is called once per preset and **returns whether to keep going**: answer `false`
+    /// and the sweep stops, puts the device back, and returns what it has read so far. That is a
+    /// partial file by construction, and deliberately so — on a Helix Floor all eight setlists is
+    /// 1024 presets and roughly forty minutes, which nobody should be unable to call off. The file
+    /// lists exactly which presets it holds, so a partial one is self-describing rather than
+    /// silently short; the caller knows it cancelled, because the `false` came from it.
+    pub fn export_setlists(
+        &mut self,
+        banks: &[i64],
+        mut progress: impl FnMut(ExportProgress) -> bool,
+    ) -> crate::Result<crate::backup::Backup> {
+        let names = self.device().setlist_names();
         // Note where we are so the sweep can put the user back afterwards. Confirmed, because the
-        // GUI's Backup button is usually pressed right after clicking a preset, and the identity
+        // GUI's export button is usually pressed right after clicking a preset, and the identity
         // the device reports in that window can still be the previous one — which would send the
         // user somewhere else entirely once the sweep finished.
         let (_, start) = self.read_preset_confirmed()?;
 
+        // Listings first, so `total` is the whole job rather than the current setlist: a progress
+        // bar that restarts per setlist is worse than none on a forty-minute sweep.
+        let mut listings = Vec::with_capacity(banks.len());
+        for &bank in banks {
+            listings.push((bank, self.list_presets_in(bank)?));
+        }
+        let total: usize = listings.iter().map(|(_, l)| l.len()).sum();
+
         let mut presets = Vec::with_capacity(total);
-        for (done, (index, listed_name)) in listing.iter().enumerate() {
-            let index = *index as i64;
-            self.goto_preset(0, index)?;
-            // `read_preset_confirmed`, not a bare read: the device answers op-23 with the *previous*
-            // preset's address for a while after a switch, so a single read here reported slot N−1
-            // and the desync check below aborted a sweep that was in fact fine. It waits for the
-            // address we asked `goto` for instead. [solid — 2026-08-20 XL report: "device reports
-            // preset 1 while backing up slot 2", at a point in the walk that moved with whichever
-            // preset the pedal happened to start on]
-            let (raw, info) = self.read_preset_confirmed()?;
-            // The stream must parse (it's what restore replays), and the op-23 identity must be
-            // the slot we selected — a mismatch that survives the retries means the sweep really
-            // has desynced; stop rather than save mislabeled blobs.
-            fretwire_data::stream::PresetStream::parse(&raw)?;
-            if let Some(i) = &info
-                && i.index != index
-            {
-                return Err(crate::Error::Backup(format!(
-                    "device reports preset {} while backing up slot {index} — sweep desynced, aborting",
-                    i.index
-                )));
+        let mut done = 0usize;
+        let mut cancelled = false;
+        for (bank, listing) in &listings {
+            let bank = *bank;
+            let setlist = setlist_name(names, bank);
+            for (index, listed_name) in listing {
+                let index = *index as i64;
+                self.goto_preset(bank, index)?;
+                // `read_preset_confirmed`, not a bare read: the device answers op-23 with the
+                // *previous* preset's address for a while after a switch, so a single read here
+                // reported slot N−1 and the desync check below aborted a sweep that was in fact
+                // fine. It waits for the address we asked `goto` for instead. [solid — 2026-08-20
+                // XL report: "device reports preset 1 while backing up slot 2", at a point in the
+                // walk that moved with whichever preset the pedal happened to start on]
+                let (raw, info) = self.read_preset_confirmed()?;
+                // The stream must parse (it's what restore replays), and the op-23 identity must be
+                // the slot we selected — a mismatch that survives the retries means the sweep really
+                // has desynced; stop rather than save mislabeled blobs.
+                fretwire_data::stream::PresetStream::parse(&raw)?;
+                if let Some(i) = &info
+                    && (i.bank, i.index) != (bank, index)
+                {
+                    return Err(crate::Error::Backup(format!(
+                        "device reports preset {}:{} while backing up {setlist} slot {index} — \
+                         sweep desynced, aborting",
+                        i.bank, i.index
+                    )));
+                }
+                let name = info
+                    .map(|i| i.name)
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or_else(|| listed_name.clone());
+                done += 1;
+                presets.push(crate::backup::BackupPreset {
+                    bank,
+                    index,
+                    name: name.clone(),
+                    raw,
+                });
+                if !progress(ExportProgress {
+                    done,
+                    total,
+                    bank,
+                    setlist,
+                    name: &name,
+                }) {
+                    cancelled = true;
+                    break;
+                }
             }
-            let name = info
-                .map(|i| i.name)
-                .filter(|n| !n.is_empty())
-                .unwrap_or_else(|| listed_name.clone());
-            progress(done + 1, total, &name);
-            presets.push(crate::backup::BackupPreset { index, name, raw });
+            if cancelled {
+                break;
+            }
         }
 
         if let Some(start) = start {
@@ -2565,28 +2643,36 @@ impl Session {
         self.clear_history();
         Ok(crate::backup::Backup {
             // The unit this actually came off, not the one the project is named after: an XL's
-            // backup used to be stamped "HX Stomp".
+            // export used to be stamped "HX Stomp".
             device: self.device().name.into(),
+            setlists: listings
+                .iter()
+                .map(|(b, _)| (*b, setlist_name(names, *b).to_string()))
+                .collect(),
             presets,
         })
     }
 
-    /// Restore one backed-up preset into setlist `slot`: select the slot, replay the stored stream
-    /// into the edit buffer (op 21), and commit it to flash under `name` (op 71). **Overwrites
-    /// `slot` persistently.** Returns the re-read preset as confirmation.
+    /// Restore one backed-up preset into `slot` of setlist `bank`: select the slot, replay the
+    /// stored stream into the edit buffer (op 21), and commit it to flash under `name` (op 71).
+    /// **Overwrites that slot persistently.** Returns the re-read preset as confirmation.
+    ///
+    /// `bank` used to be hardcoded to 0 here, which on a Floor meant a restore always landed in
+    /// FACTORY 1 whatever setlist the preset came from — see `export_setlists`.
     ///
     /// LIVE: op-21 has only been proven with mutated blobs of the *current* preset; a foreign
     /// blob (different preset) is the same mechanism but unverified until first restore test.
     pub fn restore_preset(
         &mut self,
         raw: &[u8],
+        bank: i64,
         slot: i64,
         name: &str,
     ) -> crate::Result<EditorPreset> {
         let ps = fretwire_data::stream::PresetStream::parse(raw)?;
-        self.goto_preset(0, slot)?;
+        self.goto_preset(bank, slot)?;
         self.write_preset(ps.to_blob())?;
-        self.save_preset(0, slot, name)?;
+        self.save_preset(bank, slot, name)?;
         self.clear_history();
         self.read_preset()
     }

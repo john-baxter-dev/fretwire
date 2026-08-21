@@ -76,7 +76,10 @@
   let saveAsDlg = $state(null); // { slot, name }
   let renameDlg = $state(null); // { name }
   let deleteDlg = $state(null); // slot number
-  let backupDlg = $state(null); // { path }
+  let exportDlg = $state(null); // { path, all }
+  // True from pressing Cancel until the sweep unwinds — the file is still written, holding what
+  // was read up to that point, so the finished toast has to say which of the two happened.
+  let exportCancelling = $state(false);
   let backupProgress = $state(null); // { done, total, name } while a backup sweep runs
   let restoreDlg = $state(null); // { path, entries, index, slot } — entries load from the file
   let snapRenameDlg = $state(null); // { index, name }
@@ -185,7 +188,7 @@
       const tag = e.target?.tagName;
       if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
       if (e.key === " " && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        if (saveAsDlg || renameDlg || deleteDlg || backupDlg || restoreDlg || snapRenameDlg) return;
+        if (saveAsDlg || renameDlg || deleteDlg || exportDlg || restoreDlg || snapRenameDlg) return;
         const b = selectedBlock;
         if (b && (b.bypassed === true || b.bypassed === false)) {
           e.preventDefault(); // also keeps Space from "clicking" a focused button
@@ -528,24 +531,44 @@
     }
   }
 
-  // ---- backup / restore ----
-  const onBackup = () =>
-    (backupDlg = { path: `~/fretwire-backup-${new Date().toISOString().slice(0, 10)}.json` });
-  async function confirmBackup() {
-    const path = backupDlg.path.trim();
-    backupDlg = null;
+  // ---- export / import ----
+  // "Export", not "Backup": this captures presets and nothing else. A device backup in HX Edit's
+  // sense also carries global settings and IRs, neither of which we can read yet, and a file that
+  // called itself a backup would be trusted to make a wiped pedal whole. It wouldn't.
+  const onExport = () =>
+    (exportDlg = {
+      path: `~/fretwire-presets-${new Date().toISOString().slice(0, 10)}.json`,
+      all: false,
+    });
+  async function confirmExport() {
+    const path = exportDlg.path.trim();
+    // Whatever setlist you are looking at, not whichever one the device happens to sit in — the
+    // sidebar shows one list and the button used to export bank 0 regardless.
+    const banks = exportDlg.all ? setlists.map((_, i) => i) : [viewBank];
+    exportDlg = null;
     if (!path) return;
+    exportCancelling = false;
     backupProgress = { done: 0, total: 0, name: "starting…" };
     try {
-      const count = await invoke("backup_setlist", { path });
-      toast(`Backed up ${count} presets to ${path}`, "info");
-      status = `Backed up ${count} presets.`;
+      const count = await invoke("export_setlists", { path, banks });
+      const how = exportCancelling ? "Cancelled —" : "Exported";
+      toast(`${how} ${count} presets to ${path}`, exportCancelling ? "warn" : "info");
+      status = `${how} ${count} presets.`;
     } catch (e) {
-      toast("backup: " + e);
+      toast("export: " + e);
     } finally {
       backupProgress = null;
+      exportCancelling = false;
     }
     await refreshPreset(); // the sweep reloaded the current preset and cleared the history
+  }
+  async function cancelExport() {
+    exportCancelling = true;
+    try {
+      await invoke("cancel_export");
+    } catch (e) {
+      toast("cancel: " + e);
+    }
   }
 
   const onRestore = () => (restoreDlg = { path: "~/", entries: null, index: null, slot: null });
@@ -556,17 +579,19 @@
   async function loadBackupEntries() {
     try {
       const entries = await invoke("backup_show", { path: restoreDlg.path.trim() });
-      restoreDlg = { ...restoreDlg, entries, index: null, slot: null };
+      restoreDlg = { ...restoreDlg, entries, index: null, slot: null, bank: null };
     } catch (e) {
       toast("restore: " + e);
     }
   }
   async function confirmRestore() {
-    const { path, index, slot } = restoreDlg;
+    const { path, index, slot, bank } = restoreDlg;
     restoreDlg = null;
     if (index == null || slot == null) return;
     selectedSlot = null;
-    await apply(invoke("restore_preset", { path: path.trim(), index, slot }));
+    // The entry's own bank, so a preset exported from USER 1 goes back to USER 1 rather than
+    // whichever list bank 0 happens to be.
+    await apply(invoke("restore_preset", { path: path.trim(), index, slot, bank: bank ?? 0 }));
     await refreshPresets();
     activeSnapshot = preset?.active_snapshot ?? 0;
     status = `Restored to slot ${slot}.`;
@@ -730,7 +755,7 @@
 <main>
   {#if preset}
     <div class="workspace">
-      <PresetList {presets} currentIndex={preset.index} dirty={preset.dirty} {setlists} {viewBank} currentBank={presetBank} writeBlocked={foreignSetlist} {onPickSetlist} {onGoto} {onSave} {onSaveAs} {onRename} {onBackup} {onRestore} {onCopyPreset} {onPastePreset} {presetClip} />
+      <PresetList {presets} currentIndex={preset.index} dirty={preset.dirty} {setlists} {viewBank} currentBank={presetBank} writeBlocked={foreignSetlist} {onPickSetlist} {onGoto} {onSave} {onSaveAs} {onRename} {onExport} {onRestore} {onCopyPreset} {onPastePreset} {presetClip} />
       <div class="content">
         <div class="meta">
           <span>
@@ -910,22 +935,40 @@
   </Dialog>
 {/if}
 
-{#if backupDlg}
+{#if exportDlg}
   <Dialog
-    title="Backup setlist"
-    confirmLabel="Start backup"
-    width={420}
-    onconfirm={confirmBackup}
-    oncancel={() => (backupDlg = null)}
+    title="Export presets"
+    confirmLabel="Start export"
+    width={460}
+    onconfirm={confirmExport}
+    oncancel={() => (exportDlg = null)}
   >
     <label class="dlg-field">
-      Backup file
-      <input type="text" bind:value={backupDlg.path} use:autofocus />
+      Export file
+      <input type="text" bind:value={exportDlg.path} use:autofocus />
     </label>
+    <!-- Only worth asking on a device that has more than one list. -->
+    {#if setlists.length > 1}
+      <div class="dlg-field">
+        What to export
+        <label class="dlg-check">
+          <input type="radio" checked={!exportDlg.all} onchange={() => (exportDlg = { ...exportDlg, all: false })} />
+          This setlist — <b>{setlists[viewBank] ?? `bank ${viewBank}`}</b>
+        </label>
+        <label class="dlg-check">
+          <input type="radio" checked={exportDlg.all} onchange={() => (exportDlg = { ...exportDlg, all: true })} />
+          All {setlists.length} setlists — every preset on the device
+        </label>
+      </div>
+    {/if}
     <p class="dlg-text">
-      Reads every preset to the file — nothing on the device is written. The pedal steps through
-      the whole setlist (audio follows along), and unsaved edits to the current preset are
-      reloaded from flash.
+      Reads presets to the file — nothing on the device is written. The pedal steps through every
+      preset exported (audio follows along), and unsaved edits to the current preset are reloaded
+      from flash. You can cancel partway; the file keeps what was read.
+    </p>
+    <p class="dlg-text">
+      <b>Presets only.</b> Global settings and IRs are not in the file, so this is not a full
+      device backup.
     </p>
   </Dialog>
 {/if}
@@ -952,21 +995,26 @@
         <div class="dlg-col">
           <div class="dlg-label">Preset in backup</div>
           <div class="dlg-slots">
-            {#each restoreDlg.entries as e (e.index)}
+            <!-- Keyed by bank *and* slot: a multi-setlist file has eight entries numbered 000. -->
+            {#each restoreDlg.entries as e (`${e.bank}:${e.index}`)}
               <button
                 type="button"
                 class="dlg-slot"
-                class:chosen={e.index === restoreDlg.index}
-                onclick={() => (restoreDlg = { ...restoreDlg, index: e.index, slot: e.index })}
+                class:chosen={e.index === restoreDlg.index && e.bank === restoreDlg.bank}
+                onclick={() =>
+                  (restoreDlg = { ...restoreDlg, index: e.index, bank: e.bank, slot: e.index })}
               >
                 <span class="idx">{String(e.index).padStart(3, "0")}</span>
                 <span class="nm">{e.name}</span>
+                {#if e.setlist && setlists.length > 1}<span class="cur">{e.setlist}</span>{/if}
               </button>
             {/each}
           </div>
         </div>
         <div class="dlg-col">
-          <div class="dlg-label">Restore to slot</div>
+          <div class="dlg-label">
+            Restore to slot{#if setlists.length > 1} in {setlists[viewBank] ?? `bank ${viewBank}`}{/if}
+          </div>
           <div class="dlg-slots">
             {#each presets as p (p.index)}
               <button
@@ -984,7 +1032,11 @@
         </div>
       </div>
       {#if restoreTarget && restoreDlg.index != null}
-        <p class="dlg-warn">Overwrites <b>{restoreTarget.name}</b> in slot {restoreDlg.slot} on the device.</p>
+        <p class="dlg-warn">
+          Overwrites <b>{restoreTarget.name}</b> in slot {restoreDlg.slot}
+          {#if setlists.length > 1}of <b>{setlists[restoreDlg.bank] ?? `bank ${restoreDlg.bank}`}</b>{/if}
+          on the device.
+        </p>
       {/if}
     {:else}
       <p class="dlg-text">Enter the backup file's path and press <b>Load</b> to list its presets.</p>
@@ -995,7 +1047,9 @@
 {#if backupProgress}
   <div class="bk-overlay">
     <div class="bk-card">
-      <div class="bk-title">Backing up setlist…</div>
+      <div class="bk-title">
+        {exportCancelling ? "Finishing up…" : "Exporting presets…"}
+      </div>
       <div class="bk-bar">
         <div
           class="bk-fill"
@@ -1003,8 +1057,15 @@
         ></div>
       </div>
       <div class="bk-line">
-        {backupProgress.done}/{backupProgress.total || "…"} — {backupProgress.name}
+        {backupProgress.done}/{backupProgress.total || "…"}
+        {#if backupProgress.setlist && setlists.length > 1}— {backupProgress.setlist}{/if}
+        — {backupProgress.name}
       </div>
+      <!-- All eight of a Floor's setlists is 1024 presets and the better part of an hour. An
+           un-cancellable modal over that is not a reasonable thing to put in front of someone. -->
+      <button type="button" class="bk-cancel" disabled={exportCancelling} onclick={cancelExport}>
+        {exportCancelling ? "Stopping after this preset…" : "Cancel"}
+      </button>
     </div>
   </div>
 {/if}
@@ -1330,7 +1391,7 @@
     flex: 1;
     min-width: 0;
   }
-  /* Backup-progress overlay: modal but button-less — the sweep isn't cancellable mid-flight. */
+  /* Export-progress overlay: modal, with the one button that matters. */
   .bk-overlay {
     position: fixed;
     inset: 0;
@@ -1341,6 +1402,8 @@
     z-index: 110;
   }
   .bk-card {
+    display: flex;
+    flex-direction: column;
     width: 380px;
     background: #1b1e25;
     border: 1px solid #3a4150;
@@ -1371,5 +1434,32 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .bk-cancel {
+    margin-top: 12px;
+    align-self: flex-end;
+    font: inherit;
+    font-size: 13px;
+    padding: 5px 12px;
+    border-radius: 6px;
+    border: 1px solid #3a4150;
+    background: #232833;
+    color: #e6e8ec;
+    cursor: pointer;
+  }
+  .bk-cancel:hover:not(:disabled) {
+    border-color: #4a5265;
+  }
+  .bk-cancel:disabled {
+    color: #6b7280;
+    cursor: default;
+  }
+  .dlg-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+    font-weight: 400;
+    color: #c8cdd6;
   }
 </style>

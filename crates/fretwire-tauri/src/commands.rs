@@ -14,6 +14,7 @@ use crate::dto::{
     SplitTypeDto,
 };
 use fretwire_core::{EditorPreset, Session};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, State};
 
@@ -26,6 +27,10 @@ pub struct AppState {
     pub clipboard: Arc<Mutex<Option<PresetClip>>>,
     /// Copy/paste buffer for a single block.
     pub block_clipboard: Arc<Mutex<Option<BlockClip>>>,
+    /// Set by `cancel_export` to call off an export sweep in flight. It lives outside the session
+    /// lock on purpose: the sweep holds that lock for its whole run (forty minutes for a Floor's
+    /// eight setlists), so a cancel that needed the lock could never arrive.
+    pub cancel_export: Arc<AtomicBool>,
 }
 
 /// A copied preset: the raw stream exactly as read off the device, and the name it had.
@@ -710,6 +715,9 @@ pub async fn list_presets(state: State<'_, AppState>, bank: Option<i64>) -> R<Ve
                 .map(|(index, name)| PresetListItem {
                     index: index as i64,
                     name,
+                    // A live listing is already one setlist's worth; the caller passed the bank.
+                    bank,
+                    setlist: None,
                 })
                 .collect()
         })
@@ -811,24 +819,36 @@ fn backup_path(p: &str) -> std::path::PathBuf {
     }
 }
 
-/// Back up the whole setlist to a JSON file at `path` (relative/`~/` paths land in `$HOME`).
-/// Reads only — flash is untouched — but the active-preset cursor sweeps the setlist and any
-/// unsaved edit-buffer changes are reloaded from flash. Progress streams to the frontend as
-/// `backup-progress` events `{done, total, name}`; returns the count written. The frontend
-/// re-reads the preset afterwards (the sweep cleared the edit history).
+/// Export presets to a JSON file at `path` (relative/`~/` paths land in `$HOME`) — `banks` names
+/// the setlists to walk. Reads only: flash is untouched, but the active-preset cursor sweeps every
+/// listed setlist and any unsaved edit-buffer changes are reloaded from flash.
+///
+/// This is a setlist export, not a device backup — presets only, no globals and no IRs.
+///
+/// Progress streams to the frontend as `backup-progress` events; returns the count written. A
+/// `cancel_export` in flight stops the sweep and writes what it has, which is why the count is
+/// worth returning rather than assumed. The frontend re-reads the preset afterwards (the sweep
+/// cleared the edit history).
 #[tauri::command]
-pub async fn backup_setlist(
+pub async fn export_setlists(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     path: String,
+    banks: Vec<i64>,
 ) -> R<i64> {
     let target = backup_path(&path);
+    let cancel = state.cancel_export.clone();
+    cancel.store(false, Ordering::Relaxed);
     run(&state, move |s| {
-        let backup = s.backup_setlist(|done, total, name| {
+        let backup = s.export_setlists(&banks, |p| {
             let _ = app.emit(
                 "backup-progress",
-                serde_json::json!({ "done": done, "total": total, "name": name }),
+                serde_json::json!({
+                    "done": p.done, "total": p.total,
+                    "bank": p.bank, "setlist": p.setlist, "name": p.name,
+                }),
             );
+            !cancel.load(Ordering::Relaxed)
         })?;
         std::fs::write(&target, backup.to_json()).map_err(|e| {
             fretwire_core::Error::Backup(format!("writing {}: {e}", target.display()))
@@ -836,6 +856,14 @@ pub async fn backup_setlist(
         Ok(backup.presets.len() as i64)
     })
     .await
+}
+
+/// Call off an export sweep in flight. Takes effect at the next preset boundary; the file is still
+/// written, holding everything read up to that point.
+#[tauri::command]
+pub async fn cancel_export(state: State<'_, AppState>) -> R<()> {
+    state.cancel_export.store(true, Ordering::Relaxed);
+    Ok(())
 }
 
 /// List a backup file's contents (indices + names) so the restore dialog can offer a picker.
@@ -852,6 +880,12 @@ pub async fn backup_show(path: String) -> R<Vec<PresetListItem>> {
             .into_iter()
             .map(|p| PresetListItem {
                 index: p.index,
+                bank: p.bank,
+                setlist: backup
+                    .setlists
+                    .iter()
+                    .find(|(b, _)| *b == p.bank)
+                    .map(|(_, n)| n.clone()),
                 name: p.name,
             })
             .collect())
@@ -869,6 +903,7 @@ pub async fn restore_preset(
     path: String,
     index: i64,
     slot: i64,
+    bank: i64,
 ) -> R<PresetDto> {
     let target = backup_path(&path);
     run(&state, move |s| {
@@ -876,10 +911,12 @@ pub async fn restore_preset(
             fretwire_core::Error::Backup(format!("reading {}: {e}", target.display()))
         })?;
         let backup = fretwire_core::backup::Backup::from_json(&text)?;
-        let entry = backup.preset(index).ok_or_else(|| {
-            fretwire_core::Error::Backup(format!("backup has no preset at index {index}"))
+        let entry = backup.preset(bank, index).ok_or_else(|| {
+            fretwire_core::Error::Backup(format!(
+                "export file has no preset at bank {bank} slot {index}"
+            ))
         })?;
-        let p = s.restore_preset(&entry.raw, slot, &entry.name)?;
+        let p = s.restore_preset(&entry.raw, bank, slot, &entry.name)?;
         Ok(dto(s, &p))
     })
     .await

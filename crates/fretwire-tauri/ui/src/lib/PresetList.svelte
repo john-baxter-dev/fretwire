@@ -1,7 +1,9 @@
 <script>
-  // Preset browser sidebar: the full setlist, current highlighted, click to load. Header buttons
-  // save/rename. Save As (choose target slot + name) covers copy and overwrite. Backup/Restore
-  // round-trip the whole setlist through a JSON file on disk.
+  // Preset browser sidebar: the full setlist, current highlighted, click to load. Save and Save As
+  // (choose target slot + name, covering copy and overwrite) stay on the surface with Copy/Paste,
+  // whose label doubles as the clipboard readout. The rest live under the ⋯ menu — the row had
+  // grown to seven buttons, and Rename/Export/Restore are the ones you reach for rarely and open a
+  // dialog anyway. New entries belong there rather than as another button.
   let {
     presets,
     currentIndex,
@@ -16,7 +18,7 @@
     onSave,
     onSaveAs,
     onRename,
-    onBackup,
+    onExport,
     onRestore,
     onCopyPreset,
     onPastePreset,
@@ -32,6 +34,28 @@
   // The highlighted row means "this is what's loaded", which is only true while looking at the
   // setlist it was loaded from. Browsing another one highlights nothing.
   const viewingCurrent = $derived(!hasSetlists || viewBank === currentBank);
+
+  let menuOpen = $state(false);
+  const run = (fn) => {
+    menuOpen = false;
+    fn?.();
+  };
+  // Close on any click that isn't inside the menu, and on Escape. Registered on the window rather
+  // than a backdrop element so the menu never covers the list underneath it.
+  function dismissable(node) {
+    const away = (e) => {
+      if (!node.contains(e.target)) menuOpen = false;
+    };
+    const esc = (e) => e.key === "Escape" && (menuOpen = false);
+    window.addEventListener("pointerdown", away, true);
+    window.addEventListener("keydown", esc);
+    return {
+      destroy() {
+        window.removeEventListener("pointerdown", away, true);
+        window.removeEventListener("keydown", esc);
+      },
+    };
+  }
 </script>
 
 <div class="sidebar">
@@ -57,11 +81,21 @@
       title={writeBlocked
         ? `Writing into ${setlists[viewBank] ?? "another setlist"} is untested on this hardware — switch back to ${setlists[currentBank] ?? "the device's setlist"}, or set FRETWIRE_SETLISTS=1`
         : "Save to a chosen slot / copy / overwrite"}>Save As…</button>
-    <button onclick={onRename} title="Rename the current preset (name only)">Rename…</button>
-  </div>
-  <div class="tools sub">
-    <button onclick={onBackup} title="Save every preset to a file (reads only)">Backup…</button>
-    <button onclick={onRestore} title="Restore a preset from a backup file into a slot">Restore…</button>
+    <div class="menuwrap" use:dismissable>
+      <button
+        class="more"
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+        title="More preset actions"
+        onclick={() => (menuOpen = !menuOpen)}>⋯</button>
+      {#if menuOpen}
+        <div class="menu" role="menu">
+          <button role="menuitem" onclick={() => run(onRename)}>Rename preset…</button>
+          <button role="menuitem" onclick={() => run(onExport)}>Export presets to file…</button>
+          <button role="menuitem" onclick={() => run(onRestore)}>Restore preset from file…</button>
+        </div>
+      {/if}
+    </div>
   </div>
   <div class="tools sub last">
     <button onclick={onCopyPreset} title="Copy the loaded preset, to paste onto another slot">Copy</button>
@@ -146,6 +180,49 @@
   }
   .tools button.wide {
     flex: 2;
+  }
+  /* The ⋯ menu: an icon-width button in the flex row, with the popup anchored under it. The wrapper
+     is the flex item, so the popup can be absolutely positioned without leaving the row. */
+  .menuwrap {
+    position: relative;
+    flex: 0 0 auto;
+  }
+  .tools .more {
+    flex: 0 0 auto;
+    width: 28px;
+    padding: 0;
+    line-height: 24px;
+    font-size: 15px;
+    background: #363b46;
+  }
+  .menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    z-index: 20;
+    min-width: 210px;
+    display: flex;
+    flex-direction: column;
+    background: #1b1e25;
+    border: 1px solid #3a4150;
+    border-radius: 8px;
+    padding: 4px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  }
+  .menu button {
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
+    padding: 7px 9px;
+    border: 0;
+    border-radius: 5px;
+    background: none;
+    color: #e6e8ec;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .menu button:hover {
+    background: #2a2f3a;
   }
   .tools button:nth-child(n + 2) {
     background: #363b46;

@@ -419,6 +419,13 @@ pub struct CategoryDto {
 pub struct PresetListItem {
     pub index: i64,
     pub name: String,
+    /// Which setlist the entry belongs to. Always `0` for a live listing (which is per-setlist
+    /// already) and for every version-1 export file.
+    #[serde(default)]
+    pub bank: i64,
+    /// The setlist's name where the export file recorded one — version-1 files didn't.
+    #[serde(default)]
+    pub setlist: Option<String>,
 }
 
 #[derive(Serialize)]

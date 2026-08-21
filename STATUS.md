@@ -2130,7 +2130,45 @@ sweep, not a count of them.)
 
 - A backup is stamped with the device it came off (`self.device().name`) instead of the hardcoded
   `"HX Stomp"` — an XL's file claimed to be a Stomp's.
-- **His naming point is right and is a real limitation, not just copy:** `backup` walks bank 0 only.
-  On a Floor or an XL that is one setlist out of several, so "Backup" overpromises — it is a setlist
-  export. Renaming it (and `backup`/`restore` in the CLI) is a breaking change to the command names
-  and the on-disk `device` tag's meaning; not done here.
+- **His naming point is right:** `backup` walks bank 0 only, so it is a setlist export, not a device
+  backup. How much it actually *misses* depends on the device, and an earlier draft of this bullet
+  overstated it — on a **Floor** bank 0 is one of eight named setlists, but the **HX Stomp** has a
+  single one (`setlists: Some(&["Presets"])`) and the **XL**'s is unknown (`setlists: None`, so we
+  assume one). On his XL the export may well cover everything; the label is still wrong, and on a
+  Floor viewing setlist 3 the Backup button silently exports setlist 1. Fixed in the round below.
+
+## Twenty-sixth round (2026-08-20): **"Backup" is a setlist export, and now says so**
+
+Acting on the XL reporter's aside, which turned out to be covering a bug.
+
+**The bug: the sweep always walked bank 0.** `backup_setlist` called `list_presets()` (`→ bank 0`)
+and `goto_preset(0, …)`, while the sidebar has a setlist picker. On a Helix Floor, browse USER 1,
+press Backup, and you get FACTORY 1 — with no indication. Same shape as the preset-order bug: the
+tool silently operating on something other than what is on screen. `Session::export_setlists(banks,
+…)` now takes the setlists to walk and the GUI passes the one you are looking at.
+`restore_preset` took the same treatment — it hardcoded bank 0 too, so a preset exported from USER 1
+went back into FACTORY 1.
+
+**The naming.** "Backup" is now **Export presets** (CLI `export-setlist`, with `backup` kept as an
+alias so nobody's scripts break). The word matters more than it looks: HX Edit's device backup
+carries global settings and IRs as well as presets, and a file that calls itself a backup gets
+trusted to make a wiped pedal whole. Ours holds presets and nothing else. The dialog says so in as
+many words, and `ROADMAP.md` now carries a **Full device backup** entry gated on the two missing
+pieces (op-25 global settings, op-9/12 IR transactions), so the honest name has somewhere to go.
+
+**Multi-setlist export, with a cancel.** A scope choice in the dialog — this setlist, or all of
+them — shown only on a device that has more than one. On a Floor "all" is 1024 presets: at the rate
+measured on the HX Stomp (126 in ~5 minutes) that is the better part of an hour, so the progress
+overlay grew the one button it was missing. `progress` returns `bool` and the sweep stops at the next
+preset boundary, restores the cursor, and returns what it read; the file is still written. That is a
+partial export by construction and deliberately so — it lists exactly which presets it holds, so it
+is self-describing rather than silently short, and the caller knows it cancelled because the `false`
+came from it.
+
+**File format v2**: a `bank` on every preset, plus an advisory `setlists` array of the names the
+device gave. **Version 1 files still read**, and their presets are bank 0 — not as a fallback but as
+a fact: every v1 file was written by a sweep that walked bank 0 and nothing else.
+
+**Sidebar:** the tool rows had reached seven buttons. Save / Save As and Copy / Paste stay on the
+surface (Paste's label doubles as the clipboard readout); Rename, Export and Restore moved under a
+`⋯` menu, which is where the next one goes too.

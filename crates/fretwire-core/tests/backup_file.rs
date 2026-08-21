@@ -21,7 +21,9 @@ fn real_stream_round_trips_and_is_restore_ready() {
     let raw = data("preset1_stream.msgpack.bin");
     let backup = Backup {
         device: "HX Stomp".into(),
+        setlists: vec![(0, "Presets".into())],
         presets: vec![BackupPreset {
+            bank: 0,
             index: 3,
             name: "DIRTY MADS".into(),
             raw: raw.clone(),
@@ -33,7 +35,7 @@ fn real_stream_round_trips_and_is_restore_ready() {
 
     // The stored raw is exactly what restore replays: parse → to_blob must succeed and yield a
     // non-trivial op-21 payload.
-    let entry = restored.preset(3).unwrap();
+    let entry = restored.preset(0, 3).unwrap();
     assert_eq!(entry.raw, raw);
     let ps = PresetStream::parse(&entry.raw).unwrap();
     let blob = ps.to_blob();

@@ -258,16 +258,30 @@ libusb C dependency, clean on Linux; falls back fine for dev on Windows. Workspa
 - [ ] Knob widget option, keyboard nav (beyond Space/Ctrl+Z), polish.
 
 ## Phase 7 — Preset & device management
-- [~] **Backup** — BUILT (2026-07-07, offline+mock verified; live pass pending): `Session::
-      backup_setlist` sweeps the setlist (goto + raw read per slot, op-23 identity cross-check,
-      cursor restored) into a `fretwire-backup` JSON file (`fretwire_core::backup`, hex-encoded raw streams).
-      Reads only. CLI `backup`/`backup-show`; GUI Backup… with a progress overlay. (Stores our own
-      format, not `.hlx` — the wire↔`.hlx` key mapping isn't needed for round-tripping.)
-- [~] **Restore / preset write** — BUILT (2026-07-07; **[hypothesis] until the first live test**):
-      `Session::restore_preset` = goto slot → op-21 edit-buffer write of the stored blob → op-71
-      save. The op-21 chunked write is live-proven for mutated *current* blobs (node moves); a
-      foreign blob is the same mechanism, unverified. CLI `restore <file> <index> [slot]`; GUI
-      Restore… with source + target pickers (overwrite always visible). Also gives duplicate/copy.
+- [x] **Setlist export** — BUILT (2026-07-07; multi-setlist, cancellable and renamed 2026-08-20;
+      live-verified on an HX Stomp). `Session::export_setlists` walks each requested setlist (goto +
+      raw read per slot, op-23 identity cross-check via `read_preset_confirmed`, cursor restored)
+      into a `fretwire-backup` JSON file (`fretwire_core::backup` v2, hex-encoded raw streams).
+      Reads only. CLI `export-setlist [--bank N|--all]` (alias `backup`) / `backup-show`; GUI
+      **Export presets…** under the sidebar's ⋯ menu, with a scope choice, a whole-job progress bar
+      and a Cancel — a Floor's eight setlists is 1024 presets and the better part of an hour, and a
+      cancelled sweep still writes what it read. (Stores our own format, not `.hlx` — the
+      wire↔`.hlx` key mapping isn't needed for round-tripping.)
+      **Deliberately not called a backup**: see "Full device backup" below.
+- [~] **Restore / preset write** — BUILT (2026-07-07; bank-aware 2026-08-20; **[hypothesis] until
+      the first live test**): `Session::restore_preset` = goto bank/slot → op-21 edit-buffer write of
+      the stored blob → op-71 save. The op-21 chunked write is live-proven for mutated *current*
+      blobs (node moves); a foreign blob is the same mechanism, unverified. CLI
+      `restore <file> <index> [slot] [--bank N]`; GUI Restore… with source + target pickers
+      (overwrite always visible). Also gives duplicate/copy.
+- [ ] **Full device backup** — the thing "Backup" used to imply and does not deliver. A restore that
+      makes a wiped pedal whole needs three parts, and we have one:
+      **presets** (done — setlist export above), **global / I/O settings** (op 25's id space is
+      barely mapped — see below), and **IRs** (op 9/12 transaction only partly decoded — see below).
+      Gated on those two, in that order; the naming stays honest until all three land, because a file
+      called a backup gets trusted as one. `fretwire_data::hxb` already reads HX Edit's own `.hxb`,
+      which is the reference for what a real one contains — and a plausible import path once the
+      `tone` JSON → wire blob conversion exists.
 - [ ] **IR management** — upload user impulse responses to the device's IR slots, rename/reorder/
       delete. **Transaction shape PARTIALLY DECODED** (2026-06-28, `captures/_TODO-ir.md`): PRIMARY
       channel, session op 255/254; **upload = op 9** `{112:slot, 113:u32 checksum, 109:name, 110:8192B

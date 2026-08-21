@@ -410,8 +410,10 @@ let currentBank = 0;
 const setlistNames = () => DEVICES[deviceMode].setlists;
 const bankOf = (b) => banks[b] ?? [];
 let current = bankOf(0)[0];
-// Backup/restore round-trip (see the backup_setlist handler): the last backup made this session.
+// Export/restore round-trip (see the export_setlists handler): the last export made this session,
+// and whether a sweep in flight has been called off.
 let lastBackup = null;
+let exportCancelled = false;
 
 const hexEncode = (str) =>
   Array.from(new TextEncoder().encode(str), (b) => b.toString(16).padStart(2, "0")).join("");
@@ -906,50 +908,71 @@ const HANDLERS = {
   // the browser. Don't read the mock as proof of what ships against hardware.
   cross_setlist_write_allowed: () => true,
 
-  // ---- backup / restore -----------------------------------------------------------------------
+  // ---- export / import ------------------------------------------------------------------------
   // The real backend sweeps the device and writes a `fretwire-backup` JSON file at `path`. The mock
   // mirrors the file *shape* exactly (its "raw" is hex of the mock preset state instead of a
   // MessagePack stream), triggers a browser download of it, and keeps it in memory so
   // backup_show/restore_preset work in the same session — a browser can't read arbitrary paths.
-  // Backs up the *currently browsed* setlist, which is what the real sweep walks.
-  backup_setlist: async ({ path }) => {
+  // Walks whichever setlists it is given, as the real sweep does.
+  export_setlists: async ({ path, banks }) => {
+    exportCancelled = false;
     const entries = [];
-    const list = bankOf(currentBank);
-    for (let i = 0; i < list.length; i++) {
-      const p = list[i];
-      await sleep(120); // the real sweep takes ~a second per preset; make the progress UI visible
-      emit("backup-progress", { done: i + 1, total: list.length, name: p.name });
-      entries.push({
-        index: p.index,
-        name: p.name,
-        raw_hex: hexEncode(JSON.stringify({
-          name: p.name, snapshot_names: p.snapshot_names, active_snapshot: p.active_snapshot,
-          slots: p.slots, nodePos: p.nodePos,
-        })),
-      });
+    const lists = banks.map((b) => [b, bankOf(b)]);
+    const total = lists.reduce((n, [, l]) => n + l.length, 0);
+    let done = 0;
+    outer: for (const [bank, list] of lists) {
+      for (const p of list) {
+        await sleep(120); // the real sweep takes ~a second per preset; make the progress UI visible
+        done++;
+        entries.push({
+          bank,
+          index: p.index,
+          name: p.name,
+          raw_hex: hexEncode(JSON.stringify({
+            name: p.name, snapshot_names: p.snapshot_names, active_snapshot: p.active_snapshot,
+            slots: p.slots, nodePos: p.nodePos,
+          })),
+        });
+        emit("backup-progress", {
+          done, total, bank, setlist: setlistNames()[bank] ?? "Presets", name: p.name,
+        });
+        // Checked after the entry is kept, like the real sweep: a cancelled export still holds
+        // everything read up to the moment it was called off.
+        if (exportCancelled) break outer;
+      }
     }
     lastBackup = {
-      format: "fretwire-backup", version: 1,
-      device: `${DEVICES[deviceMode].name} (mock)`, presets: entries,
+      format: "fretwire-backup", version: 2,
+      device: `${DEVICES[deviceMode].name} (mock)`,
+      setlists: banks.map((b) => ({ bank: b, name: setlistNames()[b] ?? "Presets" })),
+      presets: entries,
     };
     // Offer the file as a download, named like the requested path.
     const blob = new Blob([JSON.stringify(lastBackup, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = path.split("/").pop() || "fretwire-backup.json";
+    a.download = path.split("/").pop() || "fretwire-presets.json";
     a.click();
     URL.revokeObjectURL(a.href);
     return entries.length;
   },
+  cancel_export: () => {
+    exportCancelled = true;
+  },
   backup_show: ({ path }) => {
     if (!lastBackup)
-      throw new Error(`mock backend: no backup this session — run Backup… first (a browser can't read ${path})`);
-    return lastBackup.presets.map((p) => ({ index: p.index, name: p.name }));
+      throw new Error(`mock backend: nothing exported this session — run Export… first (a browser can't read ${path})`);
+    return lastBackup.presets.map((p) => ({
+      index: p.index,
+      name: p.name,
+      bank: p.bank ?? 0,
+      setlist: lastBackup.setlists?.find((s) => s.bank === (p.bank ?? 0))?.name ?? null,
+    }));
   },
-  restore_preset: ({ index, slot }) => {
-    if (!lastBackup) throw new Error("mock backend: no backup this session — run Backup… first");
-    const entry = lastBackup.presets.find((p) => p.index === index);
-    if (!entry) throw new Error(`backup has no preset at index ${index}`);
+  restore_preset: ({ index, slot, bank = 0 }) => {
+    if (!lastBackup) throw new Error("mock backend: nothing exported this session — run Export… first");
+    const entry = lastBackup.presets.find((p) => p.index === index && (p.bank ?? 0) === bank);
+    if (!entry) throw new Error(`export file has no preset at bank ${bank} slot ${index}`);
     const state = JSON.parse(hexDecode(entry.raw_hex));
     const restored = {
       name: state.name, index: slot, active_snapshot: state.active_snapshot ?? 0,

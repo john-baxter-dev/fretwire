@@ -160,16 +160,29 @@ The rule covers both the HX Stomp (`0x4246`) and HX Stomp XL (`0x4253`).
 
 ## Devices
 
-| device | status |
-|--------|--------|
-| HX Stomp     | **verified** — developed against one; every builder reproduces its own wire bytes |
-| Helix Floor  | **verified** — ~70 logged sessions with a remote tester, two DSPs, eight setlists |
-| HX Stomp XL  | **reported working** — an owner runs it; we hold no capture from one, so its DSP and snapshot counts, setlist count and preset banking are left unknown rather than assumed |
-| Helix LT / Rack, HX Effects | untested — same USB protocol, but nobody has tried one |
+| device | USB PID | status |
+|---------|---------|--------|
+| HX Stomp    | `0x4246` | **verified** — developed against one; every builder reproduces its own wire bytes |
+| Helix Floor | `0x4248` | **verified** — ~70 logged sessions with a remote tester; two DSPs, eight setlists |
+| HX Stomp XL | `0x4253` | **reported working** — an owner runs it. We hold no capture from one, so its DSP and snapshot counts, setlist count and preset banking stay unknown rather than assumed |
+| Helix LT, Helix Rack, HX Effects | — | **not recognised yet** — we don't know their PIDs, so `fretwire detect` won't see one |
 
-An unverified device logs a caveat when opened and is only ever picked after a verified one. Nothing
-in the device table is guessed: a field we have not seen is `None`, and the editor falls back rather
+An unverified device logs a caveat when opened, and is only picked after a verified one. Nothing in
+the device table is guessed: a field we have not seen is `None`, and the editor falls back rather
 than assuming it matches a sibling.
+
+### Adding a device
+
+The whole HX family shares the `MI_00` control protocol, so a new one is mostly a matter of knowing
+it exists. If you have a Helix LT, Rack or HX Effects and would like it supported, the one thing we
+cannot get without you is its USB product ID:
+
+```sh
+lsusb -d 0e41:            # e.g. Bus 001 Device 007: ID 0e41:42xx Line 6 ...
+```
+
+Open an issue with that line. Adding it is a table entry plus a udev rule; it would start as
+**untested**, and become **verified** once someone captures HX Edit talking to one.
 
 ## The reference data
 

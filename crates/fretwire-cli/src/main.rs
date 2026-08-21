@@ -1190,9 +1190,9 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
         None => println!("Preset — (current identity unknown)"),
     }
     println!(
-        "device {} firmware {}",
+        "device {} preset build {}",
         preset.device_model.as_deref().unwrap_or("?"),
-        preset.firmware.as_deref().unwrap_or("?")
+        preset.build_stamp.as_deref().unwrap_or("?")
     );
     let topo = if preset.split() {
         "split (parallel)"

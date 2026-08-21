@@ -2255,7 +2255,7 @@ impl Session {
     /// Does this param currently read as a bool? Answered from the **device's own last blob**, not
     /// the reference data, so it works on a clean clone with no `.models` imported.
     ///
-    /// A switch has exactly one acceptable wire type. Confirmed on hardware (HX Stomp, fw 3.71,
+    /// A switch has exactly one acceptable wire type. Confirmed on hardware (HX Stomp, fw 3.80,
     /// 2026-08-02): `TempoSync1` takes `Bool(true)` and refuses both `Int(1)` and `Float(1.0)` with
     /// device code `-3`. The typed setters below each hard-code a type, so a caller that guesses
     /// wrong gets a guaranteed refusal — the GUI's switch control routed through

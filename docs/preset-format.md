@@ -2,7 +2,8 @@
 
 When a preset is opened, the device streams it as MessagePack (see `docs/protocol.md` for the
 transport). `fretwire_data::stream::PresetStream::parse` decodes a reassembled stream. Validated
-against `captures/preset1_stream.msgpack.bin` (HX Stomp, fw v3.71). Integer keys below are
+against `captures/preset1_stream.msgpack.bin` (HX Stomp, fw 3.80 — the `v3.71` in its key-37 stamp
+is a build id, not the firmware it ran; see below). Integer keys below are
 **observed**; names are inferred (often by correlation with the `.hlx` JSON schema).
 
 ## Envelope
@@ -90,7 +91,7 @@ The bool in each array (`bypass` / `B Polarity`) pins the alignment, so the mapp
 ## Preset map (integer keys)
 | key | value | meaning (inferred) |
 |----:|-------|--------------------|
-| 7 | Map `{36: "P33", 35: 58720256, 37: "v3.71-32-g1039661"}` | device info: **36 = model code** (`P33` = HX Stomp family), 35 = version (0x03800000), 37 = firmware string |
+| 7 | Map `{36: "P33", 35: 58720256, 37: "v3.71-32-g1039661"}` | device info: **36 = model code** (`P33` = HX Stomp family), 35 = version (0x03800000), 37 = build stamp — *not* the running firmware, see below |
 | 0 | Map `{21: split, 22: Array[20]}` | **block slots** of the first DSP (`21` = split type) — see below |
 | 1 | Map `{21: split, 22: Array[20]}` — or nil | **the second DSP's slot array**, same shape as key `0`. **nil on the HX Stomp** (one DSP), populated on the Helix Floor. [solid — 2026-07-22, Floor captures cross-checked against a `.hxb` backup] |
 | 2 | Map `{0: Array[13], 1: Array[13×Array[7]]}` | snapshot/controller matrices (13 = snapshots? all zero here) |
@@ -99,6 +100,32 @@ The bool in each array (`bypass` / `B Polarity`) pins the alignment, so the mapp
 | 5 | Map{15} `{16: f32, 45..56: …, 30, 134}` | **preset-level settings**. Byte-identical across all three captures (all at defaults), so the fields aren't separable yet; `16` = f32 80 is most likely the preset tempo. [hypothesis] |
 | 6 | Map{2} `{98: <slot>, 26: 0}` | **the focused block** — key `98` is the same slot number the edit commands address, and it differs per capture (5, 7, 12), matching the block last selected. [solid] |
 | 10 | Map{6} `{6,7,8, 9: 20, 10: Array[n], 13: Array[20]}` | **snapshots**: `10` is the snapshot array (3 on a Stomp, 8 on a Floor), `9` = the slot count, `13` = a per-slot array. Each snapshot is `{0: enabled, 1: Array[11], 2: Array[64], 3: Array[20], 4: name, 5: f32 tempo, 12, 14}` — note `3` is **per-slot state**, one entry per block slot. [solid] |
+
+### Neither `7 → 37` nor `7 → 35` is the pedal's firmware version  [solid — 2026-08-21]
+Both look like one. Neither is, and labelling either "fw" tells the user their pedal is on a version
+it isn't — reported as exactly that in issue #4.
+
+| | HX Stomp (on **3.80**) | HX Stomp XL (on **3.80.0**) | Helix Floor (on **3.82**) |
+|---|---|---|---|
+| key `7 → 37` | `v3.71-32-g1039661` | `v3.71-32-g1039661` | `7d01f5e` |
+| key `7 → 35` | `0x03800000` | — | `0x03800020` |
+| `.hxb` header `0x1c` | — | — | `0x03800000` |
+
+**Key 37** is a build id. A single pedal refutes the firmware reading — a Stomp on 3.80 stamps
+`v3.71` — and the XL only adds that it is not per-unit. Read the suffix literally and the
+contradiction dissolves: `-32-g1039661` is `git describe` for *32 commits past a tag named `v3.71`*,
+so it names a build of something inside the firmware image whose last tag was 3.71, not a release.
+The Floor's bare sha is the same thing with no tag behind it. [hypothesis]
+
+**Key 35** is not the fallback: `0x03800000` appears on this 3.80 Stomp *and* in a 3.82 Floor's
+backup header, so it did not move across those releases. A format revision that reads "3.80" is the
+likely story [hypothesis] — and the reason it went unchallenged is that it agreed with one pedal by
+coincidence.
+
+So **no field we have decoded reports the version on the pedal's boot screen**: the live identity
+reply carries that same `0x03800000`. Worth revisiting if op 25 (globals) is ever decoded.
+
+Exposed as `PresetStream::build_stamp()` / `EditorPreset::build_stamp`, deliberately not `firmware`.
 
 ### Block slots (`0 → 22`, Array of 20 — and `1 → 22` for the second DSP)
 Each slot is `{19: type, 20: content}`:

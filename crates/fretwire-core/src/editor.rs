@@ -30,7 +30,7 @@ use std::path::Path;
 /// how the row-B stranding and node-enclosure mistakes happened).
 ///
 /// [solid — three independent lines, 2026-08-02/04.
-/// **1.** HX Stomp fw 3.71: one preset, one slot, a ladder of swap targets, by the total each
+/// **1.** HX Stomp fw 3.80: one preset, one slot, a ladder of swap targets, by the total each
 /// would land on — 73.3 / 73.8 / 74.4 / 74.9 accepted, 75.3 / 75.6 / 76.5 refused `-306`.
 /// **2.** The tester's Helix Floor: `somehinged3` sits at 72.7% on DSP1 and refused Elephant Man
 /// Mono (+6.02) and Euclidean Delay (+10.5), putting that device's ceiling under 78.7 too.
@@ -220,7 +220,9 @@ impl EditorBlock {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EditorPreset {
     pub device_model: Option<String>,
-    pub firmware: Option<String>,
+    /// The preset's own build stamp — *not* the device's firmware version. See
+    /// [`fretwire_data::stream::PresetStream::build_stamp`].
+    pub build_stamp: Option<String>,
     pub blocks: Vec<EditorBlock>,
     /// Footswitch/controller assignments (preset key `4`).
     pub assignments: Vec<fretwire_data::stream::Assignment>,
@@ -854,7 +856,7 @@ impl Catalog {
             .collect();
         Ok(EditorPreset {
             device_model: ps.device_model(),
-            firmware: ps.firmware(),
+            build_stamp: ps.build_stamp(),
             blocks,
             assignments: ps.assignments(),
             active_snapshot: ps.snapshots().0,

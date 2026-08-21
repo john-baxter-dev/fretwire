@@ -290,7 +290,10 @@ pub struct PresetDto {
     /// `false` only when the connected device's model code and the preset's disagree; `None` when
     /// either is unknown. Stamped by the command layer.
     pub device_matches: Option<bool>,
-    pub firmware: Option<String>,
+    /// The preset's build stamp. Deliberately not called `firmware`: it does not track the
+    /// pedal's firmware version, and labelling it that way had a tester reasonably reading it as
+    /// fretwire misreporting their device. See `PresetStream::build_stamp`.
+    pub build_stamp: Option<String>,
     pub split: bool,
     pub dsp_load: f64,
     /// The load a DSP fills up at, on `dsp_load`'s scale — **~75, not 100** (see
@@ -333,7 +336,7 @@ impl From<&EditorPreset> for PresetDto {
             device_model: p.device_model.clone(),
             device_name: None,
             device_matches: None,
-            firmware: p.firmware.clone(),
+            build_stamp: p.build_stamp.clone(),
             split: p.split(),
             dsp_load: fin(p.dsp_load),
             dsp_ceiling: fretwire_core::editor::DSP_CEILING,
@@ -477,6 +480,27 @@ impl From<fretwire_core::import::ImportSummary> for ImportResultDto {
             copied: s.copied as i64,
             dest: s.dest.display().to_string(),
             missing: s.missing,
+        }
+    }
+}
+
+/// One HX device seen on the bus by `detect`.
+///
+/// The name is the device's, not a fixed string: an HX Stomp XL that reports itself correctly in
+/// the log but is called "HX Stomp" in the UI reads as fretwire misidentifying the pedal.
+#[derive(Serialize)]
+pub struct DetectedDeviceDto {
+    pub name: String,
+    /// How far the support for this device actually goes — `None` for a device whose traffic we
+    /// have reconciled, otherwise the sentence to show the user.
+    pub caveat: Option<String>,
+}
+
+impl From<&'static fretwire_core::fretwire_usb::Device> for DetectedDeviceDto {
+    fn from(d: &'static fretwire_core::fretwire_usb::Device) -> Self {
+        DetectedDeviceDto {
+            name: d.name.to_string(),
+            caveat: d.support.caveat().map(str::to_string),
         }
     }
 }

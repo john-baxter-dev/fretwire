@@ -266,7 +266,7 @@ function makePreset(name, index, slots, opts = {}) {
   return {
     name, index, active_snapshot: 0, snapshot_names: opts.snapshot_names ?? [], slots,
     nodePos: {}, dspCount,
-    deviceModel: opts.deviceModel ?? "HX Stomp", firmware: opts.firmware ?? "3.80 (mock)",
+    deviceModel: opts.deviceModel ?? "HX Stomp", buildStamp: opts.buildStamp ?? "v3.71-32-g1039661",
   };
 }
 
@@ -312,7 +312,7 @@ function floorPreset() {
   return makePreset("Pull Me Under", 0, slots, {
     dspCount: 2,
     deviceModel: "P21",
-    firmware: "7d01f5e (mock)",
+    buildStamp: "v3.71-32-g1039661",
     snapshot_names: ["Intro", "B&C", "Solo", "", "", "", "", ""],
   });
 }
@@ -329,6 +329,15 @@ const DEVICES = {
     setlists: ["Presets"],
     // Three per bank, so the list reads 01A/01B/01C/02A as the pedal's screen does.
     presetsPerBank: 3,
+  },
+  xl: {
+    name: "HX Stomp XL",
+    setlists: ["Presets"],
+    // Four per bank — 01A/01B/01C/01D/02A, read off a real XL's screen. The one place the mock can
+    // exercise the numbering toggle against a device that banks differently from the Stomp.
+    presetsPerBank: 4,
+    // Reported, not Verified: the UI has to show this, so the mock has to be able to produce it.
+    caveat: "reported working, but not verified against a capture",
   },
   floor: {
     name: "Helix Floor",
@@ -599,7 +608,7 @@ function toDto(p) {
   const d0 = dsps[0];
   const occupied = allEditSlots(p).filter((i) => p.slots[i]?.kind === "effect");
   return {
-    name: p.name, index: p.index, bank: currentBank, device_model: p.deviceModel, firmware: p.firmware,
+    name: p.name, index: p.index, bank: currentBank, device_model: p.deviceModel, build_stamp: p.buildStamp,
     // Flat fields mirror DSP 0, exactly like the real PresetDto, so a single-DSP UI still works.
     split: d0.split, dsp_load: dsps.reduce((s, v) => s + v.dsp_load, 0),
     split_pos: d0.split_pos, mixer_pos: d0.mixer_pos,
@@ -659,7 +668,7 @@ const HANDLERS = {
     dataPresent = true;
     return { copied: 21, dest: "~/.local/share/fretwire/data", missing: [] };
   },
-  detect: () => true,
+  detect: () => [{ name: DEVICES[deviceMode].name, caveat: DEVICES[deviceMode].caveat ?? null }],
   is_connected: () => connected,
   connect: () => {
     connected = true;
@@ -1071,19 +1080,20 @@ if (typeof window !== "undefined") {
       emit("device-pushes", [{ kind: "Preset", index }]);
     },
     /**
-     * Pretend to be the other unit: "stomp" (one DSP, one flat preset list, no setlist picker) or
-     * "floor" (two DSPs, eight setlists). Reload or reconnect after switching.
+     * Pretend to be another unit: "stomp" (one DSP, one flat preset list, no setlist picker),
+     * "xl" (as the Stomp, but banked by four and carrying a support caveat) or "floor" (two DSPs,
+     * eight setlists). Reload or reconnect after switching.
      */
     device(mode) {
       if (mode === undefined) {
         console.info(
           `[fretwire] mock device: ${DEVICES[deviceMode].name} (${deviceMode}). ` +
-            `Switch with fretwireMock.device("stomp") or ("floor").`,
+            `Switch with fretwireMock.device("stomp"), ("xl") or ("floor").`,
         );
         return deviceMode;
       }
       if (!DEVICES[mode]) {
-        console.warn(`[fretwire] unknown device ${mode} — use "stomp" or "floor"`);
+        console.warn(`[fretwire] unknown device ${mode} — use "stomp", "xl" or "floor"`);
         return deviceMode;
       }
       deviceMode = mode;

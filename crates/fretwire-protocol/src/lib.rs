@@ -176,7 +176,13 @@ pub const DEVICES: &[Device] = &[
     Device {
         pid: PID_HX_STOMP_XL,
         name: "HX Stomp XL",
-        model_code: None,
+        // `P36`, seen twice on one owner's unit: the handshake identity reply came back `"P36Main"`
+        // (a live device answering us, not a spec sheet) and a preset read off the same pedal
+        // carried `P36` at key `7 → 36`. The two paths are independent, so this is the one field a
+        // bug report has been able to settle. [solid — 2026-08-21, owner report, issue #4]
+        model_code: Some("P36"),
+        // Still unknown: nothing we have read exposes it. The model code above comes from an
+        // identity string and a preset stamp; this is a different field in the backup header.
         preset_device_id: None,
         dsps: None,
         snapshots: None,

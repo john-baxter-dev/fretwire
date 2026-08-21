@@ -30,7 +30,7 @@ fn loads_preset_into_named_editable_blocks() {
         .unwrap();
 
     assert_eq!(preset.device_model.as_deref(), Some("P33"));
-    assert!(preset.firmware.unwrap().starts_with("v3.71"));
+    assert!(preset.build_stamp.unwrap().starts_with("v3.71"));
     // Six blocks enumerated from the slot array — the signal path lists only four; the amp+cab
     // and a second reverb live off-path and were previously dropped.
     assert_eq!(preset.blocks.len(), 6);

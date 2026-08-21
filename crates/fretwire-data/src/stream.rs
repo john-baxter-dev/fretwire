@@ -462,8 +462,23 @@ impl PresetStream {
             })
     }
 
-    /// Firmware version string (preset key `7 → 37`).
-    pub fn firmware(&self) -> Option<String> {
+    /// Build stamp carried by the preset (key `7 → 37`), e.g. `"v3.71-32-g1039661"`.
+    ///
+    /// It looks like a firmware version and **is not one** [solid]: an HX Stomp running **3.80**
+    /// reports `v3.71-32-g1039661`, and so does an HX Stomp XL running 3.80.0 — byte-identical, git
+    /// hash included. One pedal is enough to refute it; the second only shows it is not per-unit.
+    ///
+    /// Read the suffix literally and it stops being a contradiction: `-32-g1039661` is `git
+    /// describe` for *32 commits past the tag `v3.71`*. It names a build of some component inside
+    /// the firmware image, whose last tag happens to be 3.71 — not a release. The Helix Floor gives
+    /// a bare sha (`7d01f5e`) instead, i.e. a build with no tag behind it. [hypothesis]
+    ///
+    /// Do not reach for key `35` as the "real" version either: it reads `0x03800000` on this 3.80
+    /// Stomp *and* in a 3.82 Floor's backup header, so it tracks something that did not change
+    /// across those releases — a format revision, most likely. **No field we have decoded, on the
+    /// wire or in a backup, reports the version on the pedal's boot screen.**
+    /// [2026-08-21, owner report, issue #4]
+    pub fn build_stamp(&self) -> Option<String> {
         self.field(7)
             .and_then(|m| map_get(m, 37))
             .and_then(value_bytes)

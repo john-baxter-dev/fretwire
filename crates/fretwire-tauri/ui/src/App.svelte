@@ -611,9 +611,17 @@
     status = "Detecting…";
     statusErr = false;
     try {
-      const present = await invoke("detect");
-      status = present ? "HX Stomp: present ✓" : "HX Stomp: not found";
-      statusErr = !present;
+      // Name what is actually plugged in. This used to say "HX Stomp" whatever it found, which on
+      // an HX Stomp XL reads as fretwire failing to tell the two apart.
+      const found = await invoke("detect");
+      if (found.length === 0) {
+        status = "No HX device found";
+        statusErr = true;
+      } else {
+        status =
+          found.map((d) => d.name + (d.caveat ? ` (${d.caveat})` : "")).join(", ") + ": present ✓";
+        statusErr = false;
+      }
     } catch (e) {
       status = "Ready.";
       toast("detect: " + e);
@@ -736,6 +744,7 @@
       <select value={mockDevice} onchange={(e) => onPickMockDevice(e.currentTarget.value)}>
         <option value="floor">Helix Floor</option>
         <option value="stomp">HX Stomp</option>
+        <option value="xl">HX Stomp XL</option>
       </select>
     </label>
   {/if}
@@ -773,7 +782,9 @@
             {#if preset.dirty}<span class="edited" title="Edited — not saved to the device">● edited</span>{/if}
           </span>
           <span>device <b>{preset.device_model ?? "—"}</b></span>
-          <span>fw <b>{preset.firmware ?? "—"}</b></span>
+          <span
+            title="A build id stamped inside the preset (key 7 → 37), not your pedal's firmware version — an HX Stomp on 3.80 reports v3.71-32-g1039661, and so does an HX Stomp XL on 3.80.0. The suffix reads as 32 commits past a tag named v3.71, so it names a build inside the firmware rather than a release."
+          >preset build <b>{preset.build_stamp ?? "—"}</b></span>
           <span>routing <b>{preset.split ? "parallel (split)" : "serial"}</b></span>
           {#each dspViews as v (v.dsp)}
             <span

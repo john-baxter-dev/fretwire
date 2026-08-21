@@ -63,7 +63,13 @@ then a query: OUT 01 00 0X 00 01 00 00 00 0X 00 00 00       ->  IN .. 0X "P33"/"
   request; reply `0x0002`). This is the documented SESSION_OPEN, run **once per channel**.
 - The identity query's opcode differs by channel (**`ef03`→0x0005, `ed03`→0x0006, `f003`→0x0004**);
   the reply carries the model code string — `ef03` returns **`"P33Main"`**, `ed03`/`f003` return
-  **`"P33"`** — plus the firmware version `0x03800000` (matches preset key 35). `P33` = HX Stomp.
+  **`"P33"`** — plus `0x03800000` (matches preset key 35). `P33` = HX Stomp. That word is **not the
+  running firmware version**, despite reading like 3.80: the same value sits in a *3.82* Floor's
+  backup header. See "Neither `7 → 37` nor `7 → 35`…" in `docs/preset-format.md`.
+- **Model codes seen so far:** `P33` HX Stomp, `P21` Helix Floor, **`P36` HX Stomp XL**. The XL's is
+  [solid — 2026-08-21]: an owner's handshake returned `"P36Main"` and a preset read off the same
+  pedal carried `P36` at key `7 → 36`, two independent paths agreeing. It is the only field a bug
+  report (rather than a capture) has been able to fill in for that device.
 - After setup, the **edit channel** (`ed03/8010`) runs meter/state queries and then streams the
   **current preset** (frame 4272 IN begins `da 0a … 6c 36 2d 68 65 6c 69 78` = "l6-helix") — the
   same paged MessagePack mechanism as "Preset open" below.
@@ -277,7 +283,7 @@ The field logs made this look like a property of the *model* — a Room reverb r
 Euclidean Delay, a Bleat Chop Trem refusing to become an Elephant Man. It is a property of the
 **preset's total DSP load** at the moment of the swap, and nothing else.
 
-Measured on an HX Stomp (fw 3.71, 2026-08-02), same preset, same block, same target model, only the
+Measured on an HX Stomp (fw 3.80, 2026-08-02), same preset, same block, same target model, only the
 free DSP changed:
 
 | slot 4 → `HD2_DelayElephantManMono` | preset before | result |
@@ -381,7 +387,7 @@ enclosure mistakes happened; see `docs/helix-floor.md`.)
 
 ### The value's wire type must match the parameter's type exactly [solid]
 Key 119 is not coerced. A **switch** takes a MessagePack bool and *only* a bool: an int or a float
-carrying the same 0/1 is refused with `-3` and nothing is applied. Measured on an HX Stomp (fw 3.71,
+carrying the same 0/1 is refused with `-3` and nothing is applied. Measured on an HX Stomp (fw 3.80,
 2026-08-02) against `HD2_DelayBucketBrigade`'s `TempoSync1`:
 
 | sent | result |
@@ -413,7 +419,7 @@ and there the lone trailing value is index `0`:
 | Dynamic Ambience `Mix` (`dynamic_ambience_mix_modify`) | `{98: 7, 29: true, 26: 0, 28: 5, 119: 0.5}` |
 | Dynamic Ambience `Trails` (`dynamic_ambience_trails_on_off`) | `{98: 7, 29: false, 26: 0, 28: 0, 119: <bool>}` |
 
-Six trails toggles in that capture, all the same shape. Confirmed live on an HX Stomp (fw 3.71,
+Six trails toggles in that capture, all the same shape. Confirmed live on an HX Stomp (fw 3.80,
 2026-08-02): `{98: 2, 29: false, 26: 0, 28: 0, 119: true}` turns a Bucket Brigade's trails on and it
 reads back `true`. Builder `edit::set_value_flagged`; `Session::set_trails` and the CLI's `trails`
 wrap it, and the ordinary setters route a param whose `extra_index` is set through the same path, so

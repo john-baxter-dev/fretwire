@@ -308,7 +308,7 @@ fn parses_preset_stream_structure() {
     let ps = PresetStream::parse(&blob()).expect("parse preset stream");
     assert_eq!(ps.magic, "l6-helix");
 
-    // Device-info field (key 7): { 36: model "P33", 35: version, 37: firmware }.
+    // Device-info field (key 7): { 36: model "P33", 35: version, 37: build stamp }.
     let dev = ps.field(7).expect("device-info field 7");
     let model = map_get(dev, 36).and_then(value_bytes).unwrap();
     assert_eq!(
@@ -544,7 +544,7 @@ fn typed_device_preset_model() {
 
     let ps = PresetStream::parse(&blob()).unwrap();
     assert_eq!(ps.device_model().as_deref(), Some("P33"));
-    assert!(ps.firmware().unwrap().starts_with("v3.71"));
+    assert!(ps.build_stamp().unwrap().starts_with("v3.71"));
 
     let all = ps.blocks();
     assert_eq!(all.len(), 20);

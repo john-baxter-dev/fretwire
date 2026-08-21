@@ -367,7 +367,8 @@ The data layer already covers the Floor (355/355 models, 19,377/19,377 param key
 USB control interface is identical to the Stomp's, so this is mostly plumbing — *once* we can see a
 real session.
 
-- [x] Identify the device: PID `0x4248`, preset `device` ID `0x210001`, fw `0x03800000`. Constant +
+- [x] Identify the device: PID `0x4248`, preset `device` ID `0x210001`, version word `0x03800000`
+      (*not* the firmware version — a 3.80 Stomp reports it too). Constant +
       udev rule landed; no code matches on the PID yet.
 - [x] Decode the `.hxb` backup container (header + concatenated raw zlib streams).
 - [x] Get a capture with HX Edit connected (captures 3 & 4, 2026-07-22).

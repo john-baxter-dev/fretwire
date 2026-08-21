@@ -10,8 +10,8 @@
 //! renders authoritative device state.
 
 use crate::dto::{
-    CategoryDto, DataStatusDto, ImportResultDto, ModelChoiceDto, PresetDto, PresetListItem,
-    SplitTypeDto,
+    CategoryDto, DataStatusDto, DetectedDeviceDto, ImportResultDto, ModelChoiceDto, PresetDto,
+    PresetListItem, SplitTypeDto,
 };
 use fretwire_core::{EditorPreset, Session};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -277,10 +277,15 @@ pub async fn import_data(source: String) -> R<ImportResultDto> {
 // ---- connection ----
 
 /// USB enumeration only — does not claim the interface, safe to call anytime.
+///
+/// Returns what is actually plugged in rather than a bare yes/no, so the UI can name the pedal it
+/// found. An empty list means nothing was seen.
 #[tauri::command]
-pub async fn detect() -> R<bool> {
+pub async fn detect() -> R<Vec<DetectedDeviceDto>> {
     tauri::async_runtime::spawn_blocking(|| {
-        fretwire_core::fretwire_usb::hx_device_present().map_err(|e| e.to_string())
+        fretwire_core::fretwire_usb::present_devices()
+            .map(|found| found.into_iter().map(DetectedDeviceDto::from).collect())
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("task error: {e}"))?

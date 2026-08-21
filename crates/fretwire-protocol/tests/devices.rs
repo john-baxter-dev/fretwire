@@ -42,8 +42,12 @@ fn lookup_by_preset_model_code() {
         Device::by_model_code("P21").map(|d| d.pid),
         Some(PID_HELIX_FLOOR)
     );
+    // The XL's, from an owner's handshake reply and a preset read off the same unit.
+    assert_eq!(
+        Device::by_model_code("P36").map(|d| d.pid),
+        Some(PID_HX_STOMP_XL)
+    );
     assert!(Device::by_model_code("P99").is_none());
-    // An unknown model code must not accidentally match the XL's `None`.
     assert!(Device::by_model_code("").is_none());
 }
 
@@ -83,11 +87,11 @@ fn the_unverified_device_claims_nothing_it_hasnt_shown_us() {
         xl.support.caveat().is_some(),
         "an unverified device says so"
     );
-    // We have no capture, preset or backup from an XL — so none of this may be assumed to match
-    // the Stomp's just because the name is similar. What an owner *reads off the panel* can fill in
-    // (see `the_xl_banks_by_four_not_the_stomps_three`); what only traffic can settle stays empty,
-    // and that is the point of the middle tier.
-    assert!(xl.model_code.is_none());
+    // What an owner can observe, we take: the panel gives us the banking (see
+    // `the_xl_banks_by_four_not_the_stomps_three`) and a pasted log gave us the model code. What
+    // only a reconciled capture can settle stays empty, and that is the point of the middle tier —
+    // knowing the XL answers to `P36` says nothing about its DSP or snapshot counts.
+    assert_eq!(xl.model_code, Some("P36"));
     assert!(xl.preset_device_id.is_none());
     assert!(xl.dsps.is_none());
     assert!(xl.snapshots.is_none());

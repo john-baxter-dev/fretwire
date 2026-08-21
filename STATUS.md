@@ -2342,3 +2342,85 @@ Consequences worth remembering: a byte-comparison of two backups is **not** a va
 will always report differences; compare decoded presets instead. And `restore_preset` writes a blob
 carrying a stale txn, which has never caused an observed problem — the device parses its own
 envelope — but is now a known property rather than a surprise.
+
+## Twenty-eighth round (2026-08-21): **the XL's model code is `P36`, and "fw" was never the firmware**
+
+Same XL owner, one report, three unrelated things in it (issue #4). Two are ours to fix; the third is
+the most useful single line a bug report has given us.
+
+### `P36` = HX Stomp XL  [solid — 2026-08-21]
+
+The report's own log settles a field the device table has carried as `None` since the XL was added:
+
+```
+handshake OK — device reports "P36Main"
+preset EverlongPlexi #8    device P36    …
+```
+
+Two independent paths agreeing — a **live identity reply** (the device answering us, not a spec
+sheet) and the **preset's own stamp** at key `7 → 36`. `Device::by_model_code("P36")` now resolves,
+so an XL preset opened offline names its device, and `handshake()` stops falling back to its
+"accept any `P##`" path for this unit.
+
+It does **not** promote the XL to `Verified`, and the tier is doing its job here: knowing what the
+pedal answers to says nothing about its DSP or snapshot counts, which still need a capture. Model
+code and banking are exactly the two fields an owner can hand us; everything else stays `None`.
+
+### fretwire said "HX Stomp" to a man holding an XL
+
+`detect` returned a bare `bool` and the GUI printed a hard-coded `"HX Stomp: present ✓"` — so the
+one screen whose entire job is *which pedal is this* named the wrong one, while the log line right
+next to it said `claimed HX Stomp XL control interface 0`. The CLI has always printed `d.name` and
+was correct throughout; only the GUI hard-coded it.
+
+`detect` now returns the devices themselves (`DetectedDeviceDto { name, caveat }`), so the button
+names what is plugged in and shows the support caveat with it. The mock backend grew an **`xl`**
+mode alongside `stomp`/`floor` — banked by four, carrying a caveat — because until now there was no
+way to exercise banked-by-four numbering or the caveat display without owning the hardware.
+
+### Neither version-looking field is the pedal's firmware  [solid — 2026-08-21]
+
+The reporter, on firmware **3.80.0**, saw fretwire display `fw v3.71-32-g1039661` and reasonably
+read it as us misreporting his pedal. He was right that something was wrong. The first draft of this
+entry got *why* wrong: it leaned on "his XL is on 3.80 but our Stomp is on 3.71, and both stamp the
+same string", which turned out to rest on a belief about our own hardware that came from reading
+this very field. **This HX Stomp is on 3.80 too.** So one pedal refutes it with no cross-device
+inference at all — a 3.80 Stomp stamps `v3.71`, full stop — and the XL only adds that the value is
+not per-unit.
+
+| | HX Stomp (**3.80**) | HX Stomp XL (**3.80.0**) | Helix Floor (**3.82**) |
+|---|---|---|---|
+| key `7 → 37` | `v3.71-32-g1039661` | `v3.71-32-g1039661` | `7d01f5e` |
+| key `7 → 35` | `0x03800000` | — | `0x03800020` |
+| `.hxb` header `0x1c` | — | — | `0x03800000` |
+
+Read the suffix literally and the contradiction dissolves: `-32-g1039661` is `git describe` for *32
+commits past a tag named `v3.71`*. It names a build of something inside the firmware image whose
+last tag was 3.71 — never a release. The Floor's bare sha is the same thing with no tag behind it.
+[hypothesis]
+
+Key `35` is **not** the fallback, and the same entry claimed it was ("the device's real firmware word
+exists, but only in a `.hxb` header"). It doesn't: `0x03800000` sits in a **3.82** Floor's backup
+header and on this **3.80** Stomp alike, so it did not move across those releases. It went
+unchallenged this long because it reads "3.80" and agreed with one pedal by coincidence.
+
+Which leaves the real conclusion: **no field we have decoded, on the wire or in a backup, reports
+the version on the pedal's boot screen.** The live identity reply carries that same `0x03800000`.
+If op 25 (globals) is ever decoded, look there.
+
+Renamed through the stack — `PresetStream::firmware()` → `build_stamp()`, and the same on
+`EditorPreset` and the DTO — rather than left as a misleading name behind a corrected doc comment.
+The GUI shows `preset build` with a tooltip stating what it is not, and the CLI prints
+`preset build` instead of `firmware`.
+
+**Provenance corrected:** three hardware measurements in `docs/protocol.md` were annotated
+"HX Stomp (fw 3.71, 2026-08-02)", with the same attribution in `editor.rs` and `session.rs`. The
+measurements were always fine; the firmware label was this field read back as a version. **This unit
+has been on 3.80 the whole time**, so all five now say 3.80. Worth noticing how far a mislabelled
+field travelled: it wrote itself into unrelated provenance notes, where it then looked like
+independent corroboration.
+
+### Still open
+
+Nothing here touches the splice retry from the twenty-seventh round, which remains **unverified
+against a real splice** — the XL is still the only place one has been seen.

@@ -59,7 +59,8 @@ The setlist and preset JSON carry a numeric `device` field:
 | Helix Floor | `2162689` = **`0x210001`** | 8 (`snapshot0`…`snapshot7`) | `dsp0` **and** `dsp1` both populated |
 | HX Stomp | `2162694` = **`0x210006`** | 3 (`snapshot0`…`snapshot2`) | `dsp0` only; `dsp1` empty |
 
-`device_version` = `0x03800000` for fw 3.82.
+`device_version` = `0x03800000` for fw 3.82 — note the mismatch: an HX Stomp on **3.80** reports the
+same word, so this is not the running firmware version. See `docs/preset-format.md`.
 
 Worth knowing: the reference data we already import ships `default_preset.hlx` and
 `empty_preset.hlx` that are **already `device 0x210001` — Helix Floor presets**, with all eight
@@ -274,7 +275,8 @@ Both devices return 32 bytes: an 8-byte TLV header, an 11-byte NUL-padded model 
 In the preset stream, key `7` reads `{36: "P21\0", 35: 58720288 (0x03800020), 37: "7d01f5e\0"}` —
 so the Floor's **model code is `P21`** (Stomp: `P33`). Note key `37`, the "firmware string", is a
 bare build sha on the Floor (`7d01f5e`) where the Stomp gives `v3.71-32-g1039661`; our CLI prints
-`firmware 7d01f5e`, which is faithful, not a decode error. That sha is also u32 C above
+`preset build 7d01f5e`, which is faithful, not a decode error. (It is **not** the running firmware
+— see `PresetStream::build_stamp`.) That sha is also u32 C above
 (`0x07D01F5E` → the digits `7d01f5e`) and the value at offset `0x20` of the `.hxb` header.
 
 ### Our parser reads Floor presets  [solid]

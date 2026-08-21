@@ -694,6 +694,24 @@ impl Session {
 
     /// Navigate the device to `preset` in `bank` (op 20 SELECT). **Changes the active preset** —
     /// this is the destructive counterpart to `read_preset`. Rides the edit channel like an edit.
+    ///
+    /// **Returns once the device is actually there**, not once the frame is on the wire: the select
+    /// is fire-and-forget, so this then waits for op-23 to report the address we asked for (see
+    /// [`Self::settle_after_goto`], typically ~185 ms). Every caller wants that — each one either
+    /// reads the preset next or hands control back to a user who expects the switch to have
+    /// happened — and the ones that didn't wait were all paying more for it than the wait costs:
+    ///
+    /// - a **read** issued into the lag gets the new preset's blob under the *old* preset's
+    ///   identity, is rejected by its own identity check, and costs a full stream, a backoff and a
+    ///   re-read. Across a 126-preset sweep that was 251 stream reads and 51 s; waiting made it 127
+    ///   and 33 s, with the rejection path no longer firing at all. The same saving applies to a
+    ///   single preset click in the GUI, which is the same two calls.
+    /// - a **write** issued into the lag ([`Self::restore_preset`] does `goto` → op-21 → save)
+    ///   targets a device still mid-switch. Nothing has been observed going wrong there, but the
+    ///   wait removes the race rather than relying on it staying benign.
+    ///
+    /// It is a wait, never a failure: if the device never reports the address, this returns anyway
+    /// and the caller's own checks (which are unchanged) still catch it.
     pub fn goto_preset(&mut self, bank: i64, preset: i64) -> crate::Result<()> {
         self.check_preset_addr(bank, preset, "goto_preset")?;
         let txn = self.bump_txn();
@@ -701,7 +719,10 @@ impl Session {
         self.send_edit(body)?;
         // Remember what we asked for: the identity the device reports after a switch can lag its own
         // edit buffer by longer than a read takes, and we can only tell because we know the answer.
+        // Kept even though the settle below usually discharges it — the read that follows re-checks,
+        // and a user turning the pedal by hand in between is exactly what it is there to catch.
         self.expect_identity = Some((bank, preset));
+        self.settle_after_goto(bank, preset);
         Ok(())
     }
 
@@ -2487,26 +2508,57 @@ impl Session {
         &mut self,
     ) -> crate::Result<(Vec<u8>, Option<fretwire_data::stream::PresetInfo>)> {
         let expect = self.expect_identity.take();
+        // A read can fail two ways here, and both are transient often enough to be worth another
+        // go. The identity checks below are one. The other is `read_preset_inner` erroring outright
+        // — a stream that came back short, or one a stray edit-channel frame got spliced into — and
+        // until 2026-08-21 that propagated straight out of this function with `?`.
+        //
+        // That asymmetry is the whole bug behind "the export stops partway": `read_preset` retries
+        // a spliced read and carries on, so *browsing* survives one, while every caller that goes
+        // through here — including the setlist export — died on the first one. The tester's sweep
+        // reached 23C of a 32-bank XL and stopped on a single stream that ran 7 bytes long, having
+        // already read ninety-odd presets correctly. A reconnect cleared it, which is what a
+        // transient looks like. [solid — 2026-08-21 XL report, issue #3]
+        let mut last_err: Option<crate::Error> = None;
         for attempt in 0..3 {
-            let (raw, info, settled) = self.read_preset_inner()?;
-            if settled && identity_confirms(expect, info.as_ref()) {
-                return Ok((raw, info));
+            match self.read_preset_inner() {
+                Ok((raw, info, settled)) => {
+                    if settled && identity_confirms(expect, info.as_ref()) {
+                        return Ok((raw, info));
+                    }
+                    tracing::debug!(
+                        attempt,
+                        settled,
+                        want = ?expect,
+                        got = ?info.as_ref().map(|i| (i.bank, i.index)),
+                        "preset identity doesn't match the blob yet; re-reading"
+                    );
+                    // Clear any error from an earlier attempt: this one got a blob, so the reason
+                    // we are still looping is the identity, and that is what the final `Err` should
+                    // say if we run out of attempts.
+                    last_err = None;
+                }
+                Err(e) => {
+                    // Warn, not debug: this is a read the device got wrong, and the retry that
+                    // hides it is exactly what makes it invisible in a field log otherwise.
+                    tracing::warn!(
+                        attempt,
+                        error = %e,
+                        "preset read failed; backing off and re-reading"
+                    );
+                    last_err = Some(e);
+                }
             }
-            tracing::debug!(
-                attempt,
-                settled,
-                want = ?expect,
-                got = ?info.as_ref().map(|i| (i.bank, i.index)),
-                "preset identity doesn't match the blob yet; re-reading"
-            );
             self.backoff_before_retry(attempt);
         }
-        Err(fretwire_data::Error::Stream(
-            "the preset changed under every read attempt — refusing to use a blob whose \
-             provenance is ambiguous (try again once the device settles)"
-                .to_string(),
-        )
-        .into())
+        Err(last_err.unwrap_or_else(|| {
+            fretwire_data::Error::Stream(
+                "the preset changed under every read attempt — refusing to use a blob whose \
+                 provenance is ambiguous (try again once the device settles)"
+                    .to_string(),
+            )
+            .into()
+        }))
     }
 
     /// Read the current preset stream and return the raw reassembled bytes (before decoding).
@@ -2536,6 +2588,105 @@ impl Session {
                 Err(e)
             }
         }
+    }
+
+    /// The device's current preset identity, **without** pulling the preset stream.
+    ///
+    /// The same op-76 / op-24 / op-23 prefix [`Self::read_preset_inner`] issues, stopped before
+    /// op 22. Non-destructive, and roughly an order of magnitude cheaper than a full read: three
+    /// small request/reply pairs against a ~2.4 KB stream's ten-plus chunk round trips.
+    pub fn read_identity(&mut self) -> crate::Result<Option<fretwire_data::stream::PresetInfo>> {
+        self.transport.drain();
+
+        let txn = self.bump_txn();
+        self.edit_request_txn(
+            cmd::OPEN,
+            Tlv::command(op::PARAM_SET, edit::read_open(txn)).to_bytes(),
+            txn,
+        )?;
+
+        let txn = self.bump_txn();
+        self.edit_request_txn(
+            cmd::STREAM,
+            Tlv::command(op::PARAM_SET, edit::read_prep(txn)).to_bytes(),
+            txn,
+        )?;
+
+        let txn = self.bump_txn();
+        let info = self.edit_request_txn(
+            cmd::STREAM,
+            Tlv::command(op::PARAM_SET, edit::read_info(txn)).to_bytes(),
+            txn,
+        )?;
+        Ok(fretwire_data::stream::parse_preset_info(&info.body))
+    }
+
+    /// Wait for the device to actually be on `(bank, index)` after a [`Self::goto_preset`], by
+    /// polling the cheap identity read until it agrees.
+    ///
+    /// Called by [`Self::goto_preset`], so it applies to every switch — the export sweep, a preset
+    /// click in the GUI, `restore_preset`'s write.
+    ///
+    /// **Mostly a throughput fix, not a correctness one** — `read_preset_confirmed` already rejects
+    /// a blob whose identity hasn't caught up, and would keep doing so without this. The problem is
+    /// what that rejection costs. Op-23 lags a preset switch by longer than a read takes, so going
+    /// straight from `goto` to a full read pays a ~2.4 KB stream, a backoff and a re-read on almost
+    /// every slot: a measured **251 stream reads for 126 presets**, with 107 "identity moved"
+    /// rejections behind the difference. Waiting for the address we asked for costs three small
+    /// frames instead. [solid — 2026-08-21, HX Stomp export log]
+    ///
+    /// Polling beats a fixed sleep because the lag isn't a constant: measured across a 126-preset
+    /// Stomp sweep it ran **61-249 ms, median ~185 ms**, so a constant would have to be sized for
+    /// the worst case on every slot. A failed poll is *not* an error — the device is entitled to be
+    /// busy mid-switch, and the read that follows re-checks the identity anyway. Worst case this
+    /// returns early and we are exactly where we were before it existed.
+    ///
+    /// The lag is **elapsed time, not a number of requests** [solid — 2026-08-21]. Worth pinning
+    /// because the opposite looks true at a glance: at `POLL = 20ms` all 126 presets settled on
+    /// exactly two polls, which reads like "op-23 refreshes on the next read-open" rather than a
+    /// timer. Re-running at `POLL = 2ms` refuted it — the counts scattered (112 × 2, 13 × 3, 1 × 4)
+    /// while the median wait stayed ~185 ms, i.e. the device takes the time it takes and the poll
+    /// count merely fills it. Total wall clock was identical either way (32.5 s vs 32.7 s), so the
+    /// interval buys nothing but the number of frames we spend waiting — hence the larger one,
+    /// which is also the gentler one on a unit that is reconfiguring both DSPs.
+    fn settle_after_goto(&mut self, bank: i64, index: i64) {
+        /// Gap between polls. Short enough not to dominate the lag, long enough not to hammer a
+        /// device that is reconfiguring both DSPs.
+        const POLL: std::time::Duration = std::time::Duration::from_millis(20);
+        /// Ceiling on the wait. Past this, fall through and let the read's own retries handle it.
+        const LIMIT: std::time::Duration = std::time::Duration::from_millis(750);
+
+        let started = std::time::Instant::now();
+        let mut polls = 0usize;
+        while started.elapsed() < LIMIT {
+            std::thread::sleep(POLL);
+            polls += 1;
+            match self.read_identity() {
+                Ok(Some(i)) if (i.bank, i.index) == (bank, index) => {
+                    tracing::debug!(
+                        bank,
+                        index,
+                        polls,
+                        waited_ms = started.elapsed().as_millis() as u64,
+                        "device settled on the requested preset"
+                    );
+                    return;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    // Expected while the device is mid-switch. Debug, not warn: at one line per
+                    // poll per preset this would otherwise bury a real fault in a 1024-preset sweep.
+                    tracing::debug!(bank, index, polls, error = %e, "identity poll failed; waiting");
+                }
+            }
+        }
+        tracing::debug!(
+            bank,
+            index,
+            polls,
+            waited_ms = started.elapsed().as_millis() as u64,
+            "device never reported the requested preset within the settle budget; reading anyway"
+        );
     }
 
     /// [`Self::export_setlists`] for a single setlist — the common case, and what the GUI's
@@ -2830,7 +2981,8 @@ impl Session {
         );
 
         if let Some(t) = target {
-            check_stream_length(payload.len(), t).map_err(fretwire_data::Error::Stream)?;
+            check_stream_length(payload.len(), t, "preset")
+                .map_err(fretwire_data::Error::Stream)?;
         }
 
         // Re-ask who we're on. The op-23 identity **lags the blob by one preset**: the first read
@@ -2953,6 +3105,32 @@ impl Session {
     /// browse's index numbering has not fully reconciled with the device's own (a listing has been
     /// seen offset from the same device's `.hxb` backup), and a captured stream is what settles it.
     pub fn list_presets_raw(&mut self, bank: i64) -> crate::Result<Vec<u8>> {
+        // Retry a failed listing rather than surface it, for the same reason `read_preset` retries
+        // a failed preset stream: the failures this catches are transient interleaving on the edit
+        // channel, and one of them costing the user their whole preset list is out of proportion to
+        // a re-read that costs a few hundred milliseconds. The tester's list came back with a run
+        // of rows missing and cleared completely on reconnect. [2026-08-21 XL report, issue #3]
+        let mut last_err: Option<crate::Error> = None;
+        for attempt in 0..3 {
+            match self.list_presets_raw_once(bank) {
+                Ok(payload) => return Ok(payload),
+                Err(e) => {
+                    tracing::warn!(
+                        attempt,
+                        bank,
+                        error = %e,
+                        "preset-list read failed; backing off and re-reading"
+                    );
+                    last_err = Some(e);
+                }
+            }
+            self.backoff_before_retry(attempt);
+        }
+        Err(last_err.expect("loop runs at least once"))
+    }
+
+    /// One attempt at [`Self::list_presets_raw`], without the retry.
+    fn list_presets_raw_once(&mut self, bank: i64) -> crate::Result<Vec<u8>> {
         // HX Edit lists on the primary channel, but our reconstructed handshake doesn't leave
         // primary browse-ready; the edit channel is browse-capable in our session. LIVE experiment.
         let chan = channel::EDIT;
@@ -2984,7 +3162,8 @@ impl Session {
         );
 
         // The list stream carries the same `marker/type/len` prefix as a preset stream — a bank of
-        // 128 on a Stomp declares 3259 and reassembles to 3267 — so it gets the same treatment:
+        // 128 on a Stomp puts 3259 in the length field and reassembles to exactly the 3267 that
+        // implies, prefix included — so it gets the same treatment:
         // the declared length decides when the stream is done, a mid-stream empty reply is a credit
         // frame to skip rather than a terminator, a short non-empty chunk is payload, and running
         // out of requests is an error instead of a shorter list. On the old "stop at the first
@@ -3028,15 +3207,14 @@ impl Session {
             bank,
             "reassembled preset-list stream"
         );
-        if let Some(t) = target
-            && payload.len() < t
-        {
-            return Err(fretwire_data::Error::Stream(format!(
-                "preset-list read ended {} bytes short of the declared {t} — the device stopped \
-                 answering mid-stream",
-                t - payload.len(),
-            ))
-            .into());
+        // Same guard as the preset read, and symmetric for the same reason. A listing that ran
+        // *long* used to be accepted silently, and a spliced one still parses — it just parses into
+        // the wrong rows, which is what the tester saw as "rows 009-015 missing and 008 blank" while
+        // the panel showed the right preset. A short listing is no more cosmetic: the browse
+        // positions it yields are what `goto` addresses. [2026-08-21 XL report, issue #3]
+        if let Some(t) = target {
+            check_stream_length(payload.len(), t, "preset-list")
+                .map_err(fretwire_data::Error::Stream)?;
         }
         Ok(payload)
     }
@@ -3337,7 +3515,7 @@ fn classify_chunk(n: usize, full: usize, have: usize, target: Option<usize>) -> 
 /// the very end, and nothing in the reply says where they landed — the tester's blob decoded into
 /// something plausible and wrong, which is the expensive failure. Erroring costs one retry, which
 /// `read_preset` already does.
-fn check_stream_length(got: usize, target: usize) -> Result<(), String> {
+fn check_stream_length(got: usize, target: usize, what: &str) -> Result<(), String> {
     /// How much longer than its declared length a real stream has ever been. One capture
     /// (`preset1_stream`, 2804 bytes against a declared 2803) carries a trailing pad byte, and
     /// `fretwire-data/tests/stream_len.rs` pins that as the only slack any capture shows. Trailing
@@ -3347,14 +3525,14 @@ fn check_stream_length(got: usize, target: usize) -> Result<(), String> {
 
     if got < target {
         return Err(format!(
-            "preset read ended {} bytes short of the declared {target} — the device stopped \
+            "{what} read ended {} bytes short of the declared {target} — the device stopped \
              answering mid-stream",
             target - got,
         ));
     }
     if got > target + PAD_SLACK {
         return Err(format!(
-            "preset read ran {} bytes past the declared {target} — a frame that was not stream \
+            "{what} read ran {} bytes past the declared {target} — a frame that was not stream \
              payload got spliced into it, so the blob cannot be trusted",
             got - target,
         ));
@@ -3380,28 +3558,48 @@ mod stream_length_tests {
 
     #[test]
     fn a_stream_of_its_declared_length_decodes() {
-        assert!(check_stream_length(2388, 2388).is_ok());
+        assert!(check_stream_length(2388, 2388, "preset").is_ok());
     }
 
     /// `preset1_stream.msgpack.bin` is 2804 bytes against a declared 2803. That pad byte is real
     /// traffic, so the guard has to let it through or every read of that preset fails.
+    ///
+    /// It is also the *only* slack any tracked capture shows: the other four
+    /// (`dual_amp_stream`, `split_preset_stream` and both Floor bank listings) reassemble to
+    /// exactly their declared length. That is what keeps `PAD_SLACK` at one byte rather than
+    /// somewhere loose enough to have let the 2026-08-20 splice through.
     #[test]
     fn the_one_trailing_pad_byte_a_real_capture_carries_is_allowed() {
-        assert!(check_stream_length(2804, 2803).is_ok());
+        assert!(check_stream_length(2804, 2803, "preset").is_ok());
     }
 
     /// The 2026-08-20 splice: eight bytes past the declared length, which decoded into a preset the
     /// pedal did not have.
     #[test]
     fn a_spliced_frame_is_refused_rather_than_decoded() {
-        let e = check_stream_length(2396, 2388).unwrap_err();
+        let e = check_stream_length(2396, 2388, "preset").unwrap_err();
         assert!(e.contains("8 bytes past"), "{e}");
+    }
+
+    /// The 2026-08-21 one, seven bytes long, which stopped an XL setlist export at 23C.
+    #[test]
+    fn a_seven_byte_splice_is_refused_too() {
+        let e = check_stream_length(2875, 2868, "preset").unwrap_err();
+        assert!(e.contains("7 bytes past"), "{e}");
     }
 
     #[test]
     fn a_truncated_read_is_refused() {
-        let e = check_stream_length(2048, 2388).unwrap_err();
+        let e = check_stream_length(2048, 2388, "preset").unwrap_err();
         assert!(e.contains("340 bytes short"), "{e}");
+    }
+
+    /// The listing shares the guard, so it has to name itself in the error — a "preset read"
+    /// message raised against a browse stream sent us looking in the wrong place once already.
+    #[test]
+    fn the_listing_names_itself_in_the_error() {
+        let e = check_stream_length(3275, 3267, "preset-list").unwrap_err();
+        assert!(e.starts_with("preset-list read ran 8 bytes past"), "{e}");
     }
 }
 

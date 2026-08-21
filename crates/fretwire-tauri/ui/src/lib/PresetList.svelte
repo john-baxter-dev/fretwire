@@ -1,4 +1,6 @@
 <script>
+  import { numbering, toggleNumbering, slotLabel, canBank } from "./numbering.svelte.js";
+
   // Preset browser sidebar: the full setlist, current highlighted, click to load. Save and Save As
   // (choose target slot + name, covering copy and overwrite) stay on the surface with Copy/Paste,
   // whose label doubles as the clipboard readout. The rest live under the ⋯ menu — the row had
@@ -26,10 +28,15 @@
     presetClip = null,
   } = $props();
 
-  // How the pedal writes a slot on its own screen — `01A`, `01B`, `01C`, `02A` — when the
-  // backend knows this device's banking, and the plain slot number when it doesn't. Matching the
-  // panel is the point: someone reading a preset off the hardware should find the same string here.
-  const pad = (p) => p.label ?? String(p.index).padStart(3, "0");
+  // How the pedal writes a slot on its own screen — `01A`, `01B`, `01C`, `02A` — when the backend
+  // knows this device's banking and the user hasn't asked for flat numbers. Matching the panel is
+  // the point: someone reading a preset off the hardware should find the same string here. Which
+  // form the panel uses is itself a Global Setting on the device, hence the toggle. See
+  // `lib/numbering.svelte.js`.
+  const pad = (p) => slotLabel(p);
+  // Only worth offering where the backend actually knows the banking — otherwise both settings
+  // render the same flat number and the menu item is a lie.
+  const bankable = $derived(canBank(presets));
 
   // Only a device with more than one setlist gets the picker — an HX Stomp has a single flat
   // preset list and HX Edit shows no setlist control at all for it.
@@ -96,6 +103,15 @@
           <button role="menuitem" onclick={() => run(onRename)}>Rename preset…</button>
           <button role="menuitem" onclick={() => run(onExport)}>Export presets to file…</button>
           <button role="menuitem" onclick={() => run(onRestore)}>Restore preset from file…</button>
+          {#if bankable}
+            <div class="sep" role="separator"></div>
+            <button
+              role="menuitemcheckbox"
+              aria-checked={numbering.mode === "banked"}
+              title="The pedal itself can show either form — this is a Global Setting on the device. Match whichever yours is set to."
+              onclick={() => run(toggleNumbering)}
+              >Number presets: {numbering.mode === "banked" ? "01A" : "000"}</button>
+          {/if}
         </div>
       {/if}
     </div>
@@ -226,6 +242,19 @@
   }
   .menu button:hover {
     background: #2a2f3a;
+  }
+  .menu .sep {
+    height: 1px;
+    margin: 4px 2px;
+    background: #3a4150;
+  }
+  /* The numbering item is a setting, not an action: show the form it is currently on rather than
+     leaving the reader to guess whether the label is the state or the destination. */
+  .menu button[role="menuitemcheckbox"] {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    color: #aab2c0;
   }
   .tools button:nth-child(n + 2) {
     background: #363b46;

@@ -2194,9 +2194,151 @@ second round trip:
 **It is a label, never an address** — the same distinction the browse listing's map key needed.
 `goto_preset`/`save_preset` still take the slot, and nothing accepts `09A`.
 
-**Only the HX Stomp gets one.** `presets_per_bank` is `None` on the Floor and the XL, and those
-devices keep the slot numbers. 128 divides by 4 and by 8, the Floor has eight preset footswitches,
+**Only devices whose screen someone has read get one.** `presets_per_bank` is `None` on the Floor,
+which keeps the slot numbers. 128 divides by 4 and by 8, the Floor has eight preset footswitches,
 and we have never seen its screen — a guess has two plausible answers and the wrong one mislabels
-every preset on the unit. One look at a Floor (and at the XL, which has more footswitches than the
-Stomp and so probably banks differently) settles each. This is the conservative direction on purpose:
-a label whose entire job is to match the hardware is worse than useless when it confidently doesn't.
+every preset on the unit. One look at a Floor settles it. This is the conservative direction on
+purpose: a label whose entire job is to match the hardware is worse than useless when it confidently
+doesn't.
+
+> Updated 2026-08-21: the XL's owner read theirs off the panel — four per bank, `01A`-`32D` — so it
+> now has one. They also reported that *which* form the panel shows is a Global Setting, which the
+> twenty-seventh round covers.
+
+## Twenty-seventh round (2026-08-21): **a splice killed the export because only one read path retried**
+
+Three more from the XL owner, against `c936aec`. The first is the one that matters.
+
+### The export still stopped partway — the guard worked, the recovery didn't
+
+> `export: preset data: preset stream: preset read ran 7 bytes past the declared 2868 — a frame
+> that was not stream payload got spliced into it, so the blob cannot be trusted`
+
+Reached `23C` — ninety-odd presets read correctly — then stopped. Twenty-fifth round added the
+over-long guard that produced this message, and it is doing exactly its job: that blob *is* corrupt,
+and decoding it is what produced the phantom slot-17 block the round before. The bug is what happens
+next.
+
+`read_preset` — the GUI's panel read — has retried a failed stream since the beginning: back off,
+drain, re-read, and transient interleaving clears. `read_preset_confirmed` — added in the
+twenty-fifth round for the sweep — called `read_preset_inner()?` and propagated the error straight
+out. So **browsing survived a splice and the export died on the first one**, which is precisely the
+asymmetry the report describes: everything else works, the sweep stops. It now retries stream errors
+on the same three-attempt backoff it already used for identity mismatches, and distinguishes the two
+in its final error (a read that never succeeded reports the read failure; one that succeeded but
+never settled reports the ambiguity).
+
+`PAD_SLACK` stays at **one byte**, and a check of every tracked capture is why. Four of the five
+reassemble to *exactly* their declared length; only `preset1_stream` carries a pad, and only one
+byte of it. The comment claiming a Stomp listing "declares 3259 and reassembles to 3267" was
+conflating the raw length *field* with what `declared_stream_len` returns (field + 8) — that read
+was exact too. There is no evidence for slack wider than a byte, so a 7- or 8-byte overshoot is a
+splice, not padding, and loosening the threshold would only re-admit the corruption.
+
+### The listing had no retry and only guarded one direction
+
+Second report: a run of rows missing from the sidebar (~009-015), `008` blank, while the panel
+showed the right preset — and all of it gone after a reconnect. That is the same transient in the
+other stream. `list_presets_raw` checked only for a **short** listing and never retried, so a
+spliced one was accepted silently: a listing that runs long still parses, just into the wrong rows.
+It now shares `check_stream_length` (which grew a `what` label so a browse failure stops reporting
+itself as a "preset read") and retries on the same backoff. A truncated listing is not cosmetic —
+browse positions are what `goto` addresses.
+
+### The XL banks by four
+
+> "On HX Stomp XL the presets are actually in groups of 4, A/B/C/D, so 000-127 or 01A-32D,
+> depending on Global Setting preference."
+
+`presets_per_bank: Some(4)`, `setlist_size: Some(128)` — read off the panel, which is evidence for
+banking in a way it is not for DSP or snapshot counts, so the rest of the XL entry stays empty and
+its tier stays `Reported`. 32 banks of 4 checks out. Whether the XL has *several* setlists is still
+unknown, so `setlists` stays `None`; `Some(128)` equals the `setlist_stride` fallback, so it records
+the reading without changing any addressing.
+
+The owner wondered whether bank size tracks the snapshot count (Stomp: 3 and 3; XL: 4 and 4). The
+Floor looks like the counterexample — eight snapshots — but we have never seen its screen, so this
+stays a question rather than a refutation. **One Floor owner reading their preset numbering settles
+both it and `presets_per_bank` for that device.**
+
+### Which numbering the panel shows is a *setting*, so the GUI has a toggle
+
+The half of the report that broke an assumption: `000-127` **or** `01A-32D` is a Global Setting on
+the device. Bank size alone doesn't determine the string on the panel, so a label can be right about
+the banking and still not match the hardware — the exact failure `presets_per_bank` was made
+conservative to avoid. Reading globals is op-25, which we don't decode, so the user tells us:
+`lib/numbering.svelte.js` holds the preference (persisted, defaulting to the banked form the device
+ships in) and every render site goes through `slotLabel`. The toggle sits in the sidebar's `⋯` menu
+and only appears where the backend knows the banking — otherwise both settings render the same flat
+number. If op-25 lands, the default becomes "whatever the pedal says" and this stays as the override.
+
+**And it has to be manual, because the setting never reaches us** [solid — 2026-08-21, HX Stomp].
+Tested rather than assumed: flip the global on a live unit, re-read, byte-compare. Both streams we
+take are **identical** across the two settings —
+
+    bank-0 browse listing   3267 bytes   md5 ff953ec31ea78791f8174ff4271649d0   (both)
+    preset stream (slot 24) 2388 bytes   md5 c7f85205e279e304d4f85dff4e1dc876   (both)
+
+— with `read-info` confirming the same slot (24, `ClaudeTest`) on each side, so it is a like-for-like
+comparison and not two reads of different states. The numbering global is therefore invisible to the
+browse and preset paths and can only live in the op-25 globals blob. Nothing short of decoding that
+will let us detect it, which is what makes the toggle the honest answer rather than a stopgap.
+
+### Two measurements taken while the pedal was out
+
+A full 126-preset export ran green in the same session — `126/126`, 251 stream reads, **zero** length
+mismatches — which exercises the sweep end to end but *not* the splice retry above: no stream came
+back spliced. That fix stays unverified against a real splice until one recurs on the XL.
+
+The same log said the sweep was doing about **twice the reads it needed to**: 251 stream reads for
+126 presets, because the op-23 identity lag rejected the first read on ~85% of slots (107 "identity
+moved" warnings) and each rejection cost a full ~2.4 KB read, a backoff and a re-read.
+
+## Tuning the export against the pedal (2026-08-21)
+
+`Session::settle_after_goto` waits for the device to actually be on the preset before spending a
+stream read on it, by polling a new `read_identity()` — the op-76/24/23 prefix of the normal read,
+stopped before the stream, so three small frames instead of ten-plus chunk round trips. Measured on
+a 126-preset HX Stomp setlist:
+
+| | stream reads | "identity moved" | wall clock |
+|---|---|---|---|
+| before | 251 | 107 | 51.0 s |
+| after | **127** | **0** | **32.7 s** |
+
+Exactly one read per preset, and the rejection path stops firing at all. **This is throughput, not
+correctness** — `read_preset_confirmed` already refused the mislabelled blobs, and still does; what
+changed is that we stop paying a full read to discover what three frames can tell us.
+
+**The wait lives in `goto_preset` itself**, so every switch gets it rather than the export alone.
+That is the honest place for it: the select is fire-and-forget, and every caller either reads the
+preset next or hands back to a user who expects the switch to have happened. In particular the GUI's
+preset click is the *same two calls* — `commands::mutate` runs `goto_preset` then `read_preset` on
+one session — so the per-preset figures above are a direct measurement of click latency, not an
+analogy: **~405 ms → ~267 ms**, with half the traffic. `restore_preset` benefits differently: it does
+`goto` → op-21 write → save, and previously issued that write into the lag. Nothing was ever
+observed going wrong, but the race is now removed rather than assumed benign.
+
+**The lag is elapsed time, not a number of requests** [solid]. Worth writing down because the
+opposite looked true: at a 20 ms poll interval all 126 presets settled on *exactly* two polls, which
+reads like "op-23 refreshes on the next read-open" rather than a timer. Re-running at 2 ms refuted
+it — the counts scattered (112 × 2, 13 × 3, 1 × 4) while the median wait stayed ~185 ms (range
+61-249 ms). Total wall clock was the same either way (32.5 s vs 32.7 s), so the interval buys nothing
+but the number of frames spent waiting; 20 ms is kept as the gentler one on a unit reconfiguring
+both DSPs.
+
+### Raw preset blobs are not byte-stable across reads [solid]
+
+Fell out of verifying the tuning changed no data. Two exports of the same unchanged setlist **always
+differ**, whichever code path took them — 345 bytes between the tuned and untuned runs, and 347
+between two runs of the *same* path, which is the control that proves it isn't the change.
+
+Every differing byte is in the **first 13 of each blob**, and none is preset content: offsets 11-12
+are a `0xcd` uint16 under MessagePack key **102**, the session's transaction counter, which is
+naturally different on every read. (Offset 3 also moves on 40 of 126 and is not yet explained
+— [hypothesis].)
+
+Consequences worth remembering: a byte-comparison of two backups is **not** a validity check and
+will always report differences; compare decoded presets instead. And `restore_preset` writes a blob
+carrying a stale txn, which has never caused an observed problem — the device parses its own
+envelope — but is now a known property rather than a surprise.

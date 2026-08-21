@@ -101,6 +101,18 @@ pub struct Device {
     /// match what is written on the hardware, and a label that confidently disagrees with the panel
     /// is worse than an honest slot number — it is the same failure as listing presets in an order
     /// the pedal doesn't use.
+    ///
+    /// **Bank size is not the whole story.** Which of the two forms the pedal shows —  `01A` or the
+    /// flat `000` — is a global setting on the device, so this label can be right about the banking
+    /// and still not match a panel set to the other form. [2026-08-21 XL owner report]
+    ///
+    /// **The setting does not reach the wire** [solid — 2026-08-21, HX Stomp]. Flipping it on a
+    /// live unit and re-reading left both streams we take byte-identical: the bank-0 browse listing
+    /// (3267 bytes, same md5) and the loaded preset's stream (2388 bytes, same md5, same slot). So
+    /// it cannot be detected from a listing or a preset — it lives in the globals behind op-25,
+    /// which we don't decode. Until we do, the GUI carries a manual override
+    /// (`ui/src/lib/numbering.svelte.js`) and this renders the banked form by default, because that
+    /// is the form the device ships in.
     pub presets_per_bank: Option<usize>,
     /// How much of the above is confirmed from real traffic.
     pub support: Support,
@@ -169,15 +181,18 @@ pub const DEVICES: &[Device] = &[
         dsps: None,
         snapshots: None,
         setlists: None,
-        // Unknown, like everything else on this unit — the XL has more footswitches than the Stomp,
-        // so inheriting the Stomp's 3 is exactly the kind of assumption the rest of this entry
-        // refuses to make.
-        setlist_size: None,
-        presets_per_bank: None,
+        // 32 banks of 4 is 128 presets, which the owner reads off the panel as `01A`-`32D`. Equal
+        // to the `setlist_stride` fallback, so it changes no addressing — it records the reading.
+        // Whether the XL has *several* such setlists is still unknown, which is why `setlists`
+        // above stays `None`. [2026-08-21 owner report]
+        setlist_size: Some(128),
+        // Four, not the Stomp's three, and not a guess from the footswitch count either — the owner
+        // read `A`/`B`/`C`/`D` off the pedal's own screen. [2026-08-21 owner report]
+        presets_per_bank: Some(4),
         // An owner ran the 0.2.x editor against one over several sessions — browsing, editing,
-        // exporting — and the two bugs they filed were both device-independent and reproduced on an
-        // HX Stomp. That is enough to say it works and not enough to fill in anything above.
-        // [2026-08-20, issues #2 and #3]
+        // exporting — and the bugs they filed were device-independent and reproduced on an
+        // HX Stomp. That is enough to say it works, and (with the banking above) not enough to fill
+        // in the rest. [2026-08-20/21, issues #2 and #3]
         support: Support::Reported,
     },
 ];

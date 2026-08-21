@@ -282,6 +282,13 @@ libusb C dependency, clean on Linux; falls back fine for dev on Windows. Workspa
       called a backup gets trusted as one. `fretwire_data::hxb` already reads HX Edit's own `.hxb`,
       which is the reference for what a real one contains — and a plausible import path once the
       `tone` JSON → wire blob conversion exists.
+      > Decoding op 25 buys one small thing early: **preset numbering**. Whether the pedal writes
+      > `01A` or `000` is a global, and it is **confirmed absent from every stream we already read**
+      > — flipping it on a live Stomp left the browse listing and the preset stream byte-identical
+      > (2026-08-21, [solid]). So the GUI carries a manual toggle
+      > (`ui/src/lib/numbering.svelte.js`) and op 25 is the *only* thing that can replace it with a
+      > detected default. Small, but it is the cheapest possible first consumer of the globals
+      > decode — one field, no restore semantics, no risk.
 - [ ] **IR management** — upload user impulse responses to the device's IR slots, rename/reorder/
       delete. **Transaction shape PARTIALLY DECODED** (2026-06-28, `captures/_TODO-ir.md`): PRIMARY
       channel, session op 255/254; **upload = op 9** `{112:slot, 113:u32 checksum, 109:name, 110:8192B

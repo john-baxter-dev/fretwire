@@ -9,6 +9,7 @@
   import Dialog from "./lib/Dialog.svelte";
   import Toast from "./lib/Toast.svelte";
   import FirstRun from "./lib/FirstRun.svelte";
+  import { slotLabel } from "./lib/numbering.svelte.js";
 
 
   // First-run gating: until we've checked whether the Line 6 reference data is imported, show
@@ -155,7 +156,7 @@
   const presetLabel = $derived.by(() => {
     if (preset?.index == null) return null;
     const row = presets.find((p) => p.index === preset.index && p.bank === presetBank);
-    return row?.label ?? "#" + preset.index;
+    return row ? slotLabel(row) : "#" + preset.index;
   });
 
   // The selected block, looked up fresh from the current preset (so it reflects live edits).
@@ -903,7 +904,7 @@
           class:chosen={p.index === saveAsDlg.slot}
           onclick={() => (saveAsDlg.slot = p.index)}
         >
-          <span class="idx">{p.label ?? String(p.index).padStart(3, "0")}</span>
+          <span class="idx">{slotLabel(p)}</span>
           <span class="nm">{p.name}</span>
           {#if p.index === preset?.index}<span class="cur">current</span>{/if}
         </button>
@@ -1013,7 +1014,7 @@
                 onclick={() =>
                   (restoreDlg = { ...restoreDlg, index: e.index, bank: e.bank, slot: e.index })}
               >
-                <span class="idx">{e.label ?? String(e.index).padStart(3, "0")}</span>
+                <span class="idx">{slotLabel(e)}</span>
                 <span class="nm">{e.name}</span>
                 {#if e.setlist && setlists.length > 1}<span class="cur">{e.setlist}</span>{/if}
               </button>
@@ -1032,7 +1033,7 @@
                 class:chosen={p.index === restoreDlg.slot}
                 onclick={() => (restoreDlg = { ...restoreDlg, slot: p.index })}
               >
-                <span class="idx">{p.label ?? String(p.index).padStart(3, "0")}</span>
+                <span class="idx">{slotLabel(p)}</span>
                 <span class="nm">{p.name}</span>
                 {#if p.index === preset?.index}<span class="cur">current</span>{/if}
               </button>

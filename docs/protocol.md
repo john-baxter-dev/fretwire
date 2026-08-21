@@ -832,7 +832,19 @@ connect, decoded from `startup.pcapng` (`tools/pcap-frames.py`), on the edit cha
 > got spliced in** — a non-empty reply in a chunk slot is appended sight unseen, and everything
 > after it shifts. Eight bytes (one stream prefix) of overshoot on an HX Stomp decoded into a preset
 > the pedal did not have, whose phantom block then drew `-3` from the device when it was edited
-> (2026-08-20). One trailing pad byte is tolerated because one capture really carries one.
+> (2026-08-20). One trailing pad byte is tolerated because one capture really carries one — and only
+> one: four of the five tracked captures reassemble to exactly their declared length, which is what
+> keeps the tolerance at a byte rather than somewhere wide enough to re-admit a splice.
+>
+> **The browse listing is checked the same way** (2026-08-21). It shares the guard, because a
+> listing that ran long parses just as readily as a preset does — into the wrong rows. A remote
+> report of "rows 009-015 missing from the sidebar, 008 blank" was one of these, and browse
+> positions are what `goto` addresses, so a bad listing is an addressing fault, not a cosmetic one.
+>
+> **A failed stream is retried, not surfaced** (2026-08-21). Both of these failures are transient —
+> back off, drain, re-read and they clear. Every read path now does that; until 2026-08-21 the
+> confirmed read used by the setlist export did not, so a single splice ended a sweep that had
+> already read ninety presets correctly.
 
 **The `arg` offset is a per-channel running sum of received body lengths.** Edit-channel base after
 the handshake = `0x1009`; it then advances by each reply's body length (`+76` after read-open's reply,

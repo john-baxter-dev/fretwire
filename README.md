@@ -164,7 +164,7 @@ The rule covers both the HX Stomp (`0x4246`) and HX Stomp XL (`0x4253`).
 |---------|---------|--------|
 | HX Stomp    | `0x4246` | **verified** — developed against one; every builder reproduces its own wire bytes |
 | Helix Floor | `0x4248` | **verified** — ~70 logged sessions with a remote tester; two DSPs, eight setlists |
-| HX Stomp XL | `0x4253` | **reported working** — an owner runs it. We hold no capture from one, so its DSP and snapshot counts, setlist count and preset banking stay unknown rather than assumed |
+| HX Stomp XL | `0x4253` | **reported working** — an owner runs it, and reads `01A`-`32D` (32 banks of 4) off its screen. We hold no capture from one, so its DSP and snapshot counts and setlist count stay unknown rather than assumed |
 | Helix LT, Helix Rack, HX Effects | — | **not recognised yet** — we don't know their PIDs, so `fretwire detect` won't see one |
 
 An unverified device logs a caveat when opened, and is only picked after a verified one. Nothing in

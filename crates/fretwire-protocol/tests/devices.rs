@@ -84,8 +84,9 @@ fn the_unverified_device_claims_nothing_it_hasnt_shown_us() {
         "an unverified device says so"
     );
     // We have no capture, preset or backup from an XL — so none of this may be assumed to match
-    // the Stomp's just because the name is similar. "A user says it works" does not fill in a
-    // single field here, and that is the point of the middle tier.
+    // the Stomp's just because the name is similar. What an owner *reads off the panel* can fill in
+    // (see `the_xl_banks_by_four_not_the_stomps_three`); what only traffic can settle stays empty,
+    // and that is the point of the middle tier.
     assert!(xl.model_code.is_none());
     assert!(xl.preset_device_id.is_none());
     assert!(xl.dsps.is_none());
@@ -174,13 +175,48 @@ fn preset_labels_read_the_way_the_stomps_screen_does() {
     );
 }
 
+/// The XL banks by **four**, not the Stomp's three — reported off the pedal's own screen, and the
+/// one field an owner's reading can fill in that a capture would be needed for otherwise.
+#[test]
+fn the_xl_banks_by_four_not_the_stomps_three() {
+    let xl = Device::by_pid(PID_HX_STOMP_XL).unwrap();
+    let label = |slot| xl.preset_label(slot).unwrap();
+
+    assert_eq!(label(0), "01A");
+    assert_eq!(label(3), "01D");
+    assert_eq!(label(4), "02A");
+    // The top of the range the owner reads on the panel: 32 banks of 4.
+    assert_eq!(label(127), "32D");
+    assert_eq!(
+        xl.setlist_size.unwrap() % xl.presets_per_bank.unwrap(),
+        0,
+        "128 must divide into whole banks of 4"
+    );
+    // Same slot, different label from the Stomp — which is the reason this is per-device data and
+    // not one shared constant.
+    let stomp = Device::by_pid(PID_HX_STOMP).unwrap();
+    assert_ne!(stomp.preset_label(3), xl.preset_label(3));
+}
+
 /// A device whose screen we have not seen gets no label rather than a plausible wrong one — the
 /// editor falls back to the slot number. See `Device::presets_per_bank`.
+///
+/// The Floor is the interesting one: it almost certainly banks by four like the XL, but "almost
+/// certainly" is what this table refuses to record. Its owner reading `01A`-`32D` off the panel is
+/// all it would take.
 #[test]
 fn devices_we_have_not_seen_banking_for_offer_no_label() {
-    for pid in [PID_HELIX_FLOOR, PID_HX_STOMP_XL] {
-        let d = Device::by_pid(pid).unwrap();
-        assert_eq!(d.presets_per_bank, None, "{}", d.name);
-        assert_eq!(d.preset_label(0), None, "{}", d.name);
+    let floor = Device::by_pid(PID_HELIX_FLOOR).unwrap();
+    assert_eq!(floor.presets_per_bank, None);
+    assert_eq!(floor.preset_label(0), None);
+    // Belt and braces: no device may carry a bank size without the label agreeing, in either
+    // direction. This is the invariant the loop above used to be here to protect.
+    for d in DEVICES {
+        assert_eq!(
+            d.presets_per_bank.is_some(),
+            d.preset_label(0).is_some(),
+            "{} disagrees about whether it can label a preset",
+            d.name
+        );
     }
 }

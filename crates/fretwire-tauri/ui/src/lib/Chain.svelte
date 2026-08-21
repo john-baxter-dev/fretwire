@@ -110,6 +110,10 @@
         y: c.row === 1 ? BOT_Y : TOP_Y,
         name: name.length > 13 ? name.slice(0, 12) + "…" : name,
         bypassed: b ? !!b.bypassed : false,
+        // Which footswitch toggles this block's bypass, or 0 for unbound. Decoded from the
+        // preset's footswitch layout (key `3 → 8`, position + 1) and carried on every block —
+        // the editor simply never showed it. Read-only for now; see ROADMAP "Footswitch assign".
+        footswitch: b?.footswitch ?? 0,
         color: catColor(b?.category),
         stranded: side,
         strandedWhy:
@@ -320,6 +324,12 @@
       >
         <span class="name">{c.name}</span>
         <span class="slot">slot {c.slot}</span>
+        {#if c.footswitch > 0}
+          <span
+            class="fs"
+            title="Toggled by footswitch {c.footswitch} on the pedal"
+          >FS{c.footswitch}</span>
+        {/if}
         {#if c.stranded != null}<span class="unfed">outside path B</span>{/if}
       </button>
     {:else}
@@ -433,6 +443,25 @@
     font-size: 9px;
     font-weight: 600;
     white-space: nowrap;
+  }
+  /* The footswitch this block's bypass sits on. Top-*left*, so it never collides with the
+     stranded badge at top-right, and in the accent blue rather than the muted grey those use:
+     this is a live binding on the pedal, not a note about our drawing. */
+  .cell .fs {
+    position: absolute;
+    top: -8px;
+    left: -6px;
+    padding: 0 4px;
+    border-radius: 7px;
+    background: #24405e;
+    color: #9fc4ee;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
+  .cell.bypassed .fs {
+    opacity: 0.55;
   }
   /* A dragged block hovering another block: an insertion bar on the half it will land on. */
   .cell.insb::before,

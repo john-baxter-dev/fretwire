@@ -285,7 +285,7 @@ function dualAmpPreset() {
   const slots = {};
   slots[1] = makeBlock("gate", { label: "Gate" });
   slots[3] = makeBlock("amp_princess", { cab: "cab_112", label: "Amp A" }); // path A (col 3)
-  slots[5] = makeBlock("reverb_glitz"); // common-after (col ≥ mixer pos)
+  slots[5] = makeBlock("reverb_glitz", { footswitch: 1 }); // common-after (col ≥ mixer pos)
   slots[12] = makeBlock("amp_placater", { cab: "cab_412", label: "Amp B" }); // row B (col 3)
   return makePreset("Dual Amp", 1, slots, { snapshot_names: ["Verse", "Chorus", "Solo"] });
 }
@@ -354,9 +354,12 @@ const DEVICES = {
 // The Stomp's single flat list. Index 0 is the split "Dual Amp" preset.
 const stompPresets = () => [
   dualAmpPreset(),
+  // `footswitch` = the pedal's own bypass binding (key `3 → 8`, position + 1). Set here so the
+  // chain's FS badges have something to draw without hardware.
   serialPreset("Crunch Lead", 1, [
-    { sym: "gate" }, { sym: "drive_minotaur" },
-    { sym: "amp_cali", cab: "cab_212", label: "Amp" }, { sym: "delay_simple" }, { sym: "reverb_glitz" },
+    { sym: "gate" }, { sym: "drive_minotaur", footswitch: 1 },
+    { sym: "amp_cali", cab: "cab_212", label: "Amp" }, { sym: "delay_simple", footswitch: 2 },
+    { sym: "reverb_glitz" },
   ]),
   serialPreset("Ambient Clean", 2, [
     { sym: "comp_la" }, { sym: "mod_chorus" },

@@ -265,6 +265,12 @@
         {block.user_label || block.model_name}
         {#if block.paired_model_name}<span class="paired">+ {block.paired_model_name}</span>{/if}
         <span class="slot">slot {block.slot}</span>
+        {#if block.footswitch > 0}
+          <span
+            class="fs"
+            title="This block's bypass is on footswitch {block.footswitch}. Read from the preset; fretwire can't change the binding yet."
+          >FS{block.footswitch}</span>
+        {/if}
       </div>
       <div class="actions">
         {#if !isNode && (block.bypassed === true || block.bypassed === false)}
@@ -474,6 +480,16 @@
     font-weight: 400;
     font-size: 12px;
     margin-left: 8px;
+  }
+  /* Matches the chain cell's badge — same binding, same colour, so the two read as one fact. */
+  .title .fs {
+    margin-left: 8px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: #24405e;
+    color: #9fc4ee;
+    font-size: 11px;
+    font-weight: 700;
   }
   .actions {
     display: flex;

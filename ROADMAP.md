@@ -41,6 +41,17 @@ libusb C dependency, clean on Linux; falls back fine for dev on Windows. Workspa
       - send/save a preset to the device
 - [ ] Store each as `captures/NN-<action>.pcapng` + a `.md` describing the exact action.
 
+**Still wanted (2026-08-21), for footswitch/controller assign** — each is one action in HX Edit,
+start capture → do the single thing → stop:
+- `assign_block_to_fs1.pcapng` — a preset with an unbound block; bind that block's bypass to FS1.
+- `unassign_block_from_fs1.pcapng` — the reverse of the above, same preset.
+- `move_block_fs1_to_fs2.pcapng` — a bound block moved between switches (separates "bind" from
+  "reorder the layout").
+- `assign_param_to_exp1.pcapng` — assign one parameter (e.g. a Wah position) to EXP1.
+- `assign_same_param_to_fs4.pcapng` — the *same* parameter, same preset, to a footswitch instead.
+  The pair is what makes the controller-number space readable by diff; a Helix Floor is the useful
+  device here.
+
 ## Phase 2 — Protocol decode  (in progress)
 - [x] Identify endpoints — **interrupt EP 0x01 OUT / 0x81 IN**, 16-byte base frames, addr 8.
 - [x] Reusable extractor `tools/dump-control.ps1`; living spec `docs/protocol.md`.
@@ -256,6 +267,28 @@ libusb C dependency, clean on Linux; falls back fine for dev on Windows. Workspa
       stream mid-drag values (no history/re-read); commit on release unchanged. `delete_cab.pcapng`
       decoded → op 28 `{98:slot}` = remove cab (not yet exposed in the GUI).
 - [ ] Knob widget option, keyboard nav (beyond Space/Ctrl+Z), polish.
+
+- [x] **Show footswitch bindings** — DONE (2026-08-21): every block already carried `footswitch`
+      (preset key `3 → 8`, layout position + 1, `0` = unbound) all the way to the DTO, and the GUI
+      dropped it on the floor. Chain cells and the param panel now show an `FS<n>` badge. Read-only.
+- [ ] **Assign a block's bypass to a footswitch** (the common "put this on FS2"). Reading is
+      **[solid]** — proven twice by controlled diff (swapping FS1↔FS2 moved only `/3/8[0]` and
+      `/3/8[1]`; binding an unbound block flipped `/3/8[0]` and nothing else). **Writing is
+      undecoded**: no assign op exists in our table (6, 20-25, 28, 30, 39-43, 71, 76, 78, 88, 89) and
+      no capture shows one being made. Suggestive: deleting a block that *was* on a footswitch sends
+      only `op 28 {98: 2}` with nothing footswitch-shaped alongside, so the device maintains that
+      layout itself (`delete_bucket_brigade_on_fs.pcapng` vs `delete_block_not_on_fs.pcapng`).
+      **Needs the captures below.** Risk worth pricing in before starting: HX Edit may not use a
+      dedicated op at all but rewrite the preset via op 21, which turns this into "construct a type-2
+      node" — and that shape is only partly decoded (`6` is not a model id, `11 → 9` = `{28,29,41}`).
+- [ ] **Parameter controllers** (EXP pedal / a switch driving a param — preset key `4`). Blocked
+      *before* the write side: reading is **[partial]**. We decode the table's shape (controller # →
+      slot/param, min, max) but **not** which physical control a controller number is, so we cannot
+      honestly display "Wah is on EXP1", never mind set it. Needs a deliberate diff experiment before
+      any UI: assign one param to FS1, then EXP1, then a high-numbered switch, and diff the
+      controller numbers; then the min/max/type semantics; then the write op. **Best captured on a
+      Helix Floor** — 8 switches and two expression pedals sample the ID space, where a Stomp's 3
+      switches would leave most of it unexplored.
 
 - [ ] **Tempo-sync as one control** (issue #5) — HX Edit and the pedal both fold `TempoSync{n}` /
       `SyncSelect{n}` into the time knob: switch sync on and the knob becomes a note-value selector

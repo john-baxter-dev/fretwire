@@ -2484,3 +2484,35 @@ settable, which hiding them would not.
 `fretwireMock.knob(slot, param, value, extra)` simulates a panel knob, and the mock's `Trails`
 params now carry `extra_index: 0` like the real thing — so the exact confusion behind this bug is
 reproducible without a pedal.
+
+## Thirtieth round (2026-08-21): **footswitch bindings were decoded, carried, and then thrown away**
+
+Scoping "what would it take to add footswitch/controller assign" turned up that the read half was
+already done and simply not rendered.
+
+Every block carries `footswitch` — preset key `3 → 8`, layout position + 1, `0` = unbound — decoded,
+`[solid]` (proven twice by controlled diff), and passed all the way into `BlockDto`. The GUI never
+read the field. The CLI has printed the assignment table for months. So the editor knew which switch
+each block sat on and showed the user nothing.
+
+Chain cells and the param panel now carry an `FS<n>` badge. Read-only, and the tooltip says so
+rather than implying a control that isn't there. The mock binds two blocks so the badges have
+something to draw without hardware.
+
+### Why assign itself is not a small job
+
+**Bypass assign** is one capture away from being tractable but no closer than that. There is no
+assign op in our table (6, 20-25, 28, 30, 39-43, 71, 76, 78, 88, 89), and no capture shows an
+assignment being *made*. What the captures do show: deleting a block that was on a footswitch sends
+only `op 28 {98: 2}` with nothing footswitch-shaped alongside, against op 78 + op 28 for a block that
+wasn't — so the device maintains that layout itself. The real risk is that HX Edit doesn't use a
+dedicated op either and just rewrites the preset (op 21), which would turn this into constructing a
+type-2 node, a shape we have only partly decoded.
+
+**Parameter controllers** (key `4`) are blocked earlier than that — before the write side. The
+table's shape is decoded (controller # → slot/param, min, max), but the controller-number →
+physical-control mapping is not, so "Wah is on EXP1" is not something we can honestly display today.
+That needs a diff experiment on a Floor, whose 8 switches and 2 expression pedals actually sample the
+ID space, before any UI work is worth starting.
+
+Five captures are now named in `ROADMAP.md` Phase 1 — each a single action in HX Edit.

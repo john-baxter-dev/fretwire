@@ -11,10 +11,24 @@ use serde::Serialize;
 #[derive(Serialize, Clone, Debug)]
 #[serde(tag = "kind")]
 pub enum PushDto {
-    Bypass { slot: i64, enabled: bool },
-    Snapshot { index: i64 },
-    Preset { index: i64 },
-    Param { slot: i64, param: i64, value: f64 },
+    Bypass {
+        slot: i64,
+        enabled: bool,
+    },
+    Snapshot {
+        index: i64,
+    },
+    Preset {
+        index: i64,
+    },
+    Param {
+        slot: i64,
+        param: i64,
+        value: f64,
+        /// `true` when `param` is an index into the block's extra values, matching a
+        /// [`ParamDto::extra_index`] rather than a [`ParamDto::index`].
+        extra: bool,
+    },
 }
 
 pub fn push_dtos(pushes: &[StatusPush]) -> Vec<PushDto> {
@@ -29,9 +43,15 @@ pub fn push_dtos(pushes: &[StatusPush]) -> Vec<PushDto> {
             StatusPush::Preset(i) => Some(PushDto::Preset { index: *i }),
             // The frontend renders every parameter as a number, so flatten the three wire types the
             // same way the param DTOs do rather than teaching the UI a tagged value.
-            StatusPush::Param { slot, param, value } => Some(PushDto::Param {
+            StatusPush::Param {
+                slot,
+                param,
+                value,
+                extra,
+            } => Some(PushDto::Param {
                 slot: *slot,
                 param: *param,
+                extra: *extra,
                 value: fin(match value {
                     ParamValue::Float(f) => *f as f64,
                     ParamValue::Int(i) => *i as f64,
@@ -103,6 +123,11 @@ pub struct ParamDto {
     /// `false` when op 30 cannot address this param at all (see [`EditorParam::settable`]) — show
     /// the value, but no control.
     pub settable: bool,
+    /// Set for a value addressed in the block's **extra** space rather than the model's param list
+    /// (`Trails`, a legacy cab's mic index). A device push carrying `extra: true` matches on this
+    /// number; one carrying `extra: false` matches on `index`. Both spaces start at 0, so matching
+    /// on the wrong one silently drives a different control.
+    pub extra_index: Option<i64>,
     /// How to render this value with its unit. Sent as rules rather than a finished string because
     /// the panel re-formats continuously while a slider is dragged, before any value reaches Rust.
     pub format: Option<NumFormatDto>,
@@ -143,7 +168,9 @@ impl From<&EditorParam> for ParamDto {
     fn from(p: &EditorParam) -> Self {
         ParamDto {
             index: p.index,
-            name: p.name.clone(),
+            // The display name, not the `symbolicID` we address it by — see
+            // `EditorParam::display_name`.
+            name: p.display_name().to_string(),
             value: param_num(&p.value),
             kind: param_kind(&p.value),
             min: fin_opt(p.meta.min),
@@ -161,6 +188,7 @@ impl From<&EditorParam> for ParamDto {
                 })
                 .collect(),
             settable: p.settable,
+            extra_index: p.extra_index,
             step: fin_opt(p.meta.step),
             default: fin_opt(p.meta.default),
             format: p.meta.format.as_ref().map(|f| NumFormatDto {

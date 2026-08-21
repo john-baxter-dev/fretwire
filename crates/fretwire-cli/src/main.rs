@@ -1144,10 +1144,16 @@ fn print_snapshot_diagnosis(stream: &[u8]) {
 /// Print an editor preset as a block/param tree.
 fn print_params(params: &[fretwire_core::editor::EditorParam]) {
     for p in params {
+        // Display name first, but keep the `symbolicID` visible where it differs — a dump is what
+        // you read when working out what to address, and that is the name edits are keyed by.
+        let label = match p.display_name() {
+            d if d == p.name => p.name.clone(),
+            d => format!("{d} ({})", p.name),
+        };
         println!(
             "       [{:>2}] {:<14} = {}{}",
             p.index,
-            p.name,
+            label,
             fmt_param(p),
             if p.settable {
                 ""

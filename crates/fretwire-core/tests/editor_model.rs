@@ -71,6 +71,19 @@ fn loads_preset_into_named_editable_blocks() {
     assert_eq!(ht.params[8].name, "SyncSelect1");
     assert!(by_name("Spread").is_none());
 
+    // …but `name` is the `symbolicID`, which is the addressing key and *not* always what the user
+    // should read. Showing it verbatim put "SyncSelect1"/"TempoSync1" in the editor where HX Edit
+    // and the pedal say "Note Sync"/"Tempo Sync", which is how it was reported (issue #5). 492
+    // distinct params across the shipped `.models` files name themselves differently from their
+    // symbol, so this is the rule and not two special cases.
+    assert_eq!(ht.params[8].display_name(), "Note Sync");
+    let tempo = ht.params.iter().find(|p| p.name == "TempoSync1").unwrap();
+    assert_eq!(tempo.display_name(), "Tempo Sync");
+    // Where the two agree, `display_name` falls through to the symbol and stores nothing.
+    let mix_p = ht.params.iter().find(|p| p.name == "Mix").unwrap();
+    assert_eq!(mix_p.display_name(), "Mix");
+    assert_eq!(mix_p.meta.label, None);
+
     // Params carry UI metadata (range + widget) from the model table, matched by name.
     let mix = ht.params.iter().find(|p| p.name == "Mix").unwrap();
     assert_eq!(mix.meta.min, Some(0.0));

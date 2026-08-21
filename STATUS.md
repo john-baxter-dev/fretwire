@@ -2424,3 +2424,63 @@ independent corroboration.
 
 Nothing here touches the splice retry from the twenty-seventh round, which remains **unverified
 against a real splice** — the XL is still the only place one has been seen.
+
+## Twenty-ninth round (2026-08-21): **key 29 was load-bearing — a Trails knob drove the Time slider**
+
+The clearest report yet (issue #5), and both halves of it were real.
+
+### The push bug, settled from a capture we already had  [solid]
+
+Turning `Trails` on the pedal swept the editor's **Time** slider between 0.0 ms and 1.0 s. Writing
+Trails from the editor worked fine — which is the detail that localises it: the address we *send* is
+right, so only the mirror coming back can be wrong.
+
+`captures/dynamic_ambience_trails_on_off.pcapng` had the answer already:
+
+```
+trails :  {105: 30, 106: {…, 106: {98: 7, 29: False, 26: 0, 28: 0, 119: True}}}
+mix    :  {105: 30, 106: {…, 106: {98: 7, 29: True,  26: 0, 28: 5, 119: 0.48}}}
+```
+
+Key **29 selects which index space key 28 is in** — `true` = the model's param list, `false` = the
+block's extra values (`Trails`, a legacy cab's mic index). Exactly as it does on the way *out*, where
+we have always set it correctly. `parse_status_push` read 98/28/119 and dropped 29, and since both
+spaces start at 0, `{29: false, 28: 0}` (Trails) arrived as the model's param 0 — `Time` on a delay.
+A bool landing in a float control is why the slider slammed between its extremes.
+
+`StatusPush::Param` now carries `extra`, `PushDto` forwards it, and the panel keys pending values by
+*space + index* rather than index alone. Regression test uses the captured frames; the on and off
+frames differ in one byte, so a decoder with the space wrong still looks right on either alone — the
+test asserts both.
+
+No hardware was needed for any of this, which is the argument for keeping the captures around.
+
+### 492 params were showing their `symbolicID`  [solid]
+
+The same report: the editor listed `SyncSelect1` and `TempoSync1` where HX Edit says **Note Sync**
+and **Tempo Sync**. Not extra parameters we invented — the right params under the wrong names.
+
+`EditorParam::name` is the `.models` `symbolicID`, which is what everything addresses the param by,
+and for most params it doubles as the display name. For 492 distinct params across the shipped
+`.models` files it does not: `LowCut` → "Low Cut", `ChVol` → "Ch Vol", `Freq` → "Frequency",
+`Pedal` → "Position". So this was never two special cases; it was the whole editor, and it only got
+noticed on a param whose symbol looks like a variable name.
+
+`ParamMeta::label` now carries the display name **when it differs** (so the common case allocates
+nothing), `EditorParam::display_name()` falls through to the symbol, and the GUI shows that. The CLI
+prints `Note Sync (SyncSelect1)` — a dump is what you read while working out what to address, so the
+symbol stays visible there.
+
+### What the report got right that we didn't act on
+
+The tester noted HX Edit shows neither param for a Simple Delay. It doesn't hide them — it folds
+them into the Time control, which becomes a note-value selector when Tempo Sync is on, the same way
+the pedal's own Time knob does. Reproducing that compound control is a real piece of UI work and is
+not done; naming them correctly is the part that was a bug. Listing them separately keeps them
+settable, which hiding them would not.
+
+### Mock
+
+`fretwireMock.knob(slot, param, value, extra)` simulates a panel knob, and the mock's `Trails`
+params now carry `extra_index: 0` like the real thing — so the exact confusion behind this bug is
+reproducible without a pedal.

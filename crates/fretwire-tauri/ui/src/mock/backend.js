@@ -24,21 +24,24 @@ const LATENCY_MS = 30; // a touch of fake IPC latency, to surface races the real
 // ---------------------------------------------------------------------------------------------
 const P = {
   float: (index, name, value, min = 0, max = 10) => ({
-    index, name, value, kind: "float", min, max, value_type: 1, display_type: null, enum_labels: [], stops: [],
+    index, name, value, kind: "float", min, max, value_type: 1, display_type: null, enum_labels: [], stops: [], extra_index: null,
   }),
   int: (index, name, value, min = 0, max = 127) => ({
-    index, name, value, kind: "int", min, max, value_type: null, display_type: null, enum_labels: [], stops: [],
+    index, name, value, kind: "int", min, max, value_type: null, display_type: null, enum_labels: [], stops: [], extra_index: null,
   }),
-  bool: (index, name, on) => ({
-    index, name, value: on ? 1 : 0, kind: "bool", min: 0, max: 1, value_type: 2, display_type: null, enum_labels: [], stops: [],
+  // `extraIndex` marks a value the block carries *past* its model's param list (Trails). It is
+  // addressed in a separate index space that also starts at 0 — the distinction the device makes
+  // with key 29, and the one a push has to preserve. See EditorParam::extra_index.
+  bool: (index, name, on, extraIndex = null) => ({
+    index, name, value: on ? 1 : 0, kind: "bool", min: 0, max: 1, value_type: 2, display_type: null, enum_labels: [], stops: [], extra_index: extraIndex,
   }),
   enum: (index, name, value, labels) => ({
-    index, name, value, kind: "int", min: 0, max: labels.length - 1, value_type: 0, display_type: null, enum_labels: labels, stops: [],
+    index, name, value, kind: "int", min: 0, max: labels.length - 1, value_type: 0, display_type: null, enum_labels: labels, stops: [], extra_index: null,
   }),
   // Segmented float (cab mic Angle): a float on the wire, but rendered as discrete stop buttons.
   seg: (index, name, value, stops) => ({
     index, name, value, kind: "float", min: stops[0].value, max: stops[stops.length - 1].value,
-    value_type: 1, display_type: null, enum_labels: [], stops,
+    value_type: 1, display_type: null, enum_labels: [], stops, extra_index: null,
   }),
 };
 
@@ -58,11 +61,11 @@ const PARAMS = {
   reverb: () => [
     P.enum(0, "Type", 0, ["Room", "Hall", "Plate", "Spring", "Chamber"]),
     P.float(1, "Decay", 4), P.float(2, "Predelay", 20, 0, 500), P.float(3, "Mix", 35, 0, 100),
-    P.float(4, "Low Cut", 120, 20, 1000), P.float(5, "High Cut", 8000, 1000, 20000), P.bool(6, "Trails", true),
+    P.float(4, "Low Cut", 120, 20, 1000), P.float(5, "High Cut", 8000, 1000, 20000), P.bool(6, "Trails", true, 0),
   ],
   dynamics: () => [P.float(0, "Threshold", -48, -96, 0), P.float(1, "Decay", 30, 0, 100), P.float(2, "Level", 0, -12, 12)],
   distortion: () => [P.float(0, "Drive", 5), P.float(1, "Tone", 5), P.float(2, "Level", 5)],
-  delay: () => [P.float(0, "Time", 380, 1, 2000), P.float(1, "Feedback", 30, 0, 100), P.float(2, "Mix", 25, 0, 100), P.bool(3, "Trails", true)],
+  delay: () => [P.float(0, "Time", 380, 1, 2000), P.float(1, "Feedback", 30, 0, 100), P.float(2, "Mix", 25, 0, 100), P.bool(3, "Trails", true, 0)],
   modulation: () => [P.float(0, "Speed", 3), P.float(1, "Depth", 5), P.float(2, "Mix", 50, 0, 100)],
   eq: () => [P.float(0, "Low", 0, -12, 12), P.float(1, "Mid", 0, -12, 12), P.float(2, "High", 0, -12, 12)],
   wah: () => [P.float(0, "Position", 5), P.float(1, "Mix", 100, 0, 100)],
@@ -1063,6 +1066,19 @@ if (typeof window !== "undefined") {
       const e = current.slots[slot];
       if (e && e.kind === "effect") e.bypassed = !enabled;
       emit("device-pushes", [{ kind: "Bypass", slot, enabled }]);
+    },
+    /**
+     * Turn a parameter with the pedal's own knob. `extra` selects the index space: `false` (the
+     * default) means `param` indexes the model's param list, `true` means the block's extra values
+     * — `fretwireMock.knob(2, 0, 1, true)` is Trails on, which must **not** move the model's
+     * param 0. That confusion was a real bug (issue #5).
+     */
+    knob(slot, param, value, extra = false) {
+      const p = (current.slots[slot]?.params ?? []).find((q) =>
+        extra ? q.extra_index === param : q.extra_index == null && q.index === param,
+      );
+      if (p) p.value = value;
+      emit("device-pushes", [{ kind: "Param", slot, param, value, extra }]);
     },
     /** Switch snapshot as if from the panel. */
     snapshot(index) {

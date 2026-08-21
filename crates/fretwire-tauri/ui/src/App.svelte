@@ -244,7 +244,13 @@
   let flushAgain = false; // ...and pushes arrived while it was, so re-arm afterwards
   let pendingPresetChange = false;
   const pendingBypasses = new Map(); // slot → bypassed, from footswitch pushes
-  const pendingParams = new Map(); // "slot:param" → value, from panel-knob pushes
+  const pendingParams = new Map(); // paramKey(slot, param, extra) → value, from panel-knob pushes
+
+  // A push addresses either the model's param list or the block's extra values, and **both spaces
+  // start at 0** — so the space has to be part of the key. Keying on the number alone delivered
+  // Trails (extra 0) to the model's param 0, which is how a tester found this: turning Trails on
+  // the pedal swept the Time slider. See PushDto::Param / ParamDto::extra_index.
+  const paramKey = (slot, param, extra) => `${slot}:${extra ? "x" : "p"}${param}`;
 
   // A footswitch bypass is fully described by its own push, so apply it directly. This is also why
   // the re-read can't be trusted for it: the device's readable stream lags its own push, so a fresh
@@ -271,7 +277,8 @@
       if (!b?.params) return b;
       let touched = false;
       const params = b.params.map((p) => {
-        const v = pendingParams.get(`${b.slot}:${p.index}`);
+        const isExtra = p.extra_index != null;
+        const v = pendingParams.get(paramKey(b.slot, isExtra ? p.extra_index : p.index, isExtra));
         if (v === undefined || v === p.value) return p;
         touched = true;
         return { ...p, value: v };
@@ -353,7 +360,7 @@
       } else if (p.kind === "Bypass") {
         pendingBypasses.set(p.slot, !p.enabled);
       } else if (p.kind === "Param") {
-        pendingParams.set(`${p.slot}:${p.param}`, p.value);
+        pendingParams.set(paramKey(p.slot, p.param, p.extra), p.value);
       }
     }
     if (pendingPresetChange) {

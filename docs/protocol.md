@@ -74,6 +74,13 @@ then a query: OUT 01 00 0X 00 01 00 00 00 0X 00 00 00       ->  IN .. 0X "P33"/"
   **current preset** (frame 4272 IN begins `da 0a … 6c 36 2d 68 65 6c 69 78` = "l6-helix") — the
   same paged MessagePack mechanism as "Preset open" below.
 
+**Status pushes carry key 29 too, and it matters.** A panel change mirrors back the same map an
+op-30 edit sends — `{98: slot, 29: by_index, 26: 0, 28: index, 119: value}` — including key 29, which
+says whether key 28 indexes the model's param list (`true`) or the block's **extra** values
+(`false`: `Trails`, a legacy cab's mic index). Both spaces start at 0, so a decoder that drops key 29
+delivers a trails toggle to the model's param 0. [solid — `dynamic_ambience_trails_on_off.pcapng`
+against `dynamic_ambience_mix_modify.pcapng`; reported as issue #5]
+
 **Unifying insight:** those queries use the **same MessagePack envelope as edits**. The meter query
 `83 66 cd 03 e8 64 4c 65 80` = `{102: 0x03e8, 100: 76, 101: {}}` — key 102 a counter, key 100 the
 operation/resource id, key 101 the target (`{}` = "query all"; `{98: slot, …}` = a block). Editing

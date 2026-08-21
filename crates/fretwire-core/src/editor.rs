@@ -75,6 +75,11 @@ pub const CATEGORY_AMP_CAB: i64 = 100;
 /// editor which control to render. All optional — switches and enums carry non-numeric bounds.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ParamMeta {
+    /// The param's **display** name from `.models` (`"Note Sync"`), where it differs from the
+    /// `symbolicID` we address it by (`"SyncSelect1"`). Most params name themselves the same way
+    /// and this stays `None`; the ones that don't were showing raw symbols in the editor.
+    /// [issue #5]
+    pub label: Option<String>,
     pub min: Option<f64>,
     pub max: Option<f64>,
     pub display_type: Option<String>,
@@ -137,6 +142,16 @@ pub struct EditorParam {
     /// [solid — `captures/dynamic_ambience_trails_on_off.pcapng`, confirmed live on an HX Stomp
     /// 2026-08-02: `{98:2, 29:false, 26:0, 28:0, 119:true}` turns a Bucket Brigade's trails on]
     pub extra_index: Option<i64>,
+}
+
+impl EditorParam {
+    /// What to show the user. [`Self::name`] is the `symbolicID` — the key everything addresses this
+    /// param by — which is usually also the display name, but not always: `SyncSelect1` is HX Edit's
+    /// "Note Sync" and `TempoSync1` its "Tempo Sync". Showing the symbol was reported as fretwire
+    /// inventing parameters the pedal doesn't have. [issue #5]
+    pub fn display_name(&self) -> &str {
+        self.meta.label.as_deref().unwrap_or(&self.name)
+    }
 }
 
 /// A block as the editor sees it: identity, resolved model, current state, named params.
@@ -1091,6 +1106,9 @@ fn param_meta_from(
                         .zip(format.as_ref())
                         .and_then(|(ctl, fmt)| ctl.raw_step(fmt));
                     let meta = ParamMeta {
+                        // Only when it actually differs, so `display_name()` can fall through to
+                        // the symbol and the common case costs no allocation.
+                        label: p.name.clone().filter(|n| *n != p.symbolic_id),
                         min: p.min_f64(),
                         max: p.max_f64(),
                         display_type: p.display_type.clone(),

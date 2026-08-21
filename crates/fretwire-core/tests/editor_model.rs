@@ -415,3 +415,33 @@ fn the_three_osc_synth_lives_with_the_other_synths() {
         "3 Osc Synth should be listed under Pitch/Synth"
     );
 }
+
+/// The reference data really does resolve `pan` against the param's own range — the unit tests in
+/// `editor.rs` hand-build the control, this one reads it out of the shipped `HelixControls.json`
+/// and `io.models` and formats the output node's Pan the way the pedal's screen does.
+#[test]
+fn the_output_nodes_pan_formats_the_way_the_pedal_shows_it() {
+    let cat = catalog();
+    let preset = cat
+        .load_preset(&data("preset1_stream.msgpack.bin"))
+        .unwrap();
+    let out = preset.dsps[0]
+        .output_node
+        .as_ref()
+        .expect("every preset has an output node");
+    let pan = out.params.iter().find(|p| p.name == "Pan").unwrap();
+    assert_eq!((pan.meta.min, pan.meta.max), (Some(0.0), Some(1.0)));
+    let fmt = pan
+        .meta
+        .format
+        .as_ref()
+        .expect("pan carries a display recipe");
+
+    // 0..1 stored, -100..100 shown: hard left is the pedal's "L100", the 0.5 default is "Center".
+    assert_eq!(fmt.display(0.0).as_deref(), Some("Left 100"));
+    assert_eq!(fmt.display(0.5).as_deref(), Some("Center"));
+    assert_eq!(fmt.display(1.0).as_deref(), Some("Right 100"));
+
+    // And one scroll-wheel notch is one display unit, not the two the blanket fallback gave.
+    assert_eq!(pan.meta.step, Some(0.005));
+}

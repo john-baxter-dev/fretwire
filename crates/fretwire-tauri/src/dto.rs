@@ -106,6 +106,11 @@ pub struct ParamDto {
     /// How to render this value with its unit. Sent as rules rather than a finished string because
     /// the panel re-formats continuously while a slider is dragged, before any value reaches Rust.
     pub format: Option<NumFormatDto>,
+    /// One fine increment in stored units — what a scroll-wheel notch moves. `null` where the
+    /// reference data gives a range-switched step; see [`fretwire_core::editor::ParamMeta::step`].
+    pub step: Option<f64>,
+    /// The model's default value, in stored units — what a double-click on the control resets to.
+    pub default: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -115,11 +120,13 @@ pub struct SegStopDto {
 }
 
 /// Display recipe for a continuous param — see [`fretwire_core::editor::NumFormat`]. The panel
-/// applies `scale`, picks the first rule bracketing the result, multiplies by its `mult`, and fills
-/// the printf-ish `template`.
+/// applies `scale` and `offset`, picks the first rule bracketing the result, multiplies by its
+/// `mult`, and fills the printf-ish `template`.
 #[derive(Serialize)]
 pub struct NumFormatDto {
     pub scale: f64,
+    /// Added after `scale`; non-zero only for the bipolar controls (pan: ×200 − 100).
+    pub offset: f64,
     pub rules: Vec<FormatRuleDto>,
 }
 
@@ -154,8 +161,11 @@ impl From<&EditorParam> for ParamDto {
                 })
                 .collect(),
             settable: p.settable,
+            step: fin_opt(p.meta.step),
+            default: fin_opt(p.meta.default),
             format: p.meta.format.as_ref().map(|f| NumFormatDto {
                 scale: f.scale,
+                offset: f.offset,
                 rules: f
                     .rules
                     .iter()

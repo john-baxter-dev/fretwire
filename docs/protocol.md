@@ -789,25 +789,32 @@ carries **no** index/name). Parsed by `fretwire_data::stream::parse_preset_info`
 > This matters beyond the displayed name: the **live snapshot rides the same reply** (key 92), so an
 > uncorrected read paints the previous preset's active snapshot. `read_preset_inner` therefore
 > re-issues op 23 **after** the stream and reports whether the identity moved across the read; when
-> it did, the blob can't be attributed to either preset and `Session::read_preset` re-reads. Asking
-> again afterwards leaves the proven open/prep/info/stream sequence untouched.
+> it did, the blob can't be attributed to either preset and the caller re-reads. Asking again
+> afterwards leaves the proven open/prep/info/stream sequence untouched.
+>
+> That check catches the identity moving *across* a read, but not the other shape: an identity that
+> is uniformly stale on both sides of the stream. Nothing in the reply can — only the address
+> `goto_preset` asked for. `Session` remembers it (`expect_identity`) and discharges it in
+> `read_preset_confirmed`, which every caller that must not misattribute a blob goes through:
+> `read_preset_raw` (the read-modify-write input) and `backup_setlist` (which had been reading it
+> raw, and aborted whole sweeps on the lag).
 
-> **The browse listing is numbered globally and is *not* sorted [solid].** A listing reply numbers
-> presets `bank × setlist_size + slot` (a TEMPLATES listing on a Floor starts at 896 = 7 × 128),
-> whereas a preset's own identity (key 108), `goto_preset` and `save_preset` all use the
-> bank-relative slot — passing a global index through as a slot is what reached the device as
-> `goto_preset(7, 906)` and locked it up.
+> **A browse row's position is the slot; its map key is not [solid — corrected 2026-08-19].** The
+> listing arrives in slot order, always has, and needs no sorting: `parse_preset_list` numbers rows
+> by their position in the stream and `Session::list_presets_in` hands them over as they came.
 >
-> Separately, the entries **do not arrive in slot order**. A preset the user has *moved* keeps its
-> old position in the stream while carrying its new index. In the tester's 2026-07-29 dump of all
-> eight banks (1024 entries), bank 0 emits slot 68 at stream position 101 and bank 1 emits slot 95
-> at position 84; the other six banks are strictly ascending, which is why it went unnoticed.
-> `Session::list_presets_in` normalises to slots **and** sorts, since callers render the array
-> positionally.
+> Each row's MessagePack **map key** is a different number — the preset's index *before* it was last
+> reordered on the pedal, globally numbered as `bank × setlist_size + slot` (a TEMPLATES listing on a
+> Floor starts at 896 = 7 × 128). **No command accepts it as an address**: a preset's own identity
+> (key 108), `goto_preset` and `save_preset` all take the bank-relative slot. Passing a global index
+> through as a slot is what reached the device as `goto_preset(7, 906)` and locked it up.
 >
-> Those same 1024 entries otherwise match the unit's own `.hxb` backup slot-for-slot — the three
-> exceptions are exactly the three moved presets — which is what finally closed the "browse index
-> drift" question as device state rather than a parser bug. See `docs/helix-floor.md`.
+> An earlier draft of this block read the disagreement the other way — "the entries do not arrive in
+> slot order" — and had `list_presets_in` sort by the key. That took a correct list and shuffled it
+> into the device's pre-reorder order. What settles it: the tester's 2026-07-29 dump of all eight
+> banks (1024 entries) matches that unit's own `.hxb` backup **position**-for-position, and not at
+> all by key; the three rows where the two numbers disagree are exactly his three moved presets. The
+> full argument, and what the key probably is, are in `docs/helix-floor.md`.
 
 `open_two_presets_one_after_another.pcapng` is HX Edit **selecting** presets (op 20) — that's why an
 earlier draft mistook op 20 for "open for read". The **non-destructive read** is what HX Edit does on
@@ -817,6 +824,15 @@ connect, decoded from `startup.pcapng` (`tools/pcap-frames.py`), on the edit cha
    The op-22 reply carries chunk #0; the op-23 reply carries the preset name (e.g. `"PrincesSM7"`).
 3. OUT `cmd=0x08` (len 16) ×N — request subsequent chunks; each reply is a **272-byte** frame
    (16-byte header + 256 payload). A reply `< 272` bytes signals end of stream.
+
+> **The envelope's declared length is the authority, and it is checked in both directions [solid].**
+> The reassembler keeps reading until `declared_stream_len` is satisfied rather than stopping at the
+> first short chunk, and then refuses the blob if it did not land on that length. Under-length means
+> the device stopped answering mid-stream. **Over-length means a frame that was not stream payload
+> got spliced in** — a non-empty reply in a chunk slot is appended sight unseen, and everything
+> after it shifts. Eight bytes (one stream prefix) of overshoot on an HX Stomp decoded into a preset
+> the pedal did not have, whose phantom block then drew `-3` from the device when it was edited
+> (2026-08-20). One trailing pad byte is tolerated because one capture really carries one.
 
 **The `arg` offset is a per-channel running sum of received body lengths.** Edit-channel base after
 the handshake = `0x1009`; it then advances by each reply's body length (`+76` after read-open's reply,

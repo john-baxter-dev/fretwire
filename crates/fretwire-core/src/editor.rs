@@ -94,6 +94,18 @@ pub struct ParamMeta {
     /// for params whose control isn't described, and for enums/switches, which read as labels.
     /// See [`NumFormat`].
     pub format: Option<NumFormat>,
+    /// One fine increment of this param, **in stored units** — `HelixControls.json`'s `step.fine`
+    /// (which is in display units) divided by the resolved scale. What one scroll-wheel notch
+    /// should move, so a notch is the increment HX Edit and the pedal's own encoder use.
+    ///
+    /// `None` where the file gives a *range-switched* step instead of one number (delay times,
+    /// frequencies — 52 controls do): a single value can't express a curve, and guessing one would
+    /// be worse than the caller's own fallback.
+    pub step: Option<f64>,
+    /// The model's own default for this param, in stored units (`.models` `default`) — pan's `0.5`,
+    /// centre. What a double-click on the control resets to. `None` for the routing nodes, whose
+    /// params aren't in the `.models` files at all.
+    pub default: Option<f64>,
 }
 
 /// One position of a segmented float control (see [`ParamMeta::stops`]).
@@ -1069,14 +1081,13 @@ fn param_meta_from(
                     };
                     // Continuous floats get their unit-bearing display recipe. Enums and switches
                     // read as labels, and a segmented float shows its stop labels instead.
-                    let format = if p.value_type == Some(1) {
-                        p.display_type
-                            .as_deref()
-                            .and_then(|dt| numeric.get(dt))
-                            .cloned()
-                    } else {
-                        None
-                    };
+                    let control = (p.value_type == Some(1))
+                        .then(|| p.display_type.as_deref().and_then(|dt| numeric.get(dt)))
+                        .flatten();
+                    let format = control.map(|ctl| ctl.resolved(p.min_f64(), p.max_f64()));
+                    let step = control
+                        .zip(format.as_ref())
+                        .and_then(|(ctl, fmt)| ctl.raw_step(fmt));
                     let meta = ParamMeta {
                         min: p.min_f64(),
                         max: p.max_f64(),
@@ -1085,6 +1096,8 @@ fn param_meta_from(
                         enum_labels,
                         stops,
                         format,
+                        step,
+                        default: p.default_f64(),
                     };
                     (p.symbolic_id.clone(), meta)
                 })
@@ -1274,7 +1287,12 @@ fn seg_label(fmt: &str, v: f64) -> String {
 #[derive(Debug, Clone, PartialEq)]
 pub struct NumFormat {
     /// `dspToDisplayScale`: stored value × this = display units (seconds → ms, 0–1 → percent).
+    /// For a control that gives its display span as `minimumValue`/`maximumValue` instead, this is
+    /// derived from the param's own range — see [`display_affine`].
     pub scale: f64,
+    /// Added after `scale`. Non-zero only for the bipolar controls, whose display span is centred
+    /// on zero while the stored value runs 0..1 (pan: ×200 − 100, so 0.5 lands on 0 = "Center").
+    pub offset: f64,
     /// Range rules in file order; the first whose bounds contain the scaled value wins. A control
     /// with one unranged format has a single rule spanning everything.
     pub rules: Vec<FormatRule>,
@@ -1295,7 +1313,7 @@ pub struct FormatRule {
 impl NumFormat {
     /// Render `raw` (the stored value) the way HX Edit would. `None` only if there are no rules.
     pub fn display(&self, raw: f64) -> Option<String> {
-        let scaled = raw * self.scale;
+        let scaled = raw * self.scale + self.offset;
         let rule = self
             .rules
             .iter()
@@ -1354,10 +1372,67 @@ fn printf_f(template: &str, v: f64) -> String {
     out
 }
 
-/// Parse `HelixControls.json` into control name → [`NumFormat`] for the **continuous** controls
+/// A continuous control as `HelixControls.json` describes it: the display recipe, plus the display
+/// span for the controls that state one instead of a `dspToDisplayScale`.
+#[derive(Debug, Clone)]
+struct ControlFormat {
+    fmt: NumFormat,
+    /// `step.fine`, in display units, when the file states a single one — see [`ParamMeta::step`].
+    fine_step: Option<f64>,
+    /// `minimumValue`/`maximumValue`, kept only when the file left `dspToDisplayScale` out and gave
+    /// this instead. Five controls do, all bipolar: `pan`, `blend`, `tilt`, `split_ab_route_to`,
+    /// `split_balance`. Everywhere else the two forms would fight, so the explicit scale wins.
+    display_span: Option<(f64, f64)>,
+}
+
+impl ControlFormat {
+    /// The recipe as it applies to one param. A control that states its span rather than a scale
+    /// can only be finished here, where the param's own stored range is known — the same control
+    /// serves params with different ranges.
+    fn resolved(&self, min: Option<f64>, max: Option<f64>) -> NumFormat {
+        let mut fmt = self.fmt.clone();
+        if let Some(span) = self.display_span
+            && let (Some(lo), Some(hi)) = (min, max)
+            && let Some((scale, offset)) = display_affine((lo, hi), span)
+        {
+            fmt.scale = scale;
+            fmt.offset = offset;
+        }
+        fmt
+    }
+
+    /// [`ParamMeta::step`]: the fine increment in stored units. Needs the *resolved* format, since
+    /// the file's step is in display units and pan's scale is only known per-param.
+    fn raw_step(&self, fmt: &NumFormat) -> Option<f64> {
+        let step = self.fine_step? / fmt.scale;
+        step.is_finite().then_some(step).filter(|s| *s > 0.0)
+    }
+}
+
+/// `scale`/`offset` mapping a param's stored range onto the display span its control declares, so
+/// that `lo → dlo` and `hi → dhi`.
+///
+/// For the five bipolar controls this is the entire recipe: pan stores 0..1 and displays -100..100,
+/// i.e. ×200 − 100, which puts the stored 0.5 on 0 — "Center". Without it the stored value went
+/// through the format rules unscaled, so everything from centre to hard right read "Center" and the
+/// rest "Right 0"/"Right 1"; the same wrongness is why the slider looked like it moved in jumps.
+/// [solid — the pedal showed L100 for a slider fretwire labelled "Center", 2026-08-20 XL report;
+/// reproduced on an HX Stomp, whose synth `PanVoice1` reads "Right 0" at the stored 0.5]
+///
+/// `None` on a stored range that is degenerate or not finite — there is no mapping to make.
+fn display_affine((lo, hi): (f64, f64), (dlo, dhi): (f64, f64)) -> Option<(f64, f64)> {
+    let span = hi - lo;
+    if !span.is_finite() || span == 0.0 || !dlo.is_finite() || !dhi.is_finite() {
+        return None;
+    }
+    let scale = (dhi - dlo) / span;
+    Some((scale, dlo - lo * scale))
+}
+
+/// Parse `HelixControls.json` into control name → [`ControlFormat`] for the **continuous** controls
 /// (the discrete ones are label lists — see [`discrete_control_labels`]). Resolves the `alias`
 /// indirection the file uses for its 58 range-specialised aliases (`time_ms_20_1800` → `time_ms`).
-fn numeric_control_formats(controls: &[u8]) -> std::collections::HashMap<String, NumFormat> {
+fn numeric_control_formats(controls: &[u8]) -> std::collections::HashMap<String, ControlFormat> {
     let mut out = std::collections::HashMap::new();
     let Ok(root) = serde_json::from_slice::<serde_json::Value>(controls) else {
         return out;
@@ -1380,10 +1455,24 @@ fn numeric_control_formats(controls: &[u8]) -> std::collections::HashMap<String,
         if ctrl.get("isDiscrete").and_then(serde_json::Value::as_bool) == Some(true) {
             continue;
         }
-        let scale = ctrl
+        // A control gives its display mapping one way or the other, never both: a multiplier, or
+        // the span the stored range maps onto. `display_affine` finishes the second form once the
+        // param is known.
+        let explicit_scale = ctrl
             .get("dspToDisplayScale")
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(1.0);
+            .and_then(serde_json::Value::as_f64);
+        let bound = |k| ctrl.get(k).and_then(serde_json::Value::as_f64);
+        // `step` is either `{fine, coarse}` or an array of those bracketed by range. Only the
+        // single-object form gives one increment that holds across the param.
+        let fine_step = ctrl
+            .get("step")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|st| st.get("fine"))
+            .and_then(serde_json::Value::as_f64);
+        let display_span = match explicit_scale {
+            Some(_) => None,
+            None => bound("minimumValue").zip(bound("maximumValue")),
+        };
         let units = |v: &serde_json::Value| {
             v.get("formatUnits")
                 .or_else(|| v.get("format"))
@@ -1425,7 +1514,18 @@ fn numeric_control_formats(controls: &[u8]) -> std::collections::HashMap<String,
             }
         }
         if !rules.is_empty() {
-            out.insert(name.clone(), NumFormat { scale, rules });
+            out.insert(
+                name.clone(),
+                ControlFormat {
+                    fmt: NumFormat {
+                        scale: explicit_scale.unwrap_or(1.0),
+                        offset: 0.0,
+                        rules,
+                    },
+                    fine_step,
+                    display_span,
+                },
+            );
         }
     }
     out
@@ -1838,5 +1938,112 @@ mod tests {
             .find(|c| c.symbolic_id == "HD2_AmpGermanMahadeva")
             .unwrap();
         assert!(mahadeva.dsp_load.unwrap() > plain_mahadeva.dsp_load.unwrap());
+    }
+}
+
+#[cfg(test)]
+mod display_format_tests {
+    use super::{ControlFormat, FormatRule, NumFormat, display_affine};
+
+    /// The `pan` control verbatim from `HelixControls.json`: a display span, no `dspToDisplayScale`,
+    /// and three rules that read the sign of the *display* value.
+    fn pan_control() -> ControlFormat {
+        let rule = |lo: f64, hi: f64, mult: f64, t: &str| FormatRule {
+            lo,
+            hi,
+            mult,
+            template: t.to_string(),
+        };
+        ControlFormat {
+            fmt: NumFormat {
+                scale: 1.0,
+                offset: 0.0,
+                rules: vec![
+                    rule(-99999.0, -0.5, -1.0, "Left %.0f"),
+                    rule(-0.5, 0.5, 1.0, "Center"),
+                    rule(0.5, 999999.0, 1.0, "Right %.0f"),
+                ],
+            },
+            fine_step: Some(1.0),
+            display_span: Some((-100.0, 100.0)),
+        }
+    }
+
+    #[test]
+    fn a_stored_range_maps_onto_the_display_span_its_control_declares() {
+        // Pan: 0..1 stored, -100..100 shown.
+        assert_eq!(
+            display_affine((0.0, 1.0), (-100.0, 100.0)),
+            Some((200.0, -100.0))
+        );
+        // The identity case a scale-bearing control would describe as 1.0.
+        assert_eq!(display_affine((0.0, 100.0), (0.0, 100.0)), Some((1.0, 0.0)));
+    }
+
+    #[test]
+    fn a_degenerate_stored_range_has_no_mapping() {
+        assert_eq!(display_affine((0.5, 0.5), (-100.0, 100.0)), None);
+        assert_eq!(display_affine((0.0, f64::INFINITY), (-100.0, 100.0)), None);
+    }
+
+    /// The bug the XL report caught: unresolved, every stored value from centre to hard right reads
+    /// "Center" and the rest "Right 0"/"Right 1" — which is also why the slider looked like it
+    /// jumped rather than swept.
+    #[test]
+    fn pan_reads_as_the_pedal_shows_it_only_once_the_span_is_resolved() {
+        let unresolved = pan_control().fmt;
+        assert_eq!(unresolved.display(0.0).as_deref(), Some("Center"));
+        assert_eq!(unresolved.display(0.5).as_deref(), Some("Right 0"));
+
+        let fmt = pan_control().resolved(Some(0.0), Some(1.0));
+        assert_eq!(fmt.display(0.0).as_deref(), Some("Left 100"));
+        assert_eq!(fmt.display(0.25).as_deref(), Some("Left 50"));
+        assert_eq!(fmt.display(0.5).as_deref(), Some("Center"));
+        assert_eq!(fmt.display(0.75).as_deref(), Some("Right 50"));
+        assert_eq!(fmt.display(1.0).as_deref(), Some("Right 100"));
+        // The two the HX Stomp's synth block reports today.
+        assert_eq!(fmt.display(0.478).as_deref(), Some("Left 4"));
+        assert_eq!(fmt.display(0.544).as_deref(), Some("Right 9"));
+    }
+
+    /// A param with no range of its own can't be mapped, so the control is left as the file gave it
+    /// rather than silently scaled by a guess.
+    #[test]
+    fn a_param_without_a_range_keeps_the_unresolved_recipe() {
+        let ctl = pan_control();
+        assert_eq!(ctl.resolved(None, None), ctl.fmt);
+        assert_eq!(ctl.resolved(Some(0.0), None), ctl.fmt);
+    }
+
+    /// One wheel notch should move one display unit. Pan's stored range is 200 display units wide,
+    /// so that is 0.005 — half the blanket 1/100th-of-range the panel used, which is why it scrolled
+    /// two units a notch.
+    #[test]
+    fn the_fine_step_is_converted_into_stored_units() {
+        let ctl = pan_control();
+        let fmt = ctl.resolved(Some(0.0), Some(1.0));
+        assert_eq!(ctl.raw_step(&fmt), Some(0.005));
+        // One notch from centre is one display unit, in both directions.
+        assert_eq!(fmt.display(0.5 + 0.005).as_deref(), Some("Right 1"));
+        assert_eq!(fmt.display(0.5 - 0.005).as_deref(), Some("Left 1"));
+    }
+
+    /// A range-switched step is a curve, not a number — the panel keeps its own fallback rather
+    /// than be handed a value that is wrong across most of the range.
+    #[test]
+    fn a_control_without_a_single_step_offers_none() {
+        let mut ctl = pan_control();
+        ctl.fine_step = None;
+        assert_eq!(ctl.raw_step(&ctl.resolved(Some(0.0), Some(1.0))), None);
+    }
+
+    /// A control that states a scale keeps it: `display_span` is only read when there was none, so
+    /// the two forms can never fight.
+    #[test]
+    fn an_explicit_scale_is_not_overridden() {
+        let mut ctl = pan_control();
+        ctl.fmt.scale = 100.0;
+        ctl.display_span = None;
+        assert_eq!(ctl.resolved(Some(0.0), Some(1.0)).scale, 100.0);
     }
 }

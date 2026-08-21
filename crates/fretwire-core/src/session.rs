@@ -2446,6 +2446,40 @@ impl Session {
         Ok(prev)
     }
 
+    /// [`Self::read_preset_inner`] with the two identity checks, retried: the identity must not
+    /// have moved *across* the stream (`settled`), and it must match a pending [`Self::goto_preset`]
+    /// — after a switch the device can serve the new preset's blob while still reporting the old
+    /// address, for longer than a read takes. Only what we asked for can catch that second one, so
+    /// the expectation is taken here and this is the call that discharges it.
+    ///
+    /// Errors rather than hand back a blob whose provenance is ambiguous. Callers that would rather
+    /// show a stale panel than nothing (`read_preset`) run their own looser loop.
+    fn read_preset_confirmed(
+        &mut self,
+    ) -> crate::Result<(Vec<u8>, Option<fretwire_data::stream::PresetInfo>)> {
+        let expect = self.expect_identity.take();
+        for attempt in 0..3 {
+            let (raw, info, settled) = self.read_preset_inner()?;
+            if settled && identity_confirms(expect, info.as_ref()) {
+                return Ok((raw, info));
+            }
+            tracing::debug!(
+                attempt,
+                settled,
+                want = ?expect,
+                got = ?info.as_ref().map(|i| (i.bank, i.index)),
+                "preset identity doesn't match the blob yet; re-reading"
+            );
+            self.backoff_before_retry(attempt);
+        }
+        Err(fretwire_data::Error::Stream(
+            "the preset changed under every read attempt — refusing to use a blob whose \
+             provenance is ambiguous (try again once the device settles)"
+                .to_string(),
+        )
+        .into())
+    }
+
     /// Read the current preset stream and return the raw reassembled bytes (before decoding).
     /// Useful for diffing two device states to decode stream fields.
     pub fn read_preset_raw(&mut self) -> crate::Result<Vec<u8>> {
@@ -2455,34 +2489,24 @@ impl Session {
         // reads here, edits the tree, and writes it straight back to whatever preset the device is
         // sitting on now. If the identity moved across the read, the blob belongs to neither preset
         // and writing it back overwrites the current one with someone else's signal chain — or with
-        // an empty one. So retry, and fail rather than guess. [2026-08-01: 21 "provenance is
-        // ambiguous" warnings across the field logs, and a `fretwireTest3` resave that came back
-        // with no blocks at all.]
-        for attempt in 0..3 {
-            let (raw, info, settled) = self.read_preset_inner()?;
-            if settled {
+        // an empty one. So `read_preset_confirmed`, which retries and fails rather than guess.
+        // [2026-08-01: 21 "provenance is ambiguous" warnings across the field logs, and a
+        // `fretwireTest3` resave that came back with no blocks at all.]
+        match self.read_preset_confirmed() {
+            Ok((raw, info)) => {
                 self.last_raw = Some(raw.clone());
-                // A settled read establishes the identity as firmly as `read_preset` does, so
+                // A confirmed read establishes the identity as firmly as `read_preset` does, so
                 // publish it: callers that only want the bytes (`dump-raw`) can still say which
                 // preset they got, and `last_identity`'s contract is "as fresh as the last read".
                 self.last_info = info;
-                return Ok(raw);
+                Ok(raw)
             }
-            tracing::debug!(
-                attempt,
-                got = ?info.as_ref().map(|i| (i.bank, i.index)),
-                "raw read straddled a preset change; re-reading before any write"
-            );
-            self.backoff_before_retry(attempt);
+            Err(e) => {
+                // Don't leave a stale blob behind for a caller that falls back to it.
+                self.last_raw = None;
+                Err(e)
+            }
         }
-        // Don't leave a stale blob behind for a caller that falls back to it.
-        self.last_raw = None;
-        Err(fretwire_data::Error::Stream(
-            "the preset changed under every read attempt — refusing to edit a blob whose \
-             provenance is ambiguous (try again once the device settles)"
-                .to_string(),
-        )
-        .into())
     }
 
     /// Back up every preset in the setlist to a [`crate::backup::Backup`]. Walks the whole list
@@ -2496,17 +2520,26 @@ impl Session {
     ) -> crate::Result<crate::backup::Backup> {
         let listing = self.list_presets()?;
         let total = listing.len();
-        // Note where we are so the sweep can put the user back afterwards.
-        let (_, start, _) = self.read_preset_inner()?;
+        // Note where we are so the sweep can put the user back afterwards. Confirmed, because the
+        // GUI's Backup button is usually pressed right after clicking a preset, and the identity
+        // the device reports in that window can still be the previous one — which would send the
+        // user somewhere else entirely once the sweep finished.
+        let (_, start) = self.read_preset_confirmed()?;
 
         let mut presets = Vec::with_capacity(total);
         for (done, (index, listed_name)) in listing.iter().enumerate() {
             let index = *index as i64;
             self.goto_preset(0, index)?;
-            let (raw, info, _) = self.read_preset_inner()?;
+            // `read_preset_confirmed`, not a bare read: the device answers op-23 with the *previous*
+            // preset's address for a while after a switch, so a single read here reported slot N−1
+            // and the desync check below aborted a sweep that was in fact fine. It waits for the
+            // address we asked `goto` for instead. [solid — 2026-08-20 XL report: "device reports
+            // preset 1 while backing up slot 2", at a point in the walk that moved with whichever
+            // preset the pedal happened to start on]
+            let (raw, info) = self.read_preset_confirmed()?;
             // The stream must parse (it's what restore replays), and the op-23 identity must be
-            // the slot we selected — a mismatch means the sweep desynced; stop rather than save
-            // mislabeled blobs.
+            // the slot we selected — a mismatch that survives the retries means the sweep really
+            // has desynced; stop rather than save mislabeled blobs.
             fretwire_data::stream::PresetStream::parse(&raw)?;
             if let Some(i) = &info
                 && i.index != index
@@ -2531,7 +2564,9 @@ impl Session {
         self.last_raw = None;
         self.clear_history();
         Ok(crate::backup::Backup {
-            device: "HX Stomp".into(),
+            // The unit this actually came off, not the one the project is named after: an XL's
+            // backup used to be stamped "HX Stomp".
+            device: self.device().name.into(),
             presets,
         })
     }
@@ -2708,22 +2743,8 @@ impl Session {
             "reassembled preset stream",
         );
 
-        // A short payload is a failed read, not a preset. Every exit from the loop above except
-        // "the declared payload is whole" lands here — the request cap, the consecutive-empties
-        // guard — and each one used to fall straight through into the decoder, which then blamed
-        // whichever envelope key the missing tail happened to contain: the tester's recurring
-        // "envelope key 104 missing or not bytes", raised against a stream that was simply cut off.
-        // Erroring here says what actually happened and lets `read_preset`'s retry have another go,
-        // which is all a truncated read ever needed. [solid — 2026-08-02, `fretwire39`]
-        if let Some(t) = target
-            && payload.len() < t
-        {
-            return Err(fretwire_data::Error::Stream(format!(
-                "preset read ended {} bytes short of the declared {t} — the device stopped \
-                 answering mid-stream",
-                t - payload.len(),
-            ))
-            .into());
+        if let Some(t) = target {
+            check_stream_length(payload.len(), t).map_err(fretwire_data::Error::Stream)?;
         }
 
         // Re-ask who we're on. The op-23 identity **lags the blob by one preset**: the first read
@@ -3207,6 +3228,54 @@ fn classify_chunk(n: usize, full: usize, have: usize, target: Option<usize>) -> 
     }
 }
 
+/// Check a reassembled preset stream against the length its own envelope declared. `Ok(())` means
+/// hand it to the decoder; `Err` carries what went wrong, which [`Session::read_preset`] turns into
+/// a retry. A stream that isn't its declared length is a failed read, not a preset — in **both**
+/// directions.
+///
+/// **Short** is the familiar one. Every exit from the reassembly loop except "the declared payload
+/// is whole" lands here — the request cap, the consecutive-empties guard — and each used to fall
+/// straight through into the decoder, which then blamed whichever envelope key the missing tail
+/// happened to contain: the tester's recurring "envelope key 104 missing or not bytes", raised
+/// against a stream that was simply cut off. [solid — 2026-08-02, `fretwire39`]
+///
+/// **Long** was unguarded until 2026-08-20, and cost more, because an over-long blob still
+/// *decodes*. [`classify_chunk`] appends any non-empty reply, so a small frame that isn't stream
+/// payload landing in a chunk slot gets spliced in and everything after it shifts. The tester's log
+/// reads `bytes=2396 declared=2388` — eight bytes, the width of one stream prefix — and the GUI drew
+/// a preset the pedal did not have: a signal path longer than the device has slots, with a block on
+/// a row that was empty. Editing that block is what sent `set_param` to slot 17 and got `-3` back
+/// from the pedal, five times across two gestures. [solid — 2026-08-20 HX Stomp session]
+///
+/// Truncating back to `target` is *not* the fix. Extra bytes are harmless only if they landed at
+/// the very end, and nothing in the reply says where they landed — the tester's blob decoded into
+/// something plausible and wrong, which is the expensive failure. Erroring costs one retry, which
+/// `read_preset` already does.
+fn check_stream_length(got: usize, target: usize) -> Result<(), String> {
+    /// How much longer than its declared length a real stream has ever been. One capture
+    /// (`preset1_stream`, 2804 bytes against a declared 2803) carries a trailing pad byte, and
+    /// `fretwire-data/tests/stream_len.rs` pins that as the only slack any capture shows. Trailing
+    /// bytes are harmless in themselves — the sequence reader stops at the end of the last value —
+    /// so this bounds the *splice*, which is the case that corrupts.
+    const PAD_SLACK: usize = 1;
+
+    if got < target {
+        return Err(format!(
+            "preset read ended {} bytes short of the declared {target} — the device stopped \
+             answering mid-stream",
+            target - got,
+        ));
+    }
+    if got > target + PAD_SLACK {
+        return Err(format!(
+            "preset read ran {} bytes past the declared {target} — a frame that was not stream \
+             payload got spliced into it, so the blob cannot be trusted",
+            got - target,
+        ));
+    }
+    Ok(())
+}
+
 /// Whether the device's stored keys disagree with the slots its listing actually puts presets in —
 /// i.e. whether the user has moved presets around on the pedal.
 ///
@@ -3217,6 +3286,37 @@ fn classify_chunk(n: usize, full: usize, have: usize, target: Option<usize>) -> 
 /// [`PresetListEntry`] and [`Session::list_preset_entries_in`].
 fn listing_reordered(entries: &[PresetListEntry], base: i64) -> bool {
     entries.iter().any(|e| e.key_disagrees(base))
+}
+
+#[cfg(test)]
+mod stream_length_tests {
+    use super::check_stream_length;
+
+    #[test]
+    fn a_stream_of_its_declared_length_decodes() {
+        assert!(check_stream_length(2388, 2388).is_ok());
+    }
+
+    /// `preset1_stream.msgpack.bin` is 2804 bytes against a declared 2803. That pad byte is real
+    /// traffic, so the guard has to let it through or every read of that preset fails.
+    #[test]
+    fn the_one_trailing_pad_byte_a_real_capture_carries_is_allowed() {
+        assert!(check_stream_length(2804, 2803).is_ok());
+    }
+
+    /// The 2026-08-20 splice: eight bytes past the declared length, which decoded into a preset the
+    /// pedal did not have.
+    #[test]
+    fn a_spliced_frame_is_refused_rather_than_decoded() {
+        let e = check_stream_length(2396, 2388).unwrap_err();
+        assert!(e.contains("8 bytes past"), "{e}");
+    }
+
+    #[test]
+    fn a_truncated_read_is_refused() {
+        let e = check_stream_length(2048, 2388).unwrap_err();
+        assert!(e.contains("340 bytes short"), "{e}");
+    }
 }
 
 #[cfg(test)]

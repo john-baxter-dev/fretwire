@@ -1653,6 +1653,9 @@ before any value reaches Rust. Aliases are resolved (`time_ms_20_1800` → `time
 their own units (ms under a second, seconds past it), and anything the reference data doesn't
 describe falls back to the bare number.
 
+> Incomplete as written: `dspToDisplayScale` is only one of the two forms the file uses, and the
+> five bipolar controls use the other. See the twenty-fifth round (2026-08-20).
+
 ## The DSP meter tells the truth about headroom (2026-08-04)
 
 Round 20 measured where the pedal stops accepting blocks — **~75% on our meter, not 100%** — and
@@ -1970,3 +1973,164 @@ suggests one exists; writing it down so the next surprise has somewhere to land.
 load-bearing now, so a lost mid-stream chunk would shift slots — but `declared_stream_len` already
 turns a short stream into an error rather than a silent truncation, and the XL's setlist size is
 `None` (falls back to 128), so the check would fire spuriously on the very device that reported this.
+
+## Twenty-fifth round (2026-08-20): **two XL reports — pan read "Center" at hard left, and the backup sweep aborted on a lie**
+
+The same HX Stomp XL user (firmware 3.80.0, on `c99c837`) filed two more. Neither is XL-specific.
+
+### Pan showed "Center" for a pedal reading L100 [solid — FIXED]
+
+Drag the Output block's Pan to the left: the pedal shows `L100`, fretwire showed `Center`. He also
+noted the slider "jumps around and does not slide smoothly" — same bug, seen from the other side.
+
+`HelixControls.json` states a control's display mapping one of two ways, and we only implemented
+one. Most controls carry `dspToDisplayScale` (a multiplier: seconds → ms, 0–1 → percent). **Five
+bipolar ones instead state the span the stored range maps onto** — `minimumValue`/`maximumValue` —
+and carry no scale: `pan`, `blend`, `tilt`, `split_ab_route_to`, `split_balance`. `NumFormat`
+defaulted the missing scale to 1.0, so the stored value went through the format rules unconverted.
+Pan stores 0..1 and displays −100..100, so *everything* from centre to hard right fell in the
+`Center` rule (−0.5..0.5) and the rest read `Right 0` / `Right 1`. Two labels across the whole
+sweep of the slider — which is exactly what "jumps around" looks like.
+
+**Fixed.** `NumFormat` gains an `offset` and `display` computes `raw × scale + offset`.
+`ControlFormat::resolved` finishes the second form at param-meta build time, where the param's own
+range is known — `display_affine((0,1), (−100,100))` → `×200 − 100`, putting the stored `0.5` on
+`0` = `Center`. The explicit scale always wins where both could apply, so the two forms can never
+fight. The GUI applies the same `offset` client-side (`ParamPanel.svelte`), as it already did for
+`scale`.
+
+Confirmed on the HX Stomp — the synth block's three pans, unchanged on the device, before and after:
+
+    [ 4] PanVoice1      = Right 0  →  Center     [0.5]
+    [10] PanVoice2      = Right 1  →  Right 9    [0.544]
+    [16] PanVoice3      = Center   →  Left 4     [0.478]
+
+The slider itself needed nothing: `range()` already gives pan 200 steps, one per display unit.
+
+**The scroll wheel did.** `nudge` moved a blanket 1/100th of the range per notch, which on pan is
+0.01 stored = **two** display units — so scrolling skipped every other value and still felt jumpy
+after the label was fixed. `HelixControls.json` states the real increment as `step.fine`, in display
+units, and we had never read it: pan's is `1.0`, i.e. 0.005 stored. `ParamMeta::step` now carries it
+converted into stored units (`fine / scale`, so it rides the same resolution the display span
+needed), the DTO passes it, and one notch is one display unit.
+
+Only the **single-object** `step` form is used — 31 controls, including `pan`, `percent` and
+`generic_knob`. The other 52 give a range-switched step (a delay's is 0.1 ms under a second and
+1 ms over it); one number can't express a curve, so those keep the panel's own fallback. For most
+controls the two agree — `percent` and `generic_knob` both work out to 0.01 on a 0..1 param, which
+is what the fallback already gave — so this changes the feel of pan and the finer controls
+(`CabMicIr_Position`: 0.001, ten times finer) and nothing else. The slider keeps its continuous
+200-position sweep; a notch and a drag are different gestures.
+
+**And the value bounced on commit, which is what actually read as "glitchy".** The tester:
+
+> When you scroll it goes, then flashes back, then back again to where it ended up
+
+The panel holds the gesture's value in `live[k]` and shows `live[k] ?? p.value`. Both commit paths
+— the wheel's 300 ms debounce and the slider's `onchange` — deleted `live[k]` **before** sending, so
+for the length of the round trip the control fell back to `p.value`: whatever the panel last heard
+from the device, which is the pre-edit value (or a status push still catching up), and then jumped
+forward again when `set_param`'s re-read landed. One `commit(k, v, …)` now owns both paths and drops
+`live[k]` in the promise's `finally` instead. `apply` never rejects, so that also covers a refused
+edit — where snapping back to the device's value is the correct outcome, and now happens once
+rather than as the middle frame of a flicker.
+
+### The slot-17 rejects were a corrupted read being drawn [solid — FIXED]
+
+The five `code=-3` rejects the tester saw came with their own cause two lines above them:
+
+    reassembled preset stream bytes=2388 declared=2388     <- the read before
+    reassembled preset stream bytes=2396 declared=2388     <- this one
+
+**Eight bytes past the declared length, and we decoded it anyway.** The guard after reassembly was
+`payload.len() < t` — short only. `classify_chunk` appends any non-empty reply, so a small frame
+that isn't stream payload landing in a chunk slot gets spliced into the blob and everything after it
+shifts; eight bytes is exactly one stream prefix. The blob still decoded, into a preset the pedal did
+not have — the tester's words were "the UI glitched and the signal path was super long", which is
+what a bogus slot array draws — and it put a block on the empty B row. Editing that block sent
+`set_param` to **slot 17**, and the pedal, which has nothing there, said `-3`. Reproduced from the
+CLI on ClaudeTest: `set 9 0 0.485` (the real output node) is accepted, `set 17 0 0.485` returns the
+tester's exact target line.
+
+`check_stream_length` now refuses a stream that isn't its declared length in either direction, and
+`read_preset`'s existing retry turns that into a re-read. Truncating back to the declared length was
+tempting and is wrong: extra bytes are harmless only if they landed at the end, and nothing in the
+reply says where they landed — this blob decoded into something plausible, which is the expensive
+failure.
+
+**Why it's a tolerance and not `!=`:** `preset1_stream.msgpack.bin` is 2804 bytes against a declared
+2803 and always has been (`fretwire-data/tests/stream_len.rs` pins it). One trailing pad byte is real
+traffic; a strict equality check would fail every read of that preset. `PAD_SLACK = 1` is that
+capture, and nothing has ever shown more. Trailing bytes are harmless in themselves — the sequence
+reader stops at the end of the last value — so the bound is really on the *splice*.
+
+Three live reads on the HX Stomp after the change: `bytes=2388 declared=2388` each time, decoded
+fine. [solid — 2026-08-20]
+
+### Two things the panel should always have had (2026-08-20)
+
+**Double-click a slider to reset it.** `.models` carries a `default` for every param it describes
+(pan's is `0.5`, centre) and `Param::default_f64` had been sitting there unused since the model
+files were first parsed. `ParamMeta::default` now carries it to the panel, and the tooltip names the
+value it will jump to. Routing-node params aren't in the `.models` files, so their sliders don't
+offer it rather than inventing one.
+
+**Click the value to type one.** The readout is now a field, and it accepts what it shows — the
+inverse of `fmtVal`: undo the rule's `unitsMultiplier`, then the `scale`/`offset`, then clamp to the
+param's range. `Left 50`, `-50`, `50 %`, `-14.4 dB` and a bare number all land where they should,
+and a word-only rule (`Center`, `Off`) aims at the middle of its band.
+
+**It also takes the pedal's own shorthand**, which is the case worth writing down: the HX Stomp's
+screen writes pan as `L100`, so that is what someone reads off the hardware and types. `L100` has no
+rule *word* in it — the rule says "Left %.0f" — so it parsed as a bare `+100` and landed hard
+**right**, the exact opposite of the request. A single leading letter is now matched against the
+rule words' initials, so `L100`/`R50`/`Left 50`/`-50` all agree. Verified by round-tripping every
+rule of `pan`, `percent` and `volume` label → parse → label.
+
+### The backup sweep aborted because it never waited for the identity [solid — FIXED]
+
+> `backup: backup file: device reports preset 1 while backing up slot 2 - sweep desynced, aborting`
+>
+> The progress through the backup seems to be affected by which preset is currently selected.
+
+Off by exactly one, and one *behind* — the signature of the stale identity the 2026-07-30 Floor log
+already pinned: **after a preset change the device serves the new preset's stream while still
+reporting the old address**, for longer than a read takes. `read_preset` handles it by remembering
+what `goto_preset` asked for and re-reading until the device agrees. `backup_setlist` called
+`read_preset_inner` directly, so it saw the previous slot's identity, believed it, and aborted a
+sweep that was fine. It also ignored `settled`, and never discharged the pending expectation.
+
+**Fixed.** The check is now one method — `Session::read_preset_confirmed` — which takes the pending
+expectation, requires both `settled` and a matching address, retries with the standard backoff, and
+errors rather than return an ambiguous blob. `backup_setlist` uses it per slot *and* for the
+start-of-sweep position (the GUI's Backup button is usually pressed straight after clicking a
+preset, so that read was in the same stale window — which is what tied the failure to the UI
+selection). `read_preset_raw` — the read-modify-write input — now goes through it too, closing the
+same hole on the op-21 paths: it checked `settled` but not the address, so a stale-identity read
+was accepted and published as `last_info`.
+
+The desync check itself stays. It is now reached only by a mismatch that survives the retries.
+
+**Reproduced and caught live on the HX Stomp [solid — 2026-08-20].** A full 126-slot sweep
+completed, every stored index equal to its position — and the tail of the log has the failure
+happening and being absorbed:
+
+    read-info reply … PresetInfo { bank: 0, index: 124, … }
+    WARN preset identity moved across the stream read — blob provenance is ambiguous
+         before=(0, 124, "New Preset") after=(0, 125, "New Preset")
+    read-info reply … PresetInfo { bank: 0, index: 125, … }
+      [126/126] New Preset
+
+That is slot 125 being read while the device still answered 124. The old code took that `info`,
+compared `124 != 125`, and aborted with the reporter's exact message; the retry re-reads and gets
+125. (Only the last 20 lines of that run were captured, so this is one confirmed occurrence in the
+sweep, not a count of them.)
+
+### Also, while in there
+
+- A backup is stamped with the device it came off (`self.device().name`) instead of the hardcoded
+  `"HX Stomp"` — an XL's file claimed to be a Stomp's.
+- **His naming point is right and is a real limitation, not just copy:** `backup` walks bank 0 only.
+  On a Floor or an XL that is one setlist out of several, so "Backup" overpromises — it is a setlist
+  export. Renaming it (and `backup`/`restore` in the CLI) is a breaking change to the command names
+  and the on-disk `device` tag's meaning; not done here.

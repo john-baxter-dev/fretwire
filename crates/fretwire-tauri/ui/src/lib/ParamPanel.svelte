@@ -70,11 +70,35 @@
   // Called on commit: the final value is being sent anyway, so drop any queued preview.
   const cancelPreview = (k) => delete pvLatest[k];
 
+  // Send the gesture's final value, and keep it on screen until the commit's re-read lands.
+  //
+  // Releasing it at send time instead is what made a scroll "go, flash back, then land": for the
+  // round trip the slider falls back to `p.value`, which is whatever the panel last heard from the
+  // device — the pre-edit value, or a status push still catching up — and then jumps forward again
+  // when the re-read arrives. `apply` never rejects, so `finally` also covers a refused edit, where
+  // snapping back to the device's value is the right answer.
+  function commit(k, v, paired, p, isInt) {
+    cancelPreview(k);
+    const sent = isInt
+      ? onEnum(block.slot, paired, p.index, Math.round(v))
+      : onFloat(block.slot, paired, p.index, v);
+    Promise.resolve(sent).finally(() => {
+      // Unless a newer gesture has taken the display over in the meantime.
+      if (live[k] === v) delete live[k];
+    });
+  }
+
   // ---- scroll-wheel nudging ----
   // A slider responds to the wheel while Shift is held (hover anywhere on it) or after it's been
   // clicked (focused). Each notch nudges one step; the commit is debounced so a burst of notches
   // is one USB write (and one undo entry). Svelte 5 registers `onwheel` passively, so this is an
   // action attaching a non-passive listener — preventDefault must work to stop the page scrolling.
+  // The value box is only in the DOM once it's been clicked, so focus it as it appears.
+  function focusOnMount(node) {
+    node.focus();
+    node.select();
+  }
+
   function wheelable(node, handler) {
     node.addEventListener("wheel", handler, { passive: false });
     return { destroy: () => node.removeEventListener("wheel", handler) };
@@ -86,19 +110,17 @@
     if (!e.shiftKey && document.activeElement !== e.currentTarget) return;
     e.preventDefault();
     const dir = e.deltaY < 0 ? 1 : -1;
-    const step = isInt ? 1 : (r.max - r.min) / 100;
+    // One notch = one of the increments HX Edit uses, where the reference data states one. Pan's is
+    // half of what the old blanket 1/100th was, which is why it scrolled two display units a notch.
+    const step = isInt ? 1 : (p.step ?? (r.max - r.min) / 100);
     const cur = live[k] ?? p.value;
     const v = Math.min(r.max, Math.max(r.min, cur + dir * step));
     live[k] = v;
     if (!isInt) preview(k, paired, p, v); // audible ramp per notch (float wire path only)
     clearTimeout(wheelTimers[k]);
     wheelTimers[k] = setTimeout(() => {
-      const val = live[k];
-      delete live[k];
       delete wheelTimers[k];
-      cancelPreview(k);
-      if (isInt) onEnum(block.slot, paired, p.index, Math.round(val));
-      else onFloat(block.slot, paired, p.index, val);
+      commit(k, v, paired, p, isInt);
     }, 300);
   }
 
@@ -145,12 +167,82 @@
   function fmtVal(p, v) {
     const f = p.format;
     if (!f || !Number.isFinite(v)) return fmt(v);
-    const s = v * f.scale;
+    const s = v * f.scale + (f.offset ?? 0);
     const r =
       f.rules.find((r) => (r.lo == null || s >= r.lo) && (r.hi == null || s < r.hi)) ??
       f.rules[f.rules.length - 1];
     if (!r) return fmt(v);
     return printf(r.template, s * r.mult);
+  }
+
+  // The literal text of a format rule with the number taken out ("Left %.0f" -> "left"): what the
+  // user sees next to the digits, and so what they may type back.
+  const ruleWord = (t) =>
+    t.replace(/%%|%\+?(?:\.\d+)?f/g, " ").trim().toLowerCase();
+
+  // Parse what was typed in the value box back into a stored value. The box shows what the label
+  // shows, so it has to accept that: "L100" comes back as "Left 100" here, and the rule that
+  // rendered it is the one that reverses it — `Left`'s unitsMultiplier is -1, so 100 means -100
+  // display, which is 0.0 stored. A bare number is taken as the display value directly, so "-50"
+  // and "Left 50" both land on the same place. Returns null if there's nothing usable in the text.
+  function parseDisplay(p, text) {
+    const t = text.trim().toLowerCase();
+    if (!t) return null;
+    const f = p.format;
+    const num = t.match(/-?\d*\.?\d+/);
+    if (!f) return num ? Number(num[0]) : null;
+
+    if (!num) {
+      // A word-only rule ("Center", "Off"): aim at the middle of the band it covers, which is what
+      // renders that word back. Unbounded ends have no middle to aim at.
+      const r = f.rules.find((r) => ruleWord(r.template) === t);
+      if (!r || r.lo == null || r.hi == null) return null;
+      return fromDisplay(p, (r.lo + r.hi) / 2);
+    }
+    const n = Number(num[0]);
+    // A rule whose word is present in the text reverses its own multiplier; otherwise the number is
+    // already the display value. The initial-only form matters: the *pedal* writes pan as "L100",
+    // so that is what someone reads off its screen and types, and without it "L100" has no word to
+    // match, is taken as a bare +100, and lands hard right — the opposite of what was asked for.
+    const initial = t.match(/^([a-z])\s*-?\d/)?.[1];
+    const named =
+      f.rules.find((r) => { const w = ruleWord(r.template); return w && t.includes(w); }) ??
+      (initial && f.rules.find((r) => ruleWord(r.template).startsWith(initial)));
+    return fromDisplay(p, named ? n / (named.mult || 1) : n);
+  }
+
+  // Display value -> stored value, undoing `fmtVal`'s scale/offset, clamped to the param's range.
+  function fromDisplay(p, display) {
+    const f = p.format;
+    const v = f ? (display - (f.offset ?? 0)) / f.scale : display;
+    if (!Number.isFinite(v)) return null;
+    return Math.min(p.max ?? v, Math.max(p.min ?? v, v));
+  }
+
+  // Double-click a slider to put the param back where the model says it starts — pan to Center,
+  // a mix to its stock blend. `.models` carries that default for every param it describes; the
+  // routing nodes aren't in those files, so their sliders simply don't offer it.
+  function resetToDefault(k, p, paired, isInt) {
+    if (p.default == null || p.default === p.value) return;
+    live[k] = p.default;
+    commit(k, p.default, paired, p, isInt);
+  }
+
+  // ---- typed values ----
+  // Which value box is open for editing, and its text. Clicking the readout turns it into a field:
+  // sliders are hard to land on an exact number, and the pedal shows exact numbers.
+  let typing = $state(null);
+  let typed = $state("");
+  const openTyping = (k, p) => {
+    typing = k;
+    typed = fmtVal(p, live[k] ?? p.value);
+  };
+  function commitTyped(k, p, paired, isInt) {
+    const v = parseDisplay(p, typed);
+    typing = null;
+    if (v == null || v === p.value) return;
+    live[k] = v;
+    commit(k, v, paired, p, isInt);
   }
 
   // printf-ish `%[+][.N]f`, with `%%` a literal percent — the only forms the reference data uses.
@@ -319,20 +411,34 @@
               step={r.step}
               value={live[k] ?? p.value}
               use:wheelable={(e) => nudge(e, k, p, paired, isInt, r)}
+              ondblclick={() => resetToDefault(k, p, paired, isInt)}
+              title={p.default != null
+                ? `Double-click to reset to ${fmtVal(p, p.default)}`
+                : "Shift+scroll to nudge"}
               oninput={(e) => {
                 const v = e.currentTarget.valueAsNumber;
                 live[k] = v;
                 if (!isInt) preview(k, paired, p, v);
               }}
-              onchange={(e) => {
-                const v = e.currentTarget.valueAsNumber;
-                delete live[k];
-                cancelPreview(k);
-                if (isInt) onEnum(block.slot, paired, p.index, Math.round(v));
-                else onFloat(block.slot, paired, p.index, v);
-              }}
+              onchange={(e) => commit(k, e.currentTarget.valueAsNumber, paired, p, isInt)}
             />
-            <span class="val">{fmtVal(p, live[k] ?? p.value)}</span>
+            {#if typing === k}
+              <input
+                class="val typing"
+                value={typed}
+                oninput={(e) => (typed = e.currentTarget.value)}
+                onblur={() => commitTyped(k, p, paired, isInt)}
+                onkeydown={(e) => {
+                  if (e.key === "Enter") e.currentTarget.blur();
+                  else if (e.key === "Escape") { typing = null; e.currentTarget.blur(); }
+                }}
+                use:focusOnMount
+              />
+            {:else}
+              <button class="val" title="Click to type a value" onclick={() => openTyping(k, p)}>
+                {fmtVal(p, live[k] ?? p.value)}
+              </button>
+            {/if}
           </div>
         {/if}
       </div>
@@ -467,6 +573,31 @@
     color: #e6e8ec;
     font-variant-numeric: tabular-nums;
     font-size: 13px;
+  }
+  /* The readout doubles as a click-to-type field. Strip the button/input chrome so it still reads
+     as a value until you're in it, and pin the font rather than inheriting — `.val` sets 13px and a
+     bare `font: inherit` would take the row's size instead. */
+  button.val,
+  input.val {
+    font-family: inherit;
+    font-size: 13px;
+    background: none;
+    border: 0;
+    padding: 0;
+    color: inherit;
+    cursor: text;
+  }
+  button.val:hover {
+    color: #fff;
+    text-decoration: underline dotted #4a5265;
+  }
+  input.val.typing {
+    width: 76px;
+    background: #232833;
+    border: 1px solid #4a5265;
+    border-radius: 4px;
+    padding: 1px 4px;
+    color: #e6e8ec;
   }
   select {
     font: inherit;

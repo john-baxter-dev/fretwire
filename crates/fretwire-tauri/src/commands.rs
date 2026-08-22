@@ -11,7 +11,7 @@
 
 use crate::dto::{
     CategoryDto, DataStatusDto, DetectedDeviceDto, ImportResultDto, IrSlotDto, ModelChoiceDto,
-    PresetDto, PresetListItem, SplitTypeDto,
+    PresetDto, PresetListItem, SettingDto, SplitTypeDto,
 };
 use fretwire_core::{EditorPreset, Session};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1257,6 +1257,66 @@ mod numbering_tests {
         assert_eq!(numbering_word(false), "banked");
     }
 }
+
+// ---- device settings (globals) ----
+//
+// These are **not** preset edits: they change the pedal itself, take effect immediately and have no
+// edit-buffer stage, so none of them go on the undo timeline and none return a `PresetDto`. The
+// same shape as the IR commands, for the same reason.
+
+/// The device's global settings. **Reads only.**
+///
+/// `all = false` reads just the identified ids — 19 reads, instant. `all = true` sweeps the whole
+/// answering space (nothing above 226 responds on an HX Stomp) and includes the unidentified ids as
+/// `kind: "raw"`, which is what makes the panel usable for mapping the rest.
+#[tauri::command]
+pub async fn settings_read(state: State<'_, AppState>, all: bool) -> R<Vec<SettingDto>> {
+    use fretwire_core::fretwire_protocol::settings;
+    run(&state, move |s| {
+        let found = if all {
+            s.scan_settings(0..=SETTINGS_MAX_ID)
+        } else {
+            // Ask for exactly the ids we can name, rather than sweeping and filtering: an
+            // unimplemented id on some other device is then simply absent, not an error.
+            s.scan_settings(settings::SETTINGS.iter().map(|d| d.id))
+        };
+        Ok(found
+            .iter()
+            .map(|(id, v)| SettingDto::new(*id, v))
+            .collect())
+    })
+    .await
+}
+
+/// Write one global setting and return it as the device reports it back.
+///
+/// Refuses any id we have not identified — see `settings::is_writable`. The value is sent in
+/// whatever type the device already holds (`Session::set_setting_num` reads it first), because a
+/// type mismatch is refused with `-3`.
+#[tauri::command]
+pub async fn settings_write(state: State<'_, AppState>, id: i64, value: f64) -> R<SettingDto> {
+    use fretwire_core::fretwire_protocol::settings;
+    if !settings::is_writable(id) {
+        // Not a device error — a deliberate refusal, so it reads as one.
+        return Err(format!(
+            "setting {id} is not one fretwire has identified, so it will not be written. \
+             Change it on the pedal and use `fretwire settings-diff` to name it first."
+        ));
+    }
+    run(&state, move |s| {
+        let after = s.set_setting_num(id, value)?.ok_or_else(|| {
+            fretwire_core::Error::from(fretwire_core::fretwire_data::Error::Stream(format!(
+                "setting {id} accepted the write but reports no value back"
+            )))
+        })?;
+        Ok(SettingDto::new(id, &after))
+    })
+    .await
+}
+
+/// Top of the answering id space on an HX Stomp — 226 is the highest that responds, and the sweep
+/// is cheap enough (~0.8 ms a read) that rounding up costs nothing.
+const SETTINGS_MAX_ID: i64 = 260;
 
 // ---- user IR slots ----
 //

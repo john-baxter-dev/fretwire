@@ -49,6 +49,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::data_status,
             commands::device_numbering,
+            commands::settings_read,
+            commands::settings_write,
             commands::ir_list,
             commands::ir_scan,
             commands::ir_export,

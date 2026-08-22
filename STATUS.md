@@ -2926,3 +2926,44 @@ per cycle, and the noise to watch for is id 28 (preset index) and id 16 (tempo).
 
 **Not in this namespace at all: the input noise gate.** It is per-preset — `noiseGate`/`threshold`/
 `decay` on the fixed input node at slot 0 — and has been supported since the Floor work.
+
+## Thirty-ninth round (2026-08-22): **the globals panel**
+
+The settings ids reach the GUI. **Globals…** in the toolbar opens an overlay, grouped the way the
+pedal's own menus group them: Global EQ, Ins/Outs, Tempo, MIDI, Preferences, Displays.
+
+### One table, two front ends
+The CLI's `setting_gloss` and the GUI would have been two hand-kept lists of the same 19 ids, which
+is exactly how `201`-`203` stayed glossed as "global EQ" in the CLI after the EQ turned out to be
+190-200. So the table moved to **`fretwire_protocol::settings`** — id, name, menu group, and a
+`Kind` that says how to render it — and both front ends read it. The CLI's gloss is now a projection
+of the same data.
+
+### Unidentified ids are shown and not writable
+147 of the 166 answering ids have never been explained. They appear under **Show unidentified** as
+read-only rows, which makes the panel the tool for mapping the rest: you can see an id move.
+`settings::is_writable` gates the write, and `settings_write` refuses an unknown id before it
+reaches the device — writing an id whose meaning nobody has observed is the one thing here that
+could change something a user can't find their way back from, and reading it costs nothing.
+
+`Kind::Choice(&[])` is how "observed, never explained" is recorded — id 127 (Guitar In-Z) has two
+seen values and no recorded menu entries. The empty list is deliberate and tested, because the
+alternative is inventing labels.
+
+### No confirmations, one standing warning
+These write the pedal with no undo, the same hazard class as an IR write — but continuous rather
+than destructive, and a dialog on every knob turn would be unusable. The footer says it once, and
+changing a setting back is the undo. Where a value has an "off" sentinel rather than an enable (the
+EQ cuts park at 19.9 Hz and 20100 Hz) the row says **off** instead of showing the number.
+
+Writing id 27 re-numbers the preset list immediately, without a re-read: the write's reply is the
+device's own read-back, so it is already the authority.
+
+### Tested
+`SettingDto`'s JSON keys are pinned from both sides — `dto.rs::setting_tests` and the new
+`ui/tests/globals-mock.mjs` (24 assertions), same contract the IR DTO carries. The mock models the
+rules that matter: a refused write throws, a flag stores a bool rather than `1`, a choice rounds, a
+float keeps its fraction, and the raw tier is never writable. Root suite 273, `fretwire-tauri` 8,
+JS 23 + 24.
+
+**Still not clicked through by hand** — two panels now.

@@ -541,6 +541,16 @@ real session.
       **Still open on the LT:** its `preset_device_id` (never on the wire; the Floor's came from a
       `.hxb`, and we have no LT backup), how its screen banks presets, and **every write path** —
       no edit has ever been sent to one, which is why it is not `Verified`.
+- [x] **Global settings — op 24 reads, op 25 writes, 19 ids named (2026-08-22).** The namespace is
+      flat and numbered; a 601-id sweep costs 1.4 s, so `settings-dump` / `settings-diff` maps it
+      with no capture at all. `fretwire_protocol::settings` is the shared table, the CLI has
+      `setting-get`/`setting-set`, and the GUI has a **Globals** panel. Id 27 (preset numbering)
+      retired the manual toggle it was blocking.
+      **Still open:** 147 answering ids are unidentified — `194`/`195` and `197`/`198` are very
+      likely the mid and high EQ bands' Q and gain [hypothesis]; `127` and `156` have observed
+      values with no recorded menu entries; `201`-`203` are unknown (an earlier "global EQ" gloss
+      was withdrawn). Writes are gated to identified ids only.
+
 - [ ] **Session grid/routing planning is still DSP-0 only.** `add_block_at`, `place_block`,
       `insert_block`, `reorder_block` and `set_node_pos` plan slot moves inside one 20-slot array
       and read it via `dsp_blocks(0)`/`dsp_grid(0)` — complete for the Stomp, needs a `dsp` argument

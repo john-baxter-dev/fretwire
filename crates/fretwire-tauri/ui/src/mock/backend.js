@@ -734,10 +734,75 @@ function irCheckSlot(slot) {
   }
 }
 
+// The mock pedal's globals. Only the ids fretwire has identified are named; `raw` stands in for the
+// ~147 that answer and have never been explained, so the panel's read-only tier is exercised too.
+const SETTINGS = new Map([
+  [9, { v: 0, name: "MIDI base channel", group: "MIDI", kind: "choice",
+        options: Array.from({ length: 16 }, (_, i) => [i, String(i + 1)]) }],
+  [11, { v: true, name: "MIDI over USB", group: "MIDI", kind: "flag", labels: ["On", "Off"] }],
+  [14, { v: 1, name: "Tempo select", group: "Tempo", kind: "choice",
+         options: [[0, "Per snapshot"], [1, "Per preset"], [2, "Global"]] }],
+  [16, { v: 120, name: "Tempo", group: "Tempo", kind: "number", unit: "BPM" }],
+  [27, { v: false, name: "Preset numbering", group: "Displays", kind: "flag",
+         labels: ["000-127", "01A-32D"] }],
+  [31, { v: false, name: "Input level", group: "Ins/Outs", kind: "flag",
+         labels: ["Line", "Instrument"] }],
+  [73, { v: 0, name: "Snapshot edits", group: "Preferences", kind: "choice",
+         options: [[0, "Recall"], [1, "Discard"]] }],
+  [81, { v: false, name: "Bypass type", group: "Preferences", kind: "flag",
+         labels: ["DSP bypass", "Analog bypass"] }],
+  [94, { v: true, name: "Output level", group: "Ins/Outs", kind: "flag",
+         labels: ["Line", "Instrument"] }],
+  // Observed values with no recorded menu entries — an empty option list must stay legal.
+  [127, { v: 0, name: "Guitar In-Z", group: "Ins/Outs", kind: "choice", options: [] }],
+  [156, { v: 1, name: "Volume knob controls", group: "Ins/Outs", kind: "choice",
+          options: [[2, "Main + headphones"]] }],
+  [190, { v: 110, name: "EQ low frequency", group: "Global EQ", kind: "number", unit: "Hz" }],
+  [191, { v: 0.707, name: "EQ low Q", group: "Global EQ", kind: "number", unit: "" }],
+  [192, { v: 0, name: "EQ low gain", group: "Global EQ", kind: "number", unit: "dB" }],
+  [193, { v: 2000, name: "EQ mid frequency", group: "Global EQ", kind: "number", unit: "Hz" }],
+  [196, { v: 8000, name: "EQ high frequency", group: "Global EQ", kind: "number", unit: "Hz" }],
+  [199, { v: 19.9, name: "EQ low cut", group: "Global EQ", kind: "number", unit: "Hz", off: 19.9 }],
+  [200, { v: 20100, name: "EQ high cut", group: "Global EQ", kind: "number", unit: "Hz", off: 20100 }],
+]);
+// Ids that answer but have never been identified. Read-only, and shown only with `all`.
+const RAW_IDS = [12, 128, 210, 226];
+
+function settingDto(id) {
+  const d = SETTINGS.get(id);
+  if (!d) {
+    return { id, name: `Setting ${id}`, group: "Unidentified", kind: "raw", value: id % 3,
+             labels: null, options: [], unit: "", off: null, writable: false };
+  }
+  return {
+    id, name: d.name, group: d.group, kind: d.kind, value: d.v,
+    labels: d.labels ?? null, options: d.options ?? [], unit: d.unit ?? "",
+    off: d.off ?? null, writable: true,
+  };
+}
+
 const HANDLERS = {
   // The mock pedal is set to the banked form, like the hardware ships. Returning a value here (not
   // null) is what exercises the adopt path; `null` would exercise only the fallback.
-  device_numbering: () => "banked",
+  device_numbering: () => (SETTINGS.get(27).v ? "flat" : "banked"),
+  settings_read: ({ all }) => {
+    const ids = all
+      ? [...SETTINGS.keys(), ...RAW_IDS].sort((a, b) => a - b)
+      : [...SETTINGS.keys()];
+    return ids.map(settingDto);
+  },
+  settings_write: ({ id, value }) => {
+    const d = SETTINGS.get(id);
+    // The device refuses an id it doesn't implement, and fretwire refuses one it can't name — the
+    // panel must handle a rejected write, so the mock has to be able to reject one.
+    if (!d) throw new Error(`setting ${id} is not one fretwire has identified`);
+    // Typed: a bool takes a bool, an int rounds, a float stays a float. Writing the wrong type is
+    // what the device answers -3 to.
+    d.v = d.kind === "flag" ? Number(value) !== 0
+        : d.kind === "choice" ? Math.round(Number(value))
+        : Number(value);
+    return settingDto(id);
+  },
   ir_list: () => irDirectory(),
   ir_scan: () =>
     Array.from({ length: IR_SLOTS }, (_, i) => irDto(i, false)),

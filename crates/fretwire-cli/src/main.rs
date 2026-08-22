@@ -1895,32 +1895,34 @@ fn value_type(v: &fretwire_core::fretwire_data::rmpv::Value) -> &'static str {
 /// handful that are pinned down so a dump is not 147 anonymous numbers.
 /// A short name for a setting id, where we have one.
 ///
-/// Every entry was read off a physical HX Stomp by changing one thing on the pedal and diffing two
-/// dumps — see the table in `docs/protocol.md`. Ids not listed here answer but are unidentified;
-/// that is the normal state of this namespace, not a gap to be filled with a guess.
-fn setting_gloss(id: i64) -> &'static str {
-    match id {
-        9 => "  (MIDI base channel, zero-based)",
-        11 => "  (MIDI over USB)",
-        14 => "  (tempo scope: 0 snapshot, 1 preset, 2 global)",
-        16 => "  (tempo, BPM)",
-        27 => "  (preset numbering: true 000-127, false 01A-32D)",
-        28 => "  (current preset index)",
-        31 => "  (input level: true line, false instrument)",
-        73 => "  (snapshot edits: 0 recall, 1 discard)",
-        81 => "  (bypass type: true DSP, false analog)",
-        94 => "  (output level: true line, false instrument)",
-        127 => "  (guitar In-Z)",
-        156 => "  (volume knob assignment)",
-        190 => "  (global EQ low frequency, Hz)",
-        191 => "  (global EQ low Q)",
-        192 => "  (global EQ low gain, dB)",
-        193 => "  (global EQ mid frequency, Hz)",
-        196 => "  (global EQ high frequency, Hz)",
-        199 => "  (global EQ low cut, Hz; 19.9 is off)",
-        200 => "  (global EQ high cut, Hz; 20100 is off)",
-        _ => "",
-    }
+/// The table lives in `fretwire_protocol::settings` so the CLI and the GUI name ids identically —
+/// they used to carry separate lists, which is how `201`-`203` stayed glossed as "global EQ" here
+/// after the real EQ block turned out to be 190-200.
+fn setting_gloss(id: i64) -> String {
+    use fretwire_core::fretwire_protocol::settings::{Kind, by_id};
+    let Some(s) = by_id(id) else {
+        return String::new();
+    };
+    let detail = match s.kind {
+        Kind::Flag { on, off } => format!(": true {on}, false {off}"),
+        Kind::Choice(&[]) => String::new(),
+        Kind::Choice(vs) => {
+            let list: Vec<String> = vs.iter().map(|(v, n)| format!("{v} {n}")).collect();
+            format!(": {}", list.join(", "))
+        }
+        Kind::Number { unit, off } => {
+            let unit = if unit.is_empty() {
+                String::new()
+            } else {
+                format!(", {unit}")
+            };
+            match off {
+                Some(v) => format!("{unit}; {v} is off"),
+                None => unit,
+            }
+        }
+    };
+    format!("  ({}{detail})", s.name)
 }
 
 #[cfg(test)]

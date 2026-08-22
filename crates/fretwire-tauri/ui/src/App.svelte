@@ -11,6 +11,7 @@
   import Toast from "./lib/Toast.svelte";
   import FirstRun from "./lib/FirstRun.svelte";
   import { slotLabel, adoptDeviceNumbering } from "./lib/numbering.svelte.js";
+  import GlobalsPanel from "./lib/GlobalsPanel.svelte";
 
 
   // First-run gating: until we've checked whether the Line 6 reference data is imported, show
@@ -567,8 +568,8 @@
 
   // ---- export / import ----
   // "Export", not "Backup": this captures presets and nothing else. A device backup in HX Edit's
-  // sense also carries global settings and IRs, neither of which we can read yet, and a file that
-  // called itself a backup would be trusted to make a wiped pedal whole. It wouldn't.
+  // sense also carries global settings and IRs — both readable now, neither in this file — and a
+  // file that called itself a backup would be trusted to make a wiped pedal whole. It wouldn't.
   const onExport = () =>
     (exportDlg = {
       path: `~/fretwire-presets-${new Date().toISOString().slice(0, 10)}.json`,
@@ -753,6 +754,50 @@
   // the undo timeline, and every write is flash. The panel owns its own confirmations; this side
   // only carries the calls and turns failures into toasts.
   let showIrs = $state(false);
+  // Global settings. Not on the undo timeline and not part of `preset` — these are the pedal's own
+  // state, so they get their own fetch rather than riding a PresetDto.
+  let showGlobals = $state(false);
+  let globals = $state([]);
+  let globalsRaw = $state(false);
+  let globalsBusy = $state(false);
+
+  async function refreshGlobals() {
+    globalsBusy = true;
+    try {
+      globals = await invoke("settings_read", { all: globalsRaw });
+    } catch (e) {
+      toast("settings: " + e);
+    } finally {
+      globalsBusy = false;
+    }
+  }
+
+  async function openGlobals() {
+    showGlobals = true;
+    if (!globals.length) await refreshGlobals();
+  }
+
+  async function toggleGlobalsRaw() {
+    globalsRaw = !globalsRaw;
+    await refreshGlobals();
+  }
+
+  async function writeGlobal(id, value) {
+    globalsBusy = true;
+    try {
+      const after = await invoke("settings_write", { id, value });
+      // Replace in place rather than re-reading everything: the reply is the device's own read-back
+      // of that id, so it is already the authority on what landed.
+      globals = globals.map((s) => (s.id === after.id ? after : s));
+      // The preset list numbers itself from this one, so it has to follow immediately.
+      if (after.id === 27) adoptDeviceNumbering(after.value ? "flat" : "banked");
+    } catch (e) {
+      toast("settings: " + e);
+      await refreshGlobals();
+    } finally {
+      globalsBusy = false;
+    }
+  }
   let irSlots = $state([]);
   let irBusy = $state(false);
 
@@ -858,6 +903,7 @@
     >↷ Redo</button>
     <button class="secondary" onclick={() => (addTarget = addTarget == null ? -1 : null)}>＋ Add block</button>
     <button class="secondary" onclick={openIrs} title="Manage the pedal's user impulse responses">IRs…</button>
+    <button class="secondary" onclick={openGlobals} title="Read and change the pedal's global settings">Globals…</button>
     <button class="secondary" onclick={disconnect}>Disconnect</button>
   {:else}
     <button onclick={connect}>Connect</button>
@@ -1204,6 +1250,18 @@
 {/if}
 
 <Toast {toasts} ondismiss={dismissToast} />
+
+{#if showGlobals}
+  <GlobalsPanel
+    settings={globals}
+    busy={globalsBusy}
+    showRaw={globalsRaw}
+    onClose={() => (showGlobals = false)}
+    onRefresh={refreshGlobals}
+    onToggleRaw={toggleGlobalsRaw}
+    onWrite={writeGlobal}
+  />
+{/if}
 
 {#if showIrs}
   <IrPanel

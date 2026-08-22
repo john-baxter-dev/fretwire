@@ -7,9 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "//test": "Contract check for the mock backend. Plain node, no runner — see tests/.",
-    "test": "node tests/ir-mock.mjs",
-    "//tauri:dev": "Hot-reloading app against the real backend. Runs from the crate root (that is where tauri.conf.json lives). --no-default-features turns off `custom-protocol` — a default here so plain cargo builds work — which is what lets the webview use this dev server instead of the embedded dist/.",
+    "//test": "Contract check for the mock backend. Plain node, no runner \u2014 see tests/.",
+    "test": "node tests/ir-mock.mjs && node tests/globals-mock.mjs",
+    "//tauri:dev": "Hot-reloading app against the real backend. Runs from the crate root (that is where tauri.conf.json lives). --no-default-features turns off `custom-protocol` \u2014 a default here so plain cargo builds work \u2014 which is what lets the webview use this dev server instead of the embedded dist/.",
     "tauri:dev": "cd .. && ./ui/node_modules/.bin/tauri dev -- --no-default-features"
   },
   "dependencies": {

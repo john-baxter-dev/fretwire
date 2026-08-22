@@ -728,3 +728,171 @@ mod ir_tests {
         assert_eq!(dto.samples, 2048);
     }
 }
+
+/// One device setting, as the globals panel shows it.
+///
+/// Covers both the identified ids (from `fretwire_protocol::settings`) and the ones that merely
+/// answer — those come back with `kind: "raw"` and `writable: false`, because a value nobody has
+/// explained is worth showing and is not worth writing. See `settings::is_writable`.
+#[derive(Serialize, Clone, Debug)]
+pub struct SettingDto {
+    pub id: i64,
+    /// The pedal's name for it, or `"Setting <id>"` where we have none.
+    pub name: String,
+    pub group: String,
+    /// `"flag"`, `"choice"`, `"number"` or `"raw"` — how the panel should render it.
+    pub kind: String,
+    /// The current value: a JSON bool, integer or float, mirroring what the device holds.
+    pub value: serde_json::Value,
+    /// For `"flag"`: the menu labels for `true` and `false`, in that order.
+    pub labels: Option<[String; 2]>,
+    /// For `"choice"`: the observed values and their names. May be empty for a setting whose values
+    /// have been seen but never explained.
+    pub options: Vec<(i64, String)>,
+    /// For `"number"`: the unit, possibly empty.
+    pub unit: String,
+    /// For `"number"`: the sentinel meaning "off", where the device uses one.
+    pub off: Option<f64>,
+    pub writable: bool,
+}
+
+impl SettingDto {
+    /// Project one id and the value the device just gave for it.
+    pub fn new(id: i64, value: &fretwire_core::fretwire_data::rmpv::Value) -> Self {
+        use fretwire_core::fretwire_protocol::settings::{Kind, by_id};
+        let json = rmpv_to_json(value);
+        match by_id(id) {
+            None => Self {
+                id,
+                name: format!("Setting {id}"),
+                group: "Unidentified".into(),
+                kind: "raw".into(),
+                value: json,
+                labels: None,
+                options: Vec::new(),
+                unit: String::new(),
+                off: None,
+                writable: false,
+            },
+            Some(s) => {
+                let (kind, labels, options, unit, off) = match s.kind {
+                    Kind::Flag { on, off } => (
+                        "flag",
+                        Some([on.to_string(), off.to_string()]),
+                        Vec::new(),
+                        String::new(),
+                        None,
+                    ),
+                    Kind::Choice(vs) => (
+                        "choice",
+                        None,
+                        vs.iter().map(|(v, n)| (*v, n.to_string())).collect(),
+                        String::new(),
+                        None,
+                    ),
+                    Kind::Number { unit, off } => {
+                        ("number", None, Vec::new(), unit.to_string(), off)
+                    }
+                };
+                Self {
+                    id,
+                    name: s.name.to_string(),
+                    group: s.group.to_string(),
+                    kind: kind.into(),
+                    value: json,
+                    labels,
+                    options,
+                    unit,
+                    off,
+                    writable: true,
+                }
+            }
+        }
+    }
+}
+
+/// The device's MessagePack value as JSON, preserving which of the three types it is — the panel
+/// renders a bool as a switch and an int as a picker, and `set_setting_num` refuses a write whose
+/// type doesn't match what the device already holds.
+fn rmpv_to_json(v: &fretwire_core::fretwire_data::rmpv::Value) -> serde_json::Value {
+    use fretwire_core::fretwire_data::rmpv::Value;
+    match v {
+        Value::Boolean(b) => serde_json::Value::Bool(*b),
+        Value::Integer(i) => i
+            .as_i64()
+            .map(serde_json::Value::from)
+            .unwrap_or(serde_json::Value::Null),
+        Value::F32(f) => serde_json::Number::from_f64(f64::from(*f))
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        Value::F64(f) => serde_json::Number::from_f64(*f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        Value::String(s) => serde_json::Value::String(s.to_string()),
+        other => serde_json::Value::String(other.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod setting_tests {
+    use super::SettingDto;
+    use fretwire_core::fretwire_data::rmpv::Value;
+
+    /// Same contract as the IR DTO's: the panel reads these by name, so a rename here would compile
+    /// and then render `undefined`. Mirrored in `ui/tests/ir-mock.mjs`.
+    #[test]
+    fn the_json_keys_are_the_ones_the_panel_reads() {
+        let dto = SettingDto::new(27, &Value::Boolean(true));
+        let json = serde_json::to_value(&dto).unwrap();
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|s| s.as_str())
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "group", "id", "kind", "labels", "name", "off", "options", "unit", "value",
+                "writable"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_identified_flag_carries_its_menu_labels() {
+        let dto = SettingDto::new(27, &Value::Boolean(true));
+        assert_eq!(dto.kind, "flag");
+        assert_eq!(dto.name, "Preset numbering");
+        assert_eq!(
+            dto.labels,
+            Some(["000-127".to_string(), "01A-32D".to_string()])
+        );
+        assert_eq!(dto.value, serde_json::Value::Bool(true));
+        assert!(dto.writable);
+    }
+
+    /// The point of the raw tier: an id that answers is shown, and is not writable.
+    #[test]
+    fn an_unidentified_id_is_shown_but_not_writable() {
+        let dto = SettingDto::new(128, &Value::from(3));
+        assert_eq!(dto.kind, "raw");
+        assert_eq!(dto.name, "Setting 128");
+        assert_eq!(dto.group, "Unidentified");
+        assert!(!dto.writable);
+    }
+
+    /// Type is preserved rather than flattened to a number — a bool must not arrive as `1`, or the
+    /// panel renders a picker where the pedal has a switch and the write is refused with -3.
+    #[test]
+    fn the_three_value_types_survive_the_projection() {
+        assert!(
+            SettingDto::new(11, &Value::Boolean(false))
+                .value
+                .is_boolean()
+        );
+        assert!(SettingDto::new(14, &Value::from(2)).value.is_i64());
+        assert!(SettingDto::new(16, &Value::F32(120.0)).value.is_f64());
+    }
+}

@@ -559,13 +559,34 @@ real session.
       coming back `0x06FF00` (green) and an amp `0xFF0003` (red). The same key in the type-41 status
       push is the ring's *current* colour, bright when engaged and ~1/16 brightness when bypassed,
       which refutes the "state bitmask" reading that section carried.
-- [ ] **Set the footswitch colour and label.** Reading is done (above); writing is ops **58-62**,
-      documented by `tonepush` and untried here. Top-level `66` stays `nil` while the assignment's
-      own colour is set, so it is presumably the per-switch **override** — that is the field a
-      "custom colour" feature writes. Two things to settle first: which of 58-62 is which (they can
-      be probed one at a time against an op-33 read-back, the way the IR ops were), and whether
-      `65`/`68`/`26`/`120` matter. An HX Stomp cannot set a custom **label** from its own panel, so
-      that half can only ever be confirmed by writing it.
+- [ ] **Custom footswitch colours and labels.** The feature: pick a ring colour and a name per
+      footswitch in the GUI, the way HX Edit does, instead of inheriting the block's category colour
+      and name. Wanted — it is one of the few things HX Edit still does that we cannot.
+
+      **Reading is done** (above): op 33 returns the record, `109` is the label, `67` the assignments
+      array, and `67[].66` the colour as `0xRRGGBB`. Top-level `66` stays `nil` while the
+      assignment's own colour is set, so it is very likely the per-switch **override** — the field
+      this feature writes. That read-back is what makes the write tractable: we can tell whether an
+      attempt landed without re-reading the preset.
+
+      **Writing is ops 58-62, and probing them is expensive.** They are documented by `tonepush` and
+      untried here. `probe-edit --op 58 --set 102=1 --set 66=255` **wedged an HX Stomp** and cost a
+      power cycle (2026-08-22; `docs/safety.md`). All five ops accept a bare `{102: switch}` and do
+      nothing with it, so acceptance says nothing about whether the body was understood. At current
+      knowledge that is roughly one power cycle per guess.
+
+      **Do not resume by guessing bodies.** Get `tonepush`'s op documentation first, or capture HX
+      Edit setting a colour on Windows — either turns this from a search into a confirmation. Then:
+      one op, one body, look at the device, and nothing unsaved on the pedal.
+
+      Open sub-questions: which of 58-62 is which; whether `65`/`68`/`26`/`120` matter; and whether
+      the colour is written on the switch record or on the assignment inside it, since both carry a
+      key 66. An HX Stomp cannot set a custom **label** from its own panel, so that half can only be
+      confirmed by writing it — there is no read-only route to it.
+
+      Once it lands, the GUI already has the pieces: the footswitch binding UI exists, and
+      `Catalog::category_color` gives the inherited colour to show as the default a custom one
+      departs from.
 - [ ] **`assign-bypass` leaves the switch label unset where the pedal sets it.** A switch bound from
       the hardware carries `109: "<block name>\0"`; one bound by our op 56 carries `109: nil`, with
       the name only inside the assignment. Whether the pedal fills it in on its own schedule or op

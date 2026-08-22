@@ -735,6 +735,9 @@ function irCheckSlot(slot) {
 }
 
 const HANDLERS = {
+  // The mock pedal is set to the banked form, like the hardware ships. Returning a value here (not
+  // null) is what exercises the adopt path; `null` would exercise only the fallback.
+  device_numbering: () => "banked",
   ir_list: () => irDirectory(),
   ir_scan: () =>
     Array.from({ length: IR_SLOTS }, (_, i) => irDto(i, false)),

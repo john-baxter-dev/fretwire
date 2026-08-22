@@ -68,5 +68,15 @@ const long = "x".repeat(60);
 after = await mock.invoke("ir_upload", { slot: 9, path: "/x/a.wav", name: long, overwrite: false, force: false });
 ok(after.find((s) => s.index === 9).name.length === 31, "a long name is cut to 31");
 
+// --- preset numbering ---
+// The store in lib/numbering.svelte.js matches these two literals exactly and ignores anything
+// else, so a mismatch here would silently leave the toggle on its default instead of failing.
+// The Rust side pins the same pair in commands.rs::numbering_tests.
+const numbering = await mock.invoke("device_numbering");
+ok(
+  ["flat", "banked"].includes(numbering),
+  `device_numbering returns a word the UI knows, got ${JSON.stringify(numbering)}`,
+);
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

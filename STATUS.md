@@ -2876,3 +2876,53 @@ so README.md and `tests/devices.rs` conflicted. Both resolved toward master's ne
 keeps its `P36` and its `01A`-`32D` banking, and the whole-`DEVICES` label invariant master added
 subsumes the loop the PR was extending — the LT is now checked by name *and* by that invariant.
 268 tests pass (one new), fmt and clippy clean.
+
+## Thirty-eighth round (2026-08-22): **nineteen settings ids, in eleven minutes, with no capture**
+
+The globals namespace stopped being a mystery the moment someone stood at the pedal. A full sweep of
+ids 0..=600 takes **1.4 seconds** — ~0.8 ms a read — so the dump-change-dump loop is bounded by how
+fast a human can work the menus, not by USB. Nineteen ids named in eleven minutes.
+
+**Nothing answers above 226**, so 166 answering ids is the whole space rather than an artefact of the
+`--max 260` we happened to pick.
+
+| id | setting | | id | setting |
+|---|---|---|---|---|
+| 9 | MIDI base channel (zero-based) | | 127 | guitar In-Z |
+| 11 | MIDI over USB | | 156 | volume knob assignment |
+| 14 | tempo scope (snapshot/preset/global) | | 190 | global EQ low frequency |
+| 16 | tempo BPM | | 191 | global EQ low Q |
+| 27 | **preset numbering form** | | 192 | global EQ low gain |
+| 28 | current preset index | | 193 | global EQ mid frequency |
+| 31 | input level (line/instrument) | | 196 | global EQ high frequency |
+| 73 | snapshot edits (recall/discard) | | 199 | global EQ low cut (`19.9` off) |
+| 81 | bypass type (DSP/analog) | | 200 | global EQ high cut (`20100` off) |
+| 94 | output level (line/instrument) | | | |
+
+### Id 27 retires a workaround
+The preset-numbering form — `000`-`127` or `01A`-`32D` — was the one setting we had gone out of our
+way to work around, because the twenty-eighth round proved it never reaches the wire in any stream
+we read. It doesn't; it just isn't in a stream, it's a setting, and `read_setting(27)` answers it.
+
+The GUI now **takes the pedal's own form as the default** and keeps the manual toggle as an
+override. The distinction that makes this work is storing *nothing* until someone actually picks:
+the old store defaulted to `banked` and persisted it, which would have permanently overruled a pedal
+set to flat with a default nobody chose. `numbering.explicit` is the flag, and the device is
+re-consulted on every connect rather than cached.
+
+Three literals cross-pinned, the same way the IR DTO keys are: `commands.rs::numbering_word`, the
+store's comparisons, and the mock's `device_numbering`.
+
+### Withdrawn: `201`-`203` are not the global EQ
+An earlier gloss in `docs/protocol.md` and in the CLI called them that. The EQ turned out to be
+190-200 in threes — frequency, Q, gain per band — so the gloss was a guess made before anything was
+measured, and it is withdrawn rather than kept as a maybe. `194`/`195` and `197`/`198` are very
+probably the mid and high bands' Q and gain [hypothesis]; two knob turns settle it.
+
+### What the sweep can't tell us
+`127` and `156` were logged with labels ambiguous enough that value-to-menu-entry can't be recovered
+from the log, so only the observed integers are recorded. The rule the loop depends on is one change
+per cycle, and the noise to watch for is id 28 (preset index) and id 16 (tempo).
+
+**Not in this namespace at all: the input noise gate.** It is per-preset — `noiseGate`/`threshold`/
+`decay` on the fixed input node at slot 0 — and has been supported since the Floor work.

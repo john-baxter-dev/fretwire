@@ -10,7 +10,7 @@
   import Dialog from "./lib/Dialog.svelte";
   import Toast from "./lib/Toast.svelte";
   import FirstRun from "./lib/FirstRun.svelte";
-  import { slotLabel } from "./lib/numbering.svelte.js";
+  import { slotLabel, adoptDeviceNumbering } from "./lib/numbering.svelte.js";
 
 
   // First-run gating: until we've checked whether the Line 6 reference data is imported, show
@@ -675,6 +675,14 @@
         crossSetlistWrite = await invoke("cross_setlist_write_allowed");
       } catch (e) {
         crossSetlistWrite = true; // the mock has no such command; it can't touch hardware anyway
+      }
+      // Take the pedal's own preset-numbering form as the default, before the first listing
+      // renders, so the slot column doesn't visibly re-label itself. A user who has picked a form
+      // keeps it, and a device that doesn't answer setting 27 leaves the preference alone.
+      try {
+        adoptDeviceNumbering(await invoke("device_numbering"));
+      } catch (e) {
+        /* non-fatal — the manual toggle is still there */
       }
       viewBank = preset.bank ?? 0;
       await refreshPresets(viewBank);

@@ -1220,6 +1220,44 @@ pub async fn models_in_category(
     .map(|v| v.iter().map(ModelChoiceDto::from).collect())
 }
 
+/// Which preset-numbering form the pedal's own screen is set to — `"flat"` (`000`-`127`) or
+/// `"banked"` (`01A`-`32D`). **Reads only.**
+///
+/// Setting id 27, measured on a physical HX Stomp (see `docs/protocol.md`). `None` when the device
+/// doesn't answer that id, which is the honest answer for any device we haven't checked: the UI
+/// keeps its own preference rather than adopting a guess.
+#[tauri::command]
+pub async fn device_numbering(state: State<'_, AppState>) -> R<Option<String>> {
+    run(&state, |s| {
+        Ok(s.read_setting(SETTING_PRESET_NUMBERING)?
+            .and_then(|v| v.as_bool())
+            .map(|flat| numbering_word(flat).to_string()))
+    })
+    .await
+}
+
+/// Setting id for the preset-numbering form. See `docs/protocol.md`.
+const SETTING_PRESET_NUMBERING: i64 = 27;
+
+/// The two words [`device_numbering`] can return. The UI matches on these exactly and ignores
+/// anything else, so a typo here would silently do nothing rather than fail — hence the test.
+fn numbering_word(flat: bool) -> &'static str {
+    if flat { "flat" } else { "banked" }
+}
+
+#[cfg(test)]
+mod numbering_tests {
+    use super::numbering_word;
+
+    /// Pinned against `ui/src/lib/numbering.svelte.js`, which compares against these two literals,
+    /// and against the mock backend's `device_numbering` (checked in `ui/tests/ir-mock.mjs`).
+    #[test]
+    fn the_words_the_ui_matches_on() {
+        assert_eq!(numbering_word(true), "flat");
+        assert_eq!(numbering_word(false), "banked");
+    }
+}
+
 // ---- user IR slots ----
 //
 // These do not touch the preset, so unlike every other mutating command here they return an IR

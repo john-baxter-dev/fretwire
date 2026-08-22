@@ -155,14 +155,50 @@ Settings are a **flat numbered namespace**, not a structured document. `op 24 {1
 the reply carries the value at key `119` — and `op 25 {118: id, 119: value}` writes it. Both ride
 the ordinary edit envelope and are not block-addressed.
 
-**166 of ids 0..=260 answer on an HX Stomp.** Named so far:
+**166 of ids 0..=600 answer on an HX Stomp** — nothing above 226 answers, so that is the ceiling
+rather than an artefact of where we stopped looking.
 
-| id | setting | type |
-|---|---|---|
-| 16 | tempo, BPM | `f32` |
-| 28 | current preset index | `int` |
-| 192 | global EQ low-peak gain | — |
-| 201-203 | global EQ | — |
+Named so far, all read off a physical HX Stomp by changing one setting on the pedal's own menus and
+diffing two dumps [solid — 2026-08-22]:
+
+| id | setting | type | values |
+|---|---|---|---|
+| 9 | MIDI base channel | `int` | zero-based: `3` is channel 4 |
+| 11 | MIDI over USB | `bool` | |
+| 14 | tempo scope | `int` | `0` snapshot, `1` preset, `2` global |
+| 16 | tempo, BPM | `f32` | |
+| 27 | **preset numbering form** | `bool` | `true` flat `000`-`127`, `false` banked `01A`-`32D` |
+| 28 | current preset index | `int` | |
+| 31 | input level | `bool` | `true` line, `false` instrument |
+| 73 | snapshot edits | `int` | `0` recall, `1` discard |
+| 81 | bypass type | `bool` | `true` DSP, `false` analog |
+| 94 | output level | `bool` | `true` line, `false` instrument |
+| 127 | guitar In-Z | `int` | `0` and `1` observed — see below |
+| 156 | volume knob assignment | `int` | `1` and `2` observed; `2` is main + headphones |
+| 190 | global EQ low frequency | `f32` Hz | |
+| 191 | global EQ low Q | `f32` | |
+| 192 | global EQ low gain | `f32` dB | |
+| 193 | global EQ mid frequency | `f32` Hz | |
+| 196 | global EQ high frequency | `f32` Hz | |
+| 199 | global EQ low cut | `f32` Hz | `19.9` is off |
+| 200 | global EQ high cut | `f32` Hz | `20100` is off |
+
+**The EQ block runs 190-200 in threes** — frequency, Q, gain per band — so `194`/`195` are almost
+certainly the mid band's Q and gain and `197`/`198` the high band's. [hypothesis — the three
+observed frequencies are 190/193/196 and the two observed Q/gain pairs sit at 191/192; two more
+knob turns would settle it]
+
+**`201`-`203` are not identified.** An earlier note in this file glossed them as "global EQ", which
+was a guess made before any of the above was measured; the EQ bands turned out to be 190-200, so the
+gloss is withdrawn rather than kept as a maybe.
+
+**`127` and `156` carry values, not meanings, yet.** Both were logged with labels ambiguous enough
+that the mapping from value to menu entry can't be read back off the log, so only the observed
+integers are recorded. One more pass each, naming the exact menu entry before and after.
+
+**Not in this namespace: the input noise gate.** It is per-preset — `noiseGate`/`threshold`/`decay`
+on the fixed input node at slot 0 of each DSP, set with the ordinary set-value op. See
+`PresetStream::io_node`.
 
 **Op 24 was already in this codebase under the wrong name.** The connect capture sends `{118: 128}`
 and we had it written up as `OP_READ_PREP`, a "read-sequence prepare step", because we only ever
@@ -176,9 +212,14 @@ an `f32`, so an integer `132` is rejected outright while `132.0` is taken — wh
 `Session::set_setting_num` reads the current value before writing and sends back its type.
 
 ### Mapping the id space needs no capture
-Dump the space, change one thing on the pedal's own menus, dump again, diff. Confirmed end to end:
-moving the tempo 80 → 132 made the diff report exactly `16: 80 -> 132` out of 166 ids.
-`fretwire settings-dump` / `settings-diff`.
+Dump the space, change one thing on the pedal's own menus, dump again, diff. `fretwire
+settings-dump` / `settings-diff`. A full 601-id sweep takes **1.4 s** — ~0.8 ms a read — so the loop
+is bounded by how fast someone can work the pedal's menus, not by USB.
+
+That is how the whole table above was built: **19 ids in eleven minutes, with no capture and no
+disassembly.** The method's one rule is one change per cycle, since a diff naming two ids can't say
+which did what — and in practice the noise is id 28 (the current preset index) and id 16 (tempo, if
+anything tap-driven is running).
 
 ## Body / inner command [solid]
 On a data frame the body (offset 16+) is:

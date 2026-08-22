@@ -60,6 +60,11 @@ pub struct Session {
     /// confirmation. Consumed by the next [`Self::read_preset`], which re-reads until the identity
     /// catches up to it. See `read_preset_inner`'s staleness check for why asking twice isn't enough.
     expect_identity: Option<(i64, i64)>,
+    /// Set while deliberately probing an id space, where a refusal is the *answer* rather than a
+    /// fault. It only lowers the rejection log from `warn` to `debug` — the caller still gets the
+    /// same `Err`. Without it a settings sweep emits 95 warnings on an HX Stomp for working exactly
+    /// as intended, which trains the reader to ignore the line that matters.
+    probing: bool,
 }
 
 /// One state on the edit-history timeline: the op-21-writable preset blob plus the label of the
@@ -250,6 +255,7 @@ impl Session {
                 arg: HashMap::new(),
                 txn: 0,
                 closed: false,
+                probing: false,
                 device_lost: false,
                 last_raw: None,
                 history: Vec::new(),
@@ -629,13 +635,23 @@ impl Session {
                 || "command".to_string(),
                 |o| format!("{} (op {o})", op_name(o)),
             );
-            tracing::warn!(
-                op = ?sent_op,
-                txn,
-                code,
-                target = %edit_target_str(&edit_body),
-                "the pedal rejected the edit"
-            );
+            if self.probing {
+                tracing::debug!(
+                    op = ?sent_op,
+                    txn,
+                    code,
+                    target = %edit_target_str(&edit_body),
+                    "probe refused — expected while mapping an id space"
+                );
+            } else {
+                tracing::warn!(
+                    op = ?sent_op,
+                    txn,
+                    code,
+                    target = %edit_target_str(&edit_body),
+                    "the pedal rejected the edit"
+                );
+            }
             return Err(crate::Error::Rejected(format!(
                 "{what} — device code {code}{}",
                 reject_hint(sent_op, code)
@@ -2151,6 +2167,9 @@ impl Session {
         &mut self,
         ids: impl IntoIterator<Item = i64>,
     ) -> Vec<(i64, fretwire_data::rmpv::Value)> {
+        // A refused id is the map's negative space, not a failure — say so, so the sweep doesn't
+        // bury a genuine warning under ~95 expected ones.
+        let was_probing = std::mem::replace(&mut self.probing, true);
         let mut out = Vec::new();
         for id in ids {
             match self.read_setting(id) {
@@ -2161,6 +2180,7 @@ impl Session {
                 Err(e) => tracing::debug!(id, error = %e, "setting id refused"),
             }
         }
+        self.probing = was_probing;
         out
     }
 

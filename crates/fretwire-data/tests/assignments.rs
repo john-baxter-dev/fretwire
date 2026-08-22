@@ -142,3 +142,66 @@ fn a_footswitch_bypass_is_not_in_the_assignment_table() {
     assert_eq!(fs1.slot, Some(16), "the Simple Delay");
     assert_eq!(fs1.node_kind, Some(1), "a DSP block, not a controller node");
 }
+
+/// Captured live 2026-08-22, and the first fixture whose assignments were made **by us** rather than
+/// from the front panel: op 56 put the Simple Delay's bypass on FS2, op 37 put the amp's `Drive`
+/// (parameter 0) under FS1. See `docs/protocol.md`, "Controller assignments — writing them".
+///
+/// It holds one of each mechanism at once, which is what makes it worth keeping: the two are stored
+/// in different places and a decoder that confuses them looks right on a preset that only has one.
+#[test]
+fn a_bypass_and_a_parameter_can_share_one_preset() {
+    let s = capture("assign_bypass_and_param.msgpack.bin");
+
+    // Only the parameter reaches the controller table, at its source's ordinal (FS1 = 3).
+    let a = s.assignments();
+    assert_eq!(a.len(), 1, "the bypass is not an entry in key 4");
+    assert_eq!(a[0].controller, 3, "FS1");
+    assert_eq!(a[0].target_slot, Some(5), "the amp");
+    assert_eq!(a[0].param_index, Some(0), "Drive");
+
+    // Both reach the footswitch layout, told apart by node kind: 1 is a block's bypass, 2 is a
+    // parameter controller. Position 0 is FS1, position 1 is FS2.
+    let layout = s.footswitch_layout();
+    let fs1 = layout[0].as_ref().expect("FS1 is bound");
+    let fs2 = layout[1].as_ref().expect("FS2 is bound");
+    assert_eq!(fs1.node_kind, Some(2), "a parameter controller");
+    assert_eq!(
+        fs1.model_name, "Drive",
+        "key 5 names the parameter, not a model"
+    );
+    assert_eq!(fs2.node_kind, Some(1), "a DSP block's bypass");
+    assert_eq!(fs2.model_name, "Simple Delay");
+    assert_eq!(fs2.slot, Some(16));
+}
+
+/// The same fixture carries a **stale** user label: `14` still holds `"Tremolo"` from an earlier
+/// state of the preset while `13`, the has-label flag, is `false`. The device agrees there is no
+/// label — op 33 answers `109: nil` for that switch — so key 13 decides, not the presence of a
+/// string. Reading 14 alone showed a Simple Delay bound to FS2 as `"Tremolo"`.
+#[test]
+fn a_cleared_label_does_not_come_back() {
+    let layout = capture("assign_bypass_and_param.msgpack.bin").footswitch_layout();
+    assert_eq!(layout[1].as_ref().expect("FS2 is bound").user_label, None);
+}
+
+/// A block that only has a *knob* on a footswitch is not itself on that footswitch, and must not be
+/// badged as though its bypass were. `loaded_blocks` drops kind-2 layout nodes before enriching, so
+/// the amp at slot 5 — whose `Drive` is on FS1 — reports no footswitch of its own.
+#[test]
+fn a_parameter_controller_does_not_bind_its_block() {
+    let blocks = capture("assign_bypass_and_param.msgpack.bin").loaded_blocks();
+    let amp = blocks
+        .iter()
+        .find(|b| b.slot == 5)
+        .expect("the amp is loaded");
+    assert_eq!(
+        amp.footswitch, 0,
+        "only its Drive is on FS1, not its bypass"
+    );
+    let delay = blocks
+        .iter()
+        .find(|b| b.slot == 16)
+        .expect("the delay is loaded");
+    assert_eq!(delay.footswitch, 2, "its bypass really is on FS2");
+}

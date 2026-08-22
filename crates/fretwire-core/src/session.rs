@@ -2048,6 +2048,107 @@ impl Session {
         Ok(())
     }
 
+    /// Ask the device what footswitch `switch` carries — its assignments, label, LED colour and
+    /// latching type (op 33). **`switch` is one-based**: 1 is Footswitch 1.
+    ///
+    /// Pure read; returns the decoded reply as-is, because the reply's own key space is only
+    /// partly mapped: `{102: switch0, 65: momentary, 109: label, 66: colour, 67: assignments}`.
+    /// [solid — verified live on an HX Stomp 2026-08-22]
+    pub fn read_switch(
+        &mut self,
+        switch: i64,
+    ) -> crate::Result<Option<fretwire_data::rmpv::Value>> {
+        let txn = self.bump_txn();
+        let ack = self.send_edit(edit::read_switch(switch, txn))?;
+        Ok(fretwire_data::stream::locate_root(&ack.body, 32).map(|r| r.value))
+    }
+
+    /// Ask the device what drives parameter `param_index` of the block in `slot` (op 36).
+    ///
+    /// The document already answers this for every assignment at once
+    /// (`PresetStream::assignments`), so this exists to cross-check that decode against the
+    /// device's own answer — and because op 36 is the read half of the op-37 write we want next.
+    /// Pure read. [solid — verified live on an HX Stomp 2026-08-22]
+    pub fn read_assignment(
+        &mut self,
+        slot: i64,
+        paired: bool,
+        param_index: i64,
+    ) -> crate::Result<Option<fretwire_data::rmpv::Value>> {
+        let txn = self.bump_txn();
+        let ack = self.send_edit(edit::read_assignment(slot, paired, param_index, txn))?;
+        Ok(fretwire_data::stream::locate_root(&ack.body, 32).map(|r| r.value))
+    }
+
+    /// Make footswitch `switch` toggle the bypass of the block in `slot` (op 56).
+    ///
+    /// **`switch` is zero-based** — `0` is Footswitch 1 — matching the wire. [`Self::read_switch`]
+    /// is one-based; the asymmetry is the device's, not ours.
+    ///
+    /// Edit-buffer only, like every other block edit: it survives a save and nothing else.
+    /// [solid — verified live on an HX Stomp 2026-08-22]
+    pub fn assign_bypass_to_switch(&mut self, slot: i64, switch: i64) -> crate::Result<()> {
+        let txn = self.bump_txn();
+        self.send_edit(edit::assign_bypass_to_switch(slot, switch, txn))?;
+        Ok(())
+    }
+
+    /// Take the block in `slot` off footswitch `switch` (op 57) — the reverse of
+    /// [`Self::assign_bypass_to_switch`], same zero-based numbering.
+    /// [solid — verified live on an HX Stomp 2026-08-22]
+    pub fn unassign_bypass_from_switch(&mut self, slot: i64, switch: i64) -> crate::Result<()> {
+        let txn = self.bump_txn();
+        self.send_edit(edit::unassign_bypass_from_switch(slot, switch, txn))?;
+        Ok(())
+    }
+
+    /// Put parameter `param_index` of the block in `slot` under controller `source` (op 37).
+    ///
+    /// `source` is the ordinal the preset's controller table is indexed by — 0 none, 1-2 the
+    /// expression pedals, 3..=7 the footswitches ([`fretwire_protocol::edit::SOURCE_FS1`] is FS1),
+    /// 8 MIDI, 9 snapshots. Passing 0 removes the assignment.
+    ///
+    /// Read it back with `PresetStream::assignments`, which decodes the same table.
+    /// [solid — verified live on an HX Stomp 2026-08-22]
+    pub fn assign_param(
+        &mut self,
+        slot: i64,
+        paired: bool,
+        param_index: i64,
+        source: i64,
+    ) -> crate::Result<()> {
+        let txn = self.bump_txn();
+        self.send_edit(edit::assign_param(slot, paired, param_index, source, txn))?;
+        Ok(())
+    }
+
+    /// Move one end of an existing assignment's travel (ops 65/66): `max = false` sets Min,
+    /// `true` sets Max.
+    ///
+    /// The value is in the parameter's own units — semitones for a pitch block, 0..1 for a wah —
+    /// so it goes through the same range clamp as an ordinary parameter write.
+    /// [solid — verified live on an HX Stomp 2026-08-22]
+    pub fn set_assign_travel(
+        &mut self,
+        slot: i64,
+        paired: bool,
+        param_index: i64,
+        max: bool,
+        value: f32,
+    ) -> crate::Result<()> {
+        let value = self.clamp_param(slot, paired, param_index, f64::from(value)) as f32;
+        let txn = self.bump_txn();
+        self.send_edit(edit::set_assign_travel(
+            slot,
+            paired,
+            param_index,
+            max,
+            value,
+            txn,
+        ))?;
+        Ok(())
+    }
+
     /// Clamp `value` into the range the reference data declares for this param, when it declares
     /// one. Params we have no metadata for pass through unchanged — there is nothing to clamp to.
     ///

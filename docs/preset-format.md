@@ -205,9 +205,16 @@ their sub-maps (`15`/`17`), so type 7 reads more like a structural node than an 
 of a `Map{7}` node:
 - `11` = `{0: <node type>, 5: "<name>", 6: <model id>, 8: <slot>, …}`. **`11 → 0` = node type:
   `1` = DSP block, `2` = controller/footswitch node.** For a type-1 block, `5` = model display
-  name (matches `.models` `name`); for a type-2 node, `5` is the footswitch **label** (e.g.
-  `"OD Sw"`), `6` is *not* a model id (won't resolve), and `11 → 9` = `{28,29,41}` (the same
-  param-descriptor shape used in the assignment table — see below). [solid — verified live]
+  name (matches `.models` `name`); for a type-2 node, `5` is the **parameter's** name, `6` is *not*
+  a model id (won't resolve), and `11 → 9` = `{28,29,41}` (the same param-descriptor shape used in
+  the assignment table — see below). [solid — verified live]
+  > Refined 2026-08-22 by *making* one: op 37 (`docs/protocol.md`) assigned `Mix` on slot 16 to FS1,
+  > and the layout gained `{10: 0, 11: {0: 2, 5: "Mix\0", 7: false, 8: 16, 9: {…}}}`. So a type-2
+  > entry is a **parameter controller**, and key 5 names the parameter — the earlier `"OD Sw"`
+  > reading was a switch *parameter*, not a free-text label. A parameter assignment therefore appears
+  > **here as well as** in key 4; a bypass appears only here, as type 1. `loaded_blocks` drops type-2
+  > entries before enriching a block's `footswitch`, so a block with only a knob on FS1 is not badged
+  > as being on FS1.
 - `14` = user label string; `13` = has-label flag (e.g. a `Harmonic Tremolo` renamed `Tremolo`).
 
 ### Controllers / footswitch assignments (`4`), snapshots (`10`/`2`) [solid — corrected 2026-08-21]
@@ -230,6 +237,12 @@ of a `Map{7}` node:
   **EXP1 = 1**, which fits the same run; [unverified] here for want of an expression pedal.
 - **Only parameter controllers live in key `4`.** Assigning a block's **bypass** to a footswitch
   does not touch this table — that is recorded in `3 → 8` as a type-1 node, which we already read.
+  [solid — reconfirmed by construction 2026-08-22: op 56 changed `3 → 8[0]` and nothing else.]
+- **Snapshots remember each controller's value** at `10 → 10[N] → 2[<entry>][2]`, one per snapshot:
+  `false` while nothing is assigned, the parameter's value once something is. Removing the
+  assignment leaves the number behind. Worth knowing for two reasons — it is most of the diff noise
+  when you assign something, and the same field correlates with the op-4 nil-slot puzzle
+  (`docs/protocol.md`).
   [solid — assigning a Simple Delay's bypass to FS1 leaves key `4` entirely `nil`;
   `captures/assign_bypass_on_fs1.msgpack.bin`.] `tonepush` shows a bypass *inside* key 4, but its
   example is a wah auto-engaging off an expression pedal — a different feature, and probably the only

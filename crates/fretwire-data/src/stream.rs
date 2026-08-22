@@ -908,7 +908,15 @@ impl PresetStream {
                 // switch mapped to a button — its name like "OD Sw" is the footswitch label, not a
                 // model). Verified by comparing a serial preset (all type 1) to a dual-amp preset.
                 let node_kind = map_get(model, 0).and_then(Value::as_i64);
+                // Key 13 is the has-label flag, and it has to be honoured: key 14 keeps whatever
+                // string was there last, so a switch whose label was cleared still carries it.
+                // Reading 14 alone showed a Simple Delay bound to FS2 as `"Tremolo"` — the name a
+                // different block had held on that switch earlier in the preset's life. The device
+                // agrees there is none: op 33 answers `109: nil` for that switch.
+                // [solid — verified live 2026-08-22]
+                let labelled = map_get(node, 13).and_then(Value::as_bool).unwrap_or(false);
                 let user_label = map_get(node, 14)
+                    .filter(|_| labelled)
                     .and_then(value_bytes)
                     .map(|b| {
                         String::from_utf8_lossy(b)

@@ -275,19 +275,21 @@ start capture → do the single thing → stop:
       decoded → op 28 `{98:slot}` = remove cab (not yet exposed in the GUI).
 - [ ] Knob widget option, keyboard nav (beyond Space/Ctrl+Z), polish.
 
+- [x] **A cleared footswitch label no longer comes back** (2026-08-22): key `14` keeps the last
+      string written and key `13` is the has-label flag; we read 14 alone, so a Simple Delay bound to
+      FS2 displayed as `"Tremolo"` — a name a different block had held on that switch. Found by
+      smoke-testing the new `assign-bypass`.
 - [x] **Show footswitch bindings** — DONE (2026-08-21): every block already carried `footswitch`
       (preset key `3 → 8`, layout position + 1, `0` = unbound) all the way to the DTO, and the GUI
       dropped it on the floor. Chain cells and the param panel now show an `FS<n>` badge. Read-only.
-- [ ] **Assign a block's bypass to a footswitch** (the common "put this on FS2"). Reading is
-      **[solid]** — proven twice by controlled diff (swapping FS1↔FS2 moved only `/3/8[0]` and
-      `/3/8[1]`; binding an unbound block flipped `/3/8[0]` and nothing else). **Writing is
-      undecoded**: no assign op exists in our table (6, 20-25, 28, 30, 39-43, 71, 76, 78, 88, 89) and
-      no capture shows one being made. Suggestive: deleting a block that *was* on a footswitch sends
-      only `op 28 {98: 2}` with nothing footswitch-shaped alongside, so the device maintains that
-      layout itself (`delete_bucket_brigade_on_fs.pcapng` vs `delete_block_not_on_fs.pcapng`).
-      **Needs the captures below.** Risk worth pricing in before starting: HX Edit may not use a
-      dedicated op at all but rewrite the preset via op 21, which turns this into "construct a type-2
-      node" — and that shape is only partly decoded (`6` is not a model id, `11 → 9` = `{28,29,41}`).
+- [x] **Assign a block's bypass to a footswitch** — DONE (2026-08-22, verified live). It needed no
+      captures in the end and no op-21 rewrite: **op 56 `{98: slot, 102: switch}`** binds it and
+      **op 57** unbinds, both zero-based, both surgical. Sent on a preset with nothing bound, op 56
+      added exactly one entry at `3 → 8[0]` and op 57 restored the document byte-for-byte. The
+      opcodes came from `tonepush`'s macOS capture; the verification is ours.
+      `edit::{assign_bypass_to_switch, unassign_bypass_from_switch}`, `Session` methods of the same
+      name, CLI `assign-bypass` / `unassign-bypass`. **Still to do: expose it in the GUI** — the
+      chain already shows the `FS<n>` badge, so this is a control on the block, not new plumbing.
 - [x] **Parameter controllers — reading** (EXP pedal / a switch driving a param — preset key `4`).
       **Unblocked 2026-08-21.** The diff experiment was run on a Stomp: assign a param to FS1, then a
       second to FS2, and diff the document each time. Key `4` is indexed by **source ordinal**
@@ -296,16 +298,31 @@ start capture → do the single thing → stop:
       assignment reported "param 0, 0 → 0". Fixed in `PresetStream::assignments`, pinned by
       `fretwire-data/tests/assignments.rs`, written up in `docs/preset-format.md`. `pull` now prints
       `FS1 -> slot 16 param 0  [0 -> 8]`.
-- [ ] **Parameter controllers — the rest.** Three follow-ups, none blocking:
+- [x] **Parameter controllers — writing** — DONE (2026-08-22, verified live). **Op 37**
+      `{98: slot, 26: paired, 28: param, 29: true, 74: source, 71: 4, 129: false}` puts a parameter
+      under a controller, and the same op with `74: 0` removes it — there is no separate unassign.
+      **Ops 65/66** move the Min/Max ends, in the parameter's own units. Assigning `Mix` to FS1
+      landed the entry at **`/4[3]`**, confirming the source-ordinal indexing a second time and by a
+      different route. `edit::{assign_param, set_assign_travel}`, CLI `assign-param` /
+      `assign-travel`. **Still to do: expose it in the GUI.**
+- [x] **Reading a footswitch and an assignment from the device** — **op 33** `{102: switch}`
+      (one-based in, zero-based out) answers what a switch carries, its label, LED colour and
+      latching type; **op 36** answers one parameter's assignment, or `104: nil`. Both verified live
+      2026-08-22. Cross-checks rather than new capability — the document already carries both — but
+      op 36's reply is byte-identical to the document's own entry, which makes it a cheap way to
+      confirm a write landed.
+- [ ] **Parameter controllers — what is left.**
       - Confirm **EXP1 = 1** and the ordinals past FS2. Needs an expression pedal; a Stomp's three
         switches leave most of the ID space unsampled, so a **Helix Floor** (8 switches, 2 pedals)
         remains the better instrument for the full map.
-      - Decide **key `1`** positively. Their "4 a parameter, 0 a bypass" is now **refuted** — a
-        footswitch bypass never enters key `4` (it goes to `3 → 8`), and our parameter samples carry
-        both 0 and 4. "Value type" fits all three; confirming it wants a wider sample, and a key-4
-        bypass entry probably requires an expression pedal doing wah auto-engage.
-      - The **write op is `37`** per `tonepush` (`{98: block, 95: target, 96: scope, 74: flags,
-        71: MIDI CC}`) — untested here, and worth verifying by capture before we send one.
+      - Decide **key `1`** positively. "4 a parameter, 0 a bypass" stays **refuted**. `tonepush`
+        reads it as the **MIDI CC number**, a constant 4 under any source with no CC to give, and the
+        op-37 write agrees (assigning to FS1 stored `1: 4`) — but that is corroboration, not proof,
+        and telling it apart from a "value type" reading needs a MIDI-sourced sample, which a Stomp
+        cannot make alone.
+      - **Ops 58-62** (momentary/latching, custom switch label, LED colour) and **op 64** (a
+        parameter's MIDI CC) are documented by `tonepush` and untried here. Not needed for the
+        assignment itself.
 
 - [ ] **Tempo-sync as one control** (issue #5) — HX Edit and the pedal both fold `TempoSync{n}` /
       `SyncSelect{n}` into the time knob: switch sync on and the knob becomes a note-value selector

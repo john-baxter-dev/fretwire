@@ -2556,3 +2556,69 @@ every offset enum in the data rather than pinning the one control, and the mock'
 
 Still separate rows, not the compound Time control — that remains blocked on evidence (ROADMAP
 Phase 6), and it was the *labels* that were wrong here, not the decision to list them.
+
+## Thirty-second round (2026-08-22): **assignments can be written, and the nil slot was twelve slots**
+
+Two things landed, one planned and one a correction.
+
+**Writing controller assignments works** — the last big read-only corner of the editor. Yesterday's
+work made the *reading* correct (round thirty, and the key-29 fix); this closes the loop. Seven
+opcodes, all verified against the pedal in a single sitting, all edit-buffer commands that survive a
+save and nothing else:
+
+| Op | Does |
+|---|---|
+| 56 / 57 | put a block's bypass on a footswitch / take it off |
+| 37 | put a parameter under a controller (source `0` removes it — there is no separate unassign) |
+| 65 / 66 | that assignment's Min / Max, in the parameter's own units |
+| 33 / 36 | read a footswitch's configuration / one parameter's assignment |
+
+The opcode numbers and argument shapes are `tonepush`'s, recovered from a macOS HX Edit capture we
+do not have; every one was then sent to an HX Stomp and checked against the document it changed. The
+ROADMAP had this blocked on a capture round and warned it might turn out to be an op-21 whole-preset
+rewrite — it is not, they are all surgical.
+
+What made it quick is that **the verification instrument already existed**. Reading assignments was
+fixed the day before, so each write could be checked three ways: the document diff, `pull`'s decode,
+and the device's own op-33/36 answer. Two results fell out for free:
+
+- **Op 56 changed `3 → 8[0]` and nothing else** — the controller table at key 4 stayed empty. That
+  reconfirms "a footswitch bypass never enters key 4" by construction, where before it rested on a
+  front-panel diff.
+- **Op 37's entry landed at `/4[3]`** — index 3, the FS1 ordinal our own diff had established, and
+  the ordinal `tonepush` lists. Two independent routes to the same map.
+- A **parameter** assignment turns out to appear in the footswitch layout *as well as* key 4, as a
+  node of kind 2. `loaded_blocks` already filtered kind-2 nodes out of its `footswitch` enrichment
+  (written from a fixture) — so the badge stays correct, now proven rather than assumed.
+
+The one asymmetry to remember: **op 33 counts footswitches from 1 and ops 56-62 count from 0.** The
+CLI exposes the wire numbering rather than hiding it.
+
+Left for next time: exposing all of this in the GUI, and ops 58-62 (switch label, LED colour,
+momentary) which are documented and untried.
+
+**The op-4 nil slot was not one slot.** Round thirty-one's export work wrote it up as "bank 0 slot
+102, one per setlist, why is not understood", from a sample of five neighbours. Enumerating the whole
+setlist found **twelve** of 126, plus a thirteenth that answered nil in one sweep and streamed
+normally in the next. Every one is an empty `New Preset`; no preset with a block in it has ever
+answered nil across three full sweeps, and cold single-slot reads reproduce each one — so it is a
+slot property, not sweep fatigue.
+
+Diffing a nil slot's document against a working same-size neighbour narrowed it to **three bytes**:
+`false` where the working one holds `nil`, at `/10/10[N]/2[0][2]` for each snapshot. That path turned
+out — from the assignment work above — to be a snapshot's remembered value for a controller entry.
+Twelve of twelve match. Whether it is the cause or a co-symptom is still open, and nothing explains
+why the firmware would decline to stream such a document; correctness was never at risk, since the
+fallback reads them. `docs/protocol.md` now says twelve and shows the byte, instead of one and a
+shrug.
+
+Also generalised in passing: `{102, 103: 0, 104: nil}` is not op 4's private shape — **op 36 answers
+an unassigned parameter with exactly the same bytes**. It is the device's general "nothing here".
+
+**And a stale label, caught by the smoke test.** Binding the delay to FS2 made `pull` print it as
+`Simple Delay "Tremolo"` — a name a different block had held on that switch earlier in the preset's
+life. Key `14` keeps whatever string was last written; key `13` is the has-label flag, and we were
+reading 14 without it. The device agrees there is no label (op 33 answers `109: nil`), so 13 decides.
+One line in `footswitch_layout`, pinned by `captures/assign_bypass_and_param.msgpack.bin` — the first
+fixture whose assignments we made ourselves rather than from the front panel, and which carries one
+of each mechanism plus the stale label.

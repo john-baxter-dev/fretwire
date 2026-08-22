@@ -731,6 +731,222 @@ pub fn read_preset_at(txn: u16, bank: i64, slot: i64) -> Vec<u8> {
     ]))
 }
 
+// ---- controller assignments: what drives a parameter, and what a footswitch carries ----
+//
+// Two separate mechanisms, and conflating them is the trap. A **parameter** under a controller
+// lives in the preset document's top-level key `4` (see `PresetStream::assignments`) and is written
+// with op 37. A **block bypass on a footswitch** is not in key `4` at all — it lives in the
+// footswitch layout at `3 -> 8`, which we already decode, and is written with ops 56/57.
+//
+// Provenance: the opcode numbers and argument shapes below come from `tonepush`'s `PROTOCOL.md`,
+// which recovered them from a macOS HX Edit capture we do not have. Everything here is
+// `[hypothesis]` until this file says otherwise — each builder's doc records what the pedal
+// actually did.
+
+/// Op 33: **read a footswitch's configuration**. Answers with what the switch carries, its label,
+/// its LED colour and its latching/momentary type.
+///
+/// **One-based on the way in** (`102: 1` is Footswitch 1), unlike ops 56-62, which count from zero;
+/// the reply reports the zero-based number: asking for 1, 2, 3 answers `102: 0, 1, 2`.
+/// [solid — verified live on an HX Stomp 2026-08-22]
+pub const OP_READ_SWITCH: i64 = 33;
+
+/// Op 36: **read a parameter's controller assignment**. Answers with the source driving that
+/// parameter, and `104: nil` when nothing does.
+///
+/// The reply's key 104 is the *same map* the document stores in its controller table, so this is a
+/// second route to what `PresetStream::assignments` already decodes — useful as a cross-check, and
+/// as the read half of the op-37 write.
+/// [solid — verified live on an HX Stomp 2026-08-22]
+pub const OP_READ_ASSIGN: i64 = 36;
+
+/// Key 102 **inside an assignment target**: the footswitch number.
+///
+/// Note this is [`K_TXN`]'s number one level up. No collision — the transaction is at the body's
+/// root and the switch is inside key 101 — but the two are easy to mix up when reading a raw dump.
+pub const K_SWITCH: i64 = 102;
+
+/// Key 29 in an assignment **request**: `true` when the thing addressed is a parameter.
+///
+/// Beware the mirror: in the *document* key 29 is the parameter index and key 28 is the path
+/// (verified live 2026-08-21, `docs/preset-format.md`). In a request the two swap roles — 28 is the
+/// parameter index and 29 is this flag.
+pub const K_ASSIGN_IS_PARAM: i64 = 29;
+
+/// Build a **read-footswitch** body (op 33): ask what footswitch `switch` carries.
+/// `switch` is **one-based** — 1 is Footswitch 1. (`{102:txn, 100:33, 101:{102:switch}}`.)
+/// Pure read. [solid — verified live on an HX Stomp 2026-08-22]
+pub fn read_switch(switch: i64, txn: u16) -> Vec<u8> {
+    encode(Value::Map(vec![
+        (Value::from(K_TXN), Value::from(txn)),
+        (Value::from(K_OP), Value::from(OP_READ_SWITCH)),
+        (
+            Value::from(K_TARGET),
+            Value::Map(vec![(Value::from(K_SWITCH), Value::from(switch))]),
+        ),
+    ]))
+}
+
+/// Build a **read-assignment** body (op 36): ask what drives parameter `param_index` of the block in
+/// `slot`. `paired` selects the paired cab's namespace, exactly as [`set_value_on`] does.
+/// (`{102:txn, 100:36, 101:{98:slot, 26:paired, 28:param, 29:true}}`.)
+/// Pure read. [solid — verified live on an HX Stomp 2026-08-22]
+pub fn read_assignment(slot: i64, paired: bool, param_index: i64, txn: u16) -> Vec<u8> {
+    encode(Value::Map(vec![
+        (Value::from(K_TXN), Value::from(txn)),
+        (Value::from(K_OP), Value::from(OP_READ_ASSIGN)),
+        (
+            Value::from(K_TARGET),
+            Value::Map(vec![
+                (Value::from(K_SLOT), Value::from(slot)),
+                (Value::from(K_MODEL_SEL), Value::from(i64::from(paired))),
+                (Value::from(K_PARAM_INDEX), Value::from(param_index)),
+                (Value::from(K_ASSIGN_IS_PARAM), Value::from(true)),
+            ]),
+        ),
+    ]))
+}
+
+/// Op 56: **put a block's bypass on a footswitch**. Zero-based switch number.
+/// [solid — verified live on an HX Stomp 2026-08-22]
+pub const OP_BYPASS_TO_SWITCH: i64 = 56;
+
+/// Op 57: **take a block's bypass off a footswitch**. Same arguments as [`OP_BYPASS_TO_SWITCH`].
+/// [solid — verified live on an HX Stomp 2026-08-22]
+pub const OP_BYPASS_OFF_SWITCH: i64 = 57;
+
+/// Build an **assign-bypass-to-footswitch** body (op 56): make footswitch `switch` toggle the
+/// bypass of the block in `slot`. **`switch` is zero-based** — `0` is Footswitch 1, unlike
+/// [`read_switch`], which is one-based.
+///
+/// Edit-buffer only: reloading the preset discards it, and it persists only through a save.
+/// (`{102:txn, 100:56, 101:{98:slot, 102:switch}}`.)
+/// [solid — verified live on an HX Stomp 2026-08-22: sending it on a preset with nothing bound
+/// added exactly one entry to the footswitch layout at `3 -> 8[0]`, naming that block, and op 57
+/// put the document back byte-for-byte]
+pub fn assign_bypass_to_switch(slot: i64, switch: i64, txn: u16) -> Vec<u8> {
+    switch_assign(OP_BYPASS_TO_SWITCH, slot, switch, txn)
+}
+
+/// Build an **unassign-bypass-from-footswitch** body (op 57) — the reverse of
+/// [`assign_bypass_to_switch`], with the same arguments. [solid — verified live on an HX Stomp 2026-08-22]
+pub fn unassign_bypass_from_switch(slot: i64, switch: i64, txn: u16) -> Vec<u8> {
+    switch_assign(OP_BYPASS_OFF_SWITCH, slot, switch, txn)
+}
+
+/// The body ops 56 and 57 share: a block and a zero-based footswitch.
+fn switch_assign(op: i64, slot: i64, switch: i64, txn: u16) -> Vec<u8> {
+    encode(Value::Map(vec![
+        (Value::from(K_TXN), Value::from(txn)),
+        (Value::from(K_OP), Value::from(op)),
+        (
+            Value::from(K_TARGET),
+            Value::Map(vec![
+                (Value::from(K_SLOT), Value::from(slot)),
+                (Value::from(K_SWITCH), Value::from(switch)),
+            ]),
+        ),
+    ]))
+}
+
+/// Op 37: **put a parameter under a controller** (an expression pedal, a footswitch, MIDI, or
+/// Snapshots), or take it back off by naming source [`SOURCE_NONE`].
+/// [solid — verified live on an HX Stomp 2026-08-22]
+pub const OP_ASSIGN_PARAM: i64 = 37;
+
+/// Key 74: the assignment's **source**, as an ordinal.
+///
+/// The same ordinal the document's controller table is indexed by, which is how the two decodes
+/// were cross-checked: our own front-panel diff put FS1 at 3 and FS2 at 4, and `tonepush`'s list —
+/// 0 none, 1-2 expression pedals, 3-7 footswitches, 8 MIDI CC, 9 snapshots — agrees.
+pub const K_ASSIGN_SOURCE: i64 = 74;
+
+/// Key 71: the MIDI CC number **when the source is MIDI**, and otherwise the constant `4`.
+///
+/// Worth the caution `tonepush` records: under any other source there is no CC to give, so the `4`
+/// is meaningless — decide what this field means by the *source*, never by the value.
+pub const K_ASSIGN_CC: i64 = 71;
+
+/// Key 129, sent `false` by HX Edit on every assignment we have seen. Meaning unknown.
+pub const K_ASSIGN_FLAG129: i64 = 129;
+
+/// Source ordinal for **no controller** — what op 37 takes to remove an assignment.
+pub const SOURCE_NONE: i64 = 0;
+
+/// Source ordinal of **Footswitch 1**. Footswitches run 3..=7, so FS`n` is `SOURCE_FS1 + n - 1`.
+/// [solid — verified on an HX Stomp by front-panel diff, 2026-08-21]
+pub const SOURCE_FS1: i64 = 3;
+
+/// Build an **assign-parameter** body (op 37): put parameter `param_index` of the block in `slot`
+/// under controller `source`. `paired` selects the paired cab's namespace. Pass
+/// [`SOURCE_NONE`] to remove the assignment.
+///
+/// Edit-buffer only; a save is what makes it stick.
+/// (`{102:txn, 100:37, 101:{98:slot, 26:paired, 28:param, 29:true, 74:source, 71:4, 129:false}}`.)
+/// [solid — verified live on an HX Stomp 2026-08-22]
+pub fn assign_param(slot: i64, paired: bool, param_index: i64, source: i64, txn: u16) -> Vec<u8> {
+    encode(Value::Map(vec![
+        (Value::from(K_TXN), Value::from(txn)),
+        (Value::from(K_OP), Value::from(OP_ASSIGN_PARAM)),
+        (
+            Value::from(K_TARGET),
+            Value::Map(vec![
+                (Value::from(K_SLOT), Value::from(slot)),
+                (Value::from(K_MODEL_SEL), Value::from(i64::from(paired))),
+                (Value::from(K_PARAM_INDEX), Value::from(param_index)),
+                (Value::from(K_ASSIGN_IS_PARAM), Value::from(true)),
+                (Value::from(K_ASSIGN_SOURCE), Value::from(source)),
+                // Not a CC here: every source we can drive from a Stomp leaves this the constant
+                // HX Edit sends. See [`K_ASSIGN_CC`].
+                (Value::from(K_ASSIGN_CC), Value::from(4)),
+                (Value::from(K_ASSIGN_FLAG129), Value::from(false)),
+            ]),
+        ),
+    ]))
+}
+
+/// Op 65: set an assignment's **Min** — the value the parameter takes at the controller's heel /
+/// off position. [solid — verified live on an HX Stomp 2026-08-22]
+pub const OP_ASSIGN_MIN: i64 = 65;
+
+/// Op 66: set an assignment's **Max** — the toe / on end. [solid — verified live on an HX Stomp 2026-08-22]
+pub const OP_ASSIGN_MAX: i64 = 66;
+
+/// Build a **set-assignment-travel** body (ops 65 and 66): move one end of an existing assignment's
+/// range. `max` picks the end — `false` is Min (op 65), `true` is Max (op 66).
+///
+/// **The value is in the parameter's own units, not normalised** — a pitch block's ends are
+/// semitones, a wah's are 0..1 because that is a wah's range. Reading them as percentages is what
+/// made a pitch assignment look like it swept "700% to 1200%".
+/// (`{102:txn, 100:65|66, 101:{98:slot, 26:paired, 28:param, 29:true, 119:value}}`.)
+/// [solid — verified live on an HX Stomp 2026-08-22]
+pub fn set_assign_travel(
+    slot: i64,
+    paired: bool,
+    param_index: i64,
+    max: bool,
+    value: f32,
+    txn: u16,
+) -> Vec<u8> {
+    encode(Value::Map(vec![
+        (Value::from(K_TXN), Value::from(txn)),
+        (
+            Value::from(K_OP),
+            Value::from(if max { OP_ASSIGN_MAX } else { OP_ASSIGN_MIN }),
+        ),
+        (
+            Value::from(K_TARGET),
+            Value::Map(vec![
+                (Value::from(K_SLOT), Value::from(slot)),
+                (Value::from(K_MODEL_SEL), Value::from(i64::from(paired))),
+                (Value::from(K_PARAM_INDEX), Value::from(param_index)),
+                (Value::from(K_ASSIGN_IS_PARAM), Value::from(true)),
+                (Value::from(K_VALUE), Value::from(value)),
+            ]),
+        ),
+    ]))
+}
+
 fn get(v: &Value, key: i64) -> Option<&Value> {
     match v {
         Value::Map(m) => m
@@ -1018,6 +1234,93 @@ mod tests {
             [
                 0x83, 0x66, 0xcd, 0x03, 0xea, 0x64, 0x01, 0x65, 0x82, 0x6b, 0x02, 0x65, 0x02
             ]
+        );
+    }
+
+    // ---- controller assignments ----
+    //
+    // These pin structure, not captured bytes: we have no HX Edit capture of an assignment being
+    // made, and the wire shapes came from `tonepush`'s. What makes them trustworthy is the other
+    // end — an HX Stomp accepted each of these bodies and changed its document accordingly
+    // (2026-08-22), which is recorded on the builders themselves. A byte-exact test here would only
+    // pin the encoder against itself.
+
+    fn target_of(body: &[u8]) -> Value {
+        let parsed = EditBody::parse(body).expect("builder output parses");
+        get(&parsed.raw, K_TARGET)
+            .expect("body has a target")
+            .clone()
+    }
+
+    fn key(body: &[u8], k: i64) -> Option<i64> {
+        get(&target_of(body), k).and_then(Value::as_i64)
+    }
+
+    #[test]
+    fn a_footswitch_is_one_based_to_read_and_zero_based_to_write() {
+        // The asymmetry is the device's, and it is the trap in this whole area: op 33 takes
+        // Footswitch 1 as `1` (and answers `0`), while op 56 takes the same switch as `0`. Both
+        // confirmed live — asking 33 for 1, 2, 3 answered 0, 1, 2, and `assign_bypass_to_switch(_, 0)`
+        // landed on the layout's first position.
+        assert_eq!(key(&read_switch(1, 0), K_SWITCH), Some(1));
+        assert_eq!(key(&assign_bypass_to_switch(16, 0, 0), K_SWITCH), Some(0));
+    }
+
+    #[test]
+    fn assigning_and_unassigning_a_bypass_differ_only_in_the_opcode() {
+        let on = assign_bypass_to_switch(16, 2, 7);
+        let off = unassign_bypass_from_switch(16, 2, 7);
+        assert_eq!(EditBody::parse(&on).unwrap().op, OP_BYPASS_TO_SWITCH);
+        assert_eq!(EditBody::parse(&off).unwrap().op, OP_BYPASS_OFF_SWITCH);
+        assert_eq!(target_of(&on), target_of(&off));
+    }
+
+    #[test]
+    fn removing_a_parameter_assignment_is_the_same_op_with_source_none() {
+        // There is no separate "unassign parameter" opcode: op 37 with source 0 is the removal, and
+        // it left the document back at its baseline live.
+        let make = assign_param(16, false, 2, SOURCE_FS1, 9);
+        let drop = assign_param(16, false, 2, SOURCE_NONE, 9);
+        assert_eq!(EditBody::parse(&make).unwrap().op, OP_ASSIGN_PARAM);
+        assert_eq!(EditBody::parse(&drop).unwrap().op, OP_ASSIGN_PARAM);
+        assert_eq!(key(&make, K_ASSIGN_SOURCE), Some(SOURCE_FS1));
+        assert_eq!(key(&drop, K_ASSIGN_SOURCE), Some(SOURCE_NONE));
+    }
+
+    #[test]
+    fn a_request_puts_the_parameter_index_in_key_28() {
+        // The document stores it the other way round — key 29 is the parameter and 28 is the path —
+        // and reading one convention into the other is what made every assignment decode as
+        // "param 0" until 2026-08-21. Key 29 in a *request* is the is-a-parameter flag.
+        let body = assign_param(16, false, 2, SOURCE_FS1, 1);
+        assert_eq!(key(&body, K_PARAM_INDEX), Some(2));
+        assert_eq!(
+            get(&target_of(&body), K_ASSIGN_IS_PARAM).and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn the_paired_cab_gets_its_own_namespace() {
+        assert_eq!(
+            key(&assign_param(3, true, 1, SOURCE_FS1, 1), K_MODEL_SEL),
+            Some(1)
+        );
+        assert_eq!(
+            key(&assign_param(3, false, 1, SOURCE_FS1, 1), K_MODEL_SEL),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn min_and_max_are_two_opcodes_over_one_body() {
+        let min = set_assign_travel(16, false, 2, false, 0.1, 4);
+        let max = set_assign_travel(16, false, 2, true, 0.9, 4);
+        assert_eq!(EditBody::parse(&min).unwrap().op, OP_ASSIGN_MIN);
+        assert_eq!(EditBody::parse(&max).unwrap().op, OP_ASSIGN_MAX);
+        assert_eq!(
+            get(&target_of(&min), K_VALUE).and_then(Value::as_f64),
+            Some(0.1_f32 as f64)
         );
     }
 

@@ -23,6 +23,15 @@ enum OnOff {
     Off,
 }
 
+/// Which end of a controller assignment's travel is being set.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
+enum TravelEnd {
+    /// The heel / off end (op 65).
+    Min,
+    /// The toe / on end (op 66).
+    Max,
+}
+
 /// Which signal row a block is being moved to.
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum Row {
@@ -260,6 +269,47 @@ enum Command {
     ///
     /// Known: id 134 = 3-state input setting (0/1/2).
     Setting { id: i64, value: i64 },
+    /// Ask the device what a footswitch carries (op 33). The number is **one-based**: 1 = FS1.
+    ReadSwitch { switch: i64 },
+    /// Ask the device what drives one parameter (op 36).
+    ReadAssign {
+        slot: i64,
+        param: i64,
+        /// Read the paired cab's parameter namespace instead of the block's own.
+        #[arg(long)]
+        cab: bool,
+    },
+    /// Put a block's bypass on a footswitch (op 56). The switch number is **zero-based**: 0 = FS1.
+    ///
+    /// Edit-buffer only — reload the preset to undo, `save` to keep.
+    AssignBypass { slot: i64, switch: i64 },
+    /// Take a block's bypass off a footswitch (op 57). Zero-based, like `assign-bypass`.
+    UnassignBypass { slot: i64, switch: i64 },
+    /// Put a parameter under a controller (op 37).
+    ///
+    /// `source` is the controller ordinal: 0 none (removes it), 1-2 expression pedals,
+    /// 3-7 footswitches (3 = FS1), 8 MIDI, 9 snapshots. Edit-buffer only.
+    AssignParam {
+        slot: i64,
+        param: i64,
+        source: i64,
+        /// Assign the paired cab's parameter instead of the block's own.
+        #[arg(long)]
+        cab: bool,
+    },
+    /// Set one end of an existing assignment's travel (ops 65/66).
+    ///
+    /// The value is in the parameter's own units, the same ones `set` takes.
+    AssignTravel {
+        slot: i64,
+        param: i64,
+        /// Which end to move.
+        end: TravelEnd,
+        value: f32,
+        /// Address the paired cab's parameter.
+        #[arg(long)]
+        cab: bool,
+    },
     /// Send one hand-built edit-channel frame and print the reply.
     ///
     /// For poking the live sequence without recompiling. All three arguments are hex.
@@ -840,6 +890,54 @@ fn main() -> Result<()> {
             println!("{}", fretwire_data::stream::summarize(&ps.preset, depth));
         }
         Command::DiffStream { a, b } => diff_stream(&a, &b)?,
+        Command::ReadSwitch { switch } => {
+            let mut s = fretwire_core::Session::connect()?;
+            match s.read_switch(switch)? {
+                Some(v) => println!("FS{switch}: {v}"),
+                None => println!("FS{switch}: no decodable reply"),
+            }
+        }
+        Command::ReadAssign { slot, param, cab } => {
+            let mut s = fretwire_core::Session::connect()?;
+            match s.read_assignment(slot, cab, param)? {
+                Some(v) => println!(
+                    "slot {slot} param {param}{}: {v}",
+                    if cab { " (cab)" } else { "" }
+                ),
+                None => println!("slot {slot} param {param}: no decodable reply"),
+            }
+        }
+        Command::AssignBypass { slot, switch } => {
+            let mut s = fretwire_core::Session::connect()?;
+            s.assign_bypass_to_switch(slot, switch)?;
+            println!("slot {slot} bypass -> FS{}", switch + 1);
+        }
+        Command::UnassignBypass { slot, switch } => {
+            let mut s = fretwire_core::Session::connect()?;
+            s.unassign_bypass_from_switch(slot, switch)?;
+            println!("slot {slot} bypass off FS{}", switch + 1);
+        }
+        Command::AssignParam {
+            slot,
+            param,
+            source,
+            cab,
+        } => {
+            let mut s = fretwire_core::Session::connect()?;
+            s.assign_param(slot, cab, param, source)?;
+            println!("slot {slot} param {param} -> source {source}");
+        }
+        Command::AssignTravel {
+            slot,
+            param,
+            end,
+            value,
+            cab,
+        } => {
+            let mut s = fretwire_core::Session::connect()?;
+            s.set_assign_travel(slot, cab, param, end == TravelEnd::Max, value)?;
+            println!("slot {slot} param {param} {end:?} = {value}");
+        }
         Command::Probe {
             cmd_hex,
             arg_hex,

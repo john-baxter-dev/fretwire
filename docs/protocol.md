@@ -789,6 +789,96 @@ where nothing about this opcode has been tried.
 Its inverse (**op 5** / **op 8**, write a document into a slot; **op 16**, empty one) is deliberately
 not built: those are persistent writes and want their own captures first. See `docs/safety.md`.
 
+## Controller assignments — writing them [solid — verified live on an HX Stomp 2026-08-22]
+
+Reading was solved on 2026-08-21 (see `docs/preset-format.md`). Writing is seven opcodes, all of them
+edit-buffer commands like any other block edit: they survive a save and nothing else.
+
+**There are two mechanisms, and conflating them is the trap.** A block's **bypass** on a footswitch
+and a **parameter** under a controller are stored in different places and written by different
+opcodes.
+
+| Op | Target | Does |
+|---|---|---|
+| 56 | `{98: slot, 102: switch}` | put a block's bypass on a footswitch |
+| 57 | `{98: slot, 102: switch}` | take it off again |
+| 37 | `{98: slot, 26: paired, 28: param, 29: true, 74: source, 71: 4, 129: false}` | put a parameter under a controller |
+| 65 | `{98, 26, 28, 29: true, 119: value}` | that assignment's **Min** |
+| 66 | same | its **Max** |
+| 33 | `{102: switch}` | read a footswitch's configuration |
+| 36 | `{98, 26, 28, 29: true}` | read a parameter's assignment |
+
+The opcode numbers and shapes are `tonepush`'s, from a macOS HX Edit capture we do not have; each row
+above was then sent to an HX Stomp and checked against the document it changed. Builders:
+`fretwire_protocol::edit::{assign_bypass_to_switch, unassign_bypass_from_switch, assign_param,
+set_assign_travel, read_switch, read_assignment}`.
+
+### The footswitch number is one-based to read and zero-based to write [solid]
+
+Op 33 takes Footswitch 1 as `1` and **answers `102: 0`**; ops 56 and 57 take the same switch as `0`.
+Confirmed both ways: asking 33 for 1, 2, 3 answered 0, 1, 2, and `assign_bypass_to_switch(16, 0)`
+landed on the layout's first position. The CLI exposes the wire numbering rather than papering over
+it — `read-switch 1` and `assign-bypass 16 0` are the same switch.
+
+### A bypass goes to the layout; a parameter goes to both [solid]
+
+Sending **op 56** for slot 16 on a preset with nothing bound changed exactly one path in the
+document:
+
+```
+/3/8[0]: nil -> [{10: 7, 11: {0: 1, 5: "Simple Delay\0", 6: 458496, 7: true, 8: 16}, ...}]
+```
+
+The controller table at key `4` was untouched — which independently confirms, by construction, what
+the front-panel diff had already shown: **a footswitch bypass never enters key 4.** Op 57 put the
+document back byte-for-byte.
+
+Sending **op 37** for the same block's Mix (param 2) to source 3 changed nine paths, and the two that
+matter are:
+
+```
+/4[3]:   nil -> [{0: 3, 1: 4, 2: 0, 3: 1, 4: 0, 5: 16, 6: {28: 0, 29: 2, 41: false}, 7: 0, 13: false}]
+/3/8[0]: nil -> [{10: 0, 11: {0: 2, 5: "Mix\0", 6: 462860, 7: false, 8: 16, 2: 0, 9: {...}}, ...}]
+```
+
+So a **parameter** assignment appears in the footswitch layout *as well as* the controller table,
+distinguished by the layout node's kind (`11 → 0`): **1 for a DSP block's bypass, 2 for a parameter
+controller**, where key 5 is then the parameter's name rather than a model's. `loaded_blocks` already
+filters kind 2 out of its footswitch enrichment, so a block with only a knob on FS1 is correctly not
+badged as being on FS1 — that filter was written from a fixture and is now proven by construction.
+
+The entry landed at `/4[3]` — **index 3, the FS1 ordinal** our own front-panel diff had established,
+which is a second and independent confirmation of the source-ordinal indexing, and agrees with
+`tonepush`'s full list (0 none, 1-2 expression pedals, 3-7 footswitches, 8 MIDI, 9 snapshots).
+
+### There is no separate "unassign parameter" opcode [solid]
+
+Op 37 with `74: 0` is the removal. It leaves one thing behind: the snapshot's remembered value for
+that controller entry (`/10/10[N]/2[0][2]`) keeps the number it was given instead of returning to
+`false`. Everything else — the key-4 entry, the layout entry, the counter at `/10/8` — reverts. The
+residue is harmless, and it is the same field the op-4 nil-slot correlation above turns on.
+
+### Key 1 of a controller entry is the MIDI CC number
+
+Our own samples carried both `0` and `4` here, and "parameter vs bypass" was **refuted** on
+2026-08-21. `tonepush` reads it as the CC number, constant `4` under any source that has no CC to
+give. The op-37 write is consistent: assigning to FS1 stored `1: 4`. That is corroboration, not
+proof — telling the CC reading apart from a "value type" reading needs a MIDI-sourced sample, which a
+Stomp cannot make on its own. `[hypothesis]`, but now the better-supported one.
+
+### Op 36's reply is the document's own entry [solid]
+
+`{102: txn, 103: 0, 104: <the same map key 4 stores>}`, and `104: nil` when nothing drives the
+parameter. Since `PresetStream::assignments` already decodes that map from a document, op 36 is a
+cross-check rather than a second decoder — useful for confirming a write landed without re-reading
+the whole preset.
+
+### Not built yet
+
+Ops **58-62** — momentary/latching, custom switch label, LED colour — are documented by `tonepush`
+and untried here. Op **64** sets a *parameter's* MIDI CC, which is a different mechanism from a
+bypass's (that rides op 37 with `95: 5`). None of them are needed for the assignment itself.
+
 ## Resolved vs. still open
 - [x] Endpoints / framing / channels / sequence.
 - [x] Value encoding = **big-endian f32**.

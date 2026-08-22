@@ -6,6 +6,7 @@
   import ModelPicker from "./lib/ModelPicker.svelte";
   import PresetList from "./lib/PresetList.svelte";
   import HistoryPane from "./lib/HistoryPane.svelte";
+  import IrPanel from "./lib/IrPanel.svelte";
   import Dialog from "./lib/Dialog.svelte";
   import Toast from "./lib/Toast.svelte";
   import FirstRun from "./lib/FirstRun.svelte";
@@ -737,6 +738,68 @@
       status = `Mock is now a ${mode === "floor" ? "Helix Floor" : "HX Stomp"}. Connect to see it.`;
     }
   }
+
+  // ---- user IR slots ----
+  //
+  // Deliberately not part of the preset flow: these do not touch the edit buffer, do not appear on
+  // the undo timeline, and every write is flash. The panel owns its own confirmations; this side
+  // only carries the calls and turns failures into toasts.
+  let showIrs = $state(false);
+  let irSlots = $state([]);
+  let irBusy = $state(false);
+
+  async function irCall(fn, after) {
+    irBusy = true;
+    try {
+      const slots = await fn();
+      if (slots) irSlots = slots;
+      after?.();
+    } catch (e) {
+      toast("IR: " + e);
+    } finally {
+      irBusy = false;
+    }
+  }
+
+  const refreshIrs = () => irCall(() => invoke("ir_list"));
+  const scanIrs = () => irCall(() => invoke("ir_scan"));
+
+  function openIrs() {
+    showIrs = true;
+    refreshIrs();
+  }
+
+  const onIrExport = (slot, path) =>
+    irCall(
+      async () => {
+        const name = await invoke("ir_export", { slot, path });
+        toast(`Exported "${name}" to ${path}`, "info");
+        return null;
+      },
+    );
+
+  const onIrUpload = (job) =>
+    irCall(async () => {
+      const slots = await invoke("ir_upload", {
+        slot: job.slot,
+        path: job.path,
+        name: job.name.trim(),
+        overwrite: job.overwrite,
+        force: job.force,
+      });
+      toast(`Uploaded "${job.name.trim()}" to IR ${String(job.slot + 1).padStart(3, "0")}`, "info");
+      return slots;
+    });
+
+  const onIrDelete = (slot) =>
+    irCall(async () => {
+      const slots = await invoke("ir_delete", { slot });
+      toast(`Emptied IR ${String(slot + 1).padStart(3, "0")}`, "info");
+      return slots;
+    });
+
+  const onIrRename = (slot, name) =>
+    irCall(() => invoke("ir_rename", { slot, name }));
 </script>
 
 {#if dataStatus && !dataReady}
@@ -786,6 +849,7 @@
       onclick={onRedo}
     >↷ Redo</button>
     <button class="secondary" onclick={() => (addTarget = addTarget == null ? -1 : null)}>＋ Add block</button>
+    <button class="secondary" onclick={openIrs} title="Manage the pedal's user impulse responses">IRs…</button>
     <button class="secondary" onclick={disconnect}>Disconnect</button>
   {:else}
     <button onclick={connect}>Connect</button>
@@ -1132,6 +1196,20 @@
 {/if}
 
 <Toast {toasts} ondismiss={dismissToast} />
+
+{#if showIrs}
+  <IrPanel
+    slots={irSlots}
+    busy={irBusy}
+    onClose={() => (showIrs = false)}
+    onRefresh={refreshIrs}
+    onScan={scanIrs}
+    onExport={onIrExport}
+    onUpload={onIrUpload}
+    onDelete={onIrDelete}
+    onRename={onIrRename}
+  />
+{/if}
 
 <style>
   header {

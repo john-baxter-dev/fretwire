@@ -10,8 +10,8 @@
 //! renders authoritative device state.
 
 use crate::dto::{
-    CategoryDto, DataStatusDto, DetectedDeviceDto, ImportResultDto, ModelChoiceDto, PresetDto,
-    PresetListItem, SplitTypeDto,
+    CategoryDto, DataStatusDto, DetectedDeviceDto, ImportResultDto, IrSlotDto, ModelChoiceDto,
+    PresetDto, PresetListItem, SplitTypeDto,
 };
 use fretwire_core::{EditorPreset, Session};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1218,4 +1218,102 @@ pub async fn models_in_category(
     })
     .await
     .map(|v| v.iter().map(ModelChoiceDto::from).collect())
+}
+
+// ---- user IR slots ----
+//
+// These do not touch the preset, so unlike every other mutating command here they return an IR
+// listing rather than a `PresetDto`, and none of them go on the undo timeline: an IR write is a
+// flash write with no edit-buffer stage to roll back.
+
+/// The device's IR directory — the populated slots, in one request. **Reads only.**
+#[tauri::command]
+pub async fn ir_list(state: State<'_, AppState>) -> R<Vec<IrSlotDto>> {
+    run(&state, |s| {
+        Ok(s.ir_directory()?.iter().map(IrSlotDto::from).collect())
+    })
+    .await
+}
+
+/// Every slot including the empty ones, one select each. Slower; for the "show empty slots" view.
+#[tauri::command]
+pub async fn ir_scan(state: State<'_, AppState>) -> R<Vec<IrSlotDto>> {
+    run(&state, |s| {
+        Ok(s.ir_scan()?.iter().map(IrSlotDto::from).collect())
+    })
+    .await
+}
+
+/// Write slot `slot` out to `path` as a 32-bit float, 48 kHz mono WAV. **Reads the device only.**
+#[tauri::command]
+pub async fn ir_export(state: State<'_, AppState>, slot: i64, path: String) -> R<String> {
+    run(&state, move |s| {
+        let Some((info, blob)) = s.ir_export(slot)? else {
+            return Err(fretwire_core::fretwire_data::Error::Stream(format!(
+                "IR slot {slot} is empty"
+            ))
+            .into());
+        };
+        std::fs::write(&path, fretwire_core::fretwire_data::ir::to_wav(&blob))
+            .map_err(fretwire_core::fretwire_data::Error::Io)?;
+        Ok(info.name)
+    })
+    .await
+}
+
+/// Upload the WAV at `path` into slot `slot`. **Writes device flash.**
+///
+/// The sample rate is not converted, so a file that is not 48 kHz is refused unless `force` — it
+/// would play short and bright. The frontend confirms an occupied slot before setting `overwrite`.
+#[tauri::command]
+pub async fn ir_upload(
+    state: State<'_, AppState>,
+    slot: i64,
+    path: String,
+    name: Option<String>,
+    overwrite: bool,
+    force: bool,
+) -> R<Vec<IrSlotDto>> {
+    run(&state, move |s| {
+        let bytes = std::fs::read(&path).map_err(fretwire_core::fretwire_data::Error::Io)?;
+        let (blob, rate) = fretwire_core::fretwire_data::ir::from_wav(&bytes)
+            .map_err(|e| fretwire_core::fretwire_data::Error::Stream(format!("{path}: {e}")))?;
+        if rate != fretwire_core::fretwire_data::ir::IR_SAMPLE_RATE && !force {
+            return Err(fretwire_core::fretwire_data::Error::Stream(format!(
+                "that file is {rate} Hz and the device runs at {} Hz. Nothing here resamples, so \
+                 it would play short and bright — convert it first",
+                fretwire_core::fretwire_data::ir::IR_SAMPLE_RATE
+            ))
+            .into());
+        }
+        let name = name.unwrap_or_else(|| {
+            std::path::Path::new(&path)
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        });
+        s.ir_upload(slot, &name, &blob, overwrite)?;
+        Ok(s.ir_directory()?.iter().map(IrSlotDto::from).collect())
+    })
+    .await
+}
+
+/// Empty a slot. **Writes device flash**, and there is no undo.
+#[tauri::command]
+pub async fn ir_delete(state: State<'_, AppState>, slot: i64) -> R<Vec<IrSlotDto>> {
+    run(&state, move |s| {
+        s.ir_delete(slot)?;
+        Ok(s.ir_directory()?.iter().map(IrSlotDto::from).collect())
+    })
+    .await
+}
+
+/// Rename the IR in a slot. **Writes device flash** — the name only.
+#[tauri::command]
+pub async fn ir_rename(state: State<'_, AppState>, slot: i64, name: String) -> R<Vec<IrSlotDto>> {
+    run(&state, move |s| {
+        s.ir_rename(slot, &name)?;
+        Ok(s.ir_directory()?.iter().map(IrSlotDto::from).collect())
+    })
+    .await
 }

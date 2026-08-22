@@ -48,6 +48,12 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::data_status,
+            commands::ir_list,
+            commands::ir_scan,
+            commands::ir_export,
+            commands::ir_upload,
+            commands::ir_delete,
+            commands::ir_rename,
             commands::import_data,
             commands::detect,
             commands::is_connected,

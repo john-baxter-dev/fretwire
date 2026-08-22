@@ -622,3 +622,109 @@ impl From<&'static fretwire_core::fretwire_usb::Device> for DetectedDeviceDto {
         }
     }
 }
+
+/// One user IR slot, as the IR panel renders it.
+///
+/// The two listings the device offers answer with different fields — the directory (op 13) carries
+/// the stored hash but no checksum or length, a per-slot sweep the reverse — so everything past the
+/// index and name is optional, and the UI shows a column only where it has something to put there.
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct IrSlotDto {
+    /// Zero-based slot index. The device numbers these from 1 in its own menus, so the UI adds one.
+    pub index: i64,
+    /// The stored name, empty for an unused slot.
+    pub name: String,
+    /// What to print: the name, or a stand-in for the nameless and the empty.
+    pub display_name: String,
+    /// Whether the slot holds an IR — the device's declared length, not the presence of a name.
+    pub used: bool,
+    /// Samples the device stores here, `0` for an empty slot.
+    pub samples: i64,
+    /// The `113` word sum, when this listing carries one.
+    pub checksum: Option<u32>,
+    /// The MD5 of the stored bytes, when this listing carries one.
+    pub md5: Option<String>,
+}
+
+impl From<&fretwire_core::fretwire_data::ir::IrSlot> for IrSlotDto {
+    fn from(s: &fretwire_core::fretwire_data::ir::IrSlot) -> Self {
+        Self {
+            index: s.index,
+            name: s.name.clone(),
+            display_name: s.display_name().to_string(),
+            used: s.is_used(),
+            samples: s.stored_samples(),
+            checksum: s.checksum,
+            md5: s.md5.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod ir_tests {
+    use super::IrSlotDto;
+    use fretwire_core::fretwire_data::ir::{IrFlags, IrSlot};
+
+    fn slot(name: &str, mul: i64, exp: i64) -> IrSlot {
+        IrSlot {
+            index: 4,
+            checksum: Some(0xc0a0_76ed),
+            name: name.to_string(),
+            md5: Some("4b41c57b04c05b1471277ecf74231a7d".into()),
+            length_mul: mul,
+            length_exp: exp,
+            flags: IrFlags::default(),
+        }
+    }
+
+    /// The panel reads these keys by name. A rename here compiles, passes the JS mock (whose keys
+    /// are hand-written), and then silently renders `undefined` in the real app — so the wire
+    /// names are pinned rather than left to `serde`'s defaults.
+    #[test]
+    fn the_json_keys_are_the_ones_the_panel_reads() {
+        let json = serde_json::to_value(IrSlotDto::from(&slot("Greenback", 1, 3))).unwrap();
+        let obj = json.as_object().unwrap();
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "checksum",
+                "display_name",
+                "index",
+                "md5",
+                "name",
+                "samples",
+                "used"
+            ]
+        );
+        assert_eq!(obj["samples"], 2048);
+        assert_eq!(obj["used"], true);
+        assert_eq!(obj["display_name"], "Greenback");
+    }
+
+    #[test]
+    fn an_empty_slot_carries_the_dash_and_no_length() {
+        let dto = IrSlotDto::from(&IrSlot {
+            checksum: None,
+            md5: None,
+            name: String::new(),
+            length_mul: 0,
+            length_exp: 1,
+            ..slot("", 0, 1)
+        });
+        assert!(!dto.used);
+        assert_eq!(dto.samples, 0);
+        assert_eq!(dto.display_name, "—");
+    }
+
+    #[test]
+    fn a_nameless_but_occupied_slot_is_still_occupied() {
+        // The case the panel tags "silent": no name, but the device declares a stored length.
+        // Reading occupancy off the name would offer this slot as free space it is not.
+        let dto = IrSlotDto::from(&slot("", 1, 3));
+        assert!(dto.used);
+        assert_eq!(dto.display_name, "(unnamed)");
+        assert_eq!(dto.samples, 2048);
+    }
+}

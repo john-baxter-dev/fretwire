@@ -405,8 +405,12 @@ start capture → do the single thing → stop:
       renames. Both from `tonepush`'s `PROTOCOL.md`, not from a capture.
 - [ ] **IR management — what is left.** **Reorder** is undecoded and may not exist as an opcode
       (delete + upload expresses it). Also unfinished: how a preset's IR block **references** a user
-      slot vs a built-in cab IR, and a **GUI** IR panel (the backend is done; nothing in the Tauri
-      app exposes it yet).
+      slot vs a built-in cab IR.
+- [x] **GUI IR panel** (2026-08-22) — toolbar **IRs…** opens an overlay: per-slot export/rename/
+      delete, upload with a native picker and a target-slot picker that says what each slot holds,
+      an optional empty-slot view (128 requests vs the directory's one), and confirmations that name
+      what is lost. Slots are shown one-based, as the pedal's own menus number them. Mock backend +
+      `npm test` contract check; **not yet clicked through by hand**.
 - [~] **Global / I/O settings** — the **read side is decoded** (2026-08-22, live): **op 24**
       `{118:id}` answers with the value at key `119`, and 166 of ids 0..=260 answer on a Stomp.
       Named: **16** tempo BPM (`f32`), **28** current preset index, **192**/**201-203** global EQ.

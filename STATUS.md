@@ -2786,3 +2786,43 @@ Tempo was put back to 80.
 The GUI wants **Input Z (impedance)**, guitar pad and main-out level. The cheapest first consumer is
 the **preset-numbering flag** (`01A` vs `000`): it is confirmed absent from every preset stream we
 read, so the GUI carries a manual toggle, and one id would replace it with a detected default.
+
+## Thirty-sixth round (2026-08-22): **the IR panel**
+
+IRs reach the GUI. An overlay rather than a pane in the editor: managing impulse responses is a
+separate job from editing a preset, it needs the width of a 128-row list, and nothing in the chain
+view relates to it. **IRs…** in the toolbar opens it.
+
+Per slot: export to a WAV, rename, delete. Above them, upload — a native file picker, a name (the
+device stores 31 characters, so it is trimmed here rather than truncated silently), and a target
+slot whose picker says what each one currently holds.
+
+**The device's numbering, not ours.** The wire is zero-based and the pedal's own menus count from
+one, so the panel shows `001`. Anyone reading a slot number off the pedal and typing it here should
+land on the same IR.
+
+**Occupancy is the declared length, never the name.** A slot holding a nameless silent IR reads as
+empty by name and full by length, and it is full — the panel renders it `(unnamed)` with a **silent**
+tag. Offering that slot as free space would overwrite something, and calling it empty would be a lie
+the device disagrees with.
+
+**Everything here is a flash write with no undo**, which no other edit in this app is — the rest
+land in the edit buffer and a reload takes them back. So delete and overwrite both confirm, and the
+confirmations name what is about to be lost rather than asking "are you sure": *"**Greenback** is
+erased from the pedal… export it first if you do not have a copy."* The footer says the same once,
+quietly, rather than badging every row.
+
+The empty slots are behind a **Show empty slots** toggle, because listing them means 128 requests
+where the directory is one.
+
+### Two contracts, pinned against each other
+The mock backend's JSON keys are hand-written, so a renamed field in `IrSlotDto` would compile,
+pass the JS mock and then render `undefined` in the real app. Both sides now assert the same key
+list — `dto.rs` from Rust, `ui/tests/ir-mock.mjs` from JS. The mock check is 22 assertions run by
+plain `node` (`npm test` in `ui/`), no runner and no new dependency, and it models the device's
+rules rather than a convenient subset.
+
+### Not clicked through by hand yet
+The GUI starts clean against the pedal and both contracts are tested, but **nobody has driven the
+new panel in a running window** — the file pickers and the confirm flows in particular. Same caveat
+the assignment round carried.

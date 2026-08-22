@@ -693,7 +693,91 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // flip it with `fretwireMock.needsData()` to exercise the import screen.
 let dataPresent = true;
 
+
+// ---------------------------------------------------------------------------------------------
+// The user IR store. Mirrors the device's rules rather than a convenient subset, because those
+// rules are what the panel is built against: occupancy is the declared length (not the name), the
+// directory listing carries the stored hash but no checksum, a per-slot scan carries the checksum
+// but no hash, and every write here is irreversible.
+// ---------------------------------------------------------------------------------------------
+const IR_SLOTS = 128;
+const irStore = new Map([
+  [0, { name: "G12-65 212 C Hi-Gn 421+57", samples: 2048, checksum: 0xc0a076ed, md5: "4b41c57b04c05b1471277ecf74231a7d" }],
+  [3, { name: "OwnHammer HD412 M25", samples: 2048, checksum: 0x51ba30d1, md5: "1f0d9c2ab4e75630fd8814c2b0a99e77" }],
+  // A nameless silent one, so the panel's "silent" tag has something to render: the device does
+  // distinguish this from an empty slot, and reading occupancy off the name would not.
+  [7, { name: "", samples: 2048, checksum: 0, md5: "620f0b67a91f7f74151bc5be745b7110" }],
+]);
+
+function irDto(index, withHash) {
+  const held = irStore.get(index);
+  const name = held?.name ?? "";
+  const used = !!held;
+  return {
+    index,
+    name,
+    display_name: used ? (name || "(unnamed)") : "—",
+    used,
+    samples: held?.samples ?? 0,
+    // The two listings answer with different fields; the panel has to cope with either.
+    checksum: withHash ? null : (held?.checksum ?? 0),
+    md5: withHash ? (held?.md5 ?? null) : null,
+  };
+}
+
+const irDirectory = () =>
+  [...irStore.keys()].sort((a, b) => a - b).map((i) => irDto(i, true));
+
+function irCheckSlot(slot) {
+  if (!Number.isInteger(slot) || slot < 0 || slot >= IR_SLOTS) {
+    throw new Error(`IR slot ${slot} is out of range (0..${IR_SLOTS})`);
+  }
+}
+
 const HANDLERS = {
+  ir_list: () => irDirectory(),
+  ir_scan: () =>
+    Array.from({ length: IR_SLOTS }, (_, i) => irDto(i, false)),
+  ir_export: ({ slot, path }) => {
+    irCheckSlot(slot);
+    const held = irStore.get(slot);
+    if (!held) throw new Error(`IR slot ${slot} is empty`);
+    console.info(`[fretwire mock] would write ${path}`);
+    return held.name;
+  },
+  ir_upload: ({ slot, path, name, overwrite, force }) => {
+    irCheckSlot(slot);
+    const held = irStore.get(slot);
+    if (held && !overwrite) {
+      throw new Error(`IR slot ${slot} already holds "${held.name || "(unnamed)"}" — pass overwrite to replace it`);
+    }
+    if (/44100|44\.1/.test(path) && !force) {
+      throw new Error("that file is 44100 Hz and the device runs at 48000 Hz. Nothing here resamples, so it would play short and bright — convert it first");
+    }
+    // A fake but stable digest, so re-uploading the same path twice reports the same hash.
+    const digest = [...path].reduce((a, c) => (a * 33 + c.charCodeAt(0)) >>> 0, 5381);
+    irStore.set(slot, {
+      name: (name ?? "").slice(0, 31),
+      samples: 2048,
+      checksum: digest,
+      md5: digest.toString(16).padStart(8, "0").repeat(4),
+    });
+    return irDirectory();
+  },
+  ir_delete: ({ slot }) => {
+    irCheckSlot(slot);
+    irStore.delete(slot);
+    return irDirectory();
+  },
+  ir_rename: ({ slot, name }) => {
+    irCheckSlot(slot);
+    const held = irStore.get(slot);
+    if (!held) throw new Error(`IR slot ${slot} is empty`);
+    // Renaming leaves the samples — and so the hash — untouched, as the device does.
+    held.name = (name ?? "").slice(0, 31);
+    return irDirectory();
+  },
+
   data_status: () => ({
     present: dataPresent,
     dir: "~/.local/share/fretwire/data",

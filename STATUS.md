@@ -20,6 +20,15 @@ the **interactive routing grid** (drag blocks across a 2-row × N-col grid of sl
 the sections below describing it are kept as history.
 See ROADMAP for remaining follow-ups.
 
+**Model icons (2026-08-21):** every block in the chain and every row in the model picker now draws
+the pedal/amp/cab it is modelled on — a filled silhouette generated as SVG from a spec table
+(`ui/src/lib/icons/`), with the finish and control layout of the real unit. Cabs derive their
+speaker grid from the driver array in the name (`4x12 Greenback 25` → four cones); amps match on the
+symbolic-id prefix so the `Nrm`/`Brt`/`Jump` variants share one entry; anything unlisted falls back
+to its effect family and then to the category, so nothing is ever blank. None of Line 6's artwork is
+read or shipped — see `docs/icons.md`. Chain cells grew to 104x50 to fit the icon and a two-line
+label.
+
 **Routing flexibility (2026-07-06, verified live):** the grid now covers the full parallel-path
 lifecycle — **serial→split creation by drag** (the split/mixer node slots exist in the 20-slot array
 even on serial presets [solid, preset1 fixture], so the empty B row is revealed during a drag and one

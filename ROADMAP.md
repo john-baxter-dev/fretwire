@@ -139,6 +139,13 @@ start capture → do the single thing → stop:
 - [x] **Model picker** with category selector + **DSP-fit grey-out** + live swap (same- and
       cross-category); split-type rides `swap_model`.
 - [x] **Snapshots** (switch), **save-to-device** (two-click confirm), **⟳ Refresh**.
+- [x] **Model icons** (2026-08-21): every block and picker row draws the hardware it models, as a
+      generated SVG silhouette (`ui/src/lib/icons/`). Cabs derive their speaker grid from the driver
+      array in the name; amps match on symbolic-id prefix; unlisted models fall back to their effect
+      family, then the category. **Follow-up:** ~30 models are placeholders where the original
+      wasn't identified — see the "Known guesses" table in `docs/icons.md`, correct opportunistically
+      (one line each in `models.js`). Also open: the picker's category `<select>` is text-only (a
+      native option can't hold an icon).
 - [x] **Live-follow** of panel changes (footswitch bypass / snapshot / preset) via the
       status-channel state-push (`Session::poll_events`).
 - [x] **Move** (op 43) + **add** (op 39) block — protocol + CLI verified live.

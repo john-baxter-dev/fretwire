@@ -7,6 +7,8 @@
   // routing view this instance draws (grid + split/mixer/io nodes for that DSP). The Helix Floor
   // renders two Chains, one per DSP; a single-DSP device (or the mock) passes no `dsp` and we fall
   // back to the preset's flat, DSP-0 fields.
+  import ModelIcon from "./icons/ModelIcon.svelte";
+
   let { preset, dsp = null, selectedSlot = null, onselect, onplace, oninsert, onmovenode, onaddat } = $props();
   const d = $derived(dsp ?? preset);
 
@@ -36,7 +38,7 @@
 
   // X0 leaves room left of column 1 for the input node glyph; the output glyph hangs after the
   // last column (width padded below).
-  const STEP = 96, CW = 80, CH = 44, X0 = 48, TOP_Y = 8, BOT_Y = 84;
+  const STEP = 120, CW = 104, CH = 50, X0 = 48, TOP_Y = 8, BOT_Y = 90;
   const colX = (c) => X0 + (c - 1) * STEP;
   const midY = (y) => y + CH / 2;
   // The x of the inter-column gap *before* column c — where the bracket wires run and the split/
@@ -108,7 +110,11 @@
         occupied: c.occupied,
         x: colX(c.column),
         y: c.row === 1 ? BOT_Y : TOP_Y,
-        name: name.length > 13 ? name.slice(0, 12) + "…" : name,
+        name,
+        symbolicId: b?.symbolic_id ?? null,
+        modelName: b?.model_name ?? "",
+        // An amp carrying a paired cab is drawn as the full stack, the way it is on stage.
+        iconCategory: b?.paired_symbolic_id ? 100 : (b?.category ?? null),
         bypassed: b ? !!b.bypassed : false,
         // Which footswitch toggles this block's bypass, or 0 for unbound. Decoded from the
         // preset's footswitch layout (key `3 → 8`, position + 1) and carried on every block —
@@ -279,7 +285,7 @@
         class:sel={c.slot === selectedSlot}
         class:bypassed={c.bypassed}
         class:stranded={c.stranded != null}
-        title={c.strandedWhy}
+        title={c.strandedWhy ?? c.name}
         class:insb={dragOver === c.slot && dragSide === "l" && dragSrc != null && dragSrc !== c.slot}
         class:insa={dragOver === c.slot && dragSide === "r" && dragSrc != null && dragSrc !== c.slot}
         draggable="true"
@@ -322,8 +328,17 @@
         }}
         onclick={() => onselect?.(c.slot)}
       >
-        <span class="name">{c.name}</span>
-        <span class="slot">slot {c.slot}</span>
+        <ModelIcon
+          symbolicId={c.symbolicId}
+          category={c.iconCategory}
+          name={c.modelName}
+          size={26}
+          dim={c.bypassed}
+        />
+        <span class="text">
+          <span class="name">{c.name}</span>
+          <span class="slot">slot {c.slot}</span>
+        </span>
         {#if c.footswitch > 0}
           <span
             class="fs"
@@ -399,10 +414,10 @@
   .cell {
     position: absolute;
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     align-items: center;
-    justify-content: center;
-    gap: 2px;
+    justify-content: flex-start;
+    gap: 7px;
     font: inherit;
     background: #232833;
     /* Accent = the block's category color (--cat set inline per cell). */
@@ -410,7 +425,7 @@
     border-radius: 8px;
     color: #e6e8ec;
     cursor: grab;
-    padding: 0 6px;
+    padding: 0 7px;
   }
   .cell:active {
     cursor: grabbing;
@@ -481,16 +496,27 @@
   .cell.insa::after {
     right: -6px;
   }
+  .cell .text {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    min-width: 0;
+  }
+  /* Two lines, then ellipsis: with the icon taking the left third, one line clipped almost every
+     model name. */
   .cell .name {
     font-weight: 600;
-    font-size: 12px;
-    white-space: nowrap;
+    font-size: 11px;
+    line-height: 1.2;
+    text-align: left;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
     overflow: hidden;
-    text-overflow: ellipsis;
     max-width: 100%;
   }
   .cell .slot {
-    font-size: 11px;
+    font-size: 10px;
     color: #8891a0;
   }
   /* Empty grid slots are always faintly visible so the layout reads as a grid you drop into —

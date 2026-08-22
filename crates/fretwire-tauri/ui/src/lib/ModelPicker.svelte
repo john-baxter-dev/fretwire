@@ -3,6 +3,7 @@
   // model in the chosen category with its DSP cost; the current model is marked, and models that
   // wouldn't fit the remaining DSP budget are disabled — mirroring HX Edit's grey-out.
   import { invoke } from "./ipc.js";
+  import ModelIcon from "./icons/ModelIcon.svelte";
   import { onMount, untrack } from "svelte";
 
   let {
@@ -65,6 +66,7 @@
 <div class="picker">
   <div class="row">
     <strong>{title}</strong>
+    <ModelIcon category={categoryId} size={22} />
     {#if lockCategory}
       <span class="dim">{cats.find((c) => c.id === categoryId)?.name ?? ""}</span>
     {:else}
@@ -91,6 +93,12 @@
           : m.name}
         onclick={() => onpick(m.index, m.default_paired_index ?? null)}
       >
+        <ModelIcon
+          symbolicId={m.symbolic_id}
+          category={m.category ?? categoryId}
+          name={m.name}
+          size={22}
+        />
         <span class="name">{m.name}{isCurrent ? " ✓" : ""}</span>
         <span class="dsp">{m.dsp_load != null ? pct(m.dsp_load).toFixed(1) + "%" : "—"}</span>
       </button>
@@ -132,8 +140,8 @@
   }
   .item {
     display: flex;
-    justify-content: space-between;
-    gap: 10px;
+    align-items: center;
+    gap: 8px;
     font: inherit;
     text-align: left;
     background: #232833;
@@ -157,6 +165,13 @@
   }
   .item:disabled .dsp {
     color: #e0785f;
+  }
+  .item .name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .item .dsp {
     color: #9aa3b2;

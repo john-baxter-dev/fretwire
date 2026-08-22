@@ -116,8 +116,9 @@
     return "M" + pts.join("L");
   });
 
-  // Bands whose gain we have never identified: show the frequency as a marker, and say why there is
-  // no handle, rather than drawing a flat band that looks deliberately set to zero.
+  // Bands whose gain ids a device doesn't answer: show the frequency as a marker, and say why there
+  // is no handle, rather than drawing a flat band that looks deliberately set to zero. Empty on an
+  // HX Stomp, which answers all eleven.
   const unpinned = $derived(BANDS.filter((b) => known(b.freq) && !known(b.gain)));
 
   // --- controls ---------------------------------------------------------------
@@ -355,6 +356,5 @@
   input[type="range"] { width: 100%; accent-color: #5b8def; }
   input[type="range"]:disabled { opacity: 0.5; }
   .pending { color: #6b7280; font-size: 11px; margin-top: 4px; }
-  code { color: #c9d1d9; }
   .eq-empty { padding: 24px 0; text-align: center; color: #8b93a3; }
 </style>

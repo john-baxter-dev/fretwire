@@ -2184,6 +2184,27 @@ impl Session {
         out
     }
 
+    /// Send an arbitrary edit op and return whatever comes back. **For decoding, not for use.**
+    ///
+    /// The session is marked probing for the duration, so a refusal logs at debug rather than warn —
+    /// a refusal is the answer here. The `Err` still surfaces, carrying the device's code: `-3` is
+    /// "op exists, body wrong" and is the most useful outcome short of success.
+    ///
+    /// Everything reachable this way is an **edit-buffer** operation, which is why this exists at
+    /// all: an unknown op sent here is undone by reloading the preset. It is deliberately not
+    /// reachable from the GUI.
+    pub fn probe_edit(
+        &mut self,
+        op: i64,
+        target: Vec<(fretwire_data::rmpv::Value, fretwire_data::rmpv::Value)>,
+    ) -> crate::Result<Option<fretwire_data::rmpv::Value>> {
+        let txn = self.bump_txn();
+        let was_probing = std::mem::replace(&mut self.probing, true);
+        let out = self.send_edit(edit::probe(op, target, txn));
+        self.probing = was_probing;
+        Ok(fretwire_data::stream::locate_root(&out?.body, 32).map(|r| r.value))
+    }
+
     /// Ask the device for footswitch `switch`'s record (op 33). **`switch` is one-based**: 1 is
     /// Footswitch 1.
     ///

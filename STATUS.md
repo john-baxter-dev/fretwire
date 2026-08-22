@@ -3111,3 +3111,32 @@ than guessed at.
 This is the third time in two days that the blocker was a stale reading rather than a missing decode
 — the IR checksum, op 24's name, and now key 66. All three were sitting in data we already had. The
 pattern is worth naming: *when a key resists, try reading it as something other than a number.*
+
+## INCIDENT 2026-08-22: **I wedged the pedal probing op 58**
+
+Probing the undecoded footswitch ops. `probe-edit --op 58 --set 102=1 --set 66=255` stopped the HX
+Stomp draining its bulk OUT endpoint; it fell off the USB bus and needed a power cycle. It came back
+fine. No flash, no firmware, nothing persistent — the guardrails in `docs/safety.md` held exactly as
+written, and this is the failure mode they exist for.
+
+Three process errors, worth more than the incident:
+
+**1. I read "accepted" as "understood".** Moments earlier all five ops (58-62) had answered `103: 0`
+to a bare `{102: 1}` and changed nothing in the record. I took five acceptances as a green light for
+a bigger body. They were not evidence of anything: the device accepted a command it evidently did
+not act on. **An `accepted` from an undecoded op means nothing.**
+
+**2. The loop kept going after the first failure.** Op 58 timed out, and the shell loop sent 59, 60,
+61 and 62 to a pedal that had already stopped answering — four more commands that could teach us
+nothing, and a slower path to noticing. One op, one body, then look at the device.
+
+**3. I probed with unsaved work on the pedal.** The power cycle discarded the user's own FS1 binding
+along with my FS2 one. I knew edit-buffer state is lost on a power cycle and did not think to say
+"save or abandon anything that matters" before starting. Cheap to say, and it was their work.
+
+What survives as a finding: **ops 58-62 all accept `{102: <switch>}` and do nothing with it**, and
+**op 58 does not tolerate an extra key 66**. Whether that is because 66 is wrong for op 58 or because
+op 58 wants something else entirely is unknown, and finding out costs a power cycle per attempt at
+current knowledge. `docs/safety.md` gained a section; `probe-edit`'s help now leads with the wedge.
+
+The colour *read* stands untouched — it came from op 33, which is a pure read.

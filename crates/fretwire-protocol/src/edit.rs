@@ -851,6 +851,23 @@ pub const OP_BYPASS_TO_SWITCH: i64 = 56;
 /// [solid — verified live on an HX Stomp 2026-08-22]
 pub const OP_BYPASS_OFF_SWITCH: i64 = 57;
 
+/// Build an arbitrary edit body: `{102: txn, 100: op, 101: <target>}`.
+///
+/// Every builder in this module is a special case of this shape, and this is the escape hatch for
+/// **probing an op we have not decoded** — the ops the footswitch record's unknown keys are set by,
+/// for instance. Nothing validates `op` or `target`, which is the point: a refusal code is the
+/// answer we are looking for.
+///
+/// Prefer a named builder wherever one exists. This exists so that finding the next one does not
+/// require writing it first.
+pub fn probe(op: i64, target: Vec<(Value, Value)>, txn: u16) -> Vec<u8> {
+    encode(Value::Map(vec![
+        (Value::from(K_TXN), Value::from(txn)),
+        (Value::from(K_OP), Value::from(op)),
+        (Value::from(K_TARGET), Value::Map(target)),
+    ]))
+}
+
 /// Build an **assign-bypass-to-footswitch** body (op 56): make footswitch `switch` toggle the
 /// bypass of the block in `slot`. **`switch` is zero-based** — `0` is Footswitch 1, unlike
 /// [`read_switch`], which is one-based.

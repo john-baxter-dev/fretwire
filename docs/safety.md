@@ -40,6 +40,30 @@ still kills the unit at the same byte offset. Treat the credits as detection, no
    mid-write.
 6. **Linux: claim only interface 0** (the vendor control interface). Leave the audio interface alone.
 
+## Probing an undecoded op wedges the device — assume it, don't hope [solid — 2026-08-22]
+
+`fretwire probe-edit` sends an arbitrary op with an arbitrary body. It exists because reading a
+refusal code is how the next op gets decoded, and every op reachable that way is edit-buffer only.
+That does **not** make it safe to sweep.
+
+**Op 58 with `{102: 1, 66: 255}` wedged an HX Stomp**: bulk OUT stopped draining, the device fell
+off the bus, and it needed a power cycle. The same five ops sent a moment earlier with `{102: 1}`
+alone had all answered `103: 0` — *accepted* — and changed nothing. So:
+
+1. **An `accepted` reply from an undecoded op means nothing.** All five ops accepted a body they
+   evidently did not act on. Acceptance is not evidence the body was understood, and it is not
+   evidence the next body will be tolerated.
+2. **One op, one body, then look at the device.** The failure above came from a loop over five ops.
+   Worse, the loop *kept going* after the first timeout, sending four more commands to a pedal that
+   had already stopped answering — which tells you nothing and delays noticing.
+3. **Expect to lose the edit buffer.** A power cycle discards every unsaved binding, including any
+   the user made themselves. Say so before probing, not after.
+4. **Never probe while anything unsaved matters.** Reload or save first.
+
+The guardrails below still held — no flash, no firmware, full recovery from a power cycle, and the
+pedal came back unharmed. This is the failure mode the guardrails are *for*, and it is a normal
+outcome of this kind of work rather than a surprise. Budget for it.
+
 ## Why the brick risk is low here
 The control protocol we're implementing moves the same kinds of messages HX Edit exchanges
 constantly. A malformed control frame, at worst, makes the device's parser reboot — recovered by

@@ -350,6 +350,24 @@ enum Command {
         a: std::path::PathBuf,
         b: std::path::PathBuf,
     },
+    /// Send an arbitrary edit op, for decoding ops we do not yet know. **Probe only.**
+    ///
+    /// `--set` takes `key=value` pairs for the target map, repeatable. Values parse as bool, then
+    /// integer, then float, then string: `--set 102=1 --set 66=16711683 --set 109=Lead`.
+    ///
+    /// **This wedges pedals.** Op 58 with `{102:1, 66:255}` stopped an HX Stomp draining its bulk
+    /// OUT endpoint and cost a power cycle, moments after the same op had *accepted* a shorter body
+    /// (see `docs/safety.md`). Send one op with one body and then look at the device; never sweep.
+    /// A power cycle discards the whole edit buffer, so save or abandon anything that matters
+    /// first.
+    ///
+    /// A `-3` refusal means the op exists and the body is wrong, which is the result you want.
+    ProbeEdit {
+        #[arg(long)]
+        op: i64,
+        #[arg(long = "set", value_parser = parse_kv)]
+        set: Vec<(i64, rmpv::Value)>,
+    },
     /// Ask the device what a footswitch carries (op 33). The number is **one-based**: 1 = FS1.
     ReadSwitch { switch: i64 },
     /// Ask the device what drives one parameter (op 36).
@@ -1182,6 +1200,19 @@ fn main() -> Result<()> {
                 println!("no setting changed between the two dumps");
             }
         }
+        Command::ProbeEdit { op, set } => {
+            let mut s = fretwire_core::Session::connect()?;
+            let target: Vec<(rmpv::Value, rmpv::Value)> = set
+                .into_iter()
+                .map(|(k, v)| (rmpv::Value::from(k), v))
+                .collect();
+            println!("op {op} target {target:?}");
+            match s.probe_edit(op, target) {
+                Ok(Some(v)) => println!("  accepted: {v}"),
+                Ok(None) => println!("  accepted, empty reply"),
+                Err(e) => println!("  refused: {e}"),
+            }
+        }
         Command::ReadSwitch { switch } => {
             let mut s = fretwire_core::Session::connect()?;
             match s.read_switch(switch)? {
@@ -1898,6 +1929,35 @@ fn value_type(v: &fretwire_core::fretwire_data::rmpv::Value) -> &'static str {
 /// The table lives in `fretwire_protocol::settings` so the CLI and the GUI name ids identically —
 /// they used to carry separate lists, which is how `201`-`203` stayed glossed as "global EQ" here
 /// after the real EQ block turned out to be 190-200.
+/// Parse a `key=value` probe field. Values take the first type that fits: bool, integer, float,
+/// then string — so `66=16711683` is an int and `109=Lead` a string, which is what those two keys
+/// actually hold. A key that needs a type this can't express is a reason to write a real builder.
+fn parse_kv(arg: &str) -> Result<(i64, rmpv::Value), String> {
+    let (k, v) = arg
+        .split_once('=')
+        .ok_or_else(|| format!("expected key=value, got {arg:?}"))?;
+    let key: i64 = k
+        .trim()
+        .parse()
+        .map_err(|_| format!("{k:?} is not an integer key"))?;
+    let v = v.trim();
+    let value = match v {
+        "true" => rmpv::Value::Boolean(true),
+        "false" => rmpv::Value::Boolean(false),
+        "nil" => rmpv::Value::Nil,
+        _ => {
+            if let Ok(i) = v.parse::<i64>() {
+                rmpv::Value::from(i)
+            } else if let Ok(f) = v.parse::<f32>() {
+                rmpv::Value::F32(f)
+            } else {
+                rmpv::Value::from(v)
+            }
+        }
+    };
+    Ok((key, value))
+}
+
 fn setting_gloss(id: i64) -> String {
     use fretwire_core::fretwire_protocol::settings::{Kind, by_id};
     let Some(s) = by_id(id) else {

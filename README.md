@@ -158,7 +158,7 @@ cargo run -p fretwire-cli -- detect       # HX Stomp: present
 cargo run -p fretwire-cli -- pull         # read the loaded preset (non-destructive)
 ```
 
-The rule covers the HX Stomp (`0x4246`), the Helix Floor (`0x4248`), the Helix LT (`0x424a`) and the HX Stomp XL (`0x4253`).
+The rule covers the HX Stomp (`0x4246`), the Helix Floor (`0x4248`), the Helix LT (`0x424a`), the HX Stomp XL (`0x4253`) and the HX Effects (`0x4245`).
 
 ## Devices
 
@@ -168,7 +168,8 @@ The rule covers the HX Stomp (`0x4246`), the Helix Floor (`0x4248`), the Helix L
 | Helix Floor | `0x4248` | **verified** — ~70 logged sessions with a remote tester; two DSPs, eight setlists |
 | Helix LT    | `0x424a` | **reads verified, edits untested** — surveyed on real hardware ([`docs/helix-lt.md`](docs/helix-lt.md)): handshake, preset read, setlists and preset browse all reconcile. No edit has been sent to one |
 | HX Stomp XL | `0x4253` | **reported working** — an owner runs it, reads `01A`-`32D` (32 banks of 4) off its screen, and its handshake identifies it as `P36`. We hold no capture from one, so its DSP and snapshot counts and setlist count stay unknown rather than assumed |
-| Helix Rack, HX Effects | — | **not recognised yet** — we don't know their PIDs, so `fretwire detect` won't see one |
+| HX Effects  | `0x4245` | **untested** — a contributor sent its `lsusb` line (issue #10), so `detect` finds one and the udev rule covers it. Nobody has run the editor against one; it is effects-only, so none of its preset geometry is assumed from a Stomp |
+| Helix Rack  | — | **not recognised yet** — we don't know its PID, so `fretwire detect` won't see one |
 
 An unverified device logs a caveat when opened, and is only picked after a verified one. Nothing in
 the device table is guessed: a field we have not seen is `None`, and the editor falls back rather
@@ -177,8 +178,8 @@ than assuming it matches a sibling.
 ### Adding a device
 
 The whole HX family shares the `MI_00` control protocol, so a new one is mostly a matter of knowing
-it exists. If you have a Helix Rack or HX Effects and would like it supported, the one thing we
-cannot get without you is its USB product ID:
+it exists. If you have a Helix Rack and would like it supported, the one thing we cannot get
+without you is its USB product ID:
 
 ```sh
 lsusb -d 0e41:            # e.g. Bus 001 Device 007: ID 0e41:42xx Line 6 ...

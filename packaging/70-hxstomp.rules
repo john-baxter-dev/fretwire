@@ -19,3 +19,6 @@ SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="424a", MODE="0660", 
 # HX Stomp XL — untested; we have no capture from one. Same family, so the rule is here, but
 # fretwire will warn when it opens it.
 SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="4253", MODE="0660", TAG+="uaccess"
+# HX Effects — untested; only its USB id is known (issue #10). Same family, so the rule is here,
+# but fretwire will warn when it opens it.
+SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="4245", MODE="0660", TAG+="uaccess"

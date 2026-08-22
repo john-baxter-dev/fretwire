@@ -4,7 +4,8 @@
 //! preset — nothing is inferred from another device in the family. See `docs/helix-floor.md`.
 
 use fretwire_protocol::{
-    DEVICES, Device, PID_HELIX_FLOOR, PID_HELIX_LT, PID_HX_STOMP, PID_HX_STOMP_XL, Support,
+    DEVICES, Device, PID_HELIX_FLOOR, PID_HELIX_LT, PID_HX_EFFECTS, PID_HX_STOMP, PID_HX_STOMP_XL,
+    Support,
 };
 
 #[test]
@@ -33,6 +34,10 @@ fn lookup_by_pid() {
     assert_eq!(
         Device::by_pid(PID_HELIX_LT).map(|d| d.name),
         Some("Helix LT")
+    );
+    assert_eq!(
+        Device::by_pid(PID_HX_EFFECTS).map(|d| d.name),
+        Some("HX Effects")
     );
     assert!(Device::by_pid(0xFFFF).is_none());
 }
@@ -107,6 +112,29 @@ fn the_stomp_xl_claims_nothing_it_hasnt_shown_us() {
         1,
         "unknown DSP count falls back to one group"
     );
+}
+
+/// The HX Effects is in the table on the strength of one `lsusb` line (issue #10) — enough to find
+/// one and warn about it, and not enough to say anything else. Nothing is inherited from the Stomp:
+/// it is an effects-only unit, so a copied model code or snapshot count would be a guess about a
+/// different data class.
+#[test]
+fn the_hx_effects_carries_nothing_but_its_usb_id() {
+    let fx = Device::by_pid(PID_HX_EFFECTS).unwrap();
+    assert_eq!(fx.support, Support::Untested);
+    assert!(fx.support.caveat().is_some());
+    assert!(fx.model_code.is_none());
+    assert!(fx.preset_device_id.is_none());
+    assert!(fx.dsps.is_none());
+    assert!(fx.snapshots.is_none());
+    assert!(fx.setlists.is_none());
+    assert!(fx.setlist_size.is_none());
+    assert!(fx.presets_per_bank.is_none());
+    // The fallbacks still have to do something sane with an all-unknown device.
+    assert_eq!(fx.dsp_count(), 1);
+    assert_eq!(fx.setlist_stride(), 128);
+    assert_eq!(fx.setlist_names(), &["Presets"]);
+    assert_eq!(fx.preset_label(0), None);
 }
 
 #[test]

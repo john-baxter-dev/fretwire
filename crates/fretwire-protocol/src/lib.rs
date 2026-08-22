@@ -36,6 +36,13 @@ pub const PID_HELIX_FLOOR: u16 = 0x4248;
 /// The unit identifies itself as `P21` — the Floor's model code — and every read path
 /// reconciles against it unchanged. See `docs/helix-lt.md`.
 pub const PID_HELIX_LT: u16 = 0x424A;
+/// USB Product ID for the HX Effects, read off a contributor's unit with `lsusb`
+/// (2026-08-22, issue #10): `ID 0e41:4245 Line6, Inc. HX Effects`.
+///
+/// That descriptor line is the whole of what we know — no traffic from one has been seen, and the
+/// HX Effects is the family member least like the others (it runs the HX effects but no amp or cab
+/// models, and its preset layout is its own), so nothing below is filled in from a sibling.
+pub const PID_HX_EFFECTS: u16 = 0x4245;
 /// Interface number of the vendor-specific control channel.
 pub const CONTROL_INTERFACE: u8 = 0x00;
 /// Bulk OUT endpoint (host → device).
@@ -139,6 +146,9 @@ pub struct Device {
 /// against our builders, and in both cases every field we did not observe stays `None` rather than
 /// being copied from a sibling: the LT reports the Floor's `P21` and still does not inherit its
 /// `preset_device_id`, and the XL's own `P36` says nothing about its DSP or snapshot counts.
+///
+/// The **HX Effects** is [`Support::Untested`]: a contributor sent its `lsusb` line, so the editor
+/// can find one and warn, and every other field is empty because nobody has plugged one in.
 pub const DEVICES: &[Device] = &[
     Device {
         pid: PID_HX_STOMP,
@@ -256,6 +266,21 @@ pub const DEVICES: &[Device] = &[
         // HX Stomp. That is enough to say it works, and (with the banking above) not enough to fill
         // in the rest. [2026-08-20/21, issues #2 and #3]
         support: Support::Reported,
+    },
+    Device {
+        pid: PID_HX_EFFECTS,
+        name: "HX Effects",
+        // Nothing but the USB ID has been seen. The HX Effects is an effects-only unit — no amps,
+        // no cabs — so even the fields that look safe to copy from a Stomp are not: its model code,
+        // preset geometry and snapshot count are all unobserved.
+        model_code: None,
+        preset_device_id: None,
+        dsps: None,
+        snapshots: None,
+        setlists: None,
+        setlist_size: None,
+        presets_per_bank: None,
+        support: Support::Untested,
     },
 ];
 

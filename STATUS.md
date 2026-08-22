@@ -3185,3 +3185,29 @@ Beside it sits id 14's value — **per snapshot / per preset / global** — beca
 what a tempo write actually means, and a number with no scope beside it invites the wrong assumption.
 The field and the globals panel are two views of the same two ids and update each other in both
 directions.
+
+## Forty-fifth round (2026-08-22): **the HX Effects' USB id, from issue #10**
+
+`@kolbiman` owns one and pasted the one line we cannot get without an owner:
+
+```
+Bus 001 Device 006: ID 0e41:4245 Line6, Inc. HX Effects
+```
+
+So the HX Effects is `0x0E41`/`0x4245` and is now in `DEVICES` — the table's **first
+`Support::Untested`** entry, a tier that until now had a definition and no members. `detect` lists
+it, the packaged udev rule covers it (otherwise it fails with EACCES on a normal desktop and looks
+like fretwire not seeing the device), `Transport::open` will open it after any verified device, and
+opening it warns.
+
+Everything else is `None`. That matters more here than it did for the XL: the HX Effects is the
+family member *least* like the rest — effects only, no amps or cabs — so a model code, DSP count or
+preset geometry copied from a Stomp would be a guess about a different data class, not a close
+neighbour. `dsp_count()` falls back to 1, `setlist_stride()` to 128, `setlist_names()` to one flat
+list, and `preset_label()` returns `None` so the GUI numbers presets by slot. A test pins that the
+entry claims nothing but its PID.
+
+**Still open:** whether it speaks the same `MI_00` protocol at all. Every sign says yes — same
+vendor interface layout across every family member whose descriptors we have seen — but that is
+inference, and the tier says so. One `fretwire pull` from an owner would settle its model code and
+its preset geometry in a single reply.

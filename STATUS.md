@@ -2282,6 +2282,11 @@ ships in) and every render site goes through `slotLabel`. The toggle sits in the
 and only appears where the backend knows the banking — otherwise both settings render the same flat
 number. If op-25 lands, the default becomes "whatever the pedal says" and this stays as the override.
 
+> **Update (2026-08-22, thirty-fifth round).** It landed, half-way: op **24** reads a setting and op
+> 25 writes it, so the mechanism is no longer the blocker. The remaining one is *which id* — 166
+> answer on a Stomp and only a handful are named, and this is not yet among them. The toggle stays
+> manual until it is; `settings-diff` across a flip of the panel setting would find it in one pass.
+
 **And it has to be manual, because the setting never reaches us** [solid — 2026-08-21, HX Stomp].
 Tested rather than assumed: flip the global on a live unit, re-read, byte-compare. Both streams we
 take are **identical** across the two settings —

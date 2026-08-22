@@ -116,10 +116,11 @@ pub struct Device {
     /// **The setting does not reach the wire** [solid — 2026-08-21, HX Stomp]. Flipping it on a
     /// live unit and re-reading left both streams we take byte-identical: the bank-0 browse listing
     /// (3267 bytes, same md5) and the loaded preset's stream (2388 bytes, same md5, same slot). So
-    /// it cannot be detected from a listing or a preset — it lives in the globals behind op-25,
-    /// which we don't decode. Until we do, the GUI carries a manual override
-    /// (`ui/src/lib/numbering.svelte.js`) and this renders the banked form by default, because that
-    /// is the form the device ships in.
+    /// it cannot be detected from a listing or a preset — it lives in the globals, which op 24 reads
+    /// and op 25 writes (see `docs/protocol.md`). That namespace is decoded but not *mapped*: 166
+    /// ids answer on a Stomp and only a handful are named, so which one carries this is still
+    /// unknown. Until it is, the GUI carries a manual override (`ui/src/lib/numbering.svelte.js`)
+    /// and this renders the banked form by default, because that is the form the device ships in.
     pub presets_per_bank: Option<usize>,
     /// How much of the above is confirmed from real traffic.
     pub support: Support,

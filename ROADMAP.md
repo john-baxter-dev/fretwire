@@ -530,8 +530,17 @@ real session.
       still honestly `None`, because "a user says it works" fills in none of them. We have no
       capture, preset or backup from one, so opening it still logs a caveat. Tests pin the
       invariants, including that every table entry has a matching udev rule.
-      **Still open on the XL:** how many setlists it has, and how its screen banks presets (the
-      Stomp's 3-per-bank is not assumed), so it gets no `01A`-style preset labels yet.
+      **Still open on the XL:** how many setlists it has. Its banking was answered on 2026-08-21
+      by the owner reading `01A`-`32D` off the panel, and its model code `P36` by their handshake log.
+- [x] **Helix LT — PID `0x424A`, `Reported` (2026-08-22, PR #3).** Surveyed on a contributor's
+      physical unit: handshake, preset read, snapshot decode and the setlist/preset browses all work
+      **unmodified** once the PID is in the table, so the LT needs no protocol change. It stamps the
+      Floor's `P21` and carries the Floor's geometry (2 DSPs, 8 snapshots, 8 banks of 128), so
+      `by_model_code("P21")` keeps resolving to the Floor — they are one data class. Survey:
+      **`docs/helix-lt.md`**.
+      **Still open on the LT:** its `preset_device_id` (never on the wire; the Floor's came from a
+      `.hxb`, and we have no LT backup), how its screen banks presets, and **every write path** —
+      no edit has ever been sent to one, which is why it is not `Verified`.
 - [ ] **Session grid/routing planning is still DSP-0 only.** `add_block_at`, `place_block`,
       `insert_block`, `reorder_block` and `set_node_pos` plan slot moves inside one 20-slot array
       and read it via `dsp_blocks(0)`/`dsp_grid(0)` — complete for the Stomp, needs a `dsp` argument

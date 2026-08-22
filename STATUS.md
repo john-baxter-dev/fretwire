@@ -2826,3 +2826,48 @@ rules rather than a convenient subset.
 The GUI starts clean against the pedal and both contracts are tested, but **nobody has driven the
 new panel in a running window** — the file pickers and the confirm flows in particular. Same caveat
 the assignment round carried.
+
+## Thirty-seventh round (2026-08-22): **the Helix LT, merged from a contributor's survey**
+
+PR #3 adds the **Helix LT** (`0x0E41`/`0x424A`). Merged after review; the submitter had gone quiet
+on the follow-up questions, so what could not be answered was down-tagged rather than guessed.
+
+**The headline is that there is no headline.** The handshake, the preset read, the snapshot decode
+and both browses work **unmodified** — the LT was invisible only because its PID was in no table and
+no udev rule, so `Transport::open` skipped it and its USB node stayed root-owned. Three lines of
+data and a rule; the protocol did not move. Survey: **`docs/helix-lt.md`**.
+
+**It is the Floor's data class.** The LT reports `P21` — the Floor's model code, not one of its own
+— in the handshake identity reply *and* at preset key `7 → 36`. Two DSPs (blocks in slots ≥ 20, key
+`1` populated), 8 snapshots, 8 banks of 128 with bank 8 refused `-3`. `by_model_code("P21")` still
+resolves to the Floor, which is listed first, and that is correct rather than a collision.
+
+**Reported, not Verified — and not `Untested` either.** The PR proposed `Untested`, which means
+"only the USB IDs are known" and undersells a survey where every read path reconciled against real
+parsers. But `Verified` means the *builders* have been reconciled against a unit's own bytes, and
+**nothing has ever been written to this LT** — no edit, no save, no backup. `Reported` is the tier
+that says exactly that.
+
+### What we down-tagged
+Reviewing a contribution means separating what the unit showed from what the write-up concluded:
+
+- **`preset_device_id` stays `None`.** The wire carries no `0x0021xxxx` id; the Floor's came from a
+  `.hxb` and we have no LT backup. Not copied across.
+- **The setlist *names* are the Floor's, and the doc says so.** Only the arity (8 × 128) and the
+  character of the two end banks were observed. The Floor's came from the eight `L6Setlist` streams
+  of a real backup — a different quality of evidence, and the field to fix if an LT backup ever
+  disagrees.
+- **`presets_per_bank` stays `None`.** The survey never says how the LT's screen groups presets, and
+  the Floor's is unknown too, so there was nothing to inherit. It lists by slot number.
+- **The block count is not recorded.** The survey gave two different figures in consecutive bullets
+  and the question went unanswered. Nothing rests on it: `dsps: Some(2)` needs only that *some*
+  block sits in a slot ≥ 20, which both readings agree on.
+- **Key `35` = `0x03710020` is recorded raw.** Reading it as "firmware 3.71" would need the encoding
+  pinned against two known versions, and it never has been. Data, not a conclusion.
+
+### Merging it
+The branch was cut before the XL round, which rewrote the same device entry and the same two tests,
+so README.md and `tests/devices.rs` conflicted. Both resolved toward master's newer work: the XL
+keeps its `P36` and its `01A`-`32D` banking, and the whole-`DEVICES` label invariant master added
+subsumes the loop the PR was extending — the LT is now checked by name *and* by that invariant.
+268 tests pass (one new), fmt and clippy clean.

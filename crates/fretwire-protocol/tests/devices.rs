@@ -3,7 +3,9 @@
 //! Everything asserted here is either a USB ID from a real descriptor or a value read out of a real
 //! preset — nothing is inferred from another device in the family. See `docs/helix-floor.md`.
 
-use fretwire_protocol::{DEVICES, Device, PID_HELIX_FLOOR, PID_HX_STOMP, PID_HX_STOMP_XL, Support};
+use fretwire_protocol::{
+    DEVICES, Device, PID_HELIX_FLOOR, PID_HELIX_LT, PID_HX_STOMP, PID_HX_STOMP_XL, Support,
+};
 
 #[test]
 fn every_device_has_a_distinct_pid() {
@@ -27,6 +29,10 @@ fn lookup_by_pid() {
     assert_eq!(
         Device::by_pid(PID_HX_STOMP_XL).map(|d| d.name),
         Some("HX Stomp XL")
+    );
+    assert_eq!(
+        Device::by_pid(PID_HELIX_LT).map(|d| d.name),
+        Some("Helix LT")
     );
     assert!(Device::by_pid(0xFFFF).is_none());
 }
@@ -78,7 +84,7 @@ fn verified_devices_are_fully_described() {
 }
 
 #[test]
-fn the_unverified_device_claims_nothing_it_hasnt_shown_us() {
+fn the_stomp_xl_claims_nothing_it_hasnt_shown_us() {
     let xl = Device::by_pid(PID_HX_STOMP_XL).unwrap();
     // Reported, not Verified: an owner has it working, which is real information, but no traffic
     // from one has been reconciled against our builders.
@@ -210,9 +216,14 @@ fn the_xl_banks_by_four_not_the_stomps_three() {
 /// all it would take.
 #[test]
 fn devices_we_have_not_seen_banking_for_offer_no_label() {
-    let floor = Device::by_pid(PID_HELIX_FLOOR).unwrap();
-    assert_eq!(floor.presets_per_bank, None);
-    assert_eq!(floor.preset_label(0), None);
+    // The Floor and the LT both: the survey read the LT's presets and browsed its setlists but
+    // never says how its screen groups them, and the Floor's is unknown too, so neither has
+    // anything to inherit.
+    for pid in [PID_HELIX_FLOOR, PID_HELIX_LT] {
+        let d = Device::by_pid(pid).unwrap();
+        assert_eq!(d.presets_per_bank, None, "{}", d.name);
+        assert_eq!(d.preset_label(0), None, "{}", d.name);
+    }
     // Belt and braces: no device may carry a bank size without the label agreeing, in either
     // direction. This is the invariant the loop above used to be here to protect.
     for d in DEVICES {
@@ -223,4 +234,27 @@ fn devices_we_have_not_seen_banking_for_offer_no_label() {
             d.name
         );
     }
+}
+
+/// The LT reports the Floor's model code and the same setlist geometry, but its own preset
+/// device id was never observed — it must stay unknown rather than inherit the Floor's.
+#[test]
+fn the_lt_shares_the_floors_data_class_without_inheriting_its_device_id() {
+    let floor = Device::by_pid(PID_HELIX_FLOOR).unwrap();
+    let lt = Device::by_pid(PID_HELIX_LT).unwrap();
+
+    // Measured on a physical LT: see docs/helix-lt.md.
+    assert_eq!(lt.model_code, Some("P21"));
+    assert_eq!((lt.dsps, lt.snapshots), (Some(2), Some(8)));
+    assert_eq!(lt.setlist_size, floor.setlist_size);
+    assert_eq!(lt.setlists, floor.setlists);
+
+    // Never seen on the wire, so never guessed.
+    assert_eq!(lt.preset_device_id, None);
+
+    // Both stamp "P21"; the lookup keeps resolving it to the Floor, which is listed first.
+    assert_eq!(
+        Device::by_model_code("P21").map(|d| d.pid),
+        Some(PID_HELIX_FLOOR)
+    );
 }

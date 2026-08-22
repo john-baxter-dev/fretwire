@@ -1,7 +1,7 @@
 # fretwire
 
-An independent, from-scratch **Linux editor for the Line 6 HX Stomp, HX Stomp XL and Helix Floor**,
-written in Rust.
+An independent, from-scratch **Linux editor for the Line 6 HX Stomp, HX Stomp XL, Helix Floor and
+Helix LT**, written in Rust.
 
 fretwire talks to the pedal over its `MI_00` USB control interface (VID `0x0E41` / PID `0x4246`).
 The wire protocol was recovered by **observing USB traffic to and from the device**; the model,
@@ -156,7 +156,7 @@ cargo run -p fretwire-cli -- detect       # HX Stomp: present
 cargo run -p fretwire-cli -- pull         # read the loaded preset (non-destructive)
 ```
 
-The rule covers both the HX Stomp (`0x4246`) and HX Stomp XL (`0x4253`).
+The rule covers the HX Stomp (`0x4246`), the Helix Floor (`0x4248`), the Helix LT (`0x424a`) and the HX Stomp XL (`0x4253`).
 
 ## Devices
 
@@ -164,8 +164,9 @@ The rule covers both the HX Stomp (`0x4246`) and HX Stomp XL (`0x4253`).
 |---------|---------|--------|
 | HX Stomp    | `0x4246` | **verified** — developed against one; every builder reproduces its own wire bytes |
 | Helix Floor | `0x4248` | **verified** — ~70 logged sessions with a remote tester; two DSPs, eight setlists |
+| Helix LT    | `0x424a` | **reads verified, edits untested** — surveyed on real hardware ([`docs/helix-lt.md`](docs/helix-lt.md)): handshake, preset read, setlists and preset browse all reconcile. No edit has been sent to one |
 | HX Stomp XL | `0x4253` | **reported working** — an owner runs it, reads `01A`-`32D` (32 banks of 4) off its screen, and its handshake identifies it as `P36`. We hold no capture from one, so its DSP and snapshot counts and setlist count stay unknown rather than assumed |
-| Helix LT, Helix Rack, HX Effects | — | **not recognised yet** — we don't know their PIDs, so `fretwire detect` won't see one |
+| Helix Rack, HX Effects | — | **not recognised yet** — we don't know their PIDs, so `fretwire detect` won't see one |
 
 An unverified device logs a caveat when opened, and is only picked after a verified one. Nothing in
 the device table is guessed: a field we have not seen is `None`, and the editor falls back rather
@@ -174,7 +175,7 @@ than assuming it matches a sibling.
 ### Adding a device
 
 The whole HX family shares the `MI_00` control protocol, so a new one is mostly a matter of knowing
-it exists. If you have a Helix LT, Rack or HX Effects and would like it supported, the one thing we
+it exists. If you have a Helix Rack or HX Effects and would like it supported, the one thing we
 cannot get without you is its USB product ID:
 
 ```sh

@@ -149,14 +149,36 @@ keeps believing an editor is attached — the front panel stays in the connected
 behaves wonky until power-cycled. This is the observed "panel lock." Implemented as
 `fretwire_core::Session::close()` (also run from its `Drop`), builder opcode `fretwire_protocol::cmd::SESSION_CLOSE`.
 
-## Global / input parameters use a different op [hypothesis] — from `switch_input_gate_and_guitar_pad.pcapng`
-Block params address a slot (target key 98). **Global/input settings** (input gate, guitar pad) are
-*not* slot-addressed. Two shapes seen in that capture:
-- A **block switch** on slot 0 (Input): `{102: txn, 100: 30 (set), 101: {98:0, 29:true, 26:0, 28:0, 119:<bool>}}`
-  — confirms the documented edge case that **switch params carry key 28 = 0** and a bool at key 119.
-- A **global setting**: `{102: txn, 100: 25, 101: {118: <id>, 119: <value>}}` — a **new op (25)** with
-  the target keyed by `{118: id, 119: value}` (e.g. id `134`), with no block slot. Decoding the key-118
-  id space (which global maps to which id) is an open thread.
+## Device settings: op 24 reads, op 25 writes [solid — verified live on an HX Stomp 2026-08-22]
+
+Settings are a **flat numbered namespace**, not a structured document. `op 24 {118: id}` reads one —
+the reply carries the value at key `119` — and `op 25 {118: id, 119: value}` writes it. Both ride
+the ordinary edit envelope and are not block-addressed.
+
+**166 of ids 0..=260 answer on an HX Stomp.** Named so far:
+
+| id | setting | type |
+|---|---|---|
+| 16 | tempo, BPM | `f32` |
+| 28 | current preset index | `int` |
+| 192 | global EQ low-peak gain | — |
+| 201-203 | global EQ | — |
+
+**Op 24 was already in this codebase under the wrong name.** The connect capture sends `{118: 128}`
+and we had it written up as `OP_READ_PREP`, a "read-sequence prepare step", because we only ever
+replayed it. It is not a prepare step — the handshake is fetching setting 128 along the way. The
+missing read side that made this whole area look capture-blocked was a call we had been making
+since the first handshake.
+
+### Settings are typed, and the type is enforced [solid]
+A write whose value type differs from what the device already holds is refused with `-3`. Tempo is
+an `f32`, so an integer `132` is rejected outright while `132.0` is taken — which is why
+`Session::set_setting_num` reads the current value before writing and sends back its type.
+
+### Mapping the id space needs no capture
+Dump the space, change one thing on the pedal's own menus, dump again, diff. Confirmed end to end:
+moving the tempo 80 → 132 made the diff report exactly `16: 80 -> 132` out of 166 ids.
+`fretwire settings-dump` / `settings-diff`.
 
 ## Body / inner command [solid]
 On a data frame the body (offset 16+) is:

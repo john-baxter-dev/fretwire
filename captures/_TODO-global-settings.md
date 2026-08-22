@@ -1,20 +1,51 @@
-# TODO capture: global settings (Input Z / impedance, pad, output levels) — op-25 id space
+# Global / device settings — READ SIDE DECODED (2026-08-22), id space still to map
 
-**Goal:** map the **op-25 global-settings id space** so the GUI can expose Global Settings →
-Ins/Outs: **Input Z (impedance)**, guitar pad, output level switches (instrument/line), phones
-level, and whatever else lives there. Everything per-preset on the input/output *blocks* (gate,
-threshold, decay, level, pan) is already decoded and editable — this is only the **global** side.
+**Goal:** map the **op-25 setting id space** so the GUI can expose Global Settings → Ins/Outs:
+**Input Z (impedance)**, guitar pad, output level switches, phones level, and whatever else lives
+there. Everything per-preset on the input/output *blocks* is already decoded and editable — this is
+only the **global** side.
 
-## What we already know [solid]
-- The write op: **op 25** `{102: txn, 100: 25, 101: {118: <setting id>, 119: <value>}}` — plain
-  edit-channel envelope, not block-addressed. From `switch_input_gate_and_guitar_pad.pcapng`.
-- One id mapped: **118: 134** — a 3-state input setting cycled `0 → 1 → 2` in that capture
-  (recorded alongside the guitar pad toggle; which UI control it is exactly needs re-checking
-  against what was clicked).
-- Plumbing exists: `fretwire_protocol::edit::set_setting`, `Session::set_setting(id, value)`, CLI probe.
-- **Unknown:** the read side. HX Edit must fetch current global values at startup/on opening the
-  Global Settings pane — either in the connect sequence we already replay or via a dedicated read
-  op. Without it the GUI can write settings but can't display them.
+## What we know [solid]
+- **Op 24 reads: `{102:txn, 100:24, 101:{118:id}}`, and the reply carries the value at key 119.**
+  This was the missing half, and it was hiding in plain sight — the connect capture sends
+  `{118: 128}` and we had it written up as a "read-sequence prepare step". It is not a prepare
+  step; settings are a flat numbered namespace and the handshake happens to fetch id 128.
+- The write op: **op 25** `{102:txn, 100:25, 101:{118:id, 119:value}}`.
+- **Settings are typed, and a write of the wrong type is refused with `-3`.** Tempo is an `f32`, so
+  the old integer-only `set_setting` could never write it. `Session::set_setting_num` reads the
+  current value first and sends back its type.
+- **166 of ids 0..=260 answer on an HX Stomp.** Named so far: **16** tempo in BPM (`f32`), **28**
+  current preset index (`int`), **192** global EQ low-peak gain, **201-203** global EQ.
+- Plumbing: `edit::{read_setting,set_setting,set_setting_value}`,
+  `Session::{read_setting,scan_settings,set_setting,set_setting_num}`, CLI `setting-get`,
+  `setting-set`, `settings-dump`, `settings-diff`.
+
+## Mapping the rest needs no capture at all
+With a read op the Windows box is unnecessary. The loop is:
+
+```
+fretwire settings-dump before.txt      # 166 ids
+# change exactly one thing on the pedal's own menus
+fretwire settings-dump after.txt
+fretwire settings-diff before.txt after.txt
+```
+
+The diff names the id. Verified end to end: with tempo moved 80 -> 132 the diff reported exactly
+`16: 80 -> 132` out of 166 ids and nothing else.
+
+**Do one setting at a time**, and note the original value so it can be put back. Priorities are the
+ones the GUI wants first: **Input Z (impedance)**, guitar pad, main out level (instrument/line),
+and the **preset numbering** flag (`01A` vs `000`) — that last one is the cheapest possible first
+consumer, since it is confirmed absent from every preset stream we read and the GUI currently
+carries a manual toggle for it.
+
+## Safety
+Op 25 writes global config, not flash/firmware — same risk class as preset edits, recoverable by
+setting it back. Read before writing (which `set_setting_num` does anyway, since it needs the type).
+
+---
+
+## Original capture recipe (kept for reference — no longer the only route)
 
 ## Capture recipe (Windows box, `tools/dump-control.ps1` + HX Edit)
 One capture per setting, changing **only that setting**, stepping through **all its values in

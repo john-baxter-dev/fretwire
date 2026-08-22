@@ -77,8 +77,16 @@ pub const OP_BYPASS: i64 = 41;
 pub const OP_SELECT: i64 = 20;
 /// Operation id 76: open the current edit buffer for a (non-destructive) read.
 pub const OP_READ_OPEN: i64 = 76;
-/// Operation id 24: read-sequence prepare step (`{118: 128}` in the connect capture).
+/// Operation id 24: **read a device setting by id** — `{118: id}`.
+///
+/// We met this as a "read-sequence prepare step" because the connect capture sends `{118: 128}`
+/// and we only ever replayed it. It is not a prepare step: settings are a flat numbered namespace,
+/// op 24 reads one and [`OP_SETTING`] (25) writes one, and the handshake is simply fetching id 128
+/// along the way. [`read_prep`] is kept as the handshake's fixed call; [`read_setting`] is the
+/// general one.
 pub const OP_READ_PREP: i64 = 24;
+/// Alias for [`OP_READ_PREP`] under the name that says what it does.
+pub const OP_READ_SETTING: i64 = OP_READ_PREP;
 /// Operation id 23: read-sequence query step (nil target; reply carries the preset identity).
 pub const OP_READ_INFO: i64 = 23;
 /// Operation id 4: **read the preset stored at an index, without loading it** —
@@ -586,6 +594,15 @@ pub fn rename_snapshot(index: i64, name: &str, txn: u16) -> Vec<u8> {
 /// block-addressed. The `id` space is only partly mapped (see [`K_SETTING_ID`]); this builder is the
 /// wire primitive for both known settings and live probing. (`{102:txn, 100:25, 101:{118:id, 119:value}}`.)
 pub fn set_setting(id: i64, value: i64, txn: u16) -> Vec<u8> {
+    set_setting_value(id, Value::from(value), txn)
+}
+
+/// [`set_setting`] with the value's **type** chosen by the caller.
+///
+/// The device stores each setting as a definite type and refuses a write of any other with `-3` —
+/// tempo, for instance, is an `f32`, so the integer-only builder above could never write it. Read
+/// the current value with [`read_setting`] and send back the same type.
+pub fn set_setting_value(id: i64, value: Value, txn: u16) -> Vec<u8> {
     encode(Value::Map(vec![
         (Value::from(K_TXN), Value::from(txn)),
         (Value::from(K_OP), Value::from(OP_SETTING)),
@@ -593,7 +610,7 @@ pub fn set_setting(id: i64, value: i64, txn: u16) -> Vec<u8> {
             Value::from(K_TARGET),
             Value::Map(vec![
                 (Value::from(K_SETTING_ID), Value::from(id)),
-                (Value::from(K_VALUE), Value::from(value)),
+                (Value::from(K_VALUE), value),
             ]),
         ),
     ]))
@@ -632,6 +649,25 @@ pub fn read_prep(txn: u16) -> Vec<u8> {
         (
             Value::from(K_TARGET),
             Value::Map(vec![(Value::from(K_READ_PREP), Value::from(128))]),
+        ),
+    ]))
+}
+
+/// Build a **read-setting** body (op 24): `{102:txn, 100:24, 101:{118:id}}`.
+///
+/// Settings are a flat numbered namespace rather than a structured document — op 24 reads one and
+/// [`set_setting`] writes it. The reply carries the value at key `119`, the same key a write puts
+/// it in.
+///
+/// A write's value **type has to match what the device already holds** (a float where it wants a
+/// bool is refused with `-3`), which is the other reason to read before writing.
+pub fn read_setting(id: i64, txn: u16) -> Vec<u8> {
+    encode(Value::Map(vec![
+        (Value::from(K_TXN), Value::from(txn)),
+        (Value::from(K_OP), Value::from(OP_READ_SETTING)),
+        (
+            Value::from(K_TARGET),
+            Value::Map(vec![(Value::from(K_SETTING_ID), Value::from(id))]),
         ),
     ]))
 }
@@ -1738,5 +1774,35 @@ mod tests {
         assert_eq!(&field[..30], b"a".repeat(30).as_slice());
         assert_eq!(field[30], 0);
         assert!(std::str::from_utf8(&field[..30]).is_ok());
+    }
+    #[test]
+    fn reading_a_setting_names_its_id() {
+        // {102: 1, 100: 24, 101: {118: 16}}
+        assert_eq!(
+            read_setting(16, 1),
+            [0x83, 0x66, 0x01, 0x64, 0x18, 0x65, 0x81, 0x76, 0x10]
+        );
+        // The handshake's fixed call is the same opcode with id 128.
+        let prep = read_prep(0x03e9);
+        assert_eq!(EditBody::parse(&prep).unwrap().op, OP_READ_SETTING);
+    }
+
+    #[test]
+    fn a_setting_write_carries_the_type_it_is_given() {
+        // An integer setting and a float one differ only in how 119 is encoded, and the device
+        // refuses the wrong one with -3 — so the builder must not normalise them together.
+        let as_int = set_setting(16, 132, 1);
+        let as_f32 = set_setting_value(16, Value::F32(132.0), 1);
+        assert_ne!(as_int, as_f32);
+        assert!(as_int.ends_with(&[0x77, 0xcc, 0x84]), "119 -> uint8 132");
+        assert!(
+            as_f32.ends_with(&[0x77, 0xca, 0x43, 0x04, 0x00, 0x00]),
+            "119 -> f32 132.0"
+        );
+        // Both still address the same setting.
+        for body in [as_int, as_f32] {
+            let e = EditBody::parse(&body).unwrap();
+            assert_eq!(e.op, OP_SETTING);
+        }
     }
 }

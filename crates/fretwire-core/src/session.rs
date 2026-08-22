@@ -2088,6 +2088,82 @@ impl Session {
         Ok(())
     }
 
+    /// Write device setting `id`, matching the **type the device already holds** (op 24 then 25).
+    ///
+    /// Settings are typed, and a write of the wrong type is refused with `-3` — tempo is an `f32`,
+    /// so [`Self::set_setting`]'s integer could never set it. This reads the current value first
+    /// and sends `value` back as whatever type came out: a bool for a bool, a rounded integer for
+    /// an integer, an `f32` for a float.
+    ///
+    /// Returns the value the device reports afterwards, which is the only real confirmation.
+    pub fn set_setting_num(
+        &mut self,
+        id: i64,
+        value: f64,
+    ) -> crate::Result<Option<fretwire_data::rmpv::Value>> {
+        use fretwire_data::rmpv::Value;
+        let current = self.read_setting(id)?.ok_or_else(|| {
+            fretwire_data::Error::Stream(format!(
+                "setting {id} has no value to match a type against — the device may not implement it"
+            ))
+        })?;
+        let typed = match &current {
+            Value::Boolean(_) => Value::from(value != 0.0),
+            Value::Integer(_) => Value::from(value.round() as i64),
+            Value::F32(_) | Value::F64(_) => Value::F32(value as f32),
+            other => {
+                return Err(fretwire_data::Error::Stream(format!(
+                    "setting {id} holds {other}, which this does not know how to write"
+                ))
+                .into());
+            }
+        };
+        let txn = self.bump_txn();
+        self.send_edit(edit::set_setting_value(id, typed, txn))?;
+        self.read_setting(id)
+    }
+
+    /// Read device setting `id` (op 24). **Reads only.**
+    ///
+    /// Settings are a flat numbered namespace, not a structured document — this is the read half of
+    /// [`Self::set_setting`], and the thing whose absence made the globals area look
+    /// capture-blocked for months. Returns the raw value: the id space is only partly mapped, and
+    /// the types vary (bool, int, float), so callers get what the device said.
+    ///
+    /// `Ok(None)` means the device answered without a value — an id it does not implement.
+    pub fn read_setting(&mut self, id: i64) -> crate::Result<Option<fretwire_data::rmpv::Value>> {
+        let txn = self.bump_txn();
+        let ack = self.send_edit(edit::read_setting(id, txn))?;
+        Ok(
+            fretwire_data::stream::locate_root(&ack.body, 32).and_then(|r| {
+                fretwire_data::stream::map_get(&r.value, 104)
+                    .and_then(|p| fretwire_data::stream::map_get(p, 119))
+                    .cloned()
+            }),
+        )
+    }
+
+    /// Read every setting id in `ids`, keeping the ones the device answers. **Reads only.**
+    ///
+    /// The id space is discovered rather than documented, so this is the tool that maps it: dump it
+    /// once, change one thing on the pedal, dump it again, and the diff names the id.
+    pub fn scan_settings(
+        &mut self,
+        ids: impl IntoIterator<Item = i64>,
+    ) -> Vec<(i64, fretwire_data::rmpv::Value)> {
+        let mut out = Vec::new();
+        for id in ids {
+            match self.read_setting(id) {
+                Ok(Some(v)) => out.push((id, v)),
+                // An unimplemented id refuses, and a refusal is data here, not a failure — keep
+                // sweeping rather than stopping at the first gap.
+                Ok(None) => tracing::debug!(id, "setting id answered no value"),
+                Err(e) => tracing::debug!(id, error = %e, "setting id refused"),
+            }
+        }
+        out
+    }
+
     /// Ask the device what footswitch `switch` carries — its assignments, label, LED colour and
     /// latching type (op 33). **`switch` is one-based**: 1 is Footswitch 1.
     ///

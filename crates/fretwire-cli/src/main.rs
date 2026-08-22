@@ -327,6 +327,29 @@ enum Command {
         #[arg(long)]
         select: bool,
     },
+    /// Read one device setting by id (op 24). **Reads only.**
+    SettingGet { id: i64 },
+    /// Set a device setting, matching the type the device already holds (op 24 then 25).
+    ///
+    /// Unlike `setting`, which always writes an integer, this reads the current value first — so it
+    /// can write the float and bool settings too.
+    SettingSet { id: i64, value: f64 },
+    /// Dump the device-setting id space (op 24). **Reads only.**
+    ///
+    /// Write it to a file, change one thing on the pedal, dump again and diff: the id that moved
+    /// is the setting you touched. That is how this namespace gets mapped.
+    SettingsDump {
+        /// Highest id to try.
+        #[arg(long, default_value_t = 260)]
+        max: i64,
+        /// Write to this file instead of stdout.
+        out: Option<std::path::PathBuf>,
+    },
+    /// Diff two `settings-dump` files and name the ids that changed. Offline.
+    SettingsDiff {
+        a: std::path::PathBuf,
+        b: std::path::PathBuf,
+    },
     /// Ask the device what a footswitch carries (op 33). The number is **one-based**: 1 = FS1.
     ReadSwitch { switch: i64 },
     /// Ask the device what drives one parameter (op 36).
@@ -1090,6 +1113,75 @@ fn main() -> Result<()> {
                 None => println!("op {op} slot {slot} -> no decodable reply"),
             }
         }
+        Command::SettingGet { id } => {
+            let mut s = fretwire_core::Session::connect()?;
+            match s.read_setting(id)? {
+                // The type is not cosmetic: a write whose value type differs from what the device
+                // already holds is refused with -3, so the probe has to show it.
+                Some(v) => println!("{id} = {v}  [{}]{}", value_type(&v), setting_gloss(id)),
+                None => println!("{id}: no value (the device does not implement it)"),
+            }
+        }
+        Command::SettingSet { id, value } => {
+            let mut s = fretwire_core::Session::connect()?;
+            match s.set_setting_num(id, value)? {
+                Some(v) => println!("{id} = {v}  [{}]{}", value_type(&v), setting_gloss(id)),
+                None => println!("{id}: wrote, but the device reports no value back"),
+            }
+        }
+        Command::SettingsDump { max, out } => {
+            let mut s = fretwire_core::Session::connect()?;
+            let found = s.scan_settings(0..=max);
+            let mut text = String::new();
+            for (id, v) in &found {
+                text.push_str(&format!("{id}\t{v}\n"));
+            }
+            match out {
+                Some(path) => {
+                    std::fs::write(&path, &text)?;
+                    println!(
+                        "{} of {} ids answered -> {}",
+                        found.len(),
+                        max + 1,
+                        path.display()
+                    );
+                }
+                None => {
+                    print!("{text}");
+                    println!("# {} of {} ids answered", found.len(), max + 1);
+                }
+            }
+        }
+        Command::SettingsDiff { a, b } => {
+            let read = |p: &std::path::Path| -> anyhow::Result<Vec<(String, String)>> {
+                Ok(std::fs::read_to_string(p)?
+                    .lines()
+                    .filter(|l| !l.starts_with('#') && !l.is_empty())
+                    .filter_map(|l| l.split_once('\t'))
+                    .map(|(i, v)| (i.to_string(), v.to_string()))
+                    .collect())
+            };
+            let (before, after) = (read(&a)?, read(&b)?);
+            let lookup: std::collections::HashMap<_, _> = before.iter().cloned().collect();
+            let mut changed = 0;
+            for (id, now) in &after {
+                match lookup.get(id) {
+                    Some(was) if was != now => {
+                        changed += 1;
+                        let n: i64 = id.parse().unwrap_or(-1);
+                        println!("{id}: {was} -> {now}{}", setting_gloss(n));
+                    }
+                    None => {
+                        changed += 1;
+                        println!("{id}: (absent) -> {now}");
+                    }
+                    _ => {}
+                }
+            }
+            if changed == 0 {
+                println!("no setting changed between the two dumps");
+            }
+        }
         Command::ReadSwitch { switch } => {
             let mut s = fretwire_core::Session::connect()?;
             match s.read_switch(switch)? {
@@ -1776,6 +1868,38 @@ fn ir_filename(info: &fretwire_data::ir::IrSlot) -> std::path::PathBuf {
         format!("ir-{:03}.wav", info.index).into()
     } else {
         format!("ir-{:03} {safe}.wav", info.index).into()
+    }
+}
+
+/// Name a MessagePack value's type, for the settings probe.
+fn value_type(v: &fretwire_core::fretwire_data::rmpv::Value) -> &'static str {
+    use fretwire_core::fretwire_data::rmpv::Value;
+    match v {
+        Value::Boolean(_) => "bool",
+        Value::Integer(n) if n.is_i64() => "int",
+        Value::Integer(_) => "uint",
+        Value::F32(_) => "f32",
+        Value::F64(_) => "f64",
+        Value::String(_) => "string",
+        Value::Binary(_) => "bytes",
+        Value::Array(_) => "array",
+        Value::Map(_) => "map",
+        Value::Nil => "nil",
+        Value::Ext(..) => "ext",
+    }
+}
+
+/// A short note on the settings whose meaning is known, appended to a printed value.
+///
+/// The namespace is flat and numbered, and almost all of it is still unmapped — this names the
+/// handful that are pinned down so a dump is not 147 anonymous numbers.
+fn setting_gloss(id: i64) -> &'static str {
+    match id {
+        16 => "  (tempo, BPM)",
+        28 => "  (current preset index)",
+        192 => "  (global EQ low-peak gain)",
+        201..=203 => "  (global EQ)",
+        _ => "",
     }
 }
 

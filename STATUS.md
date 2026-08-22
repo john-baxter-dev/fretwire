@@ -2753,3 +2753,36 @@ state, one IR in slot 0.
   plus upload expresses it. The last gap in the family.
 - **No GUI.** The backend and CLI are done; nothing in the Tauri app exposes IRs yet. That, and how
   a preset's IR block *references* a user slot, are the next pieces.
+
+## Thirty-fifth round (2026-08-22): **device settings read, and the op was already ours**
+
+`tonepush`'s `PROTOCOL.md` named the missing half of the globals area: **op 24 `{118: id}` reads a
+setting**, answering with the value at key `119`. That was the one thing
+`captures/_TODO-global-settings.md` said made the whole area capture-blocked.
+
+**We had been calling it since the first handshake.** Op 24 sits in `edit.rs` as `OP_READ_PREP`, a
+"read-sequence prepare step", because the connect capture sends `{118: 128}` and we only ever
+replayed it. It is not a prepare step — settings are a flat numbered namespace and the handshake is
+fetching setting 128 on its way past. Three sessions running, the blocker has turned out to be a
+stale note rather than a missing decode.
+
+**166 of ids 0..=260 answer on a Stomp.** Named: **16** tempo in BPM, **28** current preset index,
+**192**/**201-203** global EQ. Id 28 read back `22` — the slot the pedal was parked on, which is a
+free cross-check.
+
+**Settings are typed, and the type is enforced [solid].** Writing tempo as the integer `132` is
+refused with `-3`; `132.0` is taken. So the old `set_setting(id, i64)` could never have written a
+float setting, and there are a lot of them. `Session::set_setting_num` reads the current value
+first and sends `value` back as whatever type came out — bool, rounded int, or `f32`.
+
+**Mapping the rest needs no Windows box.** The capture recipe in the TODO is superseded: dump the id
+space, change one thing on the pedal's own menus, dump again, diff. `fretwire settings-dump` and
+`settings-diff` do exactly that, and the loop is verified end to end — with the tempo moved 80 → 132
+the diff reported `16: 80 -> 132` and nothing else, out of 166 ids.
+
+Tempo was put back to 80.
+
+### Next on this
+The GUI wants **Input Z (impedance)**, guitar pad and main-out level. The cheapest first consumer is
+the **preset-numbering flag** (`01A` vs `000`): it is confirmed absent from every preset stream we
+read, so the GUI carries a manual toggle, and one id would replace it with a detected default.

@@ -407,8 +407,15 @@ start capture → do the single thing → stop:
       (delete + upload expresses it). Also unfinished: how a preset's IR block **references** a user
       slot vs a built-in cab IR, and a **GUI** IR panel (the backend is done; nothing in the Tauri
       app exposes it yet).
-- [ ] **Global / I/O settings** — extend op 25 (`{118:id, 119:value}`); map the id space (only id
-      134 known; the preset-load pushes expose more `118/119` ids to catalog).
+- [~] **Global / I/O settings** — the **read side is decoded** (2026-08-22, live): **op 24**
+      `{118:id}` answers with the value at key `119`, and 166 of ids 0..=260 answer on a Stomp.
+      Named: **16** tempo BPM (`f32`), **28** current preset index, **192**/**201-203** global EQ.
+      Settings are **typed** and a wrong-typed write is refused `-3`, so `set_setting_num` reads
+      before writing. Op 24 was already in the tree misnamed `OP_READ_PREP` — the handshake had been
+      calling it since day one.
+      **Mapping the rest needs no capture:** `settings-dump`, change one thing on the pedal,
+      `settings-dump` again, `settings-diff`. Verified — a tempo move showed up as exactly one id
+      out of 166. Priorities: Input Z, guitar pad, main out level, and the preset-numbering flag.
 - [x] **Save As** (GUI, 2026-06-29) — write the edit buffer to a chosen slot under a new name (op 71);
       sidebar slot-pick + overwrite confirm. Verified live.
 - [x] **Preset rename (name-only)** — DECODED (2026-06-30): op 6 `{107:bank,108:slot,109:name\0}` on

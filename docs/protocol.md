@@ -769,16 +769,32 @@ several-hundred-second timeout.
 
 ### An empty answer is not an error [solid]
 
-Some slots answer `{102: txn, 103: 0, 104: nil}` — seventeen bytes, status **0**, no document. On
-the test unit exactly one slot per setlist does this (bank 0 slot 102), reproducibly across sessions
-and unchanged by loading the preset first. Its neighbours answer normally and it reads back perfectly
-well through select-and-read, so this is a property of the slot, not of the opcode. **Why is not
-understood.**
+Some slots answer `{102: txn, 103: 0, 104: nil}` — seventeen bytes, status **0**, no document. It has
+to be told apart from a desynced read, because both fail to parse and only one is worth retrying:
+`fretwire_data::stream::is_empty_slot_reply` does that, and the backup drops to select-and-read for
+those slots rather than lose them. Fixture: `captures/empty_slot_reply.msgpack.bin`.
 
-It has to be told apart from a desynced read, because both fail to parse and only one is worth
-retrying: `fretwire_data::stream::is_empty_slot_reply` does that, and the backup drops to
-select-and-read for that slot alone rather than lose it. Fixture:
-`captures/empty_slot_reply.msgpack.bin`.
+That shape is not op 4's own — **op 36 answers an unassigned parameter with exactly the same
+`{102, 103: 0, 104: nil}`** (2026-08-22). It is the device's general "nothing here", so read it as an
+answer, not a fault.
+
+**Corrected 2026-08-22.** This was first written up as one odd slot (bank 0 slot 102), from a sample
+of five neighbours. Enumerating the whole setlist found **twelve** of 126 — 102, 105, 108-111, 113,
+114, 116, 121, 122, 124 — and a thirteenth, 117, that answered nil in one sweep and streamed normally
+in the next. Every one is an empty `New Preset`; **no preset with a block in it has ever answered
+nil**, across three full sweeps. Cold single-slot reads reproduce each one, so it is a property of
+the slot rather than of sweep position or device fatigue.
+
+What separates them is visible in the documents, once you have both: the nil slots differ from their
+working same-size neighbours in **three bytes and nothing else**, all `false` where the working ones
+hold `nil`, at `/10/10[N]/2[0][2]` for each of the three snapshots. That path is a snapshot's
+remembered value for controller entry 0 — assigning a parameter writes the value there and removing
+the assignment leaves it behind (see "Controller assignments" below). So the nil-answering slots are
+the ones whose snapshot controller array was initialised `false` rather than left empty. Twelve of
+twelve match; the flaky slot 117 also carries `false`, which is consistent with it being the marginal
+case. **Whether that is the cause or merely a co-symptom is not established**, and nothing yet
+explains why the firmware would decline to stream such a document. Correctness is unaffected either
+way: the fallback reads them.
 
 ### Op 4 is unverified outside the Stomp
 

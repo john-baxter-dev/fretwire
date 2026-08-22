@@ -342,6 +342,12 @@ start capture → do the single thing → stop:
       blobs (node moves); a foreign blob is the same mechanism, unverified. CLI
       `restore <file> <index> [slot] [--bank N]`; GUI Restore… with source + target pickers
       (overwrite always visible). Also gives duplicate/copy.
+- [x] **Fast setlist export** (2026-08-21). `export-setlist` used to `goto` each slot and read it
+      back — loading, settling and confirming 128 presets, which took tens of minutes and walked the
+      user's pedal through every one of them. **Op 4 reads a slot's document in place**, byte-identical
+      to the loaded read and without moving the panel: **126 presets in 10.7 s** on a Stomp. Falls
+      back to the old sweep if the device refuses op 4 (untried on a Floor), and for the odd slot that
+      answers `104: nil`. See `docs/protocol.md`.
 - [ ] **Full device backup** — the thing "Backup" used to imply and does not deliver. A restore that
       makes a wiped pedal whole needs three parts, and we have one:
       **presets** (done — setlist export above), **global / I/O settings** (op 25's id space is

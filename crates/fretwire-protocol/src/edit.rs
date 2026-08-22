@@ -81,6 +81,20 @@ pub const OP_READ_OPEN: i64 = 76;
 pub const OP_READ_PREP: i64 = 24;
 /// Operation id 23: read-sequence query step (nil target; reply carries the preset identity).
 pub const OP_READ_INFO: i64 = 23;
+/// Operation id 4: **read the preset stored at an index, without loading it** —
+/// `{107: bank, 108: slot, 101: 2}`. Streams that slot's whole document back exactly as op 22
+/// streams the edit buffer, but the device's active preset and edit buffer are untouched.
+///
+/// This is what makes a setlist backup cheap: the alternative is `select` + read per slot, which
+/// walks the user's pedal through all 128 presets and takes tens of minutes.
+///
+/// **Reads only.** Its inverse (op 5 / op 8, write a document into a slot) is deliberately not
+/// built here — that is a persistent write and wants its own captures first.
+///
+/// [`tonepush`'s opcode table names this op; the argument shape and the streaming behaviour are
+/// verified here against an HX Stomp.]
+pub const OP_READ_PRESET_AT: i64 = 4;
+
 /// Operation id 22: start the paged stream of the opened edit buffer.
 pub const OP_STREAM_START: i64 = 22;
 /// Operation id 88: **switch the active snapshot** — `{92: index}`. Changes device state.
@@ -686,6 +700,31 @@ pub fn presets_stream(txn: u16, bank: i64) -> Vec<u8> {
             Value::from(K_TARGET),
             Value::Map(vec![
                 (Value::from(K_SELECT_BANK), Value::from(bank)),
+                (Value::from(K_LIST_KIND), Value::from(2)),
+            ]),
+        ),
+    ]))
+}
+
+/// Build the **read-preset-at-index** body (op 4): `{102:txn, 100:4, 101:{107:bank, 108:slot,
+/// 101:2}}`.
+///
+/// Same prologue and same chunked stream as the preset listing — only the target differs, by
+/// carrying a slot alongside the bank. `2` is the same "kind" the listing sends; its meaning is
+/// unknown beyond "HX Edit always sends it here".
+///
+/// Non-destructive: the device streams the stored document without selecting it, so the active
+/// preset and any pending edits survive. [solid — read every slot in a setlist while the panel
+/// stayed on its preset and the edit buffer kept an uncommitted change.]
+pub fn read_preset_at(txn: u16, bank: i64, slot: i64) -> Vec<u8> {
+    encode(Value::Map(vec![
+        (Value::from(K_TXN), Value::from(txn)),
+        (Value::from(K_OP), Value::from(OP_READ_PRESET_AT)),
+        (
+            Value::from(K_TARGET),
+            Value::Map(vec![
+                (Value::from(K_SELECT_BANK), Value::from(bank)),
+                (Value::from(K_SELECT_PRESET), Value::from(slot)),
                 (Value::from(K_LIST_KIND), Value::from(2)),
             ]),
         ),

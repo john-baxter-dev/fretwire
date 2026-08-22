@@ -2720,7 +2720,15 @@ impl Session {
         // GUI's export button is usually pressed right after clicking a preset, and the identity
         // the device reports in that window can still be the previous one — which would send the
         // user somewhere else entirely once the sweep finished.
+        //
+        // Still read on the op-4 path, cheaply and once: it costs one read, and it is what restores
+        // the user's position if the sweep falls back to walking the pedal partway through.
         let (_, start) = self.read_preset_confirmed()?;
+        // Whether the device answers op 4. Assumed yes and cleared on the first refusal — see the
+        // read below.
+        let mut slot_read_works = true;
+        // Whether the sweep ever selected a preset, and so owes the user their position back.
+        let mut moved = false;
 
         // Listings first, so `total` is the whole job rather than the current setlist: a progress
         // bar that restarts per setlist is worse than none on a forty-minute sweep.
@@ -2738,18 +2746,53 @@ impl Session {
             let setlist = setlist_name(names, bank);
             for (index, listed_name) in listing {
                 let index = *index as i64;
-                self.goto_preset(bank, index)?;
-                // `read_preset_confirmed`, not a bare read: the device answers op-23 with the
-                // *previous* preset's address for a while after a switch, so a single read here
-                // reported slot N−1 and the desync check below aborted a sweep that was in fact
-                // fine. It waits for the address we asked `goto` for instead. [solid — 2026-08-20
-                // XL report: "device reports preset 1 while backing up slot 2", at a point in the
-                // walk that moved with whichever preset the pedal happened to start on]
-                let (raw, info) = self.read_preset_confirmed()?;
-                // The stream must parse (it's what restore replays), and the op-23 identity must be
-                // the slot we selected — a mismatch that survives the retries means the sweep really
-                // has desynced; stop rather than save mislabeled blobs.
+                // Read the slot in place (op 4) where the device supports it, and only walk the
+                // pedal through every preset where it does not. The walk is what made a full
+                // backup a tens-of-minutes job: `goto` has to load the preset, settle, and be
+                // confirmed before each read. [op 4 verified on an HX Stomp — the document comes
+                // back byte-identical to the loaded read, and the panel does not move. Never tried
+                // on a Floor, which is what `slot_read_works` is for.]
+                let (raw, info) = if slot_read_works {
+                    match self.read_preset_at(bank, index) {
+                        Ok(Some(raw)) => (raw, None),
+                        // The device has no document for this slot but the slow path does get one,
+                        // so drop to it for this slot alone rather than lose it from the backup.
+                        Ok(None) => {
+                            tracing::info!(bank, index, "slot answered nil — selecting it instead");
+                            self.goto_preset(bank, index)?;
+                            moved = true;
+                            self.read_preset_confirmed()?
+                        }
+                        Err(e) if done == 0 => {
+                            // Fall back for the whole job, not slot by slot: if op 4 is not there,
+                            // it is not there for any of them, and retrying it 128 times would be
+                            // slower than the walk it is meant to replace. Only the first slot may
+                            // trigger this — a failure later is a real read failure and surfaces.
+                            tracing::warn!(error = %e, "op 4 refused; falling back to the goto sweep");
+                            slot_read_works = false;
+                            self.goto_preset(bank, index)?;
+                            moved = true;
+                            self.read_preset_confirmed()?
+                        }
+                        Err(e) => return Err(e),
+                    }
+                } else {
+                    self.goto_preset(bank, index)?;
+                    moved = true;
+                    // `read_preset_confirmed`, not a bare read: the device answers op-23 with the
+                    // *previous* preset's address for a while after a switch, so a single read here
+                    // reported slot N−1 and the desync check below aborted a sweep that was in fact
+                    // fine. It waits for the address we asked `goto` for instead. [solid — 2026-08-20
+                    // XL report: "device reports preset 1 while backing up slot 2", at a point in the
+                    // walk that moved with whichever preset the pedal happened to start on]
+                    self.read_preset_confirmed()?
+                };
+                // The stream must parse — it is what restore replays.
                 fretwire_data::stream::PresetStream::parse(&raw)?;
+                // On the walk, the op-23 identity must be the slot we selected: a mismatch that
+                // survives the retries means the sweep really has desynced, so stop rather than save
+                // mislabeled blobs. Op 4 addresses the slot directly and answers no identity, so
+                // there is nothing to desync and nothing to check.
                 if let Some(i) = &info
                     && (i.bank, i.index) != (bank, index)
                 {
@@ -2786,7 +2829,10 @@ impl Session {
             }
         }
 
-        if let Some(start) = start {
+        // Only if the sweep actually moved the pedal. On the op-4 path it never left the preset it
+        // was on, and a `goto` here would be the one thing in the whole backup that changed device
+        // state.
+        if moved && let Some(start) = start {
             self.goto_preset(start.bank, start.index)?;
         }
         // The sweep changed the editing context out from under any cached state.
@@ -3215,6 +3261,143 @@ impl Session {
         if let Some(t) = target {
             check_stream_length(payload.len(), t, "preset-list")
                 .map_err(fretwire_data::Error::Stream)?;
+        }
+        Ok(payload)
+    }
+
+    /// Read the preset stored at `bank`/`slot` **without loading it** (op 4).
+    ///
+    /// Returns the same reassembled document [`Self::read_preset_raw`] returns for the edit buffer,
+    /// so it parses with [`fretwire_data::stream::PresetStream::parse`] like any other. The device's
+    /// active preset and edit buffer are untouched: nothing is selected and no edit is committed.
+    ///
+    /// This is the cheap path for reading a whole setlist. The alternative — `goto` then read, per
+    /// slot — makes the pedal load all 128 presets and takes tens of minutes; see
+    /// [`Self::export_setlists`].
+    ///
+    /// `Ok(None)` means the device answered but had no document to give — see
+    /// [`fretwire_data::stream::is_empty_slot_reply`]. That is not an error and not an empty
+    /// preset (an unused slot still streams a full default document); the slot has to be read the
+    /// slow way instead.
+    ///
+    /// **Reads only.** Its inverse (write a document into a slot) is not implemented.
+    pub fn read_preset_at(&mut self, bank: i64, slot: i64) -> crate::Result<Option<Vec<u8>>> {
+        // Same retry rationale as `list_presets_raw`: the failures worth catching here are transient
+        // interleaving on the edit channel, and a backup that loses one preset out of 128 to a
+        // recoverable blip is worse than re-reading it.
+        let mut last_err: Option<crate::Error> = None;
+        for attempt in 0..3 {
+            match self.read_preset_at_once(bank, slot) {
+                // Including `None`: a nil answer is the device's real answer, and re-asking twice
+                // more only slows the sweep down to arrive at the same place.
+                Ok(payload) => return Ok(payload),
+                Err(e) => {
+                    tracing::warn!(attempt, bank, slot, error = %e, "slot read failed; re-reading");
+                    last_err = Some(e);
+                }
+            }
+            self.backoff_before_retry(attempt);
+        }
+        Err(last_err.expect("loop runs at least once"))
+    }
+
+    /// One attempt at [`Self::read_preset_at`], without the retry.
+    fn read_preset_at_once(&mut self, bank: i64, slot: i64) -> crate::Result<Option<Vec<u8>>> {
+        // Op 4 rides the same channel and the same prologue as the preset *listing* (op 1) — it is
+        // the browse side of the protocol, not the edit-buffer side — and only its target differs,
+        // by naming a slot alongside the bank.
+        let chan = channel::EDIT;
+        let tlv = |body: Vec<u8>| Tlv::command(op::SESSION_OPEN, body).to_bytes();
+
+        // Start aligned, for the reason the listing and the preset read both do: a state push or a
+        // prior stream's leftovers would otherwise be reassembled as this document.
+        self.transport.drain();
+        self.transport
+            .drain_wire(std::time::Duration::from_millis(30), 128);
+
+        let txn = self.bump_txn();
+        self.edit_request_txn(cmd::OPEN, tlv(edit::browse_open(txn)), txn)?;
+
+        let txn = self.bump_txn();
+        self.edit_request_txn(cmd::OPEN, tlv(edit::presets_open(txn)), txn)?;
+
+        let txn = self.bump_txn();
+        let first =
+            self.edit_request_txn(cmd::STREAM, tlv(edit::read_preset_at(txn, bank, slot)), txn)?;
+        tracing::info!(
+            arg = first.arg,
+            body = first.body.len(),
+            bank,
+            slot,
+            "slot-read stream chunk #0"
+        );
+
+        // A nil answer arrives whole in chunk #0, so check before paging for more.
+        if fretwire_data::stream::is_empty_slot_reply(&first.body) {
+            self.transport.drain();
+            tracing::info!(bank, slot, "slot answered nil — no document to stream");
+            return Ok(None);
+        }
+
+        let payload = self.drain_chunked_stream(chan, first.body, "slot-read")?;
+        tracing::info!(
+            bytes = payload.len(),
+            bank,
+            slot,
+            "reassembled slot document"
+        );
+        Ok(Some(payload))
+    }
+
+    /// Reassemble a chunked stream whose chunk #0 is already in hand, on `chan`.
+    ///
+    /// The rules are the ones the preset read and the preset listing arrived at the hard way: the
+    /// envelope's declared length decides when the stream is done, a mid-stream **empty** reply is a
+    /// flow-control credit to skip rather than a terminator, a short non-empty chunk is payload, and
+    /// coming up short is an error rather than a quietly truncated result.
+    ///
+    /// Those two callers deliberately keep their own copies. Both sit on the path that produced
+    /// every lockup in `docs/helix-floor.md`, each carries timeout and retry behaviour the other
+    /// does not, and folding three readers into one shared loop is a refactor to make on purpose
+    /// with hardware to hand — not a side effect of adding a third.
+    fn drain_chunked_stream(
+        &mut self,
+        chan: (u16, u16),
+        first_chunk: Vec<u8>,
+        what: &str,
+    ) -> crate::Result<Vec<u8>> {
+        let full_chunk = first_chunk.len();
+        let target = fretwire_data::stream::declared_stream_len(&first_chunk);
+        let mut payload = first_chunk;
+        let mut empties = 0usize;
+        for _ in 0..stream_request_cap(target) {
+            if target.is_some_and(|t| payload.len() >= t) {
+                break;
+            }
+            let chunk = self.channel_request(chan, cmd::CHUNK, Vec::new())?;
+            let n = chunk.body.len();
+            match classify_chunk(n, full_chunk, payload.len(), target) {
+                ChunkVerdict::Skip => {
+                    empties += 1;
+                    if empties >= 8 {
+                        break;
+                    }
+                }
+                ChunkVerdict::Keep => {
+                    payload.extend_from_slice(&chunk.body);
+                    if n >= full_chunk {
+                        empties = 0;
+                    }
+                }
+                ChunkVerdict::Last => {
+                    payload.extend_from_slice(&chunk.body);
+                    break;
+                }
+            }
+        }
+        self.transport.drain();
+        if let Some(t) = target {
+            check_stream_length(payload.len(), t, what).map_err(fretwire_data::Error::Stream)?;
         }
         Ok(payload)
     }

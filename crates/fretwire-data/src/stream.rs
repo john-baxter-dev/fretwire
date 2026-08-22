@@ -1519,6 +1519,30 @@ pub struct Root {
     pub value: Value,
 }
 
+/// Whether a reassembled stream is the device's **empty-slot** answer rather than a document:
+/// `{102: txn, 103: 0, 104: nil}`, seventeen bytes including the envelope prefix.
+///
+/// Op 4 answers this for at least one slot per setlist on a Stomp — status `0`, so it is a normal
+/// reply and not a refusal, but key `104` carries `nil` where a document would be. Callers must
+/// tell it apart from a failed read: both fail to parse, but this one means "ask another way",
+/// not "the wire desynced".
+///
+/// The slot it happens for reads back perfectly well through select-and-read, and its neighbours
+/// answer op 4 normally, so this is about the slot rather than the opcode. [observed 2026-08-21 —
+/// bank 0 slot 102 on an HX Stomp, reproducible across sessions and unchanged by loading the preset
+/// first. Why that slot is not understood.]
+pub fn is_empty_slot_reply(payload: &[u8]) -> bool {
+    // Small enough that the root scan is cheap, and a real document never is.
+    if payload.len() > 64 {
+        return false;
+    }
+    let Some(root) = locate_root_where(payload, payload.len(), |v| map_get(v, 104).is_some())
+    else {
+        return false;
+    };
+    matches!(map_get(&root.value, 104), Some(Value::Nil))
+}
+
 /// Scan the first `max_scan` bytes for the MessagePack root: the container value that decodes
 /// cleanly and consumes the most input. Returns `None` if nothing container-like parses.
 ///

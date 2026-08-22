@@ -130,6 +130,15 @@ enum Command {
     DumpList { bank: i64, out: String },
     /// Save the raw reassembled preset stream to a file (for diffing states).
     DumpRaw { out: String },
+    /// Read the preset stored in a slot **without loading it** (op 4). Reads only — the pedal stays
+    /// on whatever preset it is showing, and any pending edits survive.
+    ReadSlot {
+        bank: i64,
+        slot: i64,
+        /// Write the raw document here instead of summarising it.
+        #[arg(long)]
+        out: Option<String>,
+    },
 
     // ---- live: edit the buffer (reversible by reloading the preset) ----
     /// Set a block's bypass, in pedal semantics: `on` engages bypass (block OFF).
@@ -707,6 +716,33 @@ fn main() -> Result<()> {
             let mut s = fretwire_core::Session::connect()?;
             s.save_preset(bank, slot, &name)?;
             println!("saved current edit buffer to bank {bank} slot {slot} as {name:?}");
+        }
+        Command::ReadSlot { bank, slot, out } => {
+            let mut s = fretwire_core::Session::connect()?;
+            let Some(raw) = s.read_preset_at(bank, slot)? else {
+                println!("bank {bank} slot {slot}: device answered nil — no document to stream");
+                s.close()?;
+                return Ok(());
+            };
+            println!("read {} bytes from bank {bank} slot {slot}", raw.len());
+            match out {
+                Some(path) => {
+                    std::fs::write(&path, &raw)?;
+                    println!("wrote {path}");
+                }
+                None => {
+                    let ps = fretwire_data::stream::PresetStream::parse(&raw)?;
+                    println!("  blocks: {}", ps.loaded_blocks().len());
+                }
+            }
+            // Prove the read was non-destructive: whatever the pedal was showing, it still is.
+            if let Some(id) = s.read_identity()? {
+                println!(
+                    "  pedal still on: [{}] {} (bank {})",
+                    id.index, id.name, id.bank
+                );
+            }
+            s.close()?;
         }
         Command::DumpRaw { out: path } => {
             let mut s = fretwire_core::Session::connect()?;

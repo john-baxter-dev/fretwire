@@ -749,6 +749,46 @@ responding twice. The GUI now waits for ~300 ms of quiet (capped at 1.2 s) and r
 pushes are applied in place and trigger **no** read at all — the push fully describes the change,
 and the device's readable stream lags its own push anyway.
 
+## Reading a preset without loading it — op 4 [solid — verified live 2026-08-21]
+
+`{102: txn, 100: 4, 101: {107: bank, 108: slot, 101: 2}}` streams the document stored in a slot and
+**does not select it**: the panel stays on whatever preset it was showing and the edit buffer keeps
+any uncommitted change. Same channel, same prologue (op 254 browse-open, op 0 presets-open) and the
+same chunked stream as the preset *listing* (op 1) — only the target differs, by naming a slot
+alongside the bank. Built by `fretwire_protocol::edit::read_preset_at`, driven by
+`Session::read_preset_at`.
+
+**The document is byte-identical to a select-and-read of the same slot.** Reading bank 0 slot 19
+both ways gives streams that differ only in the envelope's stream-kind marker (`e0 00` → `e0 28`)
+and the echoed txn; `diff-stream` reports no differences in the preset tree.
+
+This is what a setlist backup should use. `select` + read per slot has to load and settle each
+preset, which is why a full sweep took tens of minutes — and it walks the user's pedal through all
+128. **Measured on an HX Stomp: 126 presets in 10.7 s**, against a sweep that had to be given a
+several-hundred-second timeout.
+
+### An empty answer is not an error [solid]
+
+Some slots answer `{102: txn, 103: 0, 104: nil}` — seventeen bytes, status **0**, no document. On
+the test unit exactly one slot per setlist does this (bank 0 slot 102), reproducibly across sessions
+and unchanged by loading the preset first. Its neighbours answer normally and it reads back perfectly
+well through select-and-read, so this is a property of the slot, not of the opcode. **Why is not
+understood.**
+
+It has to be told apart from a desynced read, because both fail to parse and only one is worth
+retrying: `fretwire_data::stream::is_empty_slot_reply` does that, and the backup drops to
+select-and-read for that slot alone rather than lose it. Fixture:
+`captures/empty_slot_reply.msgpack.bin`.
+
+### Op 4 is unverified outside the Stomp
+
+The backup assumes op 4 works, and clears the assumption on the first refusal — falling back to the
+old sweep for the whole job rather than re-asking 128 times. That is there for the **Helix Floor**,
+where nothing about this opcode has been tried.
+
+Its inverse (**op 5** / **op 8**, write a document into a slot; **op 16**, empty one) is deliberately
+not built: those are persistent writes and want their own captures first. See `docs/safety.md`.
+
 ## Resolved vs. still open
 - [x] Endpoints / framing / channels / sequence.
 - [x] Value encoding = **big-endian f32**.

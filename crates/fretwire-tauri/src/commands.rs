@@ -1195,16 +1195,27 @@ pub fn split_types() -> Vec<SplitTypeDto> {
 
 #[tauri::command]
 pub async fn categories(state: State<'_, AppState>) -> R<Vec<CategoryDto>> {
-    run(&state, |s| Ok(s.catalog().categories()))
-        .await
-        .map(|v| {
-            v.into_iter()
-                .map(|(id, name)| CategoryDto {
+    // The colour is resolved inside the session closure because it needs the catalog; formatting it
+    // as CSS hex is the UI's dialect, so that happens here rather than in `fretwire-core`.
+    run(&state, |s| {
+        Ok(s.catalog()
+            .categories()
+            .into_iter()
+            .map(|(id, name)| {
+                (
                     id,
-                    name: name.to_string(),
-                })
-                .collect()
-        })
+                    name.to_string(),
+                    s.catalog().category_color(id).map(|c| format!("#{c:06x}")),
+                )
+            })
+            .collect::<Vec<_>>())
+    })
+    .await
+    .map(|v| {
+        v.into_iter()
+            .map(|(id, name, color)| CategoryDto { id, name, color })
+            .collect()
+    })
 }
 
 #[tauri::command]

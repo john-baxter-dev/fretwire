@@ -97,5 +97,30 @@ ok(
 );
 ok(all.filter((s) => s.kind === "raw").every((s) => s.default === null), "raw ids have no default");
 
+
+
+
+// --- the toolbar's BPM field reads and writes the same two ids ---
+// It is a second view of settings 16 and 14, not its own state, so the contract it depends on is
+// that `settings_read` carries both and a write echoes the new value back.
+ok(byId(named, 16).kind === "number" && byId(named, 16).unit === "BPM", "tempo is a number in BPM");
+ok(byId(named, 14).kind === "choice", "tempo scope is a choice");
+ok(
+  byId(named, 14).options.some(([v, l]) => v === 2 && /global/i.test(l)),
+  "…and names the global scope, which the toolbar shows beside the BPM",
+);
+const bpm = await mock.invoke("settings_write", { id: 16, value: 132.5 });
+ok(bpm.value === 132.5, `a fractional BPM survives the write, got ${bpm.value}`);
+ok(bpm.id === 16, "the write echoes the id the toolbar keys off");
+await mock.invoke("settings_write", { id: 16, value: 120 });
+
+// --- category colours ---
+// The real backend reads these from the user's HX_ModelCatalog.json; the mock has no such file and
+// must answer null, which is the fallback path a fresh install takes.
+const cats = await mock.invoke("categories");
+ok(cats.length > 0, "the mock lists categories");
+ok(cats.every((c) => "color" in c), "every category row carries a colour field");
+ok(cats.every((c) => c.color === null), "the mock has no reference data, so every colour is null");
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

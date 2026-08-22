@@ -1263,7 +1263,14 @@ const HANDLERS = {
     const ids = [...new Set(CATALOG.map((m) => m.category))].sort((a, b) => a - b);
     ids.push(100); // synthetic Amp+Cab
     return ids
-      .map((id) => ({ id, name: CATEGORY_NAMES[id] ?? `Cat ${id}` }))
+      .map((id) => ({
+        id,
+        name: CATEGORY_NAMES[id] ?? `Cat ${id}`,
+        // The real backend reads these out of the user's own HX_ModelCatalog.json and returns null
+        // when the data was never imported. The mock has no such file, so it answers null and
+        // exercises the fallback path — the one a fresh install actually takes.
+        color: null,
+      }))
       .sort((a, b) => a.name.localeCompare(b.name));
   },
   models_in_category: ({ category }) => {

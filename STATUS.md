@@ -3140,3 +3140,48 @@ op 58 wants something else entirely is unknown, and finding out costs a power cy
 current knowledge. `docs/safety.md` gained a section; `probe-edit`'s help now leads with the wedge.
 
 The colour *read* stands untouched — it came from op 33, which is a pure read.
+
+## Forty-fourth round (2026-08-22): **HX Edit's colours, and BPM in the toolbar**
+
+### The category ids are two different id spaces
+`HX_ModelCatalog.json` carries a colour per category, which is exactly what we wanted — and it keys
+them by an `id` that is **not** the id the `.models` files use. The catalog calls Distortion 1 and
+Amp 11; the model table, and `category_name`, call them 3 and 1. Joining on id compiles, runs, and
+mispaints every block in the chain. The join is **by name**, and the test that pins it says why in
+its own name.
+
+### Several of our colours were badly wrong
+Not merely different shades — different hues, which is the confusion this was meant to remove:
+
+| category | ours was | HX Edit |
+|---|---|---|
+| Modulation | pink | **blue** `0x0094E9` |
+| Dynamics | blue | **yellow** `0xDDCC00` |
+| Wah | green | **purple** `0xA844DB` |
+| IR | brown | **pink** `0xf23091` |
+| Cab | brown | **red**, the same red as Amp |
+
+Line 6 also *reuses* colours — Amp, Preamp and Cab share one red; EQ shares Dynamics' yellow; Filter
+shares Pitch/Synth's purple. Our palette had carefully distinguished categories Line 6 deliberately
+groups. Matching means adopting the collisions too, which a test asserts so nobody "fixes" it later.
+
+### Read at runtime, never copied in
+The values are Line 6's. `Catalog::category_color` reads them out of the user's own
+`HX_ModelCatalog.json` like every other piece of reference data, and returns `None` when the data was
+never imported. `Chain.svelte` keeps its old table as the **fallback** for that case — our own
+approximation, explicitly not a copy of theirs — so a skipped import still gets a legible chain
+rather than a grey one.
+
+The LED colours from the footswitch record are a *third* set — `0xFF0003` for an amp against the
+catalog's `0xDD1111`, same hue and more saturated, which is what an RGB LED at full brightness would
+be. We align the GUI to the catalog, because screen-to-screen is the comparison a user makes.
+
+### BPM in the toolbar
+Tempo is id 16 in the globals namespace, and it was three clicks into an overlay despite being the
+one global anyone changes mid-session. It now has a field in the toolbar, styled as a readout rather
+than a button because it *is* device state.
+
+Beside it sits id 14's value — **per snapshot / per preset / global** — because that is what decides
+what a tempo write actually means, and a number with no scope beside it invites the wrong assumption.
+The field and the globals panel are two views of the same two ids and update each other in both
+directions.

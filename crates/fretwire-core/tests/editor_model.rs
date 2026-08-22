@@ -482,3 +482,54 @@ fn the_output_nodes_pan_formats_the_way_the_pedal_shows_it() {
     // And one scroll-wheel notch is one display unit, not the two the blanket fallback gave.
     assert_eq!(pan.meta.step, Some(0.005));
 }
+
+/// Category colours come from `HX_ModelCatalog.json` at runtime, never from a table of ours — the
+/// values are Line 6's and are not redistributed.
+///
+/// **The join is by name, not by id.** The catalog's `id` field is a different space from the one
+/// the `.models` files use: it calls Distortion 1 and Amp 11, where the model table (and
+/// `category_name`) call them 3 and 1. Joining on id compiles, runs, and mispaints every block.
+#[test]
+fn category_colours_join_by_name_not_by_id() {
+    let cat = catalog();
+
+    // Amp is 1 for us and 11 in the catalog; if the join used ids we would get Distortion's orange.
+    assert_eq!(cat.category_color(1), Some(0xDD_11_11), "Amp");
+    // Distortion is 3 for us and 1 in the catalog — the mirror of the same trap.
+    assert_eq!(cat.category_color(3), Some(0xF5_90_1E), "Distortion");
+    assert_eq!(cat.category_color(9), Some(0x00_CC_00), "Delay");
+    assert_eq!(cat.category_color(10), Some(0xFF_5C_00), "Reverb");
+
+    // Line 6 reuses one colour across related categories; we must not "fix" that.
+    assert_eq!(
+        cat.category_color(2),
+        cat.category_color(1),
+        "Cab shares Amp's red"
+    );
+    assert_eq!(cat.category_color(13), cat.category_color(1), "Preamp too");
+    assert_eq!(
+        cat.category_color(14),
+        cat.category_color(4),
+        "EQ shares Dynamics' yellow"
+    );
+    assert_eq!(
+        cat.category_color(6),
+        cat.category_color(7),
+        "Filter shares Pitch/Synth's purple"
+    );
+
+    // Our synthetic categories resolve to the thing they are made of.
+    assert_eq!(
+        cat.category_color(fretwire_core::editor::CATEGORY_AMP_CAB),
+        cat.category_color(1),
+        "Amp+Cab takes Amp's",
+    );
+    assert_eq!(
+        cat.category_color(19),
+        cat.category_color(2),
+        "Cab (Mic+IR) takes Cab's"
+    );
+
+    // An id that is not a category has no colour rather than a default one.
+    assert_eq!(cat.category_color(999), None);
+}

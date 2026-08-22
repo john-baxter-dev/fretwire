@@ -534,6 +534,10 @@ impl From<&ModelChoice> for ModelChoiceDto {
 pub struct CategoryDto {
     pub id: i64,
     pub name: String,
+    /// HX Edit's own colour for this category, `"#rrggbb"`, read from `HX_ModelCatalog.json` at
+    /// runtime. `null` when the reference data has not been imported — the UI keeps its own palette
+    /// for that case rather than showing every block grey.
+    pub color: Option<String>,
 }
 
 #[derive(Serialize)]

@@ -64,6 +64,11 @@ pub struct Catalog {
     /// engine current firmware uses; `cablink` as fallback). Drives the synthetic "Amp+Cab"
     /// picker category — picking there adds the amp with this cab paired, like HX Edit.
     cab_links: std::collections::HashMap<String, String>,
+    /// Category **name** → `0xRRGGBB`, from `HX_ModelCatalog.json`. Keyed by name on purpose: the
+    /// catalog's own `id` field is a *different* id space from the one the `.models` files use and
+    /// that [`category_name`] speaks — the catalog calls Distortion 1 and Amp 11, where the model
+    /// table calls them 3 and 1. Joining on id would silently mispaint every block.
+    category_colors: std::collections::HashMap<String, u32>,
 }
 
 /// Synthetic picker category: every amp paired with its suggested cab (HX Edit's "Amp+Cab" list).
@@ -552,9 +557,52 @@ struct RawData {
     symbols: Vec<u8>,
     /// `HelixControls.json` — enum/segmented control labels. Best-effort (empty → no labels).
     controls: Vec<u8>,
+    /// `HX_ModelCatalog.json` — read only for its per-category colours, so the editor paints a
+    /// block the shade HX Edit paints it. Best-effort (empty → the front end keeps its own palette).
+    catalog_json: Vec<u8>,
     /// The `.models` files present, as `(filename, bytes)`. Best-effort (a missing file just
     /// drops that category's DSP loads / param ranges).
     models: Vec<(String, Vec<u8>)>,
+}
+
+/// Pull category name → `0xRRGGBB` out of `HX_ModelCatalog.json`.
+///
+/// The file nests categories under several keys and repeats the shape for subcategories, so this
+/// walks the whole tree and takes any object carrying both a `name` and a `color`. Colours are
+/// `"0xRRGGBB"` strings, in mixed case.
+///
+/// Best-effort throughout: a missing or unparseable file yields an empty map and the front end
+/// falls back to its own palette. This never fails a catalog load — the colours are cosmetic and
+/// the editor's job is to work without the reference data at all.
+fn category_colors_from(bytes: &[u8]) -> std::collections::HashMap<String, u32> {
+    let mut out = std::collections::HashMap::new();
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return out;
+    };
+    fn walk(v: &serde_json::Value, out: &mut std::collections::HashMap<String, u32>) {
+        match v {
+            serde_json::Value::Object(m) => {
+                if let (Some(serde_json::Value::String(name)), Some(serde_json::Value::String(c))) =
+                    (m.get("name"), m.get("color"))
+                    && let Some(hex) = c.strip_prefix("0x").or_else(|| c.strip_prefix("0X"))
+                    && let Ok(rgb) = u32::from_str_radix(hex, 16)
+                {
+                    out.entry(name.clone()).or_insert(rgb);
+                }
+                for x in m.values() {
+                    walk(x, out);
+                }
+            }
+            serde_json::Value::Array(a) => {
+                for x in a {
+                    walk(x, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    walk(&v, &mut out);
+    out
 }
 
 /// The `.models` files the catalog reads for DSP loads, per-param ranges, and cab links.
@@ -624,6 +672,7 @@ impl Catalog {
             model_defs: require("HelixModelDefs.bin")?,
             symbols: require("Helix.sym")?,
             controls: std::fs::read(dir.join("HelixControls.json")).unwrap_or_default(),
+            catalog_json: std::fs::read(dir.join("HX_ModelCatalog.json")).unwrap_or_default(),
             models: MODEL_FILES
                 .iter()
                 .filter_map(|&n| std::fs::read(dir.join(n)).ok().map(|b| (n.to_string(), b)))
@@ -649,6 +698,7 @@ impl Catalog {
             model_defs: include_bytes!("../../fretwire-data/data/HelixModelDefs.bin").to_vec(),
             symbols: include_bytes!("../../fretwire-data/data/Helix.sym").to_vec(),
             controls: include_bytes!("../../fretwire-data/data/HelixControls.json").to_vec(),
+            catalog_json: include_bytes!("../../fretwire-data/data/HX_ModelCatalog.json").to_vec(),
             models: vec![
                 model!("amp.models"),
                 model!("cab.models"),
@@ -682,7 +732,24 @@ impl Catalog {
             loads: loads_from(&raw.models),
             param_meta: param_meta_from(&raw.models, &raw.controls),
             cab_links: cab_links_from(&raw.models),
+            category_colors: category_colors_from(&raw.catalog_json),
         })
+    }
+
+    /// The colour HX Edit paints category `id`, as `0xRRGGBB`.
+    ///
+    /// `None` when the reference data has not been imported — the editor runs without it, so the
+    /// front end keeps a palette of its own for that case. Our synthetic categories resolve to the
+    /// thing they are made of: `Amp+Cab` and `Cab (Mic+IR)` take Amp's and Cab's colours, which in
+    /// Line 6's scheme are the same red anyway.
+    pub fn category_color(&self, id: i64) -> Option<u32> {
+        let name = category_name(id)?;
+        let name = match name {
+            "Amp+Cab" => "Amp",
+            "Cab (Mic+IR)" => "Cab",
+            other => other,
+        };
+        self.category_colors.get(name).copied()
     }
 
     /// The `Helix.sym` index of an exact device symbol, if present.

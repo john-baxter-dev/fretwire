@@ -692,6 +692,8 @@
       } catch (e) {
         /* non-fatal */
       }
+      await loadCategoryColors();
+      await loadTempo();
       status = `Connected — ${preset.blocks.length} blocks. Session held for editing.`;
     } catch (e) {
       status = "Not connected.";
@@ -753,6 +755,72 @@
   // Deliberately not part of the preset flow: these do not touch the edit buffer, do not appear on
   // the undo timeline, and every write is flash. The panel owns its own confirmations; this side
   // only carries the calls and turns failures into toasts.
+  // HX Edit's category colours, id -> "#rrggbb", read from the reference data. Empty until the
+  // catalog answers, and empty forever on an install that skipped the import — Chain falls back to
+  // its own palette rather than showing a grey chain.
+  let catColors = $state(null);
+
+  async function loadCategoryColors() {
+    try {
+      const cats = await invoke("categories");
+      const map = {};
+      for (const c of cats) if (c.color) map[c.id] = c.color;
+      catColors = Object.keys(map).length ? map : null;
+    } catch (e) {
+      catColors = null; // cosmetic; never worth surfacing
+    }
+  }
+
+  // Tempo lives in the globals namespace (id 16), but it is the one global anyone reaches for
+  // mid-session, so it gets a field in the toolbar rather than three clicks into an overlay.
+  //
+  // Id 14 says what a tempo write actually means — per snapshot, per preset, or global — and that
+  // changes the consequence enough to show alongside rather than leave the user guessing.
+  const TEMPO_ID = 16;
+  const TEMPO_SCOPE_ID = 14;
+  const SCOPE_NAMES = { 0: "per snapshot", 1: "per preset", 2: "global" };
+
+  let tempo = $state(null);
+  let tempoScope = $state(null);
+  let tempoBusy = $state(false);
+
+  const tempoTitle = $derived(
+    tempo == null
+      ? "The device did not report a tempo"
+      : `Tempo, ${SCOPE_NAMES[tempoScopeRaw] ?? "scope unknown"}. Writes the pedal immediately.`,
+  );
+  let tempoScopeRaw = $state(null);
+
+  async function loadTempo() {
+    try {
+      const rows = await invoke("settings_read", { all: false });
+      const t = rows.find((r) => r.id === TEMPO_ID);
+      const sc = rows.find((r) => r.id === TEMPO_SCOPE_ID);
+      tempo = typeof t?.value === "number" ? t.value : null;
+      tempoScopeRaw = typeof sc?.value === "number" ? sc.value : null;
+      tempoScope = SCOPE_NAMES[tempoScopeRaw] ?? null;
+    } catch (e) {
+      tempo = null; // a device that doesn't answer id 16 simply gets no field
+    }
+  }
+
+  async function setTempo(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n === tempo) return;
+    tempoBusy = true;
+    try {
+      const after = await invoke("settings_write", { id: TEMPO_ID, value: n });
+      tempo = typeof after.value === "number" ? after.value : tempo;
+      // Keep the globals panel honest if it is open behind this.
+      globals = globals.map((s) => (s.id === after.id ? after : s));
+    } catch (e) {
+      toast("tempo: " + e);
+      await loadTempo();
+    } finally {
+      tempoBusy = false;
+    }
+  }
+
   let showIrs = $state(false);
   // Global settings. Not on the undo timeline and not part of `preset` — these are the pedal's own
   // state, so they get their own fetch rather than riding a PresetDto.
@@ -791,6 +859,12 @@
       globals = globals.map((s) => (s.id === after.id ? after : s));
       // The preset list numbers itself from this one, so it has to follow immediately.
       if (after.id === 27) adoptDeviceNumbering(after.value ? "flat" : "banked");
+      // …and the toolbar's BPM field is a second view of ids 16 and 14.
+      if (after.id === TEMPO_ID && typeof after.value === "number") tempo = after.value;
+      if (after.id === TEMPO_SCOPE_ID && typeof after.value === "number") {
+        tempoScopeRaw = after.value;
+        tempoScope = SCOPE_NAMES[after.value] ?? null;
+      }
     } catch (e) {
       toast("settings: " + e);
       await refreshGlobals();
@@ -904,6 +978,20 @@
     <button class="secondary" onclick={() => (addTarget = addTarget == null ? -1 : null)}>＋ Add block</button>
     <button class="secondary" onclick={openIrs} title="Manage the pedal's user impulse responses">IRs…</button>
     <button class="secondary" onclick={openGlobals} title="Read and change the pedal's global settings">Globals…</button>
+    <span class="tempo" title={tempoTitle}>
+      <label for="bpm">BPM</label>
+      <input
+        id="bpm"
+        type="number"
+        min="40"
+        max="240"
+        step="0.1"
+        disabled={tempo == null || tempoBusy}
+        value={tempo ?? ""}
+        onchange={(e) => setTempo(e.currentTarget.value)}
+      />
+      {#if tempoScope}<span class="scope">{tempoScope}</span>{/if}
+    </span>
     <button class="secondary" onclick={disconnect}>Disconnect</button>
   {:else}
     <button onclick={connect}>Connect</button>
@@ -996,6 +1084,7 @@
             {preset}
             dsp={dspView}
             {selectedSlot}
+            {catColors}
             onselect={(slot) => (selectedSlot = slot)}
             onplace={onPlace}
             oninsert={onInsert}
@@ -1278,6 +1367,41 @@
 {/if}
 
 <style>
+  /* Tempo sits in the toolbar because it is the one global anyone changes mid-session. Styled as a
+     readout with an editable number rather than as another button, so it reads as device state. */
+  .tempo {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    padding: 2px 8px;
+    border: 1px solid #3a4150;
+    border-radius: 4px;
+    background: #12151a;
+    font-size: 12px;
+    color: #8b93a3;
+  }
+  .tempo input {
+    width: 58px;
+    background: none;
+    border: none;
+    color: #e6e9ef;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    padding: 0;
+  }
+  .tempo input:disabled {
+    opacity: 0.5;
+  }
+  .tempo input:focus {
+    outline: 1px solid #5b8def;
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+  .tempo .scope {
+    color: #6b7280;
+    font-size: 11px;
+  }
   header {
     display: flex;
     align-items: center;

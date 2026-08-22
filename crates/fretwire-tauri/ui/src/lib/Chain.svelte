@@ -9,11 +9,19 @@
   // back to the preset's flat, DSP-0 fields.
   import ModelIcon from "./icons/ModelIcon.svelte";
 
-  let { preset, dsp = null, selectedSlot = null, onselect, onplace, oninsert, onmovenode, onaddat } = $props();
+  let {
+    preset, dsp = null, selectedSlot = null, catColors = null,
+    onselect, onplace, oninsert, onmovenode, onaddat,
+  } = $props();
   const d = $derived(dsp ?? preset);
 
-  // Block accent color by device model category (ids from fretwire-core editor::category_name) — so the
-  // chain reads at a glance: amps warm red, drives yellow, delays green, reverbs orange, etc.
+  // Block accent colour by category. **HX Edit's own colours win**, read from the reference data at
+  // runtime (`categories` carries them) and passed in as `catColors` — a block should be the same
+  // shade in both editors, because two colour schemes for one preset is worse than either.
+  //
+  // The table below is the fallback for a fresh install with no reference data imported, where the
+  // editor still runs with numeric names. It is our own approximation and deliberately *not* a copy
+  // of Line 6's values, which are theirs and are never redistributed.
   const CAT_COLORS = {
     1: "#d94f4f", // Amp
     13: "#c96a4a", // Preamp
@@ -34,7 +42,7 @@
     15: "#7a8494", // Looper
     17: "#7a8494", // Volume/Pan
   };
-  const catColor = (c) => CAT_COLORS[c] ?? "#5a6478";
+  const catColor = (c) => catColors?.[c] ?? CAT_COLORS[c] ?? "#5a6478";
 
   // X0 leaves room left of column 1 for the input node glyph; the output glyph hangs after the
   // last column (width padded below).

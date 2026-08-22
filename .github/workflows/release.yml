@@ -82,6 +82,11 @@ jobs:
         with:
           files: dist/*
           fail_on_unmatched_files: true
+          # The release body comes from a file in the tree, so it is reviewable in a diff and the
+          # published notes cannot drift from the tag. Both jobs point at the same file: whichever
+          # finishes first creates the release, the other updates it with identical text. A tag
+          # with no matching file fails the step rather than publishing an empty release.
+          body_path: docs/release-notes/${{ github.ref_name }}.md
 
   cli:
     name: static CLI (musl)
@@ -118,3 +123,8 @@ jobs:
         with:
           files: dist/*
           fail_on_unmatched_files: true
+          # The release body comes from a file in the tree, so it is reviewable in a diff and the
+          # published notes cannot drift from the tag. Both jobs point at the same file: whichever
+          # finishes first creates the release, the other updates it with identical text. A tag
+          # with no matching file fails the step rather than publishing an empty release.
+          body_path: docs/release-notes/${{ github.ref_name }}.md

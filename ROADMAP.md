@@ -552,6 +552,15 @@ real session.
       with no recorded menu entries; `201`-`203` are unknown (an earlier "global EQ" gloss was
       withdrawn). Writes are gated to identified ids only.
 
+- [ ] **Footswitch LED colour, custom label and momentary/latching.** Writes are ops **58-62**,
+      documented by `tonepush` and untried here. The **read** side is already ours: op 33 returns
+      `{102: switch (zero-based), 65: bool, 109: nil, 66: nil, 67: nil}` on a switch with nothing
+      customised, so the record's shape is known and only its key meanings are not — `109` carries a
+      name elsewhere in this protocol, and one of `66`/`67` is presumably the colour. **Setting a
+      colour and a label on one switch from the pedal and re-reading names every key in one
+      request**, no capture needed; the write ops can then be tried one at a time against the
+      read-back. Cheap, and it pairs with the footswitch binding UI that already exists.
+
 - [ ] **Session grid/routing planning is still DSP-0 only.** `add_block_at`, `place_block`,
       `insert_block`, `reorder_block` and `set_node_pos` plan slot moves inside one 20-slot array
       and read it via `dsp_blocks(0)`/`dsp_grid(0)` — complete for the Stomp, needs a `dsp` argument

@@ -981,6 +981,22 @@ parameter. Since `PresetStream::assignments` already decodes that map from a doc
 cross-check rather than a second decoder — useful for confirming a write landed without re-reading
 the whole preset.
 
+### Op 33's reply, on a switch with nothing customised [solid — live HX Stomp, 2026-08-22]
+
+    FS1 -> {102: 0, 65: false, 109: nil, 66: nil, 67: nil}
+    FS2 -> {102: 1, 65: false, 109: nil, 66: nil, 67: nil}
+    FS3 -> {102: 2, 65: false, 109: nil, 66: nil, 67: nil}
+
+Key `102` is the switch index, **zero-based**, so the one-based argument the CLI takes is ours and
+not the wire's. `65` is a bool that is false on all three; `109` is the key that carries a *name*
+elsewhere in this protocol (it is the IR name), so a custom switch label is the obvious reading;
+`66` and `67` are the two remaining slots, one of which is presumably the LED colour.
+
+**All of it is `nil` here because nothing on this preset has been customised**, which is exactly why
+the shape is decodable and the meanings are not. Setting a colour and a label on one switch from the
+pedal's own menu and re-reading would name every one of these keys in a single request — the same
+loop that mapped the settings namespace, and it needs no capture.
+
 ### Not built yet
 
 Ops **58-62** — momentary/latching, custom switch label, LED colour — are documented by `tonepush`

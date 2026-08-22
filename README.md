@@ -3,6 +3,8 @@
 An independent, from-scratch **Linux editor for the Line 6 HX Stomp, HX Stomp XL, Helix Floor and
 Helix LT**, written in Rust.
 
+**[fretwire.org](https://fretwire.org)** — screenshots, supported devices, and the FAQ.
+
 fretwire talks to the pedal over its `MI_00` USB control interface (VID `0x0E41` / PID `0x4246`).
 The wire protocol was recovered by **observing USB traffic to and from the device**; the model,
 preset, and control **data is not included** — fretwire reads it at runtime from a copy you import
@@ -28,8 +30,8 @@ from your own HX Edit installation (see [The reference data](#the-reference-data
 
 ## Install
 
-Grab a package from [Releases](https://github.com/john-baxter-dev/fretwire/releases) — no toolchain,
-no build:
+Grab a package from [Releases](https://github.com/john-baxter-dev/fretwire/releases) (linked from
+[fretwire.org](https://fretwire.org)) — no toolchain, no build:
 
 | distro | file |
 |--------|------|

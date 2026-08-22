@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 rust-version.workspace = true
 description = "Linux control application for the Line 6 HX Stomp — name placeholder; the working crates are published as fretwire-* (see repository)."
 readme = "README.md"

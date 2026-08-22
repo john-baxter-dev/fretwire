@@ -754,7 +754,20 @@ whose own layout is FS1 → slot 2 and FS2 → slot 4, pressing FS1 twice and FS
 
 Key 70 tracks the **0-based footswitch** (FS1 → 0, FS2 → 1) and key 63 the state the press produced,
 matching the type-49 mirror every time. That is the live FS → block mapping, which is what an
-"assign block to a footswitch" feature would need; key 66 stays unexplained.
+"assign block to a footswitch" feature would need.
+
+**Key 66 is the footswitch's LED ring colour, `0xRRGGBB`** [solid — 2026-08-22, see "The footswitch
+record" below]. It reads as a state bitmask only until you look at it as a colour:
+
+| | engaged | bypassed |
+|---|---|---|
+| slot 2 | `458496` = `0x06FF00` | `67840` = `0x010900` |
+| slot 4 | `13055` = `0x0032FF` | `1037` = `0x00040D` |
+
+Same hue, roughly a sixteenth of the brightness — a lit ring and an unlit one. Slot 2 is green and
+slot 4 blue, which is Helix's own category colouring. So the push is not just telling us the block's
+new state, it is telling us **what the pedal's ring now looks like**, which is the one thing about a
+press that a preset re-read cannot reproduce.
 
 **Type 23 rides every snapshot switch**, exactly once, always `{23: 0}` — seven switches, seven
 copies, no variation. Ordering is fixed: type 42, then a type 49 bypass mirror per changed block,
@@ -996,8 +1009,40 @@ not an observation. **An HX Stomp cannot set a custom switch label from its own 
 HX Edit feature — so if `109` is the label, this device may never move it on its own, and the key
 would have to be confirmed by writing it.
 
-`67` is the cheap one: assign a block to a switch and re-read. Nothing else in the record should
-move, and a key that goes from `nil` to a value in that single step is named.
+### The footswitch record, decoded [solid — live HX Stomp, 2026-08-22]
+
+Binding a block to a switch and re-reading named three of the four unknowns in one step.
+
+    FS1, Simple Delay on it:
+    {102: 0, 65: false, 109: "Simple Delay\0", 66: nil,
+     67: [{59: true, 68: 1, 66: 458496,
+           69: {109: "Simple Delay\0", 98: 16, 29: false, 26: 0, 28: 0, 120: {56: 0, 51: 0}}}]}
+
+| key | meaning | evidence |
+|---|---|---|
+| `102` | switch index, **zero-based** | constant across FS1-3 |
+| `109` | the switch's **label** | `nil` → `"Simple Delay\0"` when a block was bound |
+| `67` | the **assignments array** | `nil` → one entry naming slot 16, the bound block |
+| `67[].66` | the assignment's **LED colour**, `0xRRGGBB` | see below |
+| `67[].69.98` | the target **slot** | `16`, and `5` for a block at slot 5 |
+| `67[].59` | enabled | `true` on a fresh bind |
+| `65`, `66` (top level), `68`, `26`, `120` | unknown | never moved |
+
+**The colour was proved by binding a second block of a different category.** A delay came back
+`0x06FF00` and an amp `0xFF0003` — Helix's green and red. Two categories, two hues, one gesture
+apart; the earlier "66 is a bitmask" reading in the status-push section is refuted by the same
+finding.
+
+Top-level `66` stayed `nil` throughout, so it is presumably a **per-switch override** that falls
+back to the block's category colour — the write ops (58-62) are where that would be set, and they
+are still untried.
+
+**`109` is set by the pedal and not by our op 56** [solid, mechanism unknown]. The switch bound from
+the hardware carried `109: "Simple Delay\0"`; the one `assign-bypass` bound carried `109: nil`,
+with the name present only inside the assignment's own key 69. Whether the pedal fills it in on its
+own schedule or op 56 is genuinely missing a step is not settled — but a switch we bind is not
+byte-identical to one the pedal binds, and that is worth knowing before anything relies on the
+label.
 
 **All of it is `nil` here because nothing on this preset has been customised**, which is exactly why
 the shape is decodable and the meanings are not. Setting a colour and a label on one switch from the

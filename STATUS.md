@@ -3061,3 +3061,53 @@ than as a number you have to have memorised.
 ### Also noticed
 `201` answers **`nil`** while `202` is `1` and `203` is `true` — implemented, still unidentified. An
 id that answers with no value at all is a shape the sweep had not turned up before.
+
+## Forty-third round (2026-08-22): **the footswitch ring colour is key 66, and it was already in a capture we had**
+
+Asked in passing whether we could set a footswitch's LED colour. Reading it turned out to be one
+bind away, and the answer refutes a reading that has been in `docs/protocol.md` since the status-push
+work.
+
+Op 33 on a switch with nothing on it is all `nil` — which is why its keys had never been named.
+Binding a block and re-reading moves three of them at once:
+
+    {102: 0, 65: false, 109: "Simple Delay\0", 66: nil,
+     67: [{59: true, 68: 1, 66: 458496,
+           69: {109: "Simple Delay\0", 98: 16, 29: false, 26: 0, 28: 0, 120: {56: 0, 51: 0}}}]}
+
+`109` is the label, `67` the assignments array, `69.98` the target slot. And `67[].66` is the one
+worth having.
+
+### 458496 is not a number, it is a colour
+`0x06FF00`. Binding an amp instead of a delay gave `0xFF0003`. Green and red — **Helix's own
+category colouring**, two categories one gesture apart.
+
+Which sends us back to the status-push section, where key 66 has sat "unexplained" with an explicit
+note that an earlier bitmask reading didn't fit: *"across four presses it went 458496, 13055, 1037,
+67840, which no four-block state fits."* As colours:
+
+| | engaged | bypassed |
+|---|---|---|
+| slot 2 | `0x06FF00` green | `0x010900` |
+| slot 4 | `0x0032FF` blue | `0x00040D` |
+
+Same hue, about a sixteenth of the brightness. **A lit ring and an unlit one.** The push has been
+telling us what the pedal's ring looks like the whole time, which is the one thing about a press
+that re-reading the preset cannot reproduce. The bitmask reading is refuted, and the value that
+refuted it was sitting in a capture from weeks ago.
+
+### Two smaller findings
+**Top-level `66` stayed `nil`** while the assignment's colour was set, so it is presumably the
+per-switch **override** — the field a "custom colour" feature would write. Ops 58-62 are still
+untried.
+
+**Our `assign-bypass` leaves `109` unset where the pedal sets it.** The switch bound from the
+hardware carried `109: "Simple Delay\0"`; the one op 56 bound carried `109: nil`, the name present
+only inside the assignment. A switch we bind is not byte-identical to one the pedal binds. Whether
+the pedal fills it in later or op 56 is missing a step is not settled, and it is roadmapped rather
+than guessed at.
+
+### Method note
+This is the third time in two days that the blocker was a stale reading rather than a missing decode
+— the IR checksum, op 24's name, and now key 66. All three were sitting in data we already had. The
+pattern is worth naming: *when a key resists, try reading it as something other than a number.*

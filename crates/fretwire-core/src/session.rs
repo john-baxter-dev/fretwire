@@ -2191,12 +2191,17 @@ impl Session {
     /// is `{102, 65, 109, 66, 67}` [solid — live HX Stomp, 2026-08-22], and `102` is the switch
     /// index, zero-based, confirmed across FS1-3.
     ///
-    /// The other four are **`[hypothesis]`**: `65` momentary, `109` label, `66` colour, `67`
-    /// assignments. Every one of them read `nil` on all three switches of a preset with nothing
-    /// customised, which is precisely why they are unconfirmed — `109` carrying a name elsewhere in
-    /// this protocol is a suggestive analogy, not an observation. Assigning a block to a switch and
-    /// re-reading would settle `67` on its own. (This block previously carried the whole mapping
-    /// under a `[solid]` tag; only the shape had ever been checked.)
+    /// `109` is the switch **label** and `67` its **assignments** array, both confirmed by binding a
+    /// block and watching them go from `nil` to populated. Inside an assignment, `69.98` is the
+    /// target slot, `59` its enabled flag, and **`66` is the LED ring colour as `0xRRGGBB`** — a
+    /// delay bound green (`0x06FF00`), an amp red (`0xFF0003`), which is Helix's own category
+    /// colouring. [solid — live HX Stomp, 2026-08-22]
+    ///
+    /// Still unknown: `65`, top-level `66` (presumably a per-switch colour override, since it stays
+    /// `nil` while the assignment's own colour is set), `68`, and the assignment's `26`/`120`.
+    ///
+    /// **A switch we bind is not identical to one the pedal binds**: op 56 leaves top-level `109`
+    /// `nil` where the hardware fills in the block's name. See `docs/protocol.md`.
     pub fn read_switch(
         &mut self,
         switch: i64,

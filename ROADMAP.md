@@ -552,14 +552,26 @@ real session.
       with no recorded menu entries; `201`-`203` are unknown (an earlier "global EQ" gloss was
       withdrawn). Writes are gated to identified ids only.
 
-- [ ] **Footswitch LED colour, custom label and momentary/latching.** Writes are ops **58-62**,
-      documented by `tonepush` and untried here. The **read** side is already ours: op 33 returns
-      `{102: switch (zero-based), 65: bool, 109: nil, 66: nil, 67: nil}` on a switch with nothing
-      customised, so the record's shape is known and only its key meanings are not — `109` carries a
-      name elsewhere in this protocol, and one of `66`/`67` is presumably the colour. **Setting a
-      colour and a label on one switch from the pedal and re-reading names every key in one
-      request**, no capture needed; the write ops can then be tried one at a time against the
-      read-back. Cheap, and it pairs with the footswitch binding UI that already exists.
+- [x] **The footswitch record is decoded (2026-08-22).** Op 33 returns
+      `{102: switch (zero-based), 65: ?, 109: label, 66: ?, 67: [assignments]}`, and an assignment is
+      `{59: enabled, 68: ?, 66: colour, 69: {109: name, 98: slot, 28: param, …}}`. **Key 66 is the
+      LED ring colour, `0xRRGGBB`** — proved by binding two blocks of different categories, a delay
+      coming back `0x06FF00` (green) and an amp `0xFF0003` (red). The same key in the type-41 status
+      push is the ring's *current* colour, bright when engaged and ~1/16 brightness when bypassed,
+      which refutes the "state bitmask" reading that section carried.
+- [ ] **Set the footswitch colour and label.** Reading is done (above); writing is ops **58-62**,
+      documented by `tonepush` and untried here. Top-level `66` stays `nil` while the assignment's
+      own colour is set, so it is presumably the per-switch **override** — that is the field a
+      "custom colour" feature writes. Two things to settle first: which of 58-62 is which (they can
+      be probed one at a time against an op-33 read-back, the way the IR ops were), and whether
+      `65`/`68`/`26`/`120` matter. An HX Stomp cannot set a custom **label** from its own panel, so
+      that half can only ever be confirmed by writing it.
+- [ ] **`assign-bypass` leaves the switch label unset where the pedal sets it.** A switch bound from
+      the hardware carries `109: "<block name>\0"`; one bound by our op 56 carries `109: nil`, with
+      the name only inside the assignment. Whether the pedal fills it in on its own schedule or op
+      56 is missing a step is not settled. Low stakes — the pedal still shows a sensible label — but
+      a switch we bind is not byte-identical to one it binds, which matters before anything reads
+      that field.
 
 - [ ] **Session grid/routing planning is still DSP-0 only.** `add_block_at`, `place_block`,
       `insert_block`, `reorder_block` and `set_node_pos` plan slot moves inside one 20-slot array

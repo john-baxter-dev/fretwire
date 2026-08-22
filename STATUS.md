@@ -45,7 +45,8 @@ edit-history timeline with A/B compare** (blob snapshots restored via the op-21 
 node's slot [solid, input-gate capture]; io.models meta now bundled), category-colored blocks,
 wheel-nudge sliders, click-empty-cell add (`add_block_at`, guarded), in-app dialogs/toasts, Save As
 with a full setlist slot picker. Global settings (Input Z/impedance, pad, output levels) are **not
-decoded** — see `captures/_TODO-global-settings.md`.
+decoded** — see `captures/_TODO-global-settings.md`. The **user IR store** is decoded and
+implemented as of 2026-08-22 (round thirty-four).
 
 **Preset backup/restore (2026-07-07, offline+mock verified; live pass pending):** the proven op-21
 write unlocked Phase 7 — `Session::backup_setlist` sweeps the setlist (goto → read each preset's raw
@@ -2670,3 +2671,52 @@ so a regression there would show up in the CLI too rather than waiting to be fou
 
 **Not clicked through by hand yet** — the Svelte markup compiles and the contract beneath it is
 tested, but nobody has driven the new controls in a running window.
+
+## Thirty-fourth round (2026-08-22): **IRs, the one thing the pedal could only do through HX Edit**
+
+The user IR store is readable and writable. Until now a Linux user had to keep a Windows or macOS
+box around for exactly one task — getting an impulse response onto the pedal — because nothing else
+speaks this op family. `ir-list`, `ir-info`, `ir-export`, `ir-export-all` and `ir-upload` close that.
+
+**The roadmap said this was blocked and it was not.** The line gating IR work read "confirm the
+`113` checksum algorithm"; the checksum had been solved on 2026-07-22 (a little-endian `u32` word
+sum, not a CRC) and the line was never updated. The same pattern as the assignment round: the notes
+were more pessimistic than the evidence.
+
+**Read first, and it paid.** Ops 12 (select) and 11 (stream) are pure reads, so the whole read half
+was built and proven before anything wrote flash — and op 12's reply turns out to carry the slot's
+*entire* metadata record, which makes enumerating the store 128 small replies instead of a megabyte
+of audio.
+
+Three findings, all live:
+
+- **An IR round-trips bit-exact [solid].** The blob read off slot 0 is byte-identical to the one
+  `import_ir.pcapng` recorded HX Edit uploading in June 2026 — an independent source, two months
+  apart. Writing that same file into an empty slot and reading it back gives the same bytes again.
+  The device resamples, normalises and trims nothing.
+- **`114` is the occupancy flag [solid] — this corrects a prior reading.** `114/115/123/124/125`
+  were written up as constant "format flags" because every sample we had came from a *populated*
+  slot. An empty slot reports `114: 0, 115: 1` against a full slot's `1, 3`. So occupancy is a flag,
+  not the presence of a name — and the difference bites: a zero-filled slot with no name still
+  reports `114: 1`, which is a **silent IR, not an empty slot**, and would give silence rather than
+  a bypass if a preset pointed at it. `IrSlot::is_used` reads the flag.
+- **Op 9's ack is not the verdict [solid].** Its immediate reply is `103: 1`, not the usual `0`, and
+  the real completion arrives afterwards as a status push. `ir_upload` re-reads the slot's checksum
+  instead of trusting it.
+
+**One refactor, on purpose.** Op 9 is 8259 bytes and needs the same paced bulk transfer as the
+op-21 preset write — 512 payload bytes per credit, split 496 + 16. Rather than duplicate ~200 lines
+of pacing tuned against 20+ recorded Floor failures, `write_preset`'s transfer loop was extracted to
+`Session::send_chunked_tlv`. Both captures that motivated that pacing are one of each transfer, so
+this is the shape it always had. The preset path was re-verified live afterwards (`write-roundtrip`:
+5 chunks, 5 real credits, acked, no stall — the documented healthy numbers).
+
+### What is not done
+- **Delete, rename and reorder are not decoded.** A slot can be overwritten but not emptied. Op
+  **10** is the gap in an otherwise contiguous 9/11/12/13 family and is the obvious candidate;
+  `fretwire ir-probe <op> <slot>` exists to try it against an expendable slot. **Not attempted** —
+  sending an undocumented opcode to hardware wants a human's say-so first.
+- **Slot 1 of the dev pedal holds a nameless silent IR** — residue of the round-trip test, left
+  there because there is no delete. Slot 0's original is backed up and byte-verified.
+- **No GUI.** The backend and CLI are done; nothing in the Tauri app exposes IRs yet. That, and how
+  a preset's IR block *references* a user slot, are the next pieces.

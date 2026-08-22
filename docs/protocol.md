@@ -895,6 +895,80 @@ Ops **58-62** — momentary/latching, custom switch label, LED colour — are do
 and untried here. Op **64** sets a *parameter's* MIDI CC, which is a different mechanism from a
 bypass's (that rides op 37 with `95: 5`). None of them are needed for the assignment itself.
 
+## The user IR store — reading and writing it [solid — verified live on an HX Stomp 2026-08-22]
+
+The 128 user impulse-response slots, the one device capability HX Edit had entirely to itself. All
+of it rides the **browse envelope** (TLV opcode `0x02` `SESSION_OPEN`), not the `0x06` envelope
+every block edit uses, and every transaction sits between an **op 255** open and an **op 254**
+close. Decoded from `captures/{import,export}_ir.pcapng`; the builders in
+`fretwire_protocol::edit` are byte-exact against those captures, and the whole family has now been
+driven against a live pedal.
+
+| action | op (100) | target (101) | reply |
+|---|---|---|---|
+| **session begin** | **255** | `{}` | `104: nil` |
+| **upload** | **9** | `{112:slot, 113:checksum, 109:name, 114,115,123,124,125, 110:blob}` | `103: 1`, then a status push |
+| **stream a blob** | **11** | `{112:slot, 101:2}` | the 8192-byte blob, paged |
+| **select a slot** | **12** | `{112:slot}` | that slot's whole metadata record |
+| **commit** | **13** | `{101:2}` | the directory, as an array of records |
+| **session end** | **254** | `{}` | `104: nil` |
+
+**Op 12 is the cheap read.** Its reply carries the slot's index, checksum, name and flags, so the
+whole store enumerates in 128 small replies rather than a megabyte of audio. `Session::ir_directory`
+does exactly that inside one session.
+
+### An IR is 2048 samples, stored verbatim [solid]
+The blob is **8192 bytes = 2048 little-endian `f32`**, mono, at the device's 48 kHz. No header, no
+rate, no channel count — the length is the format. And the device stores what it is given: a blob
+read back off slot 0 is **byte-identical** to the one `import_ir.pcapng` recorded HX Edit uploading
+in June, and a slot written from that file reads back byte-identical again. Nothing is resampled,
+normalised or trimmed on the way in or out, so an IR round-trips bit-exact.
+
+### The `113` checksum is a word sum, not a CRC [solid]
+The blob read as 2048 little-endian `u32` words, summed and truncated to 32 bits:
+
+```python
+checksum = sum(struct.unpack("<2048I", blob)) & 0xffffffff   # 0xc0a076ed
+```
+
+crc32, crc32-inverted, adler32, byte-sum, big-endian sum and xor were all checked against the
+capture and all differ. `fretwire_protocol::edit::ir_checksum`. The read path verifies it on every
+export, so a torn reassembly is an error rather than a file that is quietly a few samples short.
+
+### `114` is the occupancy flag [solid] — corrects a prior reading
+`114/115/123/124/125` were written up as constant "format flags" (`1, 3, false, false, 0`) because
+every sample we had came from a **populated** slot. Reading an **empty** one separates two of them:
+
+| | `114` | `115` |
+|---|---|---|
+| slot holds an IR | `1` | `3` |
+| slot is empty | `0` | `1` |
+
+So `114` is the device's own answer to "is this slot used", and it is not the same question as "does
+this slot have a name". Writing an all-zero blob under an empty name leaves a slot reporting
+`114: 1` with no name and a zero checksum — **a silent IR, not an empty slot**, and one that would
+give silence rather than a bypass if a preset pointed an IR block at it. `IrSlot::is_used` reads
+`114` for that reason. `123/124/125` stay constant across empty and full alike and remain unmapped.
+
+### Writing a slot is a flash write, and the reply arrives twice [solid]
+Op 9 is too big for one frame (8259 bytes of TLV) and goes out on the **same paced bulk transfer as
+the op-21 preset write** — 512 payload bytes per credit, each unit split 496 + 16. Both captures
+that carry a bulk upload are one of each, which is why `Session::send_chunked_tlv` is one
+implementation serving both.
+
+Its immediate reply is `103: **1**`, not the usual `0`, and the real completion lands afterwards as
+a **status-channel push** echoing the same transaction. So the ack is not the verdict — `ir_upload`
+re-reads the slot and compares checksums instead.
+
+Unlike every other edit in this project, this one **does not live in the edit buffer**: there is no
+reload that undoes it. `ir_upload` refuses an occupied slot unless told to overwrite.
+
+### Not decoded: delete, rename, reorder
+Op **10** is conspicuously absent from a family that otherwise runs 9, 11, 12, 13 — the obvious
+candidate for delete, and untried. Rename and reorder have never been captured either. A slot can
+be *overwritten* but not emptied: the zero-fill above is the closest thing available and it leaves
+the occupancy flag set. Anyone with HX Edit and a capture setup can close this in one session.
+
 ## Resolved vs. still open
 - [x] Endpoints / framing / channels / sequence.
 - [x] Value encoding = **big-endian f32**.

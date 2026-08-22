@@ -391,11 +391,21 @@ start capture → do the single thing → stop:
       > (`ui/src/lib/numbering.svelte.js`) and op 25 is the *only* thing that can replace it with a
       > detected default. Small, but it is the cheapest possible first consumer of the globals
       > decode — one field, no restore semantics, no risk.
-- [ ] **IR management** — upload user impulse responses to the device's IR slots, rename/reorder/
-      delete. **Transaction shape PARTIALLY DECODED** (2026-06-28, `captures/_TODO-ir.md`): PRIMARY
-      channel, session op 255/254; **upload = op 9** `{112:slot, 113:u32 checksum, 109:name, 110:8192B
-      blob (2048×f32), …flags}` + op 13 commit; **export = op 12/11**. Before implementing: reassemble
-      the blob, **confirm the `113` checksum algorithm**, and decode the format flags (more captures).
+- [x] **IR management — read and write** (2026-08-22, verified live). The one device capability
+      HX Edit had entirely to itself, and the reason a Linux user still needed a Windows box.
+      `Session::{ir_info,ir_directory,ir_export,ir_upload}`; CLI `ir-list`, `ir-info`, `ir-export`,
+      `ir-export-all`, `ir-upload`; builders byte-exact against `captures/{import,export}_ir.pcapng`.
+      An IR **round-trips bit-exact** — a blob read off the pedal matches the one the June capture
+      recorded HX Edit uploading, and a slot written back from that file matches again.
+      The `113` checksum (a little-endian word sum, not a CRC) was solved 2026-07-22 and this line
+      went on saying it was the blocker; it was not.
+      See `docs/protocol.md` "The user IR store".
+- [ ] **IR management — what is left.** **Delete, rename and reorder are not decoded**, so a slot
+      can be overwritten but not emptied. Op **10** is the gap in an otherwise contiguous 9/11/12/13
+      family and is the obvious candidate; probing it needs a slot that is expendable
+      (`fretwire ir-probe`). Also unfinished: how a preset's IR block **references** a user slot vs
+      a built-in cab IR, and a **GUI** IR panel (the backend is done; nothing in the Tauri app
+      exposes it yet).
 - [ ] **Global / I/O settings** — extend op 25 (`{118:id, 119:value}`); map the id space (only id
       134 known; the preset-load pushes expose more `118/119` ids to catalog).
 - [x] **Save As** (GUI, 2026-06-29) — write the edit buffer to a chosen slot under a new name (op 71);

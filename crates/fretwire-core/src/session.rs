@@ -220,6 +220,17 @@ fn identity_confirms(
     }
 }
 
+/// What to tell a user whose preset write stalled. Kept beside the IR one so the two read as a
+/// pair — the important difference is that a stalled preset write is recoverable by reloading,
+/// because it never reached flash.
+const RECOVER_PRESET: &str = "Reload the preset — the edit buffer holds a half-written one. \
+                              Nothing was saved to flash.";
+
+/// What to tell a user whose IR upload stalled. Unlike a preset write this one *is* a flash write,
+/// so the slot itself may be half-written; re-uploading is what fixes it.
+const RECOVER_IR: &str = "The IR slot may be half-written — upload it again once the pedal is \
+                          responding. No other slot is affected.";
+
 impl Session {
     /// Open the device, claim the interface, and run the session handshake.
     ///
@@ -937,7 +948,25 @@ impl Session {
     /// LIVE: the exact chunk size and `arg` cadence are reconstructed from `move_EQ_right_two_slots`.
     /// The device's `{103:1}` apply-ACK is best-effort (logged, not required); the caller confirms by
     /// re-reading.
-    pub fn write_preset(&mut self, blob: Vec<u8>) -> crate::Result<()> {
+    /// Send one already-built TLV to the device as a paced, flow-controlled bulk transfer.
+    ///
+    /// The op-21 whole-preset write and the op-9 IR upload are the only two commands too big for a
+    /// single frame, and on the wire they are the same transfer: 512 payload bytes per credit, each
+    /// unit split 496 + 16. Both of the captures this pacing was derived from are one of each
+    /// (`move_EQ_right_two_slots` and `import_ir`), so there is one implementation rather than two.
+    ///
+    /// `what` names the transfer in the log and in the message a user reads if it stalls;
+    /// `recovery` is the sentence telling them what to do about *this* kind of transfer.
+    ///
+    /// Returns whether the device echoed `txn` in its apply-ACK — best effort, and never a
+    /// substitute for the caller re-reading.
+    fn send_chunked_tlv(
+        &mut self,
+        tlv: Vec<u8>,
+        txn: u16,
+        what: &str,
+        recovery: &str,
+    ) -> crate::Result<bool> {
         /// Payload bytes per flow-control credit — HX Edit's unit, and it is **512, not 496**.
         const UNIT: usize = 512;
         /// Biggest body that still fits one 512-byte bulk packet once the 16-byte frame header is
@@ -979,27 +1008,7 @@ impl Session {
         /// complete perfectly. The `n + 1 < chunks` guard at the call site is what keeps that out.
         const SLOW_CREDIT: std::time::Duration = std::time::Duration::from_millis(22);
 
-        let txn = self.bump_txn();
-        let tlv = Tlv::command(op::PARAM_SET, edit::write_preset(&blob, txn)).to_bytes();
         let (src, dst) = channel::EDIT;
-
-        // Diagnostic: `FRETWIRE_DUMP_WRITES=<dir>` saves the exact blob we are about to send before
-        // the first byte goes out, so a write that wedges the pedal can be reproduced offline from
-        // the bytes that did it. Off unless the variable is set; failures here never block the write.
-        if let Some(dir) = std::env::var_os("FRETWIRE_DUMP_WRITES") {
-            let dir = std::path::PathBuf::from(dir);
-            let stamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0);
-            let path = dir.join(format!("write-{stamp}-txn{txn}.bin"));
-            match std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, &blob)) {
-                Ok(()) => tracing::info!(path = %path.display(), bytes = blob.len(),
-                    "dumped the op-21 blob before sending"),
-                Err(e) => tracing::warn!("could not dump the op-21 blob: {e}"),
-            }
-        }
-
         self.transport.drain();
         // arg stays at the channel cursor for the whole transfer (the capture barely advances it,
         // and small edits via `send_edit` don't advance per frame). LIVE: advance per chunk if the
@@ -1170,7 +1179,8 @@ impl Session {
                 silent,
                 credit_ms = credit_ms.as_millis(),
                 slow,
-                "write-preset chunk"
+                what,
+                "chunked-write chunk"
             );
             // The device is answering but lagging, and on this hardware that is terminal: stop
             // here, with the next chunk still in hand. See `SLOW_CREDIT` for why this cannot fire
@@ -1183,14 +1193,13 @@ impl Session {
                     first_credit_ms,
                     credit_ms = credit_ms.as_millis(),
                     chunks = n + 1,
+                    what,
                     "device is falling behind mid-write — stopping before we push more at it"
                 );
-                self.last_raw = None;
                 return Err(crate::Error::WriteStalled(format!(
-                    "the pedal started falling behind {sent} of {total} bytes into a preset write, \
-                     so we stopped rather than push more data at it. Reload the preset — the edit \
-                     buffer holds a half-written one. Nothing was saved to flash. If the pedal has \
-                     also stopped responding, power-cycle it"
+                    "the pedal started falling behind {sent} of {total} bytes into {what}, so we \
+                     stopped rather than push more data at it. {recovery} If the pedal has also \
+                     stopped responding, power-cycle it"
                 )));
             }
             // Only worth stopping while there is still data to withhold: past the last chunk the
@@ -1202,15 +1211,14 @@ impl Session {
                     credits,
                     first_credit_ms,
                     chunks = n + 1,
+                    what,
                     "device stopped acknowledging mid-write — abandoning the transfer"
                 );
-                self.last_raw = None;
                 return Err(crate::Error::WriteStalled(format!(
-                    "the pedal stopped taking data {sent} of {total} bytes into a preset write. \
-                     Every write that has done this needed a power cycle to come back, so do that \
-                     first, then reload the preset — the edit buffer holds a half-written one. \
-                     Nothing was saved to flash. This is a known Helix Floor fault we are still \
-                     chasing; the log line above it is the useful part of a bug report"
+                    "the pedal stopped taking data {sent} of {total} bytes into {what}. Every \
+                     write that has done this needed a power cycle to come back, so do that first. \
+                     {recovery} This is a known Helix Floor fault we are still chasing; the log \
+                     line above it is the useful part of a bug report"
                 )));
             }
             if started.elapsed() > WRITE_BUDGET {
@@ -1220,15 +1228,12 @@ impl Session {
                     credits,
                     first_credit_ms,
                     chunks = n + 1,
-                    "preset write exceeded its wall-clock budget — abandoning the transfer"
+                    what,
+                    "transfer exceeded its wall-clock budget — abandoning it"
                 );
-                // The edit buffer holds a partial preset now, so the read cache no longer describes
-                // the device. Drop it: the next read has to come off the wire.
-                self.last_raw = None;
                 return Err(crate::Error::WriteStalled(format!(
-                    "a preset write ran past {WRITE_BUDGET:?} with {sent} of {total} bytes sent. \
-                     The edit buffer may be inconsistent — reload the preset, and power-cycle \
-                     the pedal if it is unresponsive"
+                    "{what} ran past {WRITE_BUDGET:?} with {sent} of {total} bytes sent. \
+                     {recovery} Power-cycle the pedal if it is unresponsive"
                 )));
             }
         }
@@ -1245,7 +1250,7 @@ impl Session {
         // Look in both places. The apply-ACK is `0x03ed cmd 4` — not a credit — so when it lands
         // mid-transfer the credit wait now sets it aside, and a sweep of `acks` alone would miss it
         // and report `acked=false` on a write the device plainly took.
-        let acked = acks
+        let acked: bool = acks
             .iter()
             .chain(set_aside.iter())
             .any(|f| reply_txn(&f.body) == Some(txn));
@@ -1269,9 +1274,44 @@ impl Session {
             chunks,
             real_credits,
             stray_frames,
-            "write-preset sent"
+            what,
+            "chunked write sent"
         );
-        Ok(())
+        Ok(acked)
+    }
+
+    /// Write a whole preset document into the **edit buffer** (op 21). Flash is untouched until a
+    /// `save_preset`.
+    pub fn write_preset(&mut self, blob: Vec<u8>) -> crate::Result<()> {
+        let txn = self.bump_txn();
+        let tlv = Tlv::command(op::PARAM_SET, edit::write_preset(&blob, txn)).to_bytes();
+
+        // Diagnostic: `FRETWIRE_DUMP_WRITES=<dir>` saves the exact blob we are about to send before
+        // the first byte goes out, so a write that wedges the pedal can be reproduced offline from
+        // the bytes that did it. Off unless the variable is set; failures here never block the write.
+        if let Some(dir) = std::env::var_os("FRETWIRE_DUMP_WRITES") {
+            let dir = std::path::PathBuf::from(dir);
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            let path = dir.join(format!("write-{stamp}-txn{txn}.bin"));
+            match std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, &blob)) {
+                Ok(()) => tracing::info!(path = %path.display(), bytes = blob.len(),
+                    "dumped the op-21 blob before sending"),
+                Err(e) => tracing::warn!("could not dump the op-21 blob: {e}"),
+            }
+        }
+
+        // Every abort path leaves a partial preset in the edit buffer, so the read cache no longer
+        // describes the device. Drop it: the next read has to come off the wire.
+        match self.send_chunked_tlv(tlv, txn, "a preset write", RECOVER_PRESET) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                self.last_raw = None;
+                Err(e)
+            }
+        }
     }
 
     // ---- edit history (undo / redo / timeline jump) ------------------------------------------
@@ -3448,6 +3488,297 @@ impl Session {
             "reassembled slot document"
         );
         Ok(Some(payload))
+    }
+
+    // ---- IR (impulse response) slots ----
+    //
+    // The device's user-IR store, which HX Edit is otherwise the only way to reach. Everything here
+    // rides the browse envelope (TLV `SESSION_OPEN`), not the edit envelope, and every transaction
+    // sits between an op-255 begin and an op-254 end.
+
+    /// Run `f` inside an open IR session (op 255 … op 254).
+    ///
+    /// The close is sent whether or not `f` succeeded — leaving the device with a session open is
+    /// how the next unrelated read starts decoding somebody else's stream.
+    fn in_ir_session<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> crate::Result<T>,
+    ) -> crate::Result<T> {
+        // Start aligned for the same reason the preset listing does: a state push or a prior
+        // stream's leftovers would otherwise be reassembled as this reply.
+        self.transport.drain();
+        self.transport
+            .drain_wire(std::time::Duration::from_millis(30), 128);
+
+        let txn = self.bump_txn();
+        self.ir_request(cmd::OPEN, edit::ir_session_begin(txn), txn)?;
+        let out = f(self);
+        let txn = self.bump_txn();
+        let closed = self.ir_request(cmd::STREAM, edit::ir_session_end(txn), txn);
+        if let Err(e) = closed {
+            // Worth a line but not worth losing the result over: the session times out on its own.
+            tracing::warn!(error = %e, "IR session did not close cleanly");
+        }
+        self.transport.drain();
+        out
+    }
+
+    /// Send one IR-session command and hand back the reply, refusals included.
+    fn ir_request(&mut self, command: u8, body: Vec<u8>, txn: u16) -> crate::Result<Frame> {
+        let tlv = Tlv::command(op::SESSION_OPEN, body).to_bytes();
+        let ack = self.edit_request_txn(command, tlv, txn)?;
+        if let Some((rejected, code)) = fretwire_data::stream::parse_edit_rejection(&ack.body)
+            && rejected == txn
+        {
+            return Err(crate::Error::Rejected(format!(
+                "IR command — device code {code}{}",
+                reject_hint(None, code)
+            )));
+        }
+        Ok(ack)
+    }
+
+    /// The `104` payload of an IR reply, if it carries one.
+    fn ir_reply_payload(ack: &Frame) -> Option<fretwire_data::rmpv::Value> {
+        let root = fretwire_data::stream::locate_root(&ack.body, 32)?;
+        fretwire_data::stream::map_get(&root.value, 104).cloned()
+    }
+
+    /// Select slot `slot` and return the metadata the device answers with (op 12).
+    ///
+    /// Selecting is a **read**: it names the slot a following [`Self::ir_export`] would stream, and
+    /// the reply carries the slot's index, blob checksum, name and format flags. Nothing is written.
+    fn ir_select(&mut self, slot: i64) -> crate::Result<Option<fretwire_data::ir::IrSlot>> {
+        let txn = self.bump_txn();
+        let ack = self.ir_request(cmd::STREAM, edit::ir_select(txn, slot), txn)?;
+        Ok(Self::ir_reply_payload(&ack)
+            .as_ref()
+            .and_then(fretwire_data::ir::parse_slot))
+    }
+
+    /// Read one IR slot's metadata. **Reads only.**
+    pub fn ir_info(&mut self, slot: i64) -> crate::Result<Option<fretwire_data::ir::IrSlot>> {
+        self.in_ir_session(|s| s.ir_select(slot))
+    }
+
+    /// Read every IR slot's metadata, in one session. **Reads only.**
+    ///
+    /// One op-12 per slot rather than one blob per slot: 128 small replies instead of a megabyte,
+    /// which is the difference between a listing and a transfer. Slots that answer nothing are
+    /// skipped rather than erroring — a device with fewer slots than [`IR_SLOTS`] should shorten
+    /// the list, not fail it.
+    pub fn ir_directory(&mut self) -> crate::Result<Vec<fretwire_data::ir::IrSlot>> {
+        self.in_ir_session(|s| {
+            let mut out = Vec::new();
+            for slot in 0..fretwire_data::ir::IR_SLOTS as i64 {
+                match s.ir_select(slot) {
+                    Ok(Some(info)) => out.push(info),
+                    Ok(None) => {
+                        tracing::debug!(slot, "IR slot answered nothing — ending the sweep");
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!(slot, error = %e, "IR slot refused — ending the sweep");
+                        break;
+                    }
+                }
+            }
+            Ok(out)
+        })
+    }
+
+    /// Read an IR slot's audio blob and metadata (op 12, then the op-11 stream). **Reads only.**
+    ///
+    /// The blob is [`fretwire_data::ir::IR_BLOB_LEN`] bytes of little-endian `f32`; wrap it with
+    /// [`fretwire_data::ir::to_wav`] to get a file. `Ok(None)` means the slot is empty.
+    ///
+    /// The blob's own checksum is verified against the one the metadata reports, so a torn transfer
+    /// is an error rather than a file that is quietly four samples short.
+    pub fn ir_export(
+        &mut self,
+        slot: i64,
+    ) -> crate::Result<Option<(fretwire_data::ir::IrSlot, Vec<u8>)>> {
+        self.in_ir_session(|s| {
+            let Some(info) = s.ir_select(slot)? else {
+                return Ok(None);
+            };
+            if !info.is_used() {
+                tracing::info!(slot, "IR slot is empty — nothing to export");
+                return Ok(None);
+            }
+            let txn = s.bump_txn();
+            let first = s.ir_request(cmd::STREAM, edit::ir_stream(txn, slot), txn)?;
+            tracing::info!(
+                arg = first.arg,
+                body = first.body.len(),
+                slot,
+                "IR stream chunk #0"
+            );
+            let payload = s.drain_chunked_stream(channel::EDIT, first.body, "IR")?;
+
+            // The stream carries the same `marker/type/len` prefix a preset document does, so the
+            // blob is what follows the MessagePack header rather than the whole payload.
+            let blob = fretwire_data::stream::locate_root(&payload, 64)
+                .and_then(|root| {
+                    fretwire_data::stream::map_get(&root.value, 104)
+                        .and_then(fretwire_data::stream::value_bytes)
+                        .map(<[u8]>::to_vec)
+                })
+                .ok_or_else(|| {
+                    fretwire_data::Error::Stream(format!(
+                        "IR slot {slot}: the stream carried no blob at key 104 \
+                         ({} bytes reassembled)",
+                        payload.len()
+                    ))
+                })?;
+
+            if blob.len() != fretwire_data::ir::IR_BLOB_LEN {
+                return Err(fretwire_data::Error::Stream(format!(
+                    "IR slot {slot}: expected {} bytes, got {}",
+                    fretwire_data::ir::IR_BLOB_LEN,
+                    blob.len()
+                ))
+                .into());
+            }
+            // The device told us what this blob should sum to; a mismatch means the reassembly is
+            // wrong, and writing that back to another slot would carry the damage with it.
+            let got = fretwire_protocol::edit::ir_checksum(&blob);
+            if let Some(want) = info.checksum
+                && want != got
+            {
+                return Err(fretwire_data::Error::Stream(format!(
+                    "IR slot {slot}: checksum {got:#010x} does not match the device's {want:#010x}"
+                ))
+                .into());
+            }
+            tracing::info!(slot, name = %info.name, bytes = blob.len(), "exported IR");
+            Ok(Some((info, blob)))
+        })
+    }
+
+    /// **Probe**: send `op` inside an IR session with a `{112: slot}` target and return the reply.
+    ///
+    /// The IR op family is only partly mapped — 9 upload, 11 stream, 12 select, 13 commit, with
+    /// 10 conspicuously absent — and this is how the gaps get filled. It can write, because an
+    /// unmapped opcode can do anything; it exists for probing a slot whose contents are expendable.
+    pub fn ir_probe(
+        &mut self,
+        op_id: i64,
+        slot: i64,
+    ) -> crate::Result<Option<fretwire_data::rmpv::Value>> {
+        self.in_ir_session(|s| {
+            let txn = s.bump_txn();
+            let body = fretwire_data::rmpv::Value::Map(vec![
+                (
+                    fretwire_data::rmpv::Value::from(102),
+                    fretwire_data::rmpv::Value::from(txn),
+                ),
+                (
+                    fretwire_data::rmpv::Value::from(100),
+                    fretwire_data::rmpv::Value::from(op_id),
+                ),
+                (
+                    fretwire_data::rmpv::Value::from(101),
+                    fretwire_data::rmpv::Value::Map(vec![(
+                        fretwire_data::rmpv::Value::from(112),
+                        fretwire_data::rmpv::Value::from(slot),
+                    )]),
+                ),
+            ]);
+            let mut encoded = Vec::new();
+            fretwire_data::rmpv::encode::write_value(&mut encoded, &body)
+                .expect("msgpack encode to Vec is infallible");
+            let ack = s.ir_request(cmd::STREAM, encoded, txn)?;
+            Ok(Self::ir_reply_payload(&ack))
+        })
+    }
+
+    /// Upload an IR into slot `slot` (op 9, then the op-13 commit).
+    ///
+    /// **This writes device flash.** Not firmware — user data, in the same risk class as
+    /// `save_preset` — but unlike every other edit in this crate it does not live in the edit
+    /// buffer and cannot be undone by reloading. `overwrite` has to be set to write over a slot
+    /// that already holds an IR; without it an occupied slot is an error rather than a surprise.
+    ///
+    /// `blob` is [`fretwire_data::ir::IR_BLOB_LEN`] bytes of little-endian `f32` — build it from a
+    /// file with [`fretwire_data::ir::from_wav`]. The checksum is computed here, not passed in.
+    ///
+    /// Returns the slot as the device reports it afterwards, having verified that the checksum it
+    /// now holds is the one we sent.
+    pub fn ir_upload(
+        &mut self,
+        slot: i64,
+        name: &str,
+        blob: &[u8],
+        overwrite: bool,
+    ) -> crate::Result<fretwire_data::ir::IrSlot> {
+        if blob.len() != fretwire_data::ir::IR_BLOB_LEN {
+            return Err(fretwire_data::Error::Stream(format!(
+                "an IR is {} bytes ({} samples); this one is {}",
+                fretwire_data::ir::IR_BLOB_LEN,
+                fretwire_data::ir::IR_SAMPLES,
+                blob.len()
+            ))
+            .into());
+        }
+        if !(0..fretwire_data::ir::IR_SLOTS as i64).contains(&slot) {
+            return Err(fretwire_data::Error::Stream(format!(
+                "IR slot {slot} is out of range (0..{})",
+                fretwire_data::ir::IR_SLOTS
+            ))
+            .into());
+        }
+        let sent_checksum = fretwire_protocol::edit::ir_checksum(blob);
+
+        self.in_ir_session(|s| {
+            // Look before writing. The device will happily overwrite an occupied slot, and an IR
+            // the user paid for is not recoverable from anywhere else once it is gone.
+            if let Some(existing) = s.ir_select(slot)?
+                && existing.is_used()
+                && !overwrite
+            {
+                return Err(crate::Error::Rejected(format!(
+                    "IR slot {slot} already holds \"{}\" — pass overwrite to replace it",
+                    existing.display_name()
+                )));
+            }
+
+            let txn = s.bump_txn();
+            let body = fretwire_protocol::edit::ir_upload(txn, slot, name, blob)
+                .expect("blob length checked above");
+            let tlv = Tlv::command(op::SESSION_OPEN, body).to_bytes();
+            let acked = s.send_chunked_tlv(tlv, txn, "an IR upload", RECOVER_IR)?;
+            // The op-9 reply is `103: 1`, not the usual `0`, and the real completion arrives
+            // afterwards as a status push echoing the same transaction — so a missing ack here is
+            // worth a line but is not the verdict. The re-read below is.
+            tracing::info!(slot, acked, checksum = sent_checksum, "IR upload sent");
+
+            let txn = s.bump_txn();
+            let ack = s.ir_request(cmd::OPEN, fretwire_protocol::edit::ir_commit(txn), txn)?;
+            let directory = Self::ir_reply_payload(&ack)
+                .as_ref()
+                .map(fretwire_data::ir::parse_directory)
+                .unwrap_or_default();
+            tracing::info!(slots = directory.len(), "IR store committed");
+
+            // Ask the device what it now holds, rather than trusting the commit. A checksum that
+            // came back different means the flash write landed wrong, and the caller needs to know
+            // that before it tells anyone the IR is loaded.
+            let landed = s.ir_select(slot)?.ok_or_else(|| {
+                fretwire_data::Error::Stream(format!(
+                    "IR slot {slot} gave no metadata after the upload"
+                ))
+            })?;
+            if landed.checksum != Some(sent_checksum) {
+                return Err(fretwire_data::Error::Stream(format!(
+                    "IR slot {slot}: the device reports checksum {:#010x} after an upload of \
+                     {sent_checksum:#010x} — the write did not land intact",
+                    landed.checksum.unwrap_or(0)
+                ))
+                .into());
+            }
+            Ok(landed)
+        })
     }
 
     /// Reassemble a chunked stream whose chunk #0 is already in hand, on `chan`.

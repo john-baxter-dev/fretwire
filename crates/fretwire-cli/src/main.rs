@@ -269,6 +269,48 @@ enum Command {
     ///
     /// Known: id 134 = 3-state input setting (0/1/2).
     Setting { id: i64, value: i64 },
+    /// List the device's user IR slots — index, name and blob checksum. **Reads only.**
+    IrList {
+        /// Show empty slots too, instead of only the ones holding an IR.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Show one IR slot's metadata (op 12). **Reads only.**
+    IrInfo { slot: i64 },
+    /// Download an IR slot to a 32-bit float, 48 kHz mono WAV. **Reads only.**
+    IrExport {
+        slot: i64,
+        /// Where to write it. Defaults to the slot's own name in the working directory.
+        out: Option<std::path::PathBuf>,
+    },
+    /// Download every populated IR slot into a directory. **Reads only.**
+    IrExportAll { dir: std::path::PathBuf },
+    /// Upload a WAV into a user IR slot (op 9 + op 13). **WRITES DEVICE FLASH.**
+    ///
+    /// User data, not firmware, so the risk class is `save`'s — but unlike a preset edit it does
+    /// not sit in the edit buffer and cannot be undone by reloading. Export the slot first if it
+    /// holds anything you want to keep.
+    ///
+    /// The file is resampled to nothing: it is truncated or zero-padded to 2048 samples and its
+    /// first channel is taken. A file that is not already 48 kHz is refused unless --force.
+    IrUpload {
+        slot: i64,
+        wav: std::path::PathBuf,
+        /// Name to store, up to 31 characters. Defaults to the file's stem.
+        #[arg(long)]
+        name: Option<String>,
+        /// Replace an IR already in the slot.
+        #[arg(long)]
+        overwrite: bool,
+        /// Upload anyway when the file's sample rate is not 48 kHz.
+        #[arg(long)]
+        force: bool,
+    },
+    /// PROBE: send an arbitrary opcode inside an IR session with a `{112: slot}` target.
+    ///
+    /// For mapping the IR op family — ops 9/11/12/13 are decoded, the rest are not. Prints
+    /// whatever comes back, refusals included. Only send this at a slot you can afford to lose.
+    IrProbe { op: i64, slot: i64 },
     /// Ask the device what a footswitch carries (op 33). The number is **one-based**: 1 = FS1.
     ReadSwitch { switch: i64 },
     /// Ask the device what drives one parameter (op 36).
@@ -890,6 +932,117 @@ fn main() -> Result<()> {
             println!("{}", fretwire_data::stream::summarize(&ps.preset, depth));
         }
         Command::DiffStream { a, b } => diff_stream(&a, &b)?,
+        Command::IrList { all } => {
+            let mut s = fretwire_core::Session::connect()?;
+            let slots = s.ir_directory()?;
+            let shown: Vec<_> = slots.iter().filter(|i| all || i.is_used()).collect();
+            if shown.is_empty() {
+                println!("no IRs loaded ({} slots read)", slots.len());
+            }
+            for i in shown {
+                match i.checksum {
+                    Some(c) => println!(
+                        "{:>3}  {:<32} {c:#010x}{}",
+                        i.index,
+                        i.display_name(),
+                        // A populated slot whose blob sums to zero is silence, not emptiness, and
+                        // the two look identical in every other column.
+                        if i.is_used() && c == 0 {
+                            "  (silent)"
+                        } else {
+                            ""
+                        }
+                    ),
+                    None => println!("{:>3}  {}", i.index, i.display_name()),
+                }
+            }
+        }
+        Command::IrInfo { slot } => {
+            let mut s = fretwire_core::Session::connect()?;
+            match s.ir_info(slot)? {
+                Some(i) => println!("{i:#?}"),
+                None => println!("IR slot {slot}: no decodable reply"),
+            }
+        }
+        Command::IrExport { slot, out } => {
+            let mut s = fretwire_core::Session::connect()?;
+            match s.ir_export(slot)? {
+                Some((info, blob)) => {
+                    let path = out.unwrap_or_else(|| ir_filename(&info));
+                    std::fs::write(&path, fretwire_data::ir::to_wav(&blob))?;
+                    println!(
+                        "IR {slot} \"{}\" -> {} ({} samples, peak {:.3})",
+                        info.name,
+                        path.display(),
+                        fretwire_data::ir::IR_SAMPLES,
+                        fretwire_data::ir::peak(&blob)
+                    );
+                }
+                None => println!("IR slot {slot} is empty"),
+            }
+        }
+        Command::IrExportAll { dir } => {
+            let mut s = fretwire_core::Session::connect()?;
+            std::fs::create_dir_all(&dir)?;
+            let slots = s.ir_directory()?;
+            let used: Vec<i64> = slots
+                .iter()
+                .filter(|i| i.is_used())
+                .map(|i| i.index)
+                .collect();
+            println!("{} IR(s) to export", used.len());
+            for slot in used {
+                match s.ir_export(slot)? {
+                    Some((info, blob)) => {
+                        let path = dir.join(ir_filename(&info));
+                        std::fs::write(&path, fretwire_data::ir::to_wav(&blob))?;
+                        println!("  {slot:>3}  {}", path.display());
+                    }
+                    // The directory said it was used, so this is worth a line rather than silence.
+                    None => println!("  {slot:>3}  vanished between the listing and the read"),
+                }
+            }
+        }
+        Command::IrUpload {
+            slot,
+            wav,
+            name,
+            overwrite,
+            force,
+        } => {
+            let bytes = std::fs::read(&wav)?;
+            let (blob, rate) = fretwire_data::ir::from_wav(&bytes)
+                .map_err(|e| anyhow::anyhow!("{}: {e}", wav.display()))?;
+            if rate != fretwire_data::ir::IR_SAMPLE_RATE && !force {
+                anyhow::bail!(
+                    "{} is {rate} Hz; the device runs at {} Hz and nothing here resamples, so it \
+                     would play short and bright. Convert it first, or pass --force",
+                    wav.display(),
+                    fretwire_data::ir::IR_SAMPLE_RATE
+                );
+            }
+            let name = name.unwrap_or_else(|| {
+                wav.file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            });
+            let mut s = fretwire_core::Session::connect()?;
+            let landed = s.ir_upload(slot, &name, &blob, overwrite)?;
+            println!(
+                "IR {slot} <- {} as \"{}\" (checksum {:#010x}, peak {:.3})",
+                wav.display(),
+                landed.name,
+                landed.checksum.unwrap_or(0),
+                fretwire_data::ir::peak(&blob)
+            );
+        }
+        Command::IrProbe { op, slot } => {
+            let mut s = fretwire_core::Session::connect()?;
+            match s.ir_probe(op, slot)? {
+                Some(v) => println!("op {op} slot {slot} -> {v}"),
+                None => println!("op {op} slot {slot} -> no decodable reply"),
+            }
+        }
         Command::ReadSwitch { switch } => {
             let mut s = fretwire_core::Session::connect()?;
             match s.read_switch(switch)? {
@@ -1555,6 +1708,30 @@ fn fmt_value(v: fretwire_data::stream::ParamValue) -> String {
     }
 }
 
+/// A filesystem-safe filename for an exported IR: its slot number and its own name.
+///
+/// The number leads so a directory sorts the way the device does, and it disambiguates the two
+/// slots that a user has, inevitably, given the same name.
+fn ir_filename(info: &fretwire_data::ir::IrSlot) -> std::path::PathBuf {
+    let safe: String = info
+        .name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "-_ .+".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let safe = safe.trim();
+    if safe.is_empty() {
+        format!("ir-{:03}.wav", info.index).into()
+    } else {
+        format!("ir-{:03} {safe}.wav", info.index).into()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1584,5 +1761,27 @@ mod tests {
             Err(std::io::Error::from(std::io::ErrorKind::NotFound))
         });
         assert_eq!(calls, ["udevadm control --reload", "udevadm trigger"]);
+    }
+
+    #[test]
+    fn an_exported_ir_is_named_for_its_slot_and_its_own_name() {
+        let slot = |index, name: &str| fretwire_data::ir::IrSlot {
+            index,
+            checksum: None,
+            name: name.to_string(),
+            flags: fretwire_data::ir::IrFlags::default(),
+        };
+        assert_eq!(
+            ir_filename(&slot(7, "G12-65 212 C")).to_str().unwrap(),
+            "ir-007 G12-65 212 C.wav"
+        );
+        // A name is a user string: it can hold separators, and a slash would write the file
+        // somewhere else entirely.
+        assert_eq!(
+            ir_filename(&slot(3, "a/b:c*d")).to_str().unwrap(),
+            "ir-003 a_b_c_d.wav"
+        );
+        // The slot number still identifies a nameless one.
+        assert_eq!(ir_filename(&slot(12, "  ")).to_str().unwrap(), "ir-012.wav");
     }
 }

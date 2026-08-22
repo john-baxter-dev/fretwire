@@ -6,6 +6,7 @@
 //! crates and is recovered separately via USB capture.
 
 pub mod hxb;
+pub mod ir;
 pub mod modeldefs;
 pub mod models;
 pub mod preset;

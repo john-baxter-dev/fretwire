@@ -957,6 +957,197 @@ fn get(v: &Value, key: i64) -> Option<&Value> {
     }
 }
 
+// ---- IR (impulse response) slots: the device's user-IR store ----
+//
+// A separate area from everything above: not the edit buffer, not the preset browse. The Stomp
+// holds 128 user IR slots, each a fixed 2048-sample mono impulse, and HX Edit is the only way to
+// put one there. All of it rides the **primary** channel inside a `SESSION_OPEN` (0x02) TLV — the
+// same envelope the preset listing uses, not the 0x06 one every block edit uses.
+//
+// Provenance: `captures/{import,export}_ir.pcapng`, decoded 2026-06-28 and re-read 2026-08-22.
+// Every builder here is byte-exact against those captures — see the tests.
+
+/// Op 255: **open** an IR session. Brackets every IR transaction with [`OP_SESSION_END`].
+///
+/// The preset browse uses the same pair, though our listing only ever sends the 254 half — which
+/// is worth knowing, because it means what `browse_open` calls an open is really this pair's
+/// *close*, and the device is content to be handed one out of the blue.
+pub const OP_SESSION_BEGIN: i64 = 255;
+/// Op 254: **close** an IR session. The same number as [`OP_BROWSE_OPEN`]; see there.
+pub const OP_SESSION_END: i64 = 254;
+/// Op 9: **upload** an IR into a slot. Followed by [`OP_IR_COMMIT`].
+pub const OP_IR_UPLOAD: i64 = 9;
+/// Op 11: start the **blob stream** for the slot [`OP_IR_SELECT`] just named.
+pub const OP_IR_STREAM: i64 = 11;
+/// Op 12: **select** a slot for reading — and the reply carries that slot's whole metadata record,
+/// which makes this the cheap way to enumerate the store without moving 8 KB per slot.
+pub const OP_IR_SELECT: i64 = 12;
+/// Op 13: **commit** a write. Its reply is the directory of populated slots.
+pub const OP_IR_COMMIT: i64 = 13;
+
+/// Target key: the IR **slot index**, zero-based.
+pub const K_IR_SLOT: i64 = 112;
+/// Target key: the blob's **checksum** — see [`ir_checksum`].
+pub const K_IR_CHECKSUM: i64 = 113;
+/// Target key: the IR **audio blob**, 8192 bytes.
+pub const K_IR_BLOB: i64 = 110;
+/// Target keys 114/115/123/124/125: **format flags**. Constant at `1, 3, false, false, 0` across
+/// every IR this project has seen, on a device whose IRs are all one length and one format, so
+/// what they select is unknown. [hypothesis]
+pub const K_IR_FLAG_114: i64 = 114;
+/// See [`K_IR_FLAG_114`].
+pub const K_IR_FLAG_115: i64 = 115;
+/// See [`K_IR_FLAG_114`].
+pub const K_IR_FLAG_123: i64 = 123;
+/// See [`K_IR_FLAG_114`].
+pub const K_IR_FLAG_124: i64 = 124;
+/// See [`K_IR_FLAG_114`].
+pub const K_IR_FLAG_125: i64 = 125;
+
+/// The length of an IR name field on the wire: 32 bytes, NUL-padded.
+pub const IR_NAME_LEN: usize = 32;
+/// The length of an IR audio blob: 2048 little-endian `f32` samples.
+pub const IR_BLOB_LEN: usize = 8192;
+
+/// The `113` checksum: the blob read as little-endian `u32` words and summed, truncated to 32 bits.
+///
+/// Not a CRC — crc32, crc32-inverted, adler32, byte-sum, big-endian sum and xor were all checked
+/// against `import_ir.pcapng` and all differ. [solid — reproduces the captured `0xc0a076ed`]
+pub fn ir_checksum(blob: &[u8]) -> u32 {
+    blob.as_chunks::<4>()
+        .0
+        .iter()
+        .fold(0u32, |acc, w| acc.wrapping_add(u32::from_le_bytes(*w)))
+}
+
+/// Build the **session-begin** body (op 255): `{102:txn, 100:255, 101:{}}`.
+pub fn ir_session_begin(txn: u16) -> Vec<u8> {
+    encode(Value::Map(vec![
+        (Value::from(K_TXN), Value::from(txn)),
+        (Value::from(K_OP), Value::from(OP_SESSION_BEGIN)),
+        (Value::from(K_TARGET), Value::Map(Vec::new())),
+    ]))
+}
+
+/// Build the **session-end** body (op 254): `{102:txn, 100:254, 101:{}}`.
+pub fn ir_session_end(txn: u16) -> Vec<u8> {
+    encode(Value::Map(vec![
+        (Value::from(K_TXN), Value::from(txn)),
+        (Value::from(K_OP), Value::from(OP_SESSION_END)),
+        (Value::from(K_TARGET), Value::Map(Vec::new())),
+    ]))
+}
+
+/// Build the **IR-select** body (op 12): `{102:txn, 100:12, 101:{112:slot}}`.
+///
+/// The reply is the slot's metadata record — index, checksum, name and the format flags — so this
+/// alone reads the whole store. Selecting is a read; nothing is written and no blob moves.
+pub fn ir_select(txn: u16, slot: i64) -> Vec<u8> {
+    encode(Value::Map(vec![
+        (Value::from(K_TXN), Value::from(txn)),
+        (Value::from(K_OP), Value::from(OP_IR_SELECT)),
+        (
+            Value::from(K_TARGET),
+            Value::Map(vec![(Value::from(K_IR_SLOT), Value::from(slot))]),
+        ),
+    ]))
+}
+
+/// Build the **IR-stream-start** body (op 11): `{102:txn, 100:11, 101:{112:slot, 101:2}}`.
+///
+/// Sent after [`ir_select`] for the same slot. The blob pages back exactly like a preset document:
+/// a declared length up front, then chunks.
+pub fn ir_stream(txn: u16, slot: i64) -> Vec<u8> {
+    encode(Value::Map(vec![
+        (Value::from(K_TXN), Value::from(txn)),
+        (Value::from(K_OP), Value::from(OP_IR_STREAM)),
+        (
+            Value::from(K_TARGET),
+            Value::Map(vec![
+                (Value::from(K_IR_SLOT), Value::from(slot)),
+                (Value::from(K_LIST_KIND), Value::from(2)),
+            ]),
+        ),
+    ]))
+}
+
+/// Build the **IR-commit** body (op 13): `{102:txn, 100:13, 101:{101:2}}`.
+///
+/// Closes an [`ir_upload`], and answers with the directory of populated slots.
+pub fn ir_commit(txn: u16) -> Vec<u8> {
+    encode(Value::Map(vec![
+        (Value::from(K_TXN), Value::from(txn)),
+        (Value::from(K_OP), Value::from(OP_IR_COMMIT)),
+        (
+            Value::from(K_TARGET),
+            Value::Map(vec![(Value::from(K_LIST_KIND), Value::from(2))]),
+        ),
+    ]))
+}
+
+/// Write a MessagePack `str16` header, whatever the length.
+///
+/// `rmpv` picks the shortest encoding, which would put a 32-byte name in a `str8`. HX Edit sends
+/// `str16` for both the name and the blob, and the difference is one byte on a command that writes
+/// flash — so the two fixed-width fields are laid down by hand rather than left to the encoder.
+fn write_str16(out: &mut Vec<u8>, bytes: &[u8]) {
+    out.push(0xda);
+    out.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
+    out.extend_from_slice(bytes);
+}
+
+/// Pad `name` into the 32-byte NUL-padded field the wire carries. Over-long names are cut to 31
+/// bytes on a `char` boundary so the field always ends in a NUL.
+pub fn ir_name_field(name: &str) -> [u8; IR_NAME_LEN] {
+    let mut field = [0u8; IR_NAME_LEN];
+    let mut end = name.len().min(IR_NAME_LEN - 1);
+    while end > 0 && !name.is_char_boundary(end) {
+        end -= 1;
+    }
+    field[..end].copy_from_slice(&name.as_bytes()[..end]);
+    field
+}
+
+/// Build the **IR-upload** body (op 9): the slot, the checksum, the 32-byte name, the five format
+/// flags and the 8192-byte blob.
+///
+/// `blob` is 2048 little-endian `f32` samples. Returns `None` if it is not exactly
+/// [`IR_BLOB_LEN`] bytes — the device is being handed a flash write, and a short blob is a caller
+/// bug rather than something to pad silently.
+///
+/// **This writes device flash.** It must be followed by [`ir_commit`]. Its immediate reply carries
+/// `103: 1`, not the usual `0` — the real verdict arrives afterwards as a status push echoing the
+/// same transaction. [solid — `import_ir.pcapng`]
+pub fn ir_upload(txn: u16, slot: i64, name: &str, blob: &[u8]) -> Option<Vec<u8>> {
+    if blob.len() != IR_BLOB_LEN {
+        return None;
+    }
+    let mut out = Vec::with_capacity(IR_BLOB_LEN + 128);
+    // Three top-level pairs, then nine in the target. Hand-rolled only because of the two
+    // `str16` fields; every scalar still goes through the encoder.
+    out.push(0x83);
+    let pair = |out: &mut Vec<u8>, k: i64, v: Value| {
+        out.extend_from_slice(&encode(Value::from(k)));
+        out.extend_from_slice(&encode(v));
+    };
+    pair(&mut out, K_TXN, Value::from(txn));
+    pair(&mut out, K_OP, Value::from(OP_IR_UPLOAD));
+    out.extend_from_slice(&encode(Value::from(K_TARGET)));
+    out.push(0x89);
+    pair(&mut out, K_IR_SLOT, Value::from(slot));
+    pair(&mut out, K_IR_CHECKSUM, Value::from(ir_checksum(blob)));
+    out.extend_from_slice(&encode(Value::from(K_NAME)));
+    write_str16(&mut out, &ir_name_field(name));
+    pair(&mut out, K_IR_FLAG_114, Value::from(1));
+    pair(&mut out, K_IR_FLAG_115, Value::from(3));
+    pair(&mut out, K_IR_FLAG_123, Value::from(false));
+    pair(&mut out, K_IR_FLAG_124, Value::from(false));
+    pair(&mut out, K_IR_FLAG_125, Value::from(0));
+    out.extend_from_slice(&encode(Value::from(K_IR_BLOB)));
+    write_str16(&mut out, blob);
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1330,5 +1521,100 @@ mod tests {
         assert_eq!(&bytes[0..4], &[0x01, 0x00, 0x06, 0x00]); // marker + opcode 0x0006
         assert_eq!(&bytes[4..8], &[0x0d, 0x00, 0x00, 0x00]); // ilen = 13
         assert_eq!(&bytes[8..], BYPASS_ON);
+    }
+
+    // ---- IR slots: byte-exact against captures/{import,export}_ir.pcapng ----
+
+    #[test]
+    fn the_ir_session_brackets_match_the_capture() {
+        assert_eq!(
+            ir_session_begin(1005),
+            [0x83, 0x66, 0xcd, 0x03, 0xed, 0x64, 0xcc, 0xff, 0x65, 0x80]
+        );
+        assert_eq!(
+            ir_session_end(1008),
+            [0x83, 0x66, 0xcd, 0x03, 0xf0, 0x64, 0xcc, 0xfe, 0x65, 0x80]
+        );
+    }
+
+    #[test]
+    fn selecting_and_streaming_an_ir_match_the_capture() {
+        assert_eq!(
+            ir_select(1006, 0),
+            [
+                0x83, 0x66, 0xcd, 0x03, 0xee, 0x64, 0x0c, 0x65, 0x81, 0x70, 0x00
+            ]
+        );
+        assert_eq!(
+            ir_stream(1007, 0),
+            [
+                0x83, 0x66, 0xcd, 0x03, 0xef, 0x64, 0x0b, 0x65, 0x82, 0x70, 0x00, 0x65, 0x02
+            ]
+        );
+    }
+
+    #[test]
+    fn committing_an_ir_write_matches_the_capture() {
+        assert_eq!(
+            ir_commit(1011),
+            [
+                0x83, 0x66, 0xcd, 0x03, 0xf3, 0x64, 0x0d, 0x65, 0x81, 0x65, 0x02
+            ]
+        );
+    }
+
+    #[test]
+    fn the_upload_header_matches_the_capture_byte_for_byte() {
+        // The capture's own audio is a commercial IR and is not in this repo, so the blob here is
+        // synthetic — one word carrying the whole checksum, the rest zero. That reproduces the
+        // captured `113` exactly, which is what the header is being compared for: slot, checksum
+        // encoding, the 32-byte NUL-padded `str16` name, all five flags, key order, and the blob's
+        // own `str16` header.
+        const HEADER: &[u8] = &[
+            0x83, 0x66, 0xcd, 0x03, 0xf2, 0x64, 0x09, 0x65, 0x89, 0x70, 0x01, 0x71, 0xce, 0xc0,
+            0xa0, 0x76, 0xed, 0x6d, 0xda, 0x00, 0x20, 0x47, 0x31, 0x32, 0x2d, 0x36, 0x35, 0x20,
+            0x32, 0x31, 0x32, 0x20, 0x43, 0x20, 0x48, 0x69, 0x2d, 0x47, 0x6e, 0x20, 0x34, 0x32,
+            0x31, 0x2b, 0x35, 0x37, 0x20, 0x43, 0x65, 0x6c, 0x65, 0x73, 0x00, 0x72, 0x01, 0x73,
+            0x03, 0x7b, 0xc2, 0x7c, 0xc2, 0x7d, 0x00, 0x6e, 0xda, 0x20, 0x00,
+        ];
+        let mut blob = vec![0u8; IR_BLOB_LEN];
+        blob[..4].copy_from_slice(&0xc0a0_76edu32.to_le_bytes());
+        let body = ir_upload(0x03f2, 1, "G12-65 212 C Hi-Gn 421+57 Celes", &blob).unwrap();
+        assert_eq!(&body[..HEADER.len()], HEADER);
+        assert_eq!(body.len(), HEADER.len() + IR_BLOB_LEN);
+        assert_eq!(&body[HEADER.len()..], &blob[..]);
+    }
+
+    #[test]
+    fn the_checksum_is_a_little_endian_word_sum() {
+        let mut blob = vec![0u8; IR_BLOB_LEN];
+        blob[..4].copy_from_slice(&0xffff_ffffu32.to_le_bytes());
+        blob[4..8].copy_from_slice(&2u32.to_le_bytes());
+        // Wraps rather than saturating or panicking in debug.
+        assert_eq!(ir_checksum(&blob), 1);
+    }
+
+    #[test]
+    fn a_blob_of_the_wrong_length_is_refused_rather_than_padded() {
+        assert!(ir_upload(1, 0, "short", &vec![0u8; IR_BLOB_LEN - 4]).is_none());
+        assert!(ir_upload(1, 0, "long", &vec![0u8; IR_BLOB_LEN + 4]).is_none());
+    }
+
+    #[test]
+    fn an_overlong_ir_name_still_ends_in_a_nul() {
+        let field = ir_name_field("this name is very much longer than the field allows");
+        assert_eq!(field.len(), IR_NAME_LEN);
+        assert_eq!(field[IR_NAME_LEN - 1], 0);
+        assert!(field.starts_with(b"this name is very much longer t"));
+    }
+
+    #[test]
+    fn a_multibyte_name_is_cut_on_a_char_boundary() {
+        // 30 `a`s plus a two-byte `é` is 32 bytes, so the 31-byte cut would land mid-character;
+        // the field backs off to 30 and stays valid UTF-8.
+        let field = ir_name_field("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaé");
+        assert_eq!(&field[..30], b"a".repeat(30).as_slice());
+        assert_eq!(field[30], 0);
+        assert!(std::str::from_utf8(&field[..30]).is_ok());
     }
 }

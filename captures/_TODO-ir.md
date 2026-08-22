@@ -1,8 +1,11 @@
-# IR (impulse response) management — PARTIALLY DECODED (2026-06-28)
+# IR (impulse response) management — DECODED AND IMPLEMENTED (2026-08-22)
 
-Two captures landed (`import_ir.pcapng`, `export_ir.pcapng`) and the **transaction shape is decoded**.
-Decode them with `tools/decode-edits.py <cap> OUT` (the envelopes are on the **PRIMARY channel**, TLV
-opcode `0x02`, *not* the EDIT channel). What we know:
+Two captures landed (`import_ir.pcapng`, `export_ir.pcapng`), the transaction shape was decoded
+2026-06-28, and the whole family has now been **driven against a live HX Stomp**. Decode them with
+`tools/decode-edits.py <cap> OUT` (the envelopes carry TLV opcode `0x02`, *not* the `0x06` every
+block edit uses). HX Edit sends these on the **primary** channel; we send them on the **edit**
+channel and the device answers exactly the same, which is the same substitution the preset listing
+already makes. What we know:
 
 **Every IR transaction is bracketed by a session open/close:** op **255** `{}` (open) … op **254** `{}`
 (close) — the same 255/254 pair the preset browse uses.
@@ -30,17 +33,30 @@ Then op **13** `{101:2}` = **commit** the write (kind 2, same kind value the pre
 **Download / export** — op **12** `{112:slot}` (select the slot) then op **11** `{112:slot, 101:2}`
 (start the read stream); the IR streams back paged like the preset read (`cmd 0x0c` pagination).
 
-## Still needed before implementing
-- ~~Reassemble the op-9 frame and identify the `113` checksum~~ — **done, see above.** Upload is no
-  longer checksum-blocked.
-- Captures of **different IR lengths/formats** (a 1024-sample IR, a stereo IR) to decode `114/115`.
-  The `.hxb` backup format (see `docs/helix-floor.md`) carries **128 IR slots as RIFF WAV, 32-bit
-  float, 48 kHz mono** — a cheap source of real IR payloads to test blob construction against
-  without needing the device.
-- `ir-rename` / `ir-move` / `ir-delete` / `ir-assign-to-block` (the spec below) — not yet captured.
-- **Safety:** upload is a **flash write** (user data, not firmware — low brick risk) — treat like
-  `save_preset`: back up, test on an empty slot. Do **not** implement upload until the checksum is
-  verified, or a bad write could corrupt the slot.
+## Still needed
+- **Delete / rename / reorder** — never captured. Op **10** is the gap in an otherwise contiguous
+  9/11/12/13 family and is the obvious candidate for delete; probing it needs a slot you can afford
+  to lose. Until then a slot can be overwritten but not emptied.
+- **Captures of different IR lengths/formats** (a 1024-sample IR, a stereo IR) to finish `115` and
+  `123/124/125`. `114` and `115` are no longer constants — see below.
+- `ir-assign-to-block` — how a preset's IR block references a user slot vs a built-in cab IR.
+
+## Implemented and verified live (2026-08-22)
+Everything above the "still needed" line is **built and driven against a real HX Stomp**:
+`fretwire_protocol::edit::{ir_session_begin,ir_select,ir_stream,ir_commit,ir_upload,ir_checksum}`
+(byte-exact against these captures), `fretwire_data::ir` (records, WAV in and out),
+`Session::{ir_info,ir_directory,ir_export,ir_upload}`, and the CLI's `ir-list` / `ir-info` /
+`ir-export` / `ir-export-all` / `ir-upload`.
+
+Three findings from doing it, all in `docs/protocol.md`:
+- **The store is verbatim.** A blob read off the pedal is byte-identical to the one this capture
+  recorded HX Edit uploading, and a slot written from that file reads back identical again. An IR
+  round-trips bit-exact — nothing is resampled or normalised.
+- **`114` is the occupancy flag** (`1` full, `0` empty), and `115` follows it (`3` / `1`). They only
+  looked like constants because every sample here came from a populated slot. A zero-filled slot
+  with no name still reports `114: 1` — a *silent IR*, not an empty slot.
+- **Op 9's reply is `103: 1`**, with the real completion arriving afterwards as a status push. The
+  ack is not the verdict; re-reading the slot's checksum is.
 
 ---
 

@@ -546,10 +546,11 @@ real session.
       with no capture at all. `fretwire_protocol::settings` is the shared table, the CLI has
       `setting-get`/`setting-set`, and the GUI has a **Globals** panel. Id 27 (preset numbering)
       retired the manual toggle it was blocking.
-      **Still open:** 148 answering ids are unidentified — `194`/`195` and `197`/`198` are very
-      likely the mid and high EQ bands' Q and gain [hypothesis]; `127` and `156` have observed
-      values with no recorded menu entries; `201`-`203` are unknown (an earlier "global EQ" gloss
-      was withdrawn). Writes are gated to identified ids only.
+      The global EQ is fully mapped: `190`-`200`, three bands of frequency/Q/gain then the two
+      cuts, and the GUI draws it as a response curve.
+      **Still open:** 143 answering ids are unidentified; `127` (Guitar In-Z) has observed values
+      with no recorded menu entries; `201`-`203` are unknown (an earlier "global EQ" gloss was
+      withdrawn). Writes are gated to identified ids only.
 
 - [ ] **Session grid/routing planning is still DSP-0 only.** `add_block_at`, `place_block`,
       `insert_block`, `reorder_block` and `set_node_pos` plan slot moves inside one 20-slot array

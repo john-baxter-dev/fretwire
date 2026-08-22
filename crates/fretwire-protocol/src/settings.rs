@@ -4,7 +4,7 @@
 //! `docs/protocol.md`). Nothing here is documented by Line 6; every entry was read off a physical
 //! HX Stomp by changing one thing on the pedal's own menus and diffing two dumps.
 //!
-//! **166 of ids 0..=600 answer on an HX Stomp. 19 are identified; 18 of them are here.** The
+//! **166 of ids 0..=600 answer on an HX Stomp. 23 are identified; 22 of them are here.** The
 //! nineteenth is id 28, the current preset index — device state rather than a preference, written
 //! properly by `Session::goto_preset`, and deliberately not offered as a settings row.
 //!
@@ -190,11 +190,47 @@ pub const SETTINGS: &[Setting] = &[
         },
     },
     Setting {
+        id: 194,
+        name: "EQ mid Q",
+        group: "Global EQ",
+        kind: Kind::Number {
+            unit: "",
+            off: None,
+        },
+    },
+    Setting {
+        id: 195,
+        name: "EQ mid gain",
+        group: "Global EQ",
+        kind: Kind::Number {
+            unit: "dB",
+            off: None,
+        },
+    },
+    Setting {
         id: 196,
         name: "EQ high frequency",
         group: "Global EQ",
         kind: Kind::Number {
             unit: "Hz",
+            off: None,
+        },
+    },
+    Setting {
+        id: 197,
+        name: "EQ high Q",
+        group: "Global EQ",
+        kind: Kind::Number {
+            unit: "",
+            off: None,
+        },
+    },
+    Setting {
+        id: 198,
+        name: "EQ high gain",
+        group: "Global EQ",
+        kind: Kind::Number {
+            unit: "dB",
             off: None,
         },
     },

@@ -3,11 +3,15 @@
   // about the shape they make; a curve tells you at a glance, and this EQ sits across the whole
   // instrument, so being able to see it matters more here than for any per-preset control.
   //
-  // **The curve is indicative, not measured.** We know the *parameters* — frequency, Q, gain, and
-  // the two cut corners — because they were read off the device. We have never observed the filter
-  // *shapes*, so the bands are drawn as textbook analog peaking sections and the cuts as 12 dB/oct
-  // Butterworth corners. That is the honest way to render known parameters through an unknown
-  // topology, and it is what the caption says.
+  // **The curve is indicative, not measured.** We know the *parameters* — three bands of
+  // frequency/Q/gain at ids 190-198 and the two cut corners at 199/200 — because they were read off
+  // the device. We have never observed the filter *shapes*, so the bands are drawn as textbook
+  // analog peaking sections and the cuts as 12 dB/oct Butterworth corners. That is the honest way
+  // to render known parameters through an unknown topology, and it is what the caption says.
+  //
+  // A band whose ids a device doesn't answer is skipped entirely rather than drawn at 0 dB, which
+  // would read as a deliberate setting. Every id is answered on an HX Stomp; this is for the ones
+  // we have not met.
 
   import { F_MIN, F_MAX, responseDb, fPos, fFromPos } from "./eqcurve.js";
 
@@ -20,8 +24,7 @@
   };
   const known = (id) => at(id) != null;
 
-  // Ids, from docs/protocol.md. Mid and high gain/Q are the two the sweep never pinned down; the
-  // band renders with the gain it has and says so when it has none.
+  // Ids, from docs/protocol.md — the EQ is 190-200, contiguous, three bands then the two cuts.
   const BANDS = [
     { name: "Low", freq: 190, q: 191, gain: 192 },
     { name: "Mid", freq: 193, q: 194, gain: 195 },
@@ -182,8 +185,8 @@
               </label>
             {:else}
               <div class="pending">
-                Gain and Q not identified — likely ids {b.q}/{b.gain}. Two turns of this band's
-                knobs with <code>settings-diff</code> running would settle it.
+                This device did not answer ids {b.q}/{b.gain}, so the band's Q and gain are unknown
+                and it is left out of the curve rather than drawn flat.
               </div>
             {/if}
           </div>

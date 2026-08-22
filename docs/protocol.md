@@ -158,8 +158,8 @@ the ordinary edit envelope and are not block-addressed.
 **166 of ids 0..=600 answer on an HX Stomp** — nothing above 226 answers, so that is the ceiling
 rather than an artefact of where we stopped looking.
 
-Named so far, all read off a physical HX Stomp by changing one setting on the pedal's own menus and
-diffing two dumps [solid — 2026-08-22]:
+**23 are identified.** All were read off a physical HX Stomp by changing one setting on the pedal's
+own menus and diffing two dumps [solid — 2026-08-22]:
 
 | id | setting | type | values |
 |---|---|---|---|
@@ -179,14 +179,18 @@ diffing two dumps [solid — 2026-08-22]:
 | 191 | global EQ low Q | `f32` | |
 | 192 | global EQ low gain | `f32` dB | |
 | 193 | global EQ mid frequency | `f32` Hz | |
+| 194 | global EQ mid Q | `f32` | |
+| 195 | global EQ mid gain | `f32` dB | |
 | 196 | global EQ high frequency | `f32` Hz | |
+| 197 | global EQ high Q | `f32` | |
+| 198 | global EQ high gain | `f32` dB | |
 | 199 | global EQ low cut | `f32` Hz | `19.9` is off |
 | 200 | global EQ high cut | `f32` Hz | `20100` is off |
 
-**The EQ block runs 190-200 in threes** — frequency, Q, gain per band — so `194`/`195` are almost
-certainly the mid band's Q and gain and `197`/`198` the high band's. [hypothesis — the three
-observed frequencies are 190/193/196 and the two observed Q/gain pairs sit at 191/192; two more
-knob turns would settle it]
+**The EQ is `190`-`200`, complete and contiguous** [solid — 2026-08-22]: three bands of
+frequency/Q/gain at 190-192, 193-195 and 196-198, then the two cuts. The last four were predicted
+from the pattern and then confirmed on the pedal rather than left as an inference — `194` moved
+0.707 → 3.5 for mid Q and `197` 0.707 → 0.1 for high Q, with `195`/`198` taking the gains.
 
 **`201`-`203` are not identified.** An earlier note in this file glossed them as "global EQ", which
 was a guess made before any of the above was measured; the EQ bands turned out to be 190-200, so the

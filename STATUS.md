@@ -3002,3 +3002,23 @@ continuously while dragged, and every one of these is a write to the pedal.
 Its owner named both positions: `1` is **headphones only** (the knob leaves the main outputs alone),
 `2` is **main + headphones**. It had been recorded as observed-values-without-meanings; that leaves
 `127` as the only one in that state.
+
+## Forty-first round (2026-08-22): **the EQ block is complete, and the guess was right**
+
+`194`/`195` and `197`/`198` were tagged `[hypothesis]` an hour ago on the strength of a pattern —
+190/191/192 being low frequency/Q/gain and 193/196 the other two centres. Four knob turns on the
+pedal confirmed all four: `194` moved 0.707 → 3.5 for mid Q, `197` 0.707 → 0.1 for high Q, and
+`195`/`198` took the gains.
+
+**The global EQ is `190`-`200`, complete and contiguous** — three bands of frequency/Q/gain, then
+the low and high cuts. No gaps, nothing left inferred. The tag goes from `[hypothesis]` to `[solid]`
+because it was *checked*, not because the pattern was convincing; a prediction that survives a test
+is worth more than one that was never run, and this file has a bad history with the second kind
+(`114`/`115` twice, `201`-`203` once).
+
+Both bands now draw properly in the EQ curve, so the "skipped, not zeroed" path only fires for a
+device that doesn't answer those ids — its wording changed from *we haven't identified this* to
+*this device did not answer*, which is now the only way to reach it.
+
+**23 of 166 ids identified; 22 in the catalog** (id 28 is the current preset index, device state
+rather than a preference). 143 still unnamed.

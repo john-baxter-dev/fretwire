@@ -761,7 +761,11 @@ const SETTINGS = new Map([
   [191, { v: 0.707, name: "EQ low Q", group: "Global EQ", kind: "number", unit: "" }],
   [192, { v: 0, name: "EQ low gain", group: "Global EQ", kind: "number", unit: "dB" }],
   [193, { v: 2000, name: "EQ mid frequency", group: "Global EQ", kind: "number", unit: "Hz" }],
+  [194, { v: 0.707, name: "EQ mid Q", group: "Global EQ", kind: "number", unit: "" }],
+  [195, { v: 0, name: "EQ mid gain", group: "Global EQ", kind: "number", unit: "dB" }],
   [196, { v: 8000, name: "EQ high frequency", group: "Global EQ", kind: "number", unit: "Hz" }],
+  [197, { v: 0.707, name: "EQ high Q", group: "Global EQ", kind: "number", unit: "" }],
+  [198, { v: 0, name: "EQ high gain", group: "Global EQ", kind: "number", unit: "dB" }],
   [199, { v: 19.9, name: "EQ low cut", group: "Global EQ", kind: "number", unit: "Hz", off: 19.9 }],
   [200, { v: 20100, name: "EQ high cut", group: "Global EQ", kind: "number", unit: "Hz", off: 20100 }],
 ]);

@@ -555,6 +555,10 @@ const EDIT_LABELS = {
   move_before_split: (a) => `Move ${slotName(a.srcSlot)}`,
   set_node_pos: (a) => `Move ${a.node} node → col ${a.pos}`,
   set_split_type: (a) => `Split type → ${SPLIT_TYPES.find((t) => t.index === a.modelIndex)?.label ?? "?"}`,
+  assign_bypass: (a) => `FS${a.switch + 1} → ${slotName(a.slot)}`,
+  unassign_bypass: (a) => `${slotName(a.slot)} off FS${a.switch + 1}`,
+  assign_param: (a) => (a.source === 0 ? "Unassign parameter" : `${sourceName(a.source)} → parameter`),
+  set_assign_travel: (a) => `${a.max ? "Max" : "Min"} ${a.value}`,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -639,7 +643,24 @@ function toDto(p) {
     history: history.map((e) => e.label),
     history_cursor: historyCursor,
     dirty: historyCursor !== savedCursor,
+    assignments: (p.assignments ?? []).map((a) => ({
+      ...a,
+      source_name: sourceName(a.source),
+      param_name:
+        (a.paired ? p.slots[a.target_slot]?.paired_params : p.slots[a.target_slot]?.params)?.find(
+          (q) => q.index === a.param_index,
+        )?.name ?? null,
+    })),
+    // Five, like an HX Stomp: three on the panel and two on the external switch jack. The real
+    // backend reads this off the preset's own footswitch layout.
+    footswitch_count: 5,
   };
+}
+
+// Mirrors `dto::source_name`. 3..=7 are the footswitches; the rest are tonepush's names.
+function sourceName(n) {
+  if (n >= 3 && n <= 7) return `FS${n - 2}`;
+  return { 1: "EXP1", 2: "EXP2", 8: "MIDI", 9: "Snapshots" }[n] ?? `Controller ${n}`;
 }
 
 // Find a mutable param on the current preset by (slot, paired, index).
@@ -697,6 +718,51 @@ const HANDLERS = {
   },
   read_preset: () => {
     seedHistory();
+    return toDto(current);
+  },
+
+  // ---- controller assignments ----
+  // The mock models what the device does, including the parts that surprised us: op 56 *moves* a
+  // bypass binding rather than adding a second, and op 37 with source 0 is the removal.
+  assign_bypass: ({ slot, switch: sw }) => {
+    for (const e of Object.values(current.slots)) {
+      if (e?.footswitch === sw + 1) e.footswitch = 0;
+    }
+    const e = current.slots[slot];
+    if (e) e.footswitch = sw + 1;
+    return toDto(current);
+  },
+  unassign_bypass: ({ slot }) => {
+    const e = current.slots[slot];
+    if (e) e.footswitch = 0;
+    return toDto(current);
+  },
+  assign_param: ({ slot, paramIndex, source, paired }) => {
+    current.assignments ??= [];
+    const same = (a) =>
+      a.target_slot === slot && a.param_index === paramIndex && a.paired === !!paired;
+    current.assignments = current.assignments.filter((a) => !same(a));
+    if (source !== 0) {
+      // One source drives one thing here; the real table allows more, but the picker cannot make
+      // that state, so the mock does not pretend to.
+      current.assignments = current.assignments.filter((a) => a.source !== source);
+      const p = findParam(slot, !!paired, paramIndex);
+      current.assignments.push({
+        source,
+        target_slot: slot,
+        param_index: paramIndex,
+        paired: !!paired,
+        min: p?.min ?? 0,
+        max: p?.max ?? 1,
+      });
+    }
+    return toDto(current);
+  },
+  set_assign_travel: ({ slot, paramIndex, max, value, paired }) => {
+    const a = (current.assignments ?? []).find(
+      (x) => x.target_slot === slot && x.param_index === paramIndex && x.paired === !!paired,
+    );
+    if (a) a[max ? "max" : "min"] = value;
     return toDto(current);
   },
 

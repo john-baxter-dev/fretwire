@@ -268,6 +268,13 @@ pub struct EditorPreset {
     pub blocks: Vec<EditorBlock>,
     /// Footswitch/controller assignments (preset key `4`).
     pub assignments: Vec<fretwire_data::stream::Assignment>,
+    /// How many footswitch positions this preset's layout has (`3 → 8`'s length) — five on an HX
+    /// Stomp, of which three are on the front panel and two reach the external switch jack.
+    ///
+    /// This is the device's own count, not ours, and it agrees with what the device will accept:
+    /// op 33 answers switches 1..=5 and refuses 6 with code `-3` (2026-08-22). Reading it from the
+    /// preset means a Floor reports its own number without anything here being told about Floors.
+    pub footswitch_count: usize,
     /// Active snapshot index and snapshot names (preset key `10`).
     pub active_snapshot: Option<i64>,
     pub snapshot_names: Vec<String>,
@@ -901,6 +908,7 @@ impl Catalog {
             build_stamp: ps.build_stamp(),
             blocks,
             assignments: ps.assignments(),
+            footswitch_count: ps.footswitch_layout().len(),
             active_snapshot: ps.snapshots().0,
             snapshot_names: ps.snapshots().1,
             dsp_load,

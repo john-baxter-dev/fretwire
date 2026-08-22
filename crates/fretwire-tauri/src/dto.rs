@@ -358,8 +358,63 @@ pub struct PresetDto {
     /// layer; drives the history pane (click an entry → `history_jump`).
     pub history: Vec<String>,
     pub history_cursor: i64,
+    /// Every parameter under a controller. A block's bypass binding is **not** here — it is
+    /// `BlockDto::footswitch`.
+    pub assignments: Vec<AssignmentDto>,
+    /// How many footswitch positions this device has (5 on an HX Stomp: three on the panel, two on
+    /// the external jack). Read from the preset's own layout, so it is right without the UI knowing
+    /// anything about device models.
+    pub footswitch_count: usize,
     /// `true` when the edit buffer has changes not saved to flash — stamped by the command layer.
     pub dirty: bool,
+}
+
+/// One controller assignment — a parameter driven by an expression pedal, a footswitch, MIDI or
+/// snapshots (preset key `4`).
+///
+/// A block's **bypass** on a footswitch is not one of these: it lives in the footswitch layout and
+/// reaches the UI as `BlockDto::footswitch`. The two are written by different opcodes and the UI
+/// presents them in different places — see `docs/protocol.md`.
+#[derive(Debug, Clone, Serialize)]
+pub struct AssignmentDto {
+    /// Source ordinal, as `assign_param` takes it: 1-2 expression pedals, 3..=7 footswitches,
+    /// 8 MIDI, 9 snapshots.
+    pub source: i64,
+    /// How to name the source in the UI (`"FS1"`, `"EXP1"`, `"Snapshots"`).
+    pub source_name: String,
+    pub target_slot: Option<i64>,
+    pub param_index: Option<i64>,
+    /// The parameter is on the block's paired cab, so its index is in the cab's own list.
+    pub paired: bool,
+    /// The parameter's display name, resolved against whichever list `paired` selects. `None` when
+    /// the target block or parameter can't be resolved.
+    pub param_name: Option<String>,
+    /// Travel ends in the parameter's own units. Bools arrive as 0/1, matching `ParamDto::value`.
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+}
+
+/// Name a source ordinal for display. Footswitches are the proven run (FS1 = 3); the rest are
+/// `tonepush`'s names, which fit but are unverified here — see `fretwire_data::stream::Assignment`.
+pub fn source_name(ordinal: i64) -> String {
+    match ordinal {
+        n @ 3..=7 => format!("FS{}", n - 2),
+        1 => "EXP1".into(),
+        2 => "EXP2".into(),
+        8 => "MIDI".into(),
+        9 => "Snapshots".into(),
+        n => format!("Controller {n}"),
+    }
+}
+
+/// A travel end as a number. The wire keeps these in the parameter's own type — `false`/`true` for
+/// a switch, a float for a knob — and the UI wants one numeric scale, the same one `ParamDto::value`
+/// uses for bools.
+fn travel_num(v: Option<&fretwire_core::fretwire_data::rmpv::Value>) -> Option<f64> {
+    let v = v?;
+    v.as_f64()
+        .or_else(|| v.as_i64().map(|i| i as f64))
+        .or_else(|| v.as_bool().map(|b| if b { 1.0 } else { 0.0 }))
 }
 
 impl From<&EditorPreset> for PresetDto {
@@ -416,6 +471,34 @@ impl From<&EditorPreset> for PresetDto {
             history: Vec::new(),
             history_cursor: 0,
             dirty: false,
+            assignments: p
+                .assignments
+                .iter()
+                .map(|a| AssignmentDto {
+                    source: a.controller,
+                    source_name: source_name(a.controller),
+                    target_slot: a.target_slot,
+                    param_index: a.param_index,
+                    paired: a.paired(),
+                    // Resolve the name in the list the assignment actually points at: a cab's
+                    // parameter 1 is `Position` where the amp's is `Bass`, so picking the wrong
+                    // list names a real parameter that isn't the one being driven.
+                    param_name: a.target_slot.zip(a.param_index).and_then(|(slot, idx)| {
+                        let b = p.blocks.iter().find(|b| b.slot == slot)?;
+                        let list = if a.paired() {
+                            &b.paired_params
+                        } else {
+                            &b.params
+                        };
+                        list.iter()
+                            .find(|q| q.index as i64 == idx)
+                            .map(|q| q.name.clone())
+                    }),
+                    min: travel_num(a.min.as_ref()),
+                    max: travel_num(a.max.as_ref()),
+                })
+                .collect(),
+            footswitch_count: p.footswitch_count,
         }
     }
 }

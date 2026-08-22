@@ -288,8 +288,7 @@ start capture → do the single thing → stop:
       added exactly one entry at `3 → 8[0]` and op 57 restored the document byte-for-byte. The
       opcodes came from `tonepush`'s macOS capture; the verification is ours.
       `edit::{assign_bypass_to_switch, unassign_bypass_from_switch}`, `Session` methods of the same
-      name, CLI `assign-bypass` / `unassign-bypass`. **Still to do: expose it in the GUI** — the
-      chain already shows the `FS<n>` badge, so this is a control on the block, not new plumbing.
+      name, CLI `assign-bypass` / `unassign-bypass`.
 - [x] **Parameter controllers — reading** (EXP pedal / a switch driving a param — preset key `4`).
       **Unblocked 2026-08-21.** The diff experiment was run on a Stomp: assign a param to FS1, then a
       second to FS2, and diff the document each time. Key `4` is indexed by **source ordinal**
@@ -304,13 +303,25 @@ start capture → do the single thing → stop:
       **Ops 65/66** move the Min/Max ends, in the parameter's own units. Assigning `Mix` to FS1
       landed the entry at **`/4[3]`**, confirming the source-ordinal indexing a second time and by a
       different route. `edit::{assign_param, set_assign_travel}`, CLI `assign-param` /
-      `assign-travel`. **Still to do: expose it in the GUI.**
+      `assign-travel`.
 - [x] **Reading a footswitch and an assignment from the device** — **op 33** `{102: switch}`
       (one-based in, zero-based out) answers what a switch carries, its label, LED colour and
       latching type; **op 36** answers one parameter's assignment, or `104: nil`. Both verified live
       2026-08-22. Cross-checks rather than new capability — the document already carries both — but
       op 36's reply is byte-identical to the document's own entry, which makes it a cheap way to
       confirm a write landed.
+- [x] **Assignments in the GUI** — DONE (2026-08-22). The two mechanisms get two controls, because
+      confusing them is the whole trap: the block header's `FS` badge became a **picker** for which
+      footswitch toggles that block's bypass (one select, since re-sending op 56 *moves* a binding),
+      and every parameter row grew a quiet `⇢` that opens a **Controlled by** source picker with
+      Min/Max travel sliders in the parameter's own units. `PresetDto` carries `assignments`
+      (source, resolved parameter name, travel) and `footswitch_count`; four commands wrap the
+      session methods. The source list is built from `footswitch_count`, which comes off the preset's
+      own layout, so a Floor will offer its own number without the UI being told about Floors. MIDI
+      is left out — it needs a CC number, which is a separate opcode.
+      Checked rather than assumed: these use the ordinary immediate re-read, **not**
+      `read_preset_settled` — assign, remove and unassign all read back correctly on the next read,
+      three rounds in a row, so the ACK-before-rewrite hazard that model swaps have does not apply.
 - [ ] **Parameter controllers — what is left.**
       - Confirm **EXP1 = 1** and the ordinals past FS2. Needs an expression pedal; a Stomp's three
         switches leave most of the ID space unsampled, so a **Helix Floor** (8 switches, 2 pedals)

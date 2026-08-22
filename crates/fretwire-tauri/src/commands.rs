@@ -649,6 +649,104 @@ pub async fn set_split_type(
     .await
 }
 
+// ---- controller assignments ----
+//
+// Two mechanisms, and the UI keeps them apart because the device does: a block's **bypass** on a
+// footswitch is written with ops 56/57 and shows as `BlockDto::footswitch`, while a **parameter**
+// under a controller is written with op 37 and shows in `PresetDto::assignments`. See
+// `docs/protocol.md`, "Controller assignments — writing them".
+//
+// All four use `mutate_edit`, i.e. the ordinary immediate re-read, and **not**
+// `read_preset_settled`. That was worth checking rather than assuming: a model swap ACKs before the
+// device has rewritten the block's param area, which is why `swap_model` has to re-read until the
+// decode stops changing. These do not — assigning, removing and unassigning all read back correctly
+// on the very next read, three rounds in a row [solid — 2026-08-22].
+
+/// Put the block in `slot`'s bypass on footswitch `switch` (**zero-based**, so 0 is FS1).
+///
+/// Re-sending it for a different switch **moves** the binding rather than adding a second one
+/// [solid — verified live], so the UI's picker needs no unassign-then-assign dance.
+#[tauri::command]
+pub async fn assign_bypass(state: State<'_, AppState>, slot: i64, switch: i64) -> R<PresetDto> {
+    mutate_edit(
+        &state,
+        move |s| format!("FS{} \u{2192} {}", switch + 1, s.slot_label(slot)),
+        move |s| s.assign_bypass_to_switch(slot, switch),
+    )
+    .await
+}
+
+/// Take the block in `slot` off footswitch `switch` (zero-based). `switch` must be the one it is
+/// actually on — the UI reads that from `BlockDto::footswitch`, which is one-based.
+#[tauri::command]
+pub async fn unassign_bypass(state: State<'_, AppState>, slot: i64, switch: i64) -> R<PresetDto> {
+    mutate_edit(
+        &state,
+        move |s| format!("{} off FS{}", s.slot_label(slot), switch + 1),
+        move |s| s.unassign_bypass_from_switch(slot, switch),
+    )
+    .await
+}
+
+/// Put a parameter under controller `source`, or remove it with source 0.
+///
+/// **The device does not range-check `source`** — ordinal 10 was accepted and silently did nothing,
+/// because the controller table is ten long. Bounded here so a UI bug cannot make an assignment
+/// that appears to work and isn't there.
+#[tauri::command]
+pub async fn assign_param(
+    state: State<'_, AppState>,
+    slot: i64,
+    param_index: i64,
+    source: i64,
+    paired: bool,
+) -> R<PresetDto> {
+    if !(0..=9).contains(&source) {
+        return Err(format!(
+            "controller {source} does not exist — sources run 0 (none) to 9"
+        ));
+    }
+    mutate_edit(
+        &state,
+        move |s| {
+            let p = s.param_label(slot, paired, param_index);
+            if source == 0 {
+                format!("Unassign {p}")
+            } else {
+                format!("{} \u{2192} {p}", crate::dto::source_name(source))
+            }
+        },
+        move |s| s.assign_param(slot, paired, param_index, source),
+    )
+    .await
+}
+
+/// Move one end of an existing assignment's travel: `max = false` is Min, `true` is Max. The value
+/// is in the parameter's own units, the same ones `set_param` takes.
+#[tauri::command]
+pub async fn set_assign_travel(
+    state: State<'_, AppState>,
+    slot: i64,
+    param_index: i64,
+    max: bool,
+    value: f32,
+    paired: bool,
+) -> R<PresetDto> {
+    mutate_edit(
+        &state,
+        move |s| {
+            format!(
+                "{} {} of {}",
+                if max { "Max" } else { "Min" },
+                value,
+                s.param_label(slot, paired, param_index)
+            )
+        },
+        move |s| s.set_assign_travel(slot, paired, param_index, max, value),
+    )
+    .await
+}
+
 // ---- snapshots / preset navigation / persistence ----
 
 #[tauri::command]

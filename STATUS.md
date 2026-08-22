@@ -2622,3 +2622,51 @@ reading 14 without it. The device agrees there is no label (op 33 answers `109: 
 One line in `footswitch_layout`, pinned by `captures/assign_bypass_and_param.msgpack.bin` — the first
 fixture whose assignments we made ourselves rather than from the front panel, and which carries one
 of each mechanism plus the stale label.
+
+## Thirty-third round (2026-08-22): **assignments reach the GUI, and the sources are the device's own**
+
+The editor can now bind footswitches from the UI, which was the last read-only corner of it. Two
+mechanisms, two controls, deliberately not merged:
+
+- **A block's bypass** → the `FS` badge in the block header became a **picker**. One select, not an
+  unassign-then-assign pair, because re-sending op 56 for a different switch *moves* the binding
+  rather than adding a second [solid — verified live].
+- **A parameter** → every parameter row grew a quiet `⇢`. It opens a **Controlled by** source picker
+  with Min/Max travel sliders **in the parameter's own units** — a pitch block's ends are semitones,
+  not percentages.
+
+The badge stays quiet until something is actually assigned: every row carries the affordance, and a
+grid of bright badges would read as "these are all controlled".
+
+**The source list comes off the preset, not off a table of device models.** The number of
+footswitches is the length of the footswitch layout (`3 → 8`), and the device agrees with it: op 33
+answers switches 1-5 and refuses 6 with code `-3`. Five on an HX Stomp — three on the panel, two on
+the external switch jack. A Floor will report its own number without anything in the UI being told
+about Floors.
+
+Three findings came out of building it:
+
+- **`6 → 28` is the sub-model selector, not a "model path".** `0` is the block's own model, `1` its
+  paired cab — the same thing key `26` does on the edit ops. It looked like a constant `0` for as
+  long as every sample was a main-model parameter; assigning a **cab** parameter puts a `1` there.
+  It matters for naming: a cab's parameter 1 is `Position` where the amp's is `Bass`, so decoding
+  against the wrong list names a real parameter that isn't the one being driven.
+  `Assignment::paired()` now answers it.
+- **Ordinals 1, 2 and 9 are accepted and file themselves at their own index**, and 10 is *silently
+  ignored* — the table is ten long and the device does not range-check it, so the command layer
+  does. With footswitches occupying 3..=7, that leaves 1 and 2 as the expression inputs and 9 as
+  snapshots, which is what `tonepush` names them. Still `[unverified]` as to *which* physical control
+  ordinal 1 is: a Stomp with no expression pedal cannot answer that.
+- **No settle needed.** A model swap ACKs before the device rewrites the block's param area, which
+  is why `swap_model` re-reads until the decode stops changing. Assignments do not — assign, remove
+  and unassign each read back correctly on the very next read, three rounds in a row. Worth checking
+  rather than assuming, given the history.
+
+Verification: the mock backend implements all four commands and a Node smoke check exercises the DTO
+contract end to end (move-not-duplicate, `source_name`, `param_name` resolving through the right
+list, travel, removal). The Rust side was verified against the pedal through the CLI, which now
+re-reads after assigning and prints what actually landed — the same immediate re-read the GUI does,
+so a regression there would show up in the CLI too rather than waiting to be found in the UI.
+
+**Not clicked through by hand yet** — the Svelte markup compiles and the contract beneath it is
+tested, but nobody has driven the new controls in a running window.

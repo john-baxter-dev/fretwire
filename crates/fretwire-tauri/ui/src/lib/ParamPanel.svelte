@@ -24,7 +24,48 @@
     onPasteBlock,
     // Display name of whatever block is on the paste buffer, or null when it's empty.
     blockClip = null,
+    // Every parameter the preset has under a controller, and how many footswitch positions this
+    // device has. Both come straight from the preset — see `PresetDto`.
+    assignments = [],
+    footswitchCount = 0,
+    onBypassSwitch,
+    onAssignParam,
+    onAssignTravel,
   } = $props();
+
+  // ---- controller assignments ----
+  //
+  // The device keeps two mechanisms apart and so does this panel: a block's **bypass** on a
+  // footswitch is a property of the block, so it sits in the header next to the bypass button; a
+  // **parameter** under a controller belongs to that parameter's row.
+  //
+  // Sources: 0 none, 1-2 the expression inputs, 3..=7 the footswitches, 8 MIDI, 9 snapshots.
+  // MIDI is left out — it needs a CC number, which is a separate opcode we have not built.
+  const SOURCES = $derived([
+    { value: 0, label: "—" },
+    { value: 1, label: "EXP1" },
+    { value: 2, label: "EXP2" },
+    ...Array.from({ length: Math.min(footswitchCount, 5) }, (_, i) => ({
+      value: 3 + i,
+      label: `FS${i + 1}`,
+    })),
+    { value: 9, label: "Snapshots" },
+  ]);
+
+  // The assignment driving one parameter of the selected block, or undefined.
+  function assignmentFor(paired, index) {
+    return assignments.find(
+      (a) => a.target_slot === block?.slot && a.param_index === index && a.paired === paired,
+    );
+  }
+
+  // Which parameter's assignment editor is open. Only one at a time — the travel controls are tall
+  // enough that several open at once turns the grid into a wall.
+  let openAssign = $state(null);
+  $effect(() => {
+    block?.slot;
+    openAssign = null;
+  });
 
   // Routing nodes (split/mixer) and controller assignments aren't category-swappable or deletable
   // here — the split *type* is changed elsewhere, controllers are footswitch bindings.
@@ -265,11 +306,26 @@
         {block.user_label || block.model_name}
         {#if block.paired_model_name}<span class="paired">+ {block.paired_model_name}</span>{/if}
         <span class="slot">slot {block.slot}</span>
-        {#if block.footswitch > 0}
-          <span
-            class="fs"
-            title="This block's bypass is on footswitch {block.footswitch}. Read from the preset; fretwire can't change the binding yet."
-          >FS{block.footswitch}</span>
+        {#if editable && footswitchCount > 0}
+          <!-- Re-sending op 56 for a different switch *moves* the binding, so this is one select
+               and not an unassign-then-assign pair. -->
+          <label class="fspick" title="Which footswitch toggles this block's bypass">
+            <span>FS</span>
+            <select
+              value={block.footswitch}
+              onchange={(e) =>
+                onBypassSwitch(block.slot, Number(e.currentTarget.value), block.footswitch)}
+            >
+              <option value={0}>&mdash;</option>
+              {#each Array.from({ length: Math.min(footswitchCount, 5) }, (_, i) => i + 1) as n}
+                <option value={n}>{n}</option>
+              {/each}
+            </select>
+          </label>
+        {:else if block.footswitch > 0}
+          <span class="fs" title="This block's bypass is on footswitch {block.footswitch}."
+            >FS{block.footswitch}</span
+          >
         {/if}
       </div>
       <div class="actions">
@@ -368,8 +424,19 @@
     {#each params as p (p.index)}
       {@const k = key(paired, p)}
       {@const c = control(p)}
-      <div class="ctrl">
-        <span class="cap">{p.name}</span>
+      {@const asg = assignmentFor(paired, p.index)}
+      <div class="ctrl" class:assigned={!!asg}>
+        <span class="cap">
+          {p.name}
+          <button
+            class="asgbtn"
+            class:on={!!asg}
+            title={asg
+              ? `Driven by ${asg.source_name} — click to change`
+              : "Put this parameter under a footswitch or expression pedal"}
+            onclick={() => (openAssign = openAssign === k ? null : k)}>{asg ? asg.source_name : "\u21e2"}</button
+          >
+        </span>
         {#if c === "enum"}
           <!-- The option's value is the wire value, which starts at `enum_base` and not at 0 —
                `Note Sync` labels 1..=19. Offsetting here keeps read and write on the same entry;
@@ -448,6 +515,53 @@
               <button class="val" title="Click to type a value" onclick={() => openTyping(k, p)}>
                 {fmtVal(p, live[k] ?? p.value)}
               </button>
+            {/if}
+          </div>
+        {/if}
+        {#if openAssign === k}
+          <div class="asgrow">
+            <label>
+              Controlled by
+              <select
+                value={asg?.source ?? 0}
+                onchange={(e) =>
+                  onAssignParam(block.slot, paired, p.index, Number(e.currentTarget.value))}
+              >
+                {#each SOURCES as src}<option value={src.value}>{src.label}</option>{/each}
+              </select>
+            </label>
+            {#if asg}
+              <!-- The travel ends are in the parameter's own units, which is why they reuse the
+                   parameter's own range rather than a 0..1 sweep: a pitch block's ends are
+                   semitones. Bools have no meaningful middle, so they get a two-state select. -->
+              {@const tr = range(p, control(p) === "int")}
+              {#each [["Min", false], ["Max", true]] as [lbl, isMax]}
+                {@const v = (isMax ? asg.max : asg.min) ?? (isMax ? tr.max : tr.min)}
+                <label class="travel">
+                  {lbl}
+                  {#if p.kind === "bool"}
+                    <select
+                      value={v >= 0.5 ? 1 : 0}
+                      onchange={(e) =>
+                        onAssignTravel(block.slot, paired, p.index, isMax, Number(e.currentTarget.value))}
+                    >
+                      <option value={0}>Off</option>
+                      <option value={1}>On</option>
+                    </select>
+                  {:else}
+                    <input
+                      type="range"
+                      min={tr.min}
+                      max={tr.max}
+                      step={tr.step}
+                      value={v}
+                      onchange={(e) =>
+                        onAssignTravel(block.slot, paired, p.index, isMax, e.currentTarget.valueAsNumber)}
+                    />
+                    <span class="tval">{fmtVal(p, v)}</span>
+                  {/if}
+                </label>
+              {/each}
             {/if}
           </div>
         {/if}
@@ -566,6 +680,76 @@
   .ctrl .cap {
     color: #c3c9d4;
     font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  /* The assign affordance stays quiet until a parameter is actually assigned: every row carries
+     one, and a row of bright badges would read as "these are all controlled". */
+  .asgbtn {
+    flex: none;
+    border: 1px solid #33405a;
+    background: transparent;
+    color: #6d7a90;
+    border-radius: 8px;
+    padding: 0 5px;
+    font-size: 10px;
+    line-height: 15px;
+    cursor: pointer;
+  }
+  .asgbtn:hover {
+    color: #cfe0f5;
+    border-color: #4a6a95;
+  }
+  .asgbtn.on {
+    background: #24405e;
+    border-color: #35618f;
+    color: #9fc4ee;
+    font-weight: 700;
+  }
+  .ctrl.assigned .cap {
+    color: #e2e8f2;
+  }
+  .asgrow {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 14px;
+    margin: 6px 0 2px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: #1a2334;
+    border: 1px solid #2b3a52;
+    font-size: 12px;
+    color: #9aa3b2;
+  }
+  .asgrow label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .asgrow .travel input[type="range"] {
+    width: 96px;
+  }
+  .asgrow .tval {
+    min-width: 52px;
+    color: #c3c9d4;
+    font-variant-numeric: tabular-nums;
+  }
+  .title .fspick {
+    margin-left: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: #9aa3b2;
+  }
+  .title .fspick select {
+    font-size: 11px;
+    padding: 1px 4px;
   }
   .slider {
     display: flex;

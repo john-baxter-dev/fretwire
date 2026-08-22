@@ -399,6 +399,22 @@
     apply(invoke("swap_model", { slot, modelIndex, pairedIndex }));
   const onSplitType = (slot, modelIndex) =>
     apply(invoke("set_split_type", { splitSlot: slot, modelIndex }));
+  // ---- controller assignments ----
+  // Two mechanisms the device keeps apart, so we do too: a block's *bypass* on a footswitch
+  // (ops 56/57) and a *parameter* under a controller (op 37). See docs/protocol.md.
+  //
+  // `switch` is zero-based on the wire while `block.footswitch` is one-based, so the panel converts
+  // at the boundary rather than leaving two conventions loose in the UI.
+  const onBypassSwitch = (slot, oneBased, wasOneBased) =>
+    apply(
+      oneBased > 0
+        ? invoke("assign_bypass", { slot, switch: oneBased - 1 })
+        : invoke("unassign_bypass", { slot, switch: wasOneBased - 1 }),
+    );
+  const onAssignParam = (slot, paired, index, source) =>
+    apply(invoke("assign_param", { slot, paired, paramIndex: index, source }));
+  const onAssignTravel = (slot, paired, index, max, value) =>
+    apply(invoke("set_assign_travel", { slot, paired, paramIndex: index, max, value }));
   const onSnapshot = (index) => {
     activeSnapshot = index;
     apply(invoke("set_snapshot", { index }));
@@ -887,6 +903,11 @@
             {onCopyBlock}
             {onPasteBlock}
             {blockClip}
+            assignments={preset?.assignments ?? []}
+            footswitchCount={preset?.footswitch_count ?? 0}
+            {onBypassSwitch}
+            {onAssignParam}
+            {onAssignTravel}
           />
         {:else}
           <p class="hint">Click a block to edit its parameters.</p>

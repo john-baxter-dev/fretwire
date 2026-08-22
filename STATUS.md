@@ -2933,14 +2933,16 @@ The settings ids reach the GUI. **Globals…** in the toolbar opens an overlay, 
 pedal's own menus group them: Global EQ, Ins/Outs, Tempo, MIDI, Preferences, Displays.
 
 ### One table, two front ends
-The CLI's `setting_gloss` and the GUI would have been two hand-kept lists of the same 19 ids, which
+The CLI's `setting_gloss` and the GUI would have been two hand-kept lists of the same ids, which
 is exactly how `201`-`203` stayed glossed as "global EQ" in the CLI after the EQ turned out to be
 190-200. So the table moved to **`fretwire_protocol::settings`** — id, name, menu group, and a
 `Kind` that says how to render it — and both front ends read it. The CLI's gloss is now a projection
 of the same data.
 
 ### Unidentified ids are shown and not writable
-147 of the 166 answering ids have never been explained. They appear under **Show unidentified** as
+148 of the 166 answering ids have never been explained (19 are identified, and 18 of those are
+settings — id 28 is the current preset index, device state rather than a preference, so it is not
+offered as a row). They appear under **Show unidentified** as
 read-only rows, which makes the panel the tool for mapping the rest: you can see an id move.
 `settings::is_writable` gates the write, and `settings_write` refuses an unknown id before it
 reaches the device — writing an id whose meaning nobody has observed is the one thing here that

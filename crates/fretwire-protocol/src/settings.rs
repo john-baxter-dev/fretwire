@@ -4,7 +4,11 @@
 //! `docs/protocol.md`). Nothing here is documented by Line 6; every entry was read off a physical
 //! HX Stomp by changing one thing on the pedal's own menus and diffing two dumps.
 //!
-//! **166 of ids 0..=600 answer on an HX Stomp, and 19 are named.** That ratio is the normal state
+//! **166 of ids 0..=600 answer on an HX Stomp. 19 are identified; 18 of them are here.** The
+//! nineteenth is id 28, the current preset index — device state rather than a preference, written
+//! properly by `Session::goto_preset`, and deliberately not offered as a settings row.
+//!
+//!  That ratio is the normal state
 //! of this table, not a gap to be filled in with plausible guesses: an id whose meaning nobody has
 //! observed is simply absent, and the UI shows it as a raw number rather than inventing a label.
 //! Adding one costs about thirty seconds with `fretwire settings-diff`.

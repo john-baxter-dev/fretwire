@@ -546,7 +546,7 @@ real session.
       with no capture at all. `fretwire_protocol::settings` is the shared table, the CLI has
       `setting-get`/`setting-set`, and the GUI has a **Globals** panel. Id 27 (preset numbering)
       retired the manual toggle it was blocking.
-      **Still open:** 147 answering ids are unidentified — `194`/`195` and `197`/`198` are very
+      **Still open:** 148 answering ids are unidentified — `194`/`195` and `197`/`198` are very
       likely the mid and high EQ bands' Q and gain [hypothesis]; `127` and `156` have observed
       values with no recorded menu entries; `201`-`203` are unknown (an earlier "global EQ" gloss
       was withdrawn). Writes are gated to identified ids only.

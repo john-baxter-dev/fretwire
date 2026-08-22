@@ -26,7 +26,7 @@ ok(
   JSON.stringify(Object.keys(named[0]).sort()) === JSON.stringify(DTO_KEYS),
   `mock rows carry the DTO's keys, got ${Object.keys(named[0]).sort()}`,
 );
-ok(named.length === 18, `18 identified settings, got ${named.length}`);
+ok(named.length === 18, `18 settings in the catalog, got ${named.length}`);
 ok(named.every((s) => s.writable), "every identified setting is writable");
 ok(named.every((s) => s.group !== "Unidentified"), "no identified setting lands in the raw group");
 

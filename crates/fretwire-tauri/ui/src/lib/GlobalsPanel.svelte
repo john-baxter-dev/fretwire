@@ -9,6 +9,8 @@
   // Ids fretwire has not identified are shown and **not** writable: a value nobody has explained is
   // worth seeing (this panel is how the rest of the space gets mapped) and is not worth writing.
 
+  import GlobalEq from "./GlobalEq.svelte";
+
   let {
     settings = [],
     busy = false,
@@ -23,9 +25,14 @@
   // never pushes the named settings down the page.
   const ORDER = ["Global EQ", "Ins/Outs", "Tempo", "MIDI", "Preferences", "Displays"];
 
+  // The EQ has its own tab, so it must not also appear as a table of eleven numbers below.
+  let tab = $state("eq");
+  const eqRows = $derived(settings.filter((s) => s.group === "Global EQ"));
+
   const groups = $derived.by(() => {
     const by = new Map();
     for (const s of settings) {
+      if (s.group === "Global EQ") continue;
       if (!by.has(s.group)) by.set(s.group, []);
       by.get(s.group).push(s);
     }
@@ -68,21 +75,39 @@
     <div class="gl-head">
       <span class="gl-title">Global settings</span>
       <span class="gl-count">
-        {namedCount} named{showRaw && settings.length > namedCount
-          ? ` · ${settings.length - namedCount} unidentified`
-          : ""}
+        {tab === "eq"
+          ? `${eqRows.length} EQ parameters`
+          : `${namedCount} named${
+              showRaw && settings.length > namedCount
+                ? ` · ${settings.length - namedCount} unidentified`
+                : ""
+            }`}
       </span>
       <span class="spacer"></span>
-      <label class="check" title="Also list the ids that answer but have never been explained">
-        <input type="checkbox" checked={showRaw} onchange={() => onToggleRaw?.()} disabled={busy} />
-        Show unidentified
-      </label>
+      {#if showRaw && tab === "settings"}
+        <span class="hint-inline">unidentified ids are read-only</span>
+      {/if}
+      {#if tab === "settings"}
+        <label class="check" title="Also list the ids that answer but have never been explained">
+          <input type="checkbox" checked={showRaw} onchange={() => onToggleRaw?.()} disabled={busy} />
+          Show unidentified
+        </label>
+      {/if}
       <button class="row" onclick={() => onRefresh?.()} disabled={busy}>Refresh</button>
       <button class="row" onclick={() => onClose?.()}>Close</button>
     </div>
 
+    <div class="gl-tabs" role="tablist">
+      <button class="tab" class:on={tab === "eq"} role="tab" aria-selected={tab === "eq"}
+        onclick={() => (tab = "eq")} disabled={!eqRows.length}>Global EQ</button>
+      <button class="tab" class:on={tab === "settings"} role="tab" aria-selected={tab === "settings"}
+        onclick={() => (tab = "settings")}>All settings</button>
+    </div>
+
     <div class="gl-body">
-      {#if !settings.length}
+      {#if tab === "eq" && settings.length}
+        <GlobalEq settings={eqRows} {busy} {onWrite} />
+      {:else if !settings.length}
         <div class="empty">
           {busy ? "Reading the pedal…" : "Nothing read yet — press Refresh."}
         </div>
@@ -152,9 +177,9 @@
     <div class="gl-foot">
       These change the pedal itself and take effect at once — there is no undo and no reload that
       takes one back. Setting it back is the way back.
-      {#if showRaw}
-        Unidentified ids are read-only: <code>fretwire settings-diff</code> names one in about
-        thirty seconds, and then it becomes editable here.
+      {#if showRaw && tab === "settings"}
+        <code>fretwire settings-diff</code> names an unidentified id in about thirty seconds, and
+        then it becomes editable here.
       {/if}
     </div>
   </div>
@@ -173,7 +198,7 @@
   .gl-card {
     display: flex;
     flex-direction: column;
-    width: 620px;
+    width: 660px;
     max-width: calc(100vw - 40px);
     max-height: calc(100vh - 80px);
     background: #1b1e25;
@@ -197,6 +222,33 @@
   }
   .spacer {
     flex: 1;
+  }
+  .gl-tabs {
+    display: flex;
+    gap: 2px;
+    padding: 8px 14px 0;
+    border-bottom: 1px solid #2b303a;
+  }
+  .tab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: #8b93a3;
+    padding: 5px 10px 7px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .tab.on {
+    color: #e6e9ef;
+    border-bottom-color: #5b8def;
+  }
+  .tab:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+  .hint-inline {
+    color: #6b7280;
+    font-size: 11px;
   }
   .gl-body {
     overflow: auto;

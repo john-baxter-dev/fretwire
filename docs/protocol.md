@@ -174,7 +174,7 @@ diffing two dumps [solid — 2026-08-22]:
 | 81 | bypass type | `bool` | `true` DSP, `false` analog |
 | 94 | output level | `bool` | `true` line, `false` instrument |
 | 127 | guitar In-Z | `int` | `0` and `1` observed — see below |
-| 156 | volume knob assignment | `int` | `1` and `2` observed; `2` is main + headphones |
+| 156 | volume knob controls | `int` | `1` headphones only, `2` main + headphones |
 | 190 | global EQ low frequency | `f32` Hz | |
 | 191 | global EQ low Q | `f32` | |
 | 192 | global EQ low gain | `f32` dB | |
@@ -192,9 +192,10 @@ knob turns would settle it]
 was a guess made before any of the above was measured; the EQ bands turned out to be 190-200, so the
 gloss is withdrawn rather than kept as a maybe.
 
-**`127` and `156` carry values, not meanings, yet.** Both were logged with labels ambiguous enough
-that the mapping from value to menu entry can't be read back off the log, so only the observed
-integers are recorded. One more pass each, naming the exact menu entry before and after.
+**`127` carries values, not meanings, yet.** It was logged with labels ambiguous enough that the
+mapping from value to menu entry can't be read back off the log, so only the observed integers are
+recorded. One more pass, naming the exact menu entry before and after. (`156` was in the same state
+until its owner named both positions: `1` leaves the main outputs alone.)
 
 **Not in this namespace: the input noise gate.** It is per-preset — `noiseGate`/`threshold`/`decay`
 on the fixed input node at slot 0 of each DSP, set with the ordinary set-value op. See

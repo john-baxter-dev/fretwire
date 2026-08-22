@@ -2969,3 +2969,36 @@ float keeps its fraction, and the raw tier is never writable. Root suite 273, `f
 JS 23 + 24.
 
 **Still not clicked through by hand** — two panels now.
+
+## Fortieth round (2026-08-22): **the global EQ, drawn**
+
+Five numbers in a table tell you nothing about the shape they make. The EQ moves to its own tab in
+the globals panel, above a **frequency-response curve** — log frequency, ±15 dB, band handles at
+each centre, dashed markers at the cut corners — with log-mapped sliders under it.
+
+**The curve is indicative and says so.** We know the *parameters*, because they were read off the
+pedal. We have never observed the filter *topology*: the bands are drawn as textbook analog peaking
+sections and the cuts as two-pole Butterworth corners. Rendering known parameters through an assumed
+shape is fine; claiming it is the pedal's response would not be, so the caption under the plot says
+which is which.
+
+**The two unpinned bands are drawn as absent, not as flat.** Mid and high gain (`194`/`195`,
+`197`/`198` [hypothesis]) were never identified, so those bands contribute *nothing* to the summed
+curve and appear as a dashed frequency marker with a line saying which ids would settle it. Drawing
+them at 0 dB would have looked like a deliberate setting.
+
+### The maths is tested, because the plot can't be eyeballed
+A subtly wrong curve looks fine. `lib/eqcurve.js` holds the response functions as plain exports —
+out of the component precisely so they can run under `node` — and `tests/eqcurve.mjs` checks them
+against textbook behaviour: a peak hits its gain exactly at centre and is flat three decades away,
+boost and cut mirror, low Q is wider than high Q, both cuts are −3 dB at the corner and fall
+12 dB/oct, bands sum in dB, a band with an unknown gain is skipped rather than zeroed, and the
+frequency slider is logarithmic (its midpoint is the geometric mean, ~632 Hz). 30 assertions.
+
+**One write per gesture.** The sliders fire on `change`, never `input` — a range input fires
+continuously while dragged, and every one of these is a write to the pedal.
+
+### Id 156 is fully named
+Its owner named both positions: `1` is **headphones only** (the knob leaves the main outputs alone),
+`2` is **main + headphones**. It had been recorded as observed-values-without-meanings; that leaves
+`127` as the only one in that state.

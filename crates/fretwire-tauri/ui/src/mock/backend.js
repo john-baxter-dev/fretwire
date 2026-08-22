@@ -756,7 +756,7 @@ const SETTINGS = new Map([
   // Observed values with no recorded menu entries — an empty option list must stay legal.
   [127, { v: 0, name: "Guitar In-Z", group: "Ins/Outs", kind: "choice", options: [] }],
   [156, { v: 1, name: "Volume knob controls", group: "Ins/Outs", kind: "choice",
-          options: [[2, "Main + headphones"]] }],
+          options: [[1, "Headphones only"], [2, "Main + headphones"]] }],
   [190, { v: 110, name: "EQ low frequency", group: "Global EQ", kind: "number", unit: "Hz" }],
   [191, { v: 0.707, name: "EQ low Q", group: "Global EQ", kind: "number", unit: "" }],
   [192, { v: 0, name: "EQ low gain", group: "Global EQ", kind: "number", unit: "dB" }],

@@ -146,11 +146,12 @@ pub const SETTINGS: &[Setting] = &[
     },
     Setting {
         id: 156,
-        // 1 -> 2 was "main + headphones"; what 1 alone is called was not recorded, and 0 has never
-        // been seen. Only the one confirmed label is here.
+        // Both observed states named by the owner: 1 -> 2 was the move to "main + headphones", so
+        // 1 is the headphone-only position, where the knob leaves the main outputs alone. `0` has
+        // never been seen and is not assumed to exist.
         name: "Volume knob controls",
         group: "Ins/Outs",
-        kind: Kind::Choice(&[(2, "Main + headphones")]),
+        kind: Kind::Choice(&[(1, "Headphones only"), (2, "Main + headphones")]),
     },
     Setting {
         id: 190,

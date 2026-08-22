@@ -51,6 +51,24 @@
 
   // --- response (see eqcurve.js) ---
 
+  // The pedal resets a setting when you push its knob in; these buttons are that gesture. `default`
+  // is null for anything whose factory value we have never watched the pedal restore, and a null
+  // default offers no button rather than resetting to zero.
+  const dflt = (id) => at(id)?.default ?? null;
+  const changed = (id) => {
+    const d = dflt(id);
+    return d != null && Math.abs(val(id, d) - d) > 1e-6;
+  };
+  const bandIds = (b) => [b.freq, b.q, b.gain].filter((id) => known(id));
+  const bandChanged = (b) => bandIds(b).some(changed);
+  const anyChanged = $derived(
+    settings.some((s) => s.default != null && Math.abs(Number(s.value) - s.default) > 1e-6),
+  );
+
+  function reset(ids) {
+    for (const id of ids) if (changed(id)) write(id, dflt(id));
+  }
+
   const isOff = (id) => {
     const s = at(id);
     return !s || s.off == null ? false : Math.abs(Number(s.value) - s.off) < 0.05;
@@ -66,6 +84,28 @@
       })),
       lowCut: known(LOW_CUT) && !isOff(LOW_CUT) ? val(LOW_CUT, F_MIN) : null,
       highCut: known(HIGH_CUT) && !isOff(HIGH_CUT) ? val(HIGH_CUT, F_MAX) : null,
+    };
+    const pts = [];
+    for (let i = 0; i <= 220; i++) {
+      const f = F_MIN * Math.pow(F_MAX / F_MIN, i / 220);
+      const db = Math.max(-DB, Math.min(DB, responseDb(f, shape)));
+      pts.push(`${x(f).toFixed(1)},${y(db).toFixed(1)}`);
+    }
+    return "M" + pts.join("L");
+  });
+
+  // The factory curve, drawn faintly behind the live one so a change is visible as a shape rather
+  // than as a number you have to remember. Only drawn when something actually differs.
+  const stock = $derived.by(() => {
+    if (!available || !anyChanged) return "";
+    const shape = {
+      bands: BANDS.filter((b) => known(b.freq) && known(b.gain) && dflt(b.gain) != null).map((b) => ({
+        freq: dflt(b.freq) ?? val(b.freq, 1000),
+        q: dflt(b.q) ?? 0.707,
+        gain: dflt(b.gain) ?? 0,
+      })),
+      lowCut: dflt(LOW_CUT) != null && at(LOW_CUT)?.off !== dflt(LOW_CUT) ? dflt(LOW_CUT) : null,
+      highCut: dflt(HIGH_CUT) != null && at(HIGH_CUT)?.off !== dflt(HIGH_CUT) ? dflt(HIGH_CUT) : null,
     };
     const pts = [];
     for (let i = 0; i <= 220; i++) {
@@ -123,6 +163,7 @@
       <line x1={PAD_L} y1={y(0)} x2={PAD_L + plotW} y2={y(0)} class="zero" />
       <text x={PAD_L - 6} y={y(0) + 3} class="tick" text-anchor="end">0</text>
 
+      {#if stock}<path d={stock} class="stock" />{/if}
       <path d={`${curve}L${PAD_L + plotW},${y(-DB)}L${PAD_L},${y(-DB)}Z`} class="fill" />
       <path d={curve} class="curve" />
 
@@ -146,15 +187,31 @@
     </svg>
 
     <div class="caption">
-      Indicative shape: the parameters are read from the pedal, the filter topology is not something
-      we have observed.
+      <span>
+        Indicative shape: the parameters are read from the pedal, the filter topology is not
+        something we have observed.{#if anyChanged}
+          The faint line is the factory curve.{/if}
+      </span>
+      {#if anyChanged}
+        <button
+          class="reset all"
+          disabled={busy}
+          onclick={() => reset(settings.map((s) => s.id))}
+          title="Set every EQ parameter back to the pedal's factory value"
+        >Reset EQ</button>
+      {/if}
     </div>
 
     <div class="rows">
       {#each BANDS as b (b.name)}
         {#if known(b.freq)}
           <div class="band">
-            <div class="bname">{b.name}</div>
+            <div class="bname">
+              {b.name}
+              {#if bandChanged(b)}
+                <button class="reset" disabled={busy} onclick={() => reset(bandIds(b))}>Reset</button>
+              {/if}
+            </div>
             <label class="ctl">
               <span>Freq</span>
               <input
@@ -162,7 +219,7 @@
                 value={fPos(val(b.freq, 1000))}
                 onchange={(e) => write(b.freq, Math.round(fFromPos(e.currentTarget.value)))}
               />
-              <output>{fmt(val(b.freq, 1000), 0)} Hz</output>
+              <output class:moved={changed(b.freq)}>{fmt(val(b.freq, 1000), 0)} Hz</output>
             </label>
             {#if known(b.gain)}
               <label class="ctl">
@@ -172,7 +229,7 @@
                   value={val(b.gain, 0)}
                   onchange={(e) => write(b.gain, e.currentTarget.value)}
                 />
-                <output>{fmt(val(b.gain, 0))} dB</output>
+                <output class:moved={changed(b.gain)}>{fmt(val(b.gain, 0))} dB</output>
               </label>
               <label class="ctl">
                 <span>Q</span>
@@ -181,7 +238,7 @@
                   value={val(b.q, 0.707)}
                   onchange={(e) => write(b.q, e.currentTarget.value)}
                 />
-                <output>{fmt(val(b.q, 0.707), 3)}</output>
+                <output class:moved={changed(b.q)}>{fmt(val(b.q, 0.707), 3)}</output>
               </label>
             {:else}
               <div class="pending">
@@ -194,7 +251,12 @@
       {/each}
 
       <div class="band cuts">
-        <div class="bname">Cuts</div>
+        <div class="bname">
+          Cuts
+          {#if [LOW_CUT, HIGH_CUT].some(changed)}
+            <button class="reset" disabled={busy} onclick={() => reset([LOW_CUT, HIGH_CUT])}>Reset</button>
+          {/if}
+        </div>
         {#each [{ id: LOW_CUT, label: "Low cut" }, { id: HIGH_CUT, label: "High cut" }] as c (c.id)}
           {#if known(c.id)}
             <label class="ctl">
@@ -204,7 +266,7 @@
                 value={fPos(val(c.id, F_MIN))}
                 onchange={(e) => write(c.id, Math.round(fFromPos(e.currentTarget.value)))}
               />
-              <output class:off={isOff(c.id)}>
+              <output class:off={isOff(c.id)} class:moved={changed(c.id)}>
                 {isOff(c.id) ? "Off" : `${fmt(val(c.id, F_MIN), 0)} Hz`}
               </output>
             </label>
@@ -232,7 +294,35 @@
   .hlabel.dim { fill: #6b7280; }
   .unpinned { stroke: #6b7280; stroke-width: 1; stroke-dasharray: 3 3; }
   .cut { stroke: #b0793f; stroke-width: 1; stroke-dasharray: 2 3; }
-  .caption { color: #6b7280; font-size: 11px; margin: 6px 2px 10px; }
+  .caption {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    color: #6b7280;
+    font-size: 11px;
+    margin: 6px 2px 10px;
+  }
+  .caption span { flex: 1; }
+  .stock {
+    fill: none;
+    stroke: #6b7280;
+    stroke-width: 1;
+    stroke-dasharray: 4 3;
+  }
+  .reset {
+    background: none;
+    border: 1px solid #3a4150;
+    border-radius: 4px;
+    color: #8b93a3;
+    font-size: 10px;
+    padding: 1px 6px;
+    margin-left: 8px;
+    cursor: pointer;
+  }
+  .reset:hover:not(:disabled) { color: #e6e9ef; border-color: #5b8def; }
+  .reset:disabled { opacity: 0.5; cursor: default; }
+  .reset.all { margin: 0; white-space: nowrap; }
+  .ctl output.moved { color: #cddcff; }
   .rows { display: flex; flex-direction: column; gap: 10px; }
   .band {
     border: 1px solid #262b34;

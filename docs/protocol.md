@@ -187,6 +187,30 @@ own menus and diffing two dumps [solid — 2026-08-22]:
 | 199 | global EQ low cut | `f32` Hz | `19.9` is off |
 | 200 | global EQ high cut | `f32` Hz | `20100` is off |
 
+**Factory defaults, for the EQ only** [solid — one HX Stomp, 2026-08-22]. The pedal resets a
+setting when its knob is pushed in; these are what it reported once every Global EQ knob had been
+pushed. `193` is the one that proves the gesture rather than the state — it had been left at 1900 by
+hand and came back as 2000.
+
+| id | default | | id | default |
+|---|---|---|---|---|
+| 190 low frequency | 110 Hz | | 196 high frequency | 8000 Hz |
+| 191 low Q | 0.707 | | 197 high Q | 0.707 |
+| 192 low gain | 0 dB | | 198 high gain | 0 dB |
+| 193 mid frequency | 2000 Hz | | 199 low cut | 19.9 (off) |
+| 194 mid Q | 0.707 | | 200 high cut | 20100 (off) |
+| 195 mid gain | 0 dB | | | |
+
+No default appears anywhere else we look: not in any shipped `.models` file, not in
+`HelixControls.json`, and not in the protocol, which offers a value and neither a default nor a
+range. So this is **one unit's** factory EQ, recorded with its provenance rather than asserted as
+universal — a Floor or an LT may differ, the same caveat the Floor's setlist names carry. No other
+id's default has been observed.
+
+**`201` answers `nil`; `202` is `1` and `203` is `true`** — they are implemented and still
+unidentified. Worth noting only because an id that answers with no value is a shape the sweep hadn't
+turned up before.
+
 **The EQ is `190`-`200`, complete and contiguous** [solid — 2026-08-22]: three bands of
 frequency/Q/gain at 190-192, 193-195 and 196-198, then the two cuts. The last four were predicted
 from the pattern and then confirmed on the pedal rather than left as an inference — `194` moved

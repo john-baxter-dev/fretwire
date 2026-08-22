@@ -254,6 +254,36 @@ pub const SETTINGS: &[Setting] = &[
     },
 ];
 
+/// The device's own factory value for `id`, where we have observed one.
+///
+/// **Only the global EQ, and only from one unit.** The pedal resets a setting when you push its
+/// knob in; these are what an HX Stomp reported after every Global EQ knob had been pushed
+/// [2026-08-22]. Id 193 is the one that proves the gesture rather than the state — it had been left
+/// at 1900 by hand and came back as 2000.
+///
+/// Nothing about this is documented: no default appears in any shipped `.models` file, in
+/// `HelixControls.json`, or anywhere in the wire protocol, which offers a value and neither a
+/// default nor a range. So this is one unit's factory EQ, recorded with its provenance rather than
+/// asserted as universal — a Floor or an LT may well differ, the same caveat the Floor's setlist
+/// names carry. Every other id returns `None`: their defaults have simply never been observed.
+pub fn default_of(id: i64) -> Option<f64> {
+    Some(match id {
+        190 => 110.0,
+        191 => 0.707,
+        192 => 0.0,
+        193 => 2000.0,
+        194 => 0.707,
+        195 => 0.0,
+        196 => 8000.0,
+        197 => 0.707,
+        198 => 0.0,
+        // The cuts have no separate enable — off *is* a frequency, parked at the end of the range.
+        199 => 19.9,
+        200 => 20100.0,
+        _ => return None,
+    })
+}
+
 /// The identified setting for `id`, if we have one.
 pub fn by_id(id: i64) -> Option<&'static Setting> {
     SETTINGS.iter().find(|s| s.id == id)
@@ -328,6 +358,30 @@ mod tests {
         // 128 answers on a Stomp (the handshake reads it) and has never been identified.
         assert!(!is_writable(128));
         assert!(!is_writable(-1));
+    }
+
+    /// Defaults are known for the EQ and nothing else, and that asymmetry is the point — it says
+    /// which ones we have watched the pedal reset.
+    #[test]
+    fn defaults_cover_the_eq_and_only_the_eq() {
+        for s in SETTINGS {
+            let eq = s.group == "Global EQ";
+            assert_eq!(
+                default_of(s.id).is_some(),
+                eq,
+                "{} ({}) disagrees about having a default",
+                s.name,
+                s.id
+            );
+        }
+        // Flat: no boost or cut on any of the three bands.
+        assert_eq!(default_of(192), Some(0.0));
+        assert_eq!(default_of(195), Some(0.0));
+        assert_eq!(default_of(198), Some(0.0));
+        // And both cuts parked at their off sentinels rather than at an audible corner.
+        assert_eq!(default_of(199), Some(19.9));
+        assert_eq!(default_of(200), Some(20100.0));
+        assert_eq!(default_of(27), None);
     }
 
     /// A choice with no entries is how "observed, never explained" is recorded — it must stay

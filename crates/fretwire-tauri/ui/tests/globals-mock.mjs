@@ -18,7 +18,7 @@ const throws = async (fn, frag, m) => {
 // Must match `SettingDto`'s serialized keys exactly — `dto.rs::setting_tests` pins the same list
 // from the Rust side. The two drifting renders `undefined` in the real app while the mock passes.
 const DTO_KEYS = [
-  "group", "id", "kind", "labels", "name", "off", "options", "unit", "value", "writable",
+  "default", "group", "id", "kind", "labels", "name", "off", "options", "unit", "value", "writable",
 ];
 
 const named = await mock.invoke("settings_read", { all: false });
@@ -78,6 +78,24 @@ ok(byId(named, 16).off === null, "a setting with no off sentinel says null");
 // An observed-but-unexplained choice must stay legal, or the table has to invent labels.
 ok(byId(named, 127).options.length === 0, "Guitar In-Z has values but no names");
 ok(byId(named, 127).writable, "…and is still writable, because the id itself is identified");
+
+// --- factory defaults ---
+// The panel's reset buttons key off these, so "no observed default" must be null rather than 0 —
+// resetting an unknown setting to zero would be a write nobody asked for.
+ok(byId(named, 192).default === 0, "the EQ carries its factory gain");
+ok(byId(named, 193).default === 2000, "…and its factory mid frequency");
+ok(byId(named, 199).default === 19.9, "…and the cuts default to off");
+ok(byId(named, 27).default === null, "a setting we have never watched reset offers no default");
+ok(byId(named, 14).default === null, "…and neither does tempo scope");
+ok(
+  named.filter((s) => s.default != null).every((s) => s.group === "Global EQ"),
+  "only the EQ claims a default",
+);
+ok(
+  named.filter((s) => s.group === "Global EQ").every((s) => s.default != null),
+  "…and every EQ parameter has one",
+);
+ok(all.filter((s) => s.kind === "raw").every((s) => s.default === null), "raw ids have no default");
 
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

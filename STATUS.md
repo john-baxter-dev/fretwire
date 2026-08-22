@@ -3022,3 +3022,42 @@ device that doesn't answer those ids — its wording changed from *we haven't id
 
 **23 of 166 ids identified; 22 in the catalog** (id 28 is the current preset index, device state
 rather than a preference). 143 still unnamed.
+
+## Forty-second round (2026-08-22): **factory EQ defaults, from the pedal's own reset**
+
+The pedal resets a setting when you push its knob in — a gesture no capture would ever show us,
+because it never touches USB. Pushing every Global EQ knob and re-reading gives the factory values
+directly:
+
+| | | | |
+|---|---|---|---|
+| 190 low freq | 110 Hz | 196 high freq | 8000 Hz |
+| 191 low Q | 0.707 | 197 high Q | 0.707 |
+| 192 low gain | 0 dB | 198 high gain | 0 dB |
+| 193 mid freq | 2000 Hz | 199 low cut | 19.9 (off) |
+| 194 mid Q | 0.707 | 200 high cut | 20100 (off) |
+| 195 mid gain | 0 dB | | |
+
+**Id 193 is the one that makes this evidence rather than a snapshot.** It had been left at 1900 by
+hand after the mapping session; it came back 2000. Without that, "the values after a reset" and
+"the values the pedal happened to hold" are the same reading.
+
+### Only the EQ, and that asymmetry is load-bearing
+No default appears in any shipped `.models` file, in `HelixControls.json`, or anywhere in the
+protocol — op 24 offers a value and neither a default nor a range. So `settings::default_of` covers
+the eleven EQ ids and returns `None` for everything else, and a `None` means **offer no reset**,
+never "reset to zero". A test pins the split, because a reset button that writes 0 to a setting
+nobody has watched the pedal restore is a write the user did not ask for.
+
+It is also **one unit's** factory EQ. Recorded with its provenance rather than asserted as
+universal, same tier as the Floor's setlist names.
+
+### In the panel
+Reset per band, per cut pair, and for the whole EQ — the pedal's own gesture, in the same shapes.
+A parameter that differs from stock reads in a lighter colour, and once anything differs the
+**factory curve is drawn faintly behind the live one**, so a change is visible as a shape rather
+than as a number you have to have memorised.
+
+### Also noticed
+`201` answers **`nil`** while `202` is `1` and `203` is `true` — implemented, still unidentified. An
+id that answers with no value at all is a shape the sweep had not turned up before.

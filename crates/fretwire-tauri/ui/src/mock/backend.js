@@ -772,16 +772,24 @@ const SETTINGS = new Map([
 // Ids that answer but have never been identified. Read-only, and shown only with `all`.
 const RAW_IDS = [12, 128, 210, 226];
 
+// The pedal's factory EQ, read off a unit after every Global EQ knob was pushed in. Only the EQ
+// has one — a null default is how "we have never watched this reset" is expressed, and the panel
+// offers no reset button for it.
+const DEFAULTS = new Map([
+  [190, 110], [191, 0.707], [192, 0], [193, 2000], [194, 0.707], [195, 0],
+  [196, 8000], [197, 0.707], [198, 0], [199, 19.9], [200, 20100],
+]);
+
 function settingDto(id) {
   const d = SETTINGS.get(id);
   if (!d) {
     return { id, name: `Setting ${id}`, group: "Unidentified", kind: "raw", value: id % 3,
-             labels: null, options: [], unit: "", off: null, writable: false };
+             labels: null, options: [], unit: "", off: null, default: null, writable: false };
   }
   return {
     id, name: d.name, group: d.group, kind: d.kind, value: d.v,
     labels: d.labels ?? null, options: d.options ?? [], unit: d.unit ?? "",
-    off: d.off ?? null, writable: true,
+    off: d.off ?? null, default: DEFAULTS.has(id) ? DEFAULTS.get(id) : null, writable: true,
   };
 }
 

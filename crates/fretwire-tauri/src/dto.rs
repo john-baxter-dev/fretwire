@@ -753,6 +753,9 @@ pub struct SettingDto {
     pub unit: String,
     /// For `"number"`: the sentinel meaning "off", where the device uses one.
     pub off: Option<f64>,
+    /// The pedal's factory value, where we have watched it reset one — the EQ and nothing else.
+    /// Drives the panel's reset controls; `null` means no reset is offered, not "reset to zero".
+    pub default: Option<f64>,
     pub writable: bool,
 }
 
@@ -772,6 +775,7 @@ impl SettingDto {
                 options: Vec::new(),
                 unit: String::new(),
                 off: None,
+                default: None,
                 writable: false,
             },
             Some(s) => {
@@ -804,6 +808,7 @@ impl SettingDto {
                     options,
                     unit,
                     off,
+                    default: fretwire_core::fretwire_protocol::settings::default_of(id),
                     writable: true,
                 }
             }
@@ -854,8 +859,8 @@ mod setting_tests {
         assert_eq!(
             keys,
             [
-                "group", "id", "kind", "labels", "name", "off", "options", "unit", "value",
-                "writable"
+                "default", "group", "id", "kind", "labels", "name", "off", "options", "unit",
+                "value", "writable"
             ]
         );
     }
@@ -874,6 +879,16 @@ mod setting_tests {
     }
 
     /// The point of the raw tier: an id that answers is shown, and is not writable.
+    /// The reset controls key off this, so a setting with no observed default must offer none
+    /// rather than quietly resetting to zero.
+    #[test]
+    fn only_the_eq_carries_a_default() {
+        assert_eq!(SettingDto::new(192, &Value::F32(0.0)).default, Some(0.0));
+        assert_eq!(SettingDto::new(199, &Value::F32(19.9)).default, Some(19.9));
+        assert_eq!(SettingDto::new(27, &Value::Boolean(true)).default, None);
+        assert_eq!(SettingDto::new(128, &Value::from(3)).default, None);
+    }
+
     #[test]
     fn an_unidentified_id_is_shown_but_not_writable() {
         let dto = SettingDto::new(128, &Value::from(3));

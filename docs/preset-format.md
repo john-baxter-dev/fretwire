@@ -232,9 +232,22 @@ of a `Map{7}` node:
 - **The travel ends are keys `2` and `3`, not `4`/`7`** (which are `0` on every sample held). They are
   in the parameter's own raw units and follow its type: `false`/`true` for a switch, `0`/`1` for a
   0..1 knob, `0`/`8` for a delay time. [solid — three samples]
-- **Source ordinal → physical control:** **FS1 = 3, FS2 = 4** [solid — assigned each in turn and
-  diffed]. Consecutive, so FS3 = 5 is the obvious inference but is untested. `tonepush`'s notes put
-  **EXP1 = 1**, which fits the same run; [unverified] here for want of an expression pedal.
+- **Source ordinal → physical control:** **footswitches are 3..=7** — FS1 = 3, established by
+  diffing a front-panel assignment and again by writing one with op 37, and the *count* is the
+  device's own: op 33 answers switches 1-5 and refuses 6 with code `-3`, matching the five positions
+  in `3 → 8`. On an HX Stomp three of those are on the panel and two reach the external switch jack.
+  Ordinals **1, 2 and 9** are accepted and file themselves at indices 1, 2 and 9; since 3..=7 are the
+  footswitches, 1 and 2 are the two expression inputs and 9 is the last slot in a ten-long table.
+  `tonepush` names them EXP1/EXP2, MIDI (8) and Snapshots (9) — consistent with everything here, but
+  **which physical control ordinal 1 is remains [unverified]** for want of an expression pedal.
+  Ordinal **10 is silently ignored**: the table is ten long and **the device does not range-check
+  this**, so a caller must. [solid — 2026-08-22]
+- **`6 → 28` is the sub-model selector, not a path.** `0` is the block's own model and `1` its
+  paired cab, exactly like key `26` on the edit ops. It read as a constant `0` for as long as every
+  sample was a main-model parameter; assigning a **cab** parameter puts a `1` there. This matters
+  for naming: a cab's parameter 1 is `Position` where the amp's is `Bass`, so an assignment decoded
+  against the wrong list names a real parameter that isn't the one being driven.
+  [solid — verified live 2026-08-22; `Assignment::paired()`]
 - **Only parameter controllers live in key `4`.** Assigning a block's **bypass** to a footswitch
   does not touch this table — that is recorded in `3 → 8` as a type-1 node, which we already read.
   [solid — reconfirmed by construction 2026-08-22: op 56 changed `3 → 8[0]` and nothing else.]

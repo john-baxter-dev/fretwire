@@ -910,7 +910,20 @@ fn main() -> Result<()> {
         Command::AssignBypass { slot, switch } => {
             let mut s = fretwire_core::Session::connect()?;
             s.assign_bypass_to_switch(slot, switch)?;
-            println!("slot {slot} bypass -> FS{}", switch + 1);
+            // Read back rather than announce: this is the same immediate re-read the GUI's command
+            // layer does, so if the device ever ACKed ahead of rewriting the document the CLI would
+            // show it too, instead of leaving it for someone to find in the UI.
+            let p = s.read_preset()?;
+            let on = p
+                .blocks
+                .iter()
+                .find(|b| b.slot == slot)
+                .map(|b| b.footswitch);
+            println!(
+                "slot {slot} bypass -> FS{} (reads back as {:?})",
+                switch + 1,
+                on
+            );
         }
         Command::UnassignBypass { slot, switch } => {
             let mut s = fretwire_core::Session::connect()?;
@@ -925,7 +938,15 @@ fn main() -> Result<()> {
         } => {
             let mut s = fretwire_core::Session::connect()?;
             s.assign_param(slot, cab, param, source)?;
-            println!("slot {slot} param {param} -> source {source}");
+            let p = s.read_preset()?;
+            let found = p
+                .assignments
+                .iter()
+                .find(|a| a.target_slot == Some(slot) && a.param_index == Some(param));
+            println!(
+                "slot {slot} param {param} -> source {source} (reads back as {:?})",
+                found.map(|a| a.controller)
+            );
         }
         Command::AssignTravel {
             slot,
@@ -1463,7 +1484,10 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
         for a in &preset.assignments {
             let param = a
                 .param_index
-                .map(|p| format!(" param {p}"))
+                .map(|p| {
+                    // A cab parameter is numbered in the cab's own list, so say which list.
+                    format!(" {}param {p}", if a.paired() { "cab " } else { "" })
+                })
                 .unwrap_or_default();
             let slot = a
                 .target_slot
@@ -1491,8 +1515,17 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
 /// anything unproven prints as a bare ordinal rather than a guess with a confident label on it.
 fn source_name(ordinal: i64) -> String {
     match ordinal {
-        3 => "FS1".into(),
-        4 => "FS2".into(),
+        // Footswitches are the run we have proven, both by diffing a front-panel assignment and by
+        // writing one: FS1 = 3, and the device answers switches 1-5 and refuses 6.
+        n @ 3..=7 => format!("FS{}", n - 2),
+        // These three names are `tonepush`'s. Ordinals 1, 2 and 9 do file themselves at their own
+        // index here, but nothing on a Stomp proves *which* control 1 and 2 are — 3..=7 being the
+        // footswitches simply leaves the two expression inputs. Named rather than numbered because
+        // a bare "controller 1" tells a reader less, and the caveat lives in `docs/preset-format.md`.
+        1 => "EXP1".into(),
+        2 => "EXP2".into(),
+        8 => "MIDI".into(),
+        9 => "Snapshots".into(),
         n => format!("controller {n}"),
     }
 }

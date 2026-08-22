@@ -49,9 +49,11 @@ fn reads_the_parameter_index_from_key_29() {
     assert_eq!(a[1].target_slot, Some(16));
     assert_eq!(a[1].param_index, Some(2));
 
-    // The path sits where the index used to be read from, and is zero on both.
-    assert_eq!(a[0].path, Some(0));
-    assert_eq!(a[1].path, Some(0));
+    // Key 28 — where the index used to be read from — is the sub-model selector, and both of these
+    // target the block's own model rather than a paired cab.
+    assert_eq!(a[0].sub_model, Some(0));
+    assert_eq!(a[1].sub_model, Some(0));
+    assert!(!a[0].paired());
 }
 
 /// The travel ends come from keys `2`/`3`. Keys `4`/`7` are zero on every sample we hold, so the
@@ -81,7 +83,7 @@ fn dual_amp_assignment_targets_parameter_9() {
     assert_eq!(a[0].controller, 7);
     assert_eq!(a[0].target_slot, Some(15));
     assert_eq!(a[0].param_index, Some(9), "OD Switch, not Drive");
-    assert_eq!(a[0].path, Some(0));
+    assert_eq!(a[0].sub_model, Some(0));
     assert_eq!(
         a[0].min.as_ref().and_then(rmpv::Value::as_bool),
         Some(false)

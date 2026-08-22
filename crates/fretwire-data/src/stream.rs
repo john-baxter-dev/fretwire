@@ -950,9 +950,15 @@ pub struct Assignment {
     /// Source ordinal — which physical control drives this. It is the entry's index in the key-`4`
     /// array, and inner key `0` echoes it.
     ///
-    /// **FS1 = 3, FS2 = 4** [solid — assigned each in turn on a Stomp and diffed the document].
-    /// Consecutive, so FS3 = 5 is the obvious inference but is untested. `tonepush`'s notes put
-    /// EXP1 at 1, which fits the same run and is [unverified] here.
+    /// **Footswitches are 3..=7** — FS1 = 3, confirmed both by diffing a front-panel assignment and
+    /// by writing one with op 37, and the count is the device's own: op 33 answers switches 1-5 and
+    /// refuses 6 with code `-3`, matching the five positions in the footswitch layout. Ordinals
+    /// **1 and 2** are accepted and file themselves at indices 1 and 2, and 3..=7 being the
+    /// footswitches leaves them as the two expression inputs — `tonepush` names them EXP1/EXP2.
+    /// **8 is MIDI and 9 is snapshots** per the same source; 9 was accepted and filed at index 9
+    /// here. Ordinal 10 is silently ignored — the table is ten long, and **the device does not
+    /// range-check this**, so a caller must. [solid for 1..=9 landing at their own index; the
+    /// *names* for 1, 2 and 8 are `tonepush`'s and unverified for want of an expression pedal.]
     pub controller: i64,
     /// Inner key `1`. **Not** parameter-vs-bypass: all three assignments captured here are
     /// parameters, and two of them carry `0`. [solid as a refutation — `tonepush` documents this key
@@ -974,8 +980,13 @@ pub struct Assignment {
     /// gives `{28: 0, 29: 0}`, which is why the old reading looked right whenever the target
     /// happened to be parameter 0.]
     pub param_index: Option<i64>,
-    /// Model path the parameter lives on (inner key `6 → 28`) — `0` on every sample so far.
-    pub path: Option<i64>,
+    /// Which model inside the block the parameter belongs to (inner key `6 → 28`): `0` the block's
+    /// own model, `1` its paired cab. The same selector the edit ops take at key `26`.
+    ///
+    /// It read as a constant `0` for as long as every sample was a main-model parameter. Assigning
+    /// a **cab** parameter puts a `1` here, which is what identified it.
+    /// [solid — verified live on an HX Stomp 2026-08-22; see [`Assignment::paired`]]
+    pub sub_model: Option<i64>,
     /// The ends of the control's travel (inner keys `2` and `3`), in the parameter's own raw units.
     ///
     /// Kept as raw [`Value`] because the type follows the parameter: `false`/`true` for a switch,
@@ -985,6 +996,16 @@ pub struct Assignment {
     /// every sweep as `0 → 0`. [solid]
     pub min: Option<Value>,
     pub max: Option<Value>,
+}
+
+impl Assignment {
+    /// Whether the target parameter is on the block's **paired cab** rather than its own model.
+    ///
+    /// Reads [`Self::sub_model`], and is what a caller needs to look the parameter's name up in the
+    /// right list — a cab's parameter 1 is `Position`, the amp's is `Bass`.
+    pub fn paired(&self) -> bool {
+        self.sub_model.is_some_and(|m| m != 0)
+    }
 }
 
 /// One snapshot's stored state, from a preset's key `10 → 10` array.
@@ -1130,7 +1151,7 @@ impl PresetStream {
                         ctype: g(1),
                         target_slot: g(5),
                         param_index: p(29),
-                        path: p(28),
+                        sub_model: p(28),
                         min: map_get(def, 2).cloned(),
                         max: map_get(def, 3).cloned(),
                     })

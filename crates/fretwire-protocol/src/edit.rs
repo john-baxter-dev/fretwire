@@ -1108,17 +1108,21 @@ pub fn ir_name_field(name: &str) -> [u8; IR_NAME_LEN] {
     field
 }
 
-/// Build the **IR-upload** body (op 9): the slot, the checksum, the 32-byte name, the five format
+/// Build an **IR record write** (op 9): the slot, the checksum, the 32-byte name, the occupancy
 /// flags and the 8192-byte blob.
 ///
-/// `blob` is 2048 little-endian `f32` samples. Returns `None` if it is not exactly
-/// [`IR_BLOB_LEN`] bytes — the device is being handed a flash write, and a short blob is a caller
-/// bug rather than something to pad silently.
+/// `occupied` picks the `114/115` pair: `true` writes the `1, 3` a populated slot reports, `false`
+/// the `0, 1` an empty one does — though the device **ignores both** and sets them itself, so this
+/// only matters for reproducing the experiment that showed that. See [`ir_upload`] and
+/// [`ir_clear`].
+///
+/// Returns `None` if `blob` is not exactly [`IR_BLOB_LEN`] bytes — the device is being handed a
+/// flash write, and a short blob is a caller bug rather than something to pad silently.
 ///
 /// **This writes device flash.** It must be followed by [`ir_commit`]. Its immediate reply carries
 /// `103: 1`, not the usual `0` — the real verdict arrives afterwards as a status push echoing the
 /// same transaction. [solid — `import_ir.pcapng`]
-pub fn ir_upload(txn: u16, slot: i64, name: &str, blob: &[u8]) -> Option<Vec<u8>> {
+pub fn ir_record(txn: u16, slot: i64, name: &str, blob: &[u8], occupied: bool) -> Option<Vec<u8>> {
     if blob.len() != IR_BLOB_LEN {
         return None;
     }
@@ -1138,14 +1142,36 @@ pub fn ir_upload(txn: u16, slot: i64, name: &str, blob: &[u8]) -> Option<Vec<u8>
     pair(&mut out, K_IR_CHECKSUM, Value::from(ir_checksum(blob)));
     out.extend_from_slice(&encode(Value::from(K_NAME)));
     write_str16(&mut out, &ir_name_field(name));
-    pair(&mut out, K_IR_FLAG_114, Value::from(1));
-    pair(&mut out, K_IR_FLAG_115, Value::from(3));
+    pair(&mut out, K_IR_FLAG_114, Value::from(i64::from(occupied)));
+    pair(
+        &mut out,
+        K_IR_FLAG_115,
+        Value::from(if occupied { 3 } else { 1 }),
+    );
     pair(&mut out, K_IR_FLAG_123, Value::from(false));
     pair(&mut out, K_IR_FLAG_124, Value::from(false));
     pair(&mut out, K_IR_FLAG_125, Value::from(0));
     out.extend_from_slice(&encode(Value::from(K_IR_BLOB)));
     write_str16(&mut out, blob);
     Some(out)
+}
+
+/// Build an **IR upload** (op 9) — [`ir_record`] with the flags a populated slot carries.
+pub fn ir_upload(txn: u16, slot: i64, name: &str, blob: &[u8]) -> Option<Vec<u8>> {
+    ir_record(txn, slot, name, blob, true)
+}
+
+/// Build an **IR clear** (op 9) — [`ir_record`] with a silent blob, no name, and the `114: 0,
+/// 115: 1` an *empty* slot reports.
+///
+/// **This does not clear a slot. [refuted — live, 2026-08-22.]** It was the reconstruction of a
+/// delete we have no capture of: an empty slot's metadata is fully observable, so writing exactly
+/// that record ought to be indistinguishable from one. The device disagrees — it wrote the blob and
+/// the empty name, then reported `114: 1, 115: 3` regardless, which is how we know **`114`/`115`
+/// are maintained by the device and not taken from the caller**. Kept because that is worth being
+/// able to reproduce; use [`ir_upload`] for real writes.
+pub fn ir_clear(txn: u16, slot: i64) -> Vec<u8> {
+    ir_record(txn, slot, "", &[0u8; IR_BLOB_LEN], false).expect("a zero blob is the right length")
 }
 
 #[cfg(test)]
@@ -1598,6 +1624,25 @@ mod tests {
     fn a_blob_of_the_wrong_length_is_refused_rather_than_padded() {
         assert!(ir_upload(1, 0, "short", &vec![0u8; IR_BLOB_LEN - 4]).is_none());
         assert!(ir_upload(1, 0, "long", &vec![0u8; IR_BLOB_LEN + 4]).is_none());
+        assert!(ir_record(1, 0, "x", &[], true).is_none());
+    }
+
+    #[test]
+    fn a_clear_writes_the_flags_an_empty_slot_reports() {
+        // The whole point of the reconstruction: byte-for-byte the record an untouched slot
+        // describes — no name, zero checksum, and the `0, 1` flag pair rather than `1, 3`.
+        let cleared = ir_clear(0x1234, 5);
+        let full = ir_upload(0x1234, 5, "", &[0u8; IR_BLOB_LEN]).unwrap();
+        assert_eq!(cleared.len(), full.len());
+        // They differ only in the two flag values.
+        let diffs: Vec<usize> = cleared
+            .iter()
+            .zip(&full)
+            .enumerate()
+            .filter(|(_, (a, b))| a != b)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(diffs.len(), 2, "only the 114/115 values should differ");
     }
 
     #[test]

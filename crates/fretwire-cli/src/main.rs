@@ -310,7 +310,16 @@ enum Command {
     ///
     /// For mapping the IR op family — ops 9/11/12/13 are decoded, the rest are not. Prints
     /// whatever comes back, refusals included. Only send this at a slot you can afford to lose.
-    IrProbe { op: i64, slot: i64 },
+    IrProbe {
+        op: i64,
+        slot: i64,
+        /// Add the `101: 2` companion key that ops 11 and 13 carry.
+        #[arg(long)]
+        kind: bool,
+        /// Select the slot (op 12) before sending, as the blob stream requires.
+        #[arg(long)]
+        select: bool,
+    },
     /// Ask the device what a footswitch carries (op 33). The number is **one-based**: 1 = FS1.
     ReadSwitch { switch: i64 },
     /// Ask the device what drives one parameter (op 36).
@@ -1036,9 +1045,14 @@ fn main() -> Result<()> {
                 fretwire_data::ir::peak(&blob)
             );
         }
-        Command::IrProbe { op, slot } => {
+        Command::IrProbe {
+            op,
+            slot,
+            kind,
+            select,
+        } => {
             let mut s = fretwire_core::Session::connect()?;
-            match s.ir_probe(op, slot)? {
+            match s.ir_probe(op, slot, kind, select)? {
                 Some(v) => println!("op {op} slot {slot} -> {v}"),
                 None => println!("op {op} slot {slot} -> no decodable reply"),
             }

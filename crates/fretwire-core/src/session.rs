@@ -3532,7 +3532,12 @@ impl Session {
         {
             return Err(crate::Error::Rejected(format!(
                 "IR command — device code {code}{}",
-                reject_hint(None, code)
+                match code {
+                    -3 =>
+                        " (the device would not take that — an opcode it does not know here, \
+                            a slot out of range, or the wrong target shape for this op)",
+                    _ => "",
+                }
             )));
         }
         Ok(ack)
@@ -3656,39 +3661,48 @@ impl Session {
         })
     }
 
-    /// **Probe**: send `op` inside an IR session with a `{112: slot}` target and return the reply.
+    /// **Probe**: send `op_id` inside an IR session and return whatever comes back.
     ///
-    /// The IR op family is only partly mapped — 9 upload, 11 stream, 12 select, 13 commit, with
-    /// 10 conspicuously absent — and this is how the gaps get filled. It can write, because an
-    /// unmapped opcode can do anything; it exists for probing a slot whose contents are expendable.
+    /// The IR op family is only partly mapped — 9 upload, 11 stream, 12 select, 13 commit, with 10
+    /// conspicuously absent — and this is how the gaps get filled. `kind` adds the `101: 2` that
+    /// ops 11 and 13 carry; `select` sends an op-12 select for the slot first, since op 11 only
+    /// works that way and a delete might too.
+    ///
+    /// It can write: an unmapped opcode can do anything. Only point it at an expendable slot.
     pub fn ir_probe(
         &mut self,
         op_id: i64,
         slot: i64,
+        kind: bool,
+        select: bool,
     ) -> crate::Result<Option<fretwire_data::rmpv::Value>> {
+        use fretwire_data::rmpv::Value;
         self.in_ir_session(|s| {
+            if select {
+                let picked = s.ir_select(slot)?;
+                tracing::info!(slot, ?picked, "probe: selected the slot first");
+            }
             let txn = s.bump_txn();
-            let body = fretwire_data::rmpv::Value::Map(vec![
-                (
-                    fretwire_data::rmpv::Value::from(102),
-                    fretwire_data::rmpv::Value::from(txn),
-                ),
-                (
-                    fretwire_data::rmpv::Value::from(100),
-                    fretwire_data::rmpv::Value::from(op_id),
-                ),
-                (
-                    fretwire_data::rmpv::Value::from(101),
-                    fretwire_data::rmpv::Value::Map(vec![(
-                        fretwire_data::rmpv::Value::from(112),
-                        fretwire_data::rmpv::Value::from(slot),
-                    )]),
-                ),
+            let mut target = vec![(Value::from(112), Value::from(slot))];
+            if kind {
+                target.push((Value::from(101), Value::from(2)));
+            }
+            let body = Value::Map(vec![
+                (Value::from(102), Value::from(txn)),
+                (Value::from(100), Value::from(op_id)),
+                (Value::from(101), Value::Map(target)),
             ]);
             let mut encoded = Vec::new();
             fretwire_data::rmpv::encode::write_value(&mut encoded, &body)
                 .expect("msgpack encode to Vec is infallible");
-            let ack = s.ir_request(cmd::STREAM, encoded, txn)?;
+            let tlv = Tlv::command(op::SESSION_OPEN, encoded).to_bytes();
+            let ack = s.edit_request_txn(cmd::STREAM, tlv, txn)?;
+            if let Some((rejected, code)) = fretwire_data::stream::parse_edit_rejection(&ack.body)
+                && rejected == txn
+            {
+                tracing::warn!(op_id, slot, kind, select, code, "probe refused");
+                return Ok(Some(Value::from(format!("REFUSED code {code}"))));
+            }
             Ok(Self::ir_reply_payload(&ack))
         })
     }

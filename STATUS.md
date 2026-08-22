@@ -2711,11 +2711,22 @@ of pacing tuned against 20+ recorded Floor failures, `write_preset`'s transfer l
 this is the shape it always had. The preset path was re-verified live afterwards (`write-roundtrip`:
 5 chunks, 5 real credits, acked, no stall — the documented healthy numbers).
 
-### What is not done
-- **Delete, rename and reorder are not decoded.** A slot can be overwritten but not emptied. Op
-  **10** is the gap in an otherwise contiguous 9/11/12/13 family and is the obvious candidate;
-  `fretwire ir-probe <op> <slot>` exists to try it against an expendable slot. **Not attempted** —
-  sending an undocumented opcode to hardware wants a human's say-so first.
+### Delete: two reconstructions, both refuted
+- **Op 10 refuses a `{112: slot}` target with code `-3`** — the same refusal an out-of-range slot
+  draws. Either it is not delete, or it wants a different target shape. `fretwire ir-probe <op>
+  <slot> [--kind] [--select]` tries the others; those runs are blocked pending permission to send
+  undocumented opcodes to hardware.
+- **Writing an "empty" record does not clear a slot [refuted].** The upload carries `114`/`115`, so
+  writing the `0, 1` an empty slot reports looked like a free delete. The device took the silent
+  blob and the empty name and then reported `114: 1, 115: 3` anyway — which is itself the finding:
+  **those fields are device state, echoed back, not caller input.** `edit::ir_clear` is kept to
+  reproduce it; there is no `Session::ir_clear`, because a clear that does not clear is worse than
+  none.
+
+A single HX Edit capture of a delete settles this and costs nothing; probing opcodes at a live
+pedal is the expensive route.
+
+### What else is not done
 - **Slot 1 of the dev pedal holds a nameless silent IR** — residue of the round-trip test, left
   there because there is no delete. Slot 0's original is backed up and byte-verified.
 - **No GUI.** The backend and CLI are done; nothing in the Tauri app exposes IRs yet. That, and how

@@ -963,11 +963,24 @@ re-reads the slot and compares checksums instead.
 Unlike every other edit in this project, this one **does not live in the edit buffer**: there is no
 reload that undoes it. `ir_upload` refuses an occupied slot unless told to overwrite.
 
+### `114`/`115` are the device's to set, not the caller's [solid]
+The upload record carries `114` and `115`, so the obvious reconstruction of a delete is to write the
+record an empty slot reports — silent blob, no name, `114: 0, 115: 1`. **The device ignores them.**
+It took the blob and the empty name and then reported `114: 1, 115: 3` anyway, which settles what
+those fields are: state the device maintains and echoes back, not input it accepts.
+[refuted — live, 2026-08-22. `edit::ir_clear` is kept to reproduce it.]
+
+So a slot can be *overwritten* but not emptied, and the closest available thing — a nameless silent
+IR — is a distinct state from an empty slot rather than a substitute for one.
+
 ### Not decoded: delete, rename, reorder
-Op **10** is conspicuously absent from a family that otherwise runs 9, 11, 12, 13 — the obvious
-candidate for delete, and untried. Rename and reorder have never been captured either. A slot can
-be *overwritten* but not emptied: the zero-fill above is the closest thing available and it leaves
-the occupancy flag set. Anyone with HX Edit and a capture setup can close this in one session.
+Op **10** is conspicuously absent from a family that otherwise runs 9, 11, 12, 13, and is the
+obvious candidate for delete. It **refuses a `{112: slot}` target with code `-3`**, the same refusal
+an out-of-range slot draws, so either it is not delete or it wants a different target shape. Other
+shapes (`{112: slot, 101: 2}`, and either of those after an op-12 select) are what `fretwire
+ir-probe <op> <slot> [--kind] [--select]` exists to try; they have not been run. Rename and reorder
+have never been captured either. Anyone with HX Edit and a capture setup closes all three in one
+session — which is a much cheaper route than probing opcodes at a live pedal.
 
 ## Resolved vs. still open
 - [x] Endpoints / framing / channels / sequence.

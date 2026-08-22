@@ -34,9 +34,11 @@ Then op **13** `{101:2}` = **commit** the write (kind 2, same kind value the pre
 (start the read stream); the IR streams back paged like the preset read (`cmd 0x0c` pagination).
 
 ## Still needed
-- **Delete / rename / reorder** — never captured. Op **10** is the gap in an otherwise contiguous
-  9/11/12/13 family and is the obvious candidate for delete; probing it needs a slot you can afford
-  to lose. Until then a slot can be overwritten but not emptied.
+- **Delete / rename / reorder** — never captured, and **two reconstructions have now failed**:
+  op 10 with a `{112: slot}` target is refused with code `-3`, and writing an "empty" record via
+  op 9 does not clear a slot (the device overrides `114`/`115`). Until one of these is captured a
+  slot can be overwritten but not emptied. A single HX Edit capture of a delete settles it; probing
+  opcodes at a live pedal is the expensive way round.
 - **Captures of different IR lengths/formats** (a 1024-sample IR, a stereo IR) to finish `115` and
   `123/124/125`. `114` and `115` are no longer constants — see below.
 - `ir-assign-to-block` — how a preset's IR block references a user slot vs a built-in cab IR.

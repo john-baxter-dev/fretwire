@@ -3566,13 +3566,23 @@ impl Session {
         self.in_ir_session(|s| s.ir_select(slot))
     }
 
-    /// Read every IR slot's metadata, in one session. **Reads only.**
+    /// The device's IR directory: the populated slots, in one request (op 13). **Reads only.**
     ///
-    /// One op-12 per slot rather than one blob per slot: 128 small replies instead of a megabyte,
-    /// which is the difference between a listing and a transfer. Slots that answer nothing are
-    /// skipped rather than erroring — a device with fewer slots than [`IR_SLOTS`] should shorten
-    /// the list, not fail it.
+    /// Op 13 is the commit an upload ends with, but standalone it is simply a listing — and the
+    /// records it returns carry the **MD5 of each slot's stored bytes**, which a per-slot select
+    /// does not. One round trip instead of 128, so this is the listing; [`Self::ir_scan`] is for
+    /// when the empty slots matter too.
     pub fn ir_directory(&mut self) -> crate::Result<Vec<fretwire_data::ir::IrSlot>> {
+        self.in_ir_session(Self::ir_commit)
+    }
+
+    /// Every IR slot's metadata, empty ones included, one op-12 select at a time. **Reads only.**
+    ///
+    /// 128 small replies rather than a megabyte of audio, but still 128 round trips — prefer
+    /// [`Self::ir_directory`] unless the empty slots are the point. Slots that answer nothing end
+    /// the sweep rather than erroring: a device with fewer slots should shorten the list, not fail
+    /// it.
+    pub fn ir_scan(&mut self) -> crate::Result<Vec<fretwire_data::ir::IrSlot>> {
         self.in_ir_session(|s| {
             let mut out = Vec::new();
             for slot in 0..fretwire_data::ir::IR_SLOTS as i64 {
@@ -3714,11 +3724,12 @@ impl Session {
     /// buffer and cannot be undone by reloading. `overwrite` has to be set to write over a slot
     /// that already holds an IR; without it an occupied slot is an error rather than a surprise.
     ///
-    /// `blob` is [`fretwire_data::ir::IR_BLOB_LEN`] bytes of little-endian `f32` — build it from a
-    /// file with [`fretwire_data::ir::from_wav`]. The checksum is computed here, not passed in.
+    /// `blob` is little-endian `f32` and must be a length the device stores — 256, 512, 1024 or
+    /// 2048 samples. The declared length is derived from it, never passed in, because sending more
+    /// data than the declared length covers wedges the device's transfer state machine.
     ///
-    /// Returns the slot as the device reports it afterwards, having verified that the checksum it
-    /// now holds is the one we sent.
+    /// Returns the slot as the device reports it afterwards, having checked both the word sum and
+    /// the MD5 the directory reports for the stored bytes.
     pub fn ir_upload(
         &mut self,
         slot: i64,
@@ -3726,23 +3737,20 @@ impl Session {
         blob: &[u8],
         overwrite: bool,
     ) -> crate::Result<fretwire_data::ir::IrSlot> {
-        if blob.len() != fretwire_data::ir::IR_BLOB_LEN {
+        let samples = blob.len() / 4;
+        if fretwire_protocol::edit::ir_length_code(samples).is_none()
+            || !blob.len().is_multiple_of(4)
+        {
             return Err(fretwire_data::Error::Stream(format!(
-                "an IR is {} bytes ({} samples); this one is {}",
-                fretwire_data::ir::IR_BLOB_LEN,
-                fretwire_data::ir::IR_SAMPLES,
+                "an IR must be 256, 512, 1024 or 2048 samples; this one is {samples} \
+                 ({} bytes)",
                 blob.len()
             ))
             .into());
         }
-        if !(0..fretwire_data::ir::IR_SLOTS as i64).contains(&slot) {
-            return Err(fretwire_data::Error::Stream(format!(
-                "IR slot {slot} is out of range (0..{})",
-                fretwire_data::ir::IR_SLOTS
-            ))
-            .into());
-        }
+        self.check_ir_slot(slot)?;
         let sent_checksum = fretwire_protocol::edit::ir_checksum(blob);
+        let sent_md5 = fretwire_data::ir::stored_md5(blob, samples);
 
         self.in_ir_session(|s| {
             // Look before writing. The device will happily overwrite an occupied slot, and an IR
@@ -3764,20 +3772,33 @@ impl Session {
             let acked = s.send_chunked_tlv(tlv, txn, "an IR upload", RECOVER_IR)?;
             // The op-9 reply is `103: 1`, not the usual `0`, and the real completion arrives
             // afterwards as a status push echoing the same transaction — so a missing ack here is
-            // worth a line but is not the verdict. The re-read below is.
-            tracing::info!(slot, acked, checksum = sent_checksum, "IR upload sent");
+            // worth a line but is not the verdict. The re-reads below are.
+            tracing::info!(
+                slot,
+                acked,
+                samples,
+                checksum = sent_checksum,
+                "IR upload sent"
+            );
 
-            let txn = s.bump_txn();
-            let ack = s.ir_request(cmd::OPEN, fretwire_protocol::edit::ir_commit(txn), txn)?;
-            let directory = Self::ir_reply_payload(&ack)
-                .as_ref()
-                .map(fretwire_data::ir::parse_directory)
-                .unwrap_or_default();
+            let directory = s.ir_commit()?;
             tracing::info!(slots = directory.len(), "IR store committed");
 
-            // Ask the device what it now holds, rather than trusting the commit. A checksum that
-            // came back different means the flash write landed wrong, and the caller needs to know
-            // that before it tells anyone the IR is loaded.
+            // The directory reports the MD5 of what the device actually stored, padding included.
+            // That is a far stronger check than the word sum, which any reordering of the samples
+            // collides with — and it costs nothing, since the commit answers with it anyway.
+            if let Some(entry) = directory.iter().find(|e| e.index == slot)
+                && let Some(got) = entry.md5.as_deref()
+                && got != sent_md5
+            {
+                return Err(fretwire_data::Error::Stream(format!(
+                    "IR slot {slot}: the device stored bytes hashing to {got}, not the \
+                     {sent_md5} we sent"
+                ))
+                .into());
+            }
+
+            // Ask the device what it now holds, rather than trusting the commit.
             let landed = s.ir_select(slot)?.ok_or_else(|| {
                 fretwire_data::Error::Stream(format!(
                     "IR slot {slot} gave no metadata after the upload"
@@ -3793,6 +3814,83 @@ impl Session {
             }
             Ok(landed)
         })
+    }
+
+    /// Empty IR slot `slot` (op 15). **Writes device flash.**
+    ///
+    /// Emptying an already-empty slot is not an error — the device answers 0. Export the slot
+    /// first if its contents matter: there is no undo, and an IR is not recoverable from the
+    /// preset that references it.
+    pub fn ir_delete(&mut self, slot: i64) -> crate::Result<fretwire_data::ir::IrSlot> {
+        self.check_ir_slot(slot)?;
+        self.in_ir_session(|s| {
+            let txn = s.bump_txn();
+            s.ir_request(
+                cmd::OPEN,
+                fretwire_protocol::edit::ir_delete(txn, slot),
+                txn,
+            )?;
+            s.ir_commit()?;
+            let landed = s.ir_select(slot)?.ok_or_else(|| {
+                fretwire_data::Error::Stream(format!(
+                    "IR slot {slot} gave no metadata after the delete"
+                ))
+            })?;
+            if landed.is_used() {
+                return Err(fretwire_data::Error::Stream(format!(
+                    "IR slot {slot} still reports {} stored samples after a delete",
+                    landed.stored_samples()
+                ))
+                .into());
+            }
+            tracing::info!(slot, "IR slot emptied");
+            Ok(landed)
+        })
+    }
+
+    /// Rename the IR in slot `slot` (op 10). **Writes device flash**, but only the name — the
+    /// samples are untouched.
+    pub fn ir_rename(&mut self, slot: i64, name: &str) -> crate::Result<fretwire_data::ir::IrSlot> {
+        self.check_ir_slot(slot)?;
+        self.in_ir_session(|s| {
+            let txn = s.bump_txn();
+            s.ir_request(
+                cmd::OPEN,
+                fretwire_protocol::edit::ir_rename(txn, slot, name),
+                txn,
+            )?;
+            s.ir_commit()?;
+            let landed = s.ir_select(slot)?.ok_or_else(|| {
+                fretwire_data::Error::Stream(format!(
+                    "IR slot {slot} gave no metadata after the rename"
+                ))
+            })?;
+            tracing::info!(slot, name = %landed.name, "IR slot renamed");
+            Ok(landed)
+        })
+    }
+
+    /// Commit a pending IR write (op 13) and return the directory it answers with.
+    fn ir_commit(&mut self) -> crate::Result<Vec<fretwire_data::ir::IrSlot>> {
+        let txn = self.bump_txn();
+        let ack = self.ir_request(cmd::OPEN, fretwire_protocol::edit::ir_commit(txn), txn)?;
+        Ok(Self::ir_reply_payload(&ack)
+            .as_ref()
+            .map(fretwire_data::ir::parse_directory)
+            .unwrap_or_default())
+    }
+
+    /// Reject a slot index the device does not have, before anything is sent.
+    fn check_ir_slot(&self, slot: i64) -> crate::Result<()> {
+        if (0..fretwire_data::ir::IR_SLOTS as i64).contains(&slot) {
+            Ok(())
+        } else {
+            Err(fretwire_data::Error::Stream(format!(
+                "IR slot {slot} is out of range (0..{})",
+                fretwire_data::ir::IR_SLOTS
+            ))
+            .into())
+        }
     }
 
     /// Reassemble a chunked stream whose chunk #0 is already in hand, on `chan`.

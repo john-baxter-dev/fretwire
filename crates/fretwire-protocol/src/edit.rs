@@ -984,6 +984,10 @@ pub const OP_IR_STREAM: i64 = 11;
 pub const OP_IR_SELECT: i64 = 12;
 /// Op 13: **commit** a write. Its reply is the directory of populated slots.
 pub const OP_IR_COMMIT: i64 = 13;
+/// Op 15: **empty** a slot.
+pub const OP_IR_DELETE: i64 = 15;
+/// Op 10: **rename** the IR in a slot.
+pub const OP_IR_RENAME: i64 = 10;
 
 /// Target key: the IR **slot index**, zero-based.
 pub const K_IR_SLOT: i64 = 112;
@@ -991,23 +995,29 @@ pub const K_IR_SLOT: i64 = 112;
 pub const K_IR_CHECKSUM: i64 = 113;
 /// Target key: the IR **audio blob**, 8192 bytes.
 pub const K_IR_BLOB: i64 = 110;
-/// Target keys 114/115/123/124/125: **format flags**. Constant at `1, 3, false, false, 0` across
-/// every IR this project has seen, on a device whose IRs are all one length and one format, so
-/// what they select is unknown. [hypothesis]
-pub const K_IR_FLAG_114: i64 = 114;
-/// See [`K_IR_FLAG_114`].
-pub const K_IR_FLAG_115: i64 = 115;
-/// See [`K_IR_FLAG_114`].
+/// Target key 114: the **length multiplier**. With [`K_IR_LENGTH_EXP`] it declares how many
+/// samples the device will store — see [`ir_length_code`].
+pub const K_IR_LENGTH_MUL: i64 = 114;
+/// Target key 115: the **length exponent**. See [`K_IR_LENGTH_MUL`].
+pub const K_IR_LENGTH_EXP: i64 = 115;
+/// Target key 123: echoed back verbatim; `false` everywhere seen. Preset list entries carry the
+/// same trio, so it is not IR-specific.
 pub const K_IR_FLAG_123: i64 = 123;
-/// See [`K_IR_FLAG_114`].
+/// See [`K_IR_FLAG_123`].
 pub const K_IR_FLAG_124: i64 = 124;
-/// See [`K_IR_FLAG_114`].
+/// See [`K_IR_FLAG_123`].
 pub const K_IR_FLAG_125: i64 = 125;
 
 /// The length of an IR name field on the wire: 32 bytes, NUL-padded.
 pub const IR_NAME_LEN: usize = 32;
-/// The length of an IR audio blob: 2048 little-endian `f32` samples.
-pub const IR_BLOB_LEN: usize = 8192;
+/// The longest IR the device will store: 2048 samples. Declaring more, or sending more data than
+/// the declared length covers, wedges the device's transfer state machine hard enough to need the
+/// power pulled — so this is a ceiling, not a suggestion.
+pub const IR_MAX_SAMPLES: usize = 2048;
+/// The shortest stored length the code can express: `1 x 256 x 2^0`.
+pub const IR_MIN_SAMPLES: usize = 256;
+/// The length of a full-size IR audio blob: [`IR_MAX_SAMPLES`] little-endian `f32`.
+pub const IR_BLOB_LEN: usize = IR_MAX_SAMPLES * 4;
 
 /// The `113` checksum: the blob read as little-endian `u32` words and summed, truncated to 32 bits.
 ///
@@ -1108,25 +1118,42 @@ pub fn ir_name_field(name: &str) -> [u8; IR_NAME_LEN] {
     field
 }
 
-/// Build an **IR record write** (op 9): the slot, the checksum, the 32-byte name, the occupancy
-/// flags and the 8192-byte blob.
+/// The `114`/`115` pair declaring how many samples the device will store.
 ///
-/// `occupied` picks the `114/115` pair: `true` writes the `1, 3` a populated slot reports, `false`
-/// the `0, 1` an empty one does — though the device **ignores both** and sets them itself, so this
-/// only matters for reproducing the experiment that showed that. See [`ir_upload`] and
-/// [`ir_clear`].
+/// The device stores **`114 x 256 x 2^115`** samples, so with the multiplier pinned at 1 the
+/// exponent alone selects 256, 512, 1024 or 2048. Returns `None` for any other count.
 ///
-/// Returns `None` if `blob` is not exactly [`IR_BLOB_LEN`] bytes — the device is being handed a
-/// flash write, and a short blob is a caller bug rather than something to pad silently.
+/// This is not decoration. Data **shorter** than the declared length is zero-padded and harmless;
+/// data **longer** than it wedges the device's transfer state machine badly enough to need the
+/// power pulled. Deriving the code from the sample count — rather than letting a caller state one —
+/// is what makes that impossible to do by accident.
+/// [solid — `tonepush`'s measured table, cross-checked against this device's own records: slot 0
+/// reports `1, 3` and holds exactly 2048 samples.]
+pub fn ir_length_code(samples: usize) -> Option<(i64, i64)> {
+    if !(IR_MIN_SAMPLES..=IR_MAX_SAMPLES).contains(&samples) || !samples.is_power_of_two() {
+        return None;
+    }
+    // samples = 256 << exp
+    Some((1, (samples / IR_MIN_SAMPLES).trailing_zeros() as i64))
+}
+
+/// Build an **IR upload** (op 9): the slot, the checksum, the 32-byte name, the declared length
+/// and the samples.
+///
+/// `blob` is little-endian `f32`, and its length has to be one the device stores — 256, 512, 1024
+/// or 2048 samples. Anything else returns `None` rather than being padded silently, because the
+/// declared length is derived from it and a mismatch is the one thing here that can wedge the
+/// device.
 ///
 /// **This writes device flash.** It must be followed by [`ir_commit`]. Its immediate reply carries
 /// `103: 1`, not the usual `0` — the real verdict arrives afterwards as a status push echoing the
 /// same transaction. [solid — `import_ir.pcapng`]
-pub fn ir_record(txn: u16, slot: i64, name: &str, blob: &[u8], occupied: bool) -> Option<Vec<u8>> {
-    if blob.len() != IR_BLOB_LEN {
+pub fn ir_upload(txn: u16, slot: i64, name: &str, blob: &[u8]) -> Option<Vec<u8>> {
+    let (mul, exp) = ir_length_code(blob.len() / 4)?;
+    if !blob.len().is_multiple_of(4) {
         return None;
     }
-    let mut out = Vec::with_capacity(IR_BLOB_LEN + 128);
+    let mut out = Vec::with_capacity(blob.len() + 128);
     // Three top-level pairs, then nine in the target. Hand-rolled only because of the two
     // `str16` fields; every scalar still goes through the encoder.
     out.push(0x83);
@@ -1142,12 +1169,8 @@ pub fn ir_record(txn: u16, slot: i64, name: &str, blob: &[u8], occupied: bool) -
     pair(&mut out, K_IR_CHECKSUM, Value::from(ir_checksum(blob)));
     out.extend_from_slice(&encode(Value::from(K_NAME)));
     write_str16(&mut out, &ir_name_field(name));
-    pair(&mut out, K_IR_FLAG_114, Value::from(i64::from(occupied)));
-    pair(
-        &mut out,
-        K_IR_FLAG_115,
-        Value::from(if occupied { 3 } else { 1 }),
-    );
+    pair(&mut out, K_IR_LENGTH_MUL, Value::from(mul));
+    pair(&mut out, K_IR_LENGTH_EXP, Value::from(exp));
     pair(&mut out, K_IR_FLAG_123, Value::from(false));
     pair(&mut out, K_IR_FLAG_124, Value::from(false));
     pair(&mut out, K_IR_FLAG_125, Value::from(0));
@@ -1156,22 +1179,39 @@ pub fn ir_record(txn: u16, slot: i64, name: &str, blob: &[u8], occupied: bool) -
     Some(out)
 }
 
-/// Build an **IR upload** (op 9) — [`ir_record`] with the flags a populated slot carries.
-pub fn ir_upload(txn: u16, slot: i64, name: &str, blob: &[u8]) -> Option<Vec<u8>> {
-    ir_record(txn, slot, name, blob, true)
+/// Build an **IR delete** (op 15): `{102:txn, 100:15, 101:{112:slot}}`. Empties the slot.
+///
+/// **Writes device flash.** Emptying an already-empty slot is not an error — the device answers 0.
+pub fn ir_delete(txn: u16, slot: i64) -> Vec<u8> {
+    encode(Value::Map(vec![
+        (Value::from(K_TXN), Value::from(txn)),
+        (Value::from(K_OP), Value::from(OP_IR_DELETE)),
+        (
+            Value::from(K_TARGET),
+            Value::Map(vec![(Value::from(K_IR_SLOT), Value::from(slot))]),
+        ),
+    ]))
 }
 
-/// Build an **IR clear** (op 9) — [`ir_record`] with a silent blob, no name, and the `114: 0,
-/// 115: 1` an *empty* slot reports.
+/// Build an **IR rename** (op 10): `{102:txn, 100:10, 101:{112:slot, 109:name}}`.
 ///
-/// **This does not clear a slot. [refuted — live, 2026-08-22.]** It was the reconstruction of a
-/// delete we have no capture of: an empty slot's metadata is fully observable, so writing exactly
-/// that record ought to be indistinguishable from one. The device disagrees — it wrote the blob and
-/// the empty name, then reported `114: 1, 115: 3` regardless, which is how we know **`114`/`115`
-/// are maintained by the device and not taken from the caller**. Kept because that is worth being
-/// able to reproduce; use [`ir_upload`] for real writes.
-pub fn ir_clear(txn: u16, slot: i64) -> Vec<u8> {
-    ir_record(txn, slot, "", &[0u8; IR_BLOB_LEN], false).expect("a zero blob is the right length")
+/// The name goes in the same 32-byte NUL-padded field an upload carries. **Writes device flash**,
+/// but only the name — the samples are untouched.
+pub fn ir_rename(txn: u16, slot: i64, name: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(64);
+    out.push(0x83);
+    let pair = |out: &mut Vec<u8>, k: i64, v: Value| {
+        out.extend_from_slice(&encode(Value::from(k)));
+        out.extend_from_slice(&encode(v));
+    };
+    pair(&mut out, K_TXN, Value::from(txn));
+    pair(&mut out, K_OP, Value::from(OP_IR_RENAME));
+    out.extend_from_slice(&encode(Value::from(K_TARGET)));
+    out.push(0x82);
+    pair(&mut out, K_IR_SLOT, Value::from(slot));
+    out.extend_from_slice(&encode(Value::from(K_NAME)));
+    write_str16(&mut out, &ir_name_field(name));
+    out
 }
 
 #[cfg(test)]
@@ -1622,27 +1662,64 @@ mod tests {
 
     #[test]
     fn a_blob_of_the_wrong_length_is_refused_rather_than_padded() {
+        // Not a stored length: 2047 samples, and one sample past the ceiling.
         assert!(ir_upload(1, 0, "short", &vec![0u8; IR_BLOB_LEN - 4]).is_none());
         assert!(ir_upload(1, 0, "long", &vec![0u8; IR_BLOB_LEN + 4]).is_none());
-        assert!(ir_record(1, 0, "x", &[], true).is_none());
+        assert!(ir_upload(1, 0, "empty", &[]).is_none());
+        // Not a whole number of samples.
+        assert!(ir_upload(1, 0, "ragged", &vec![0u8; 1026]).is_none());
     }
 
     #[test]
-    fn a_clear_writes_the_flags_an_empty_slot_reports() {
-        // The whole point of the reconstruction: byte-for-byte the record an untouched slot
-        // describes — no name, zero checksum, and the `0, 1` flag pair rather than `1, 3`.
-        let cleared = ir_clear(0x1234, 5);
-        let full = ir_upload(0x1234, 5, "", &[0u8; IR_BLOB_LEN]).unwrap();
-        assert_eq!(cleared.len(), full.len());
-        // They differ only in the two flag values.
-        let diffs: Vec<usize> = cleared
-            .iter()
-            .zip(&full)
-            .enumerate()
-            .filter(|(_, (a, b))| a != b)
-            .map(|(i, _)| i)
-            .collect();
-        assert_eq!(diffs.len(), 2, "only the 114/115 values should differ");
+    fn the_length_code_covers_exactly_the_stored_lengths() {
+        assert_eq!(ir_length_code(256), Some((1, 0)));
+        assert_eq!(ir_length_code(512), Some((1, 1)));
+        assert_eq!(ir_length_code(1024), Some((1, 2)));
+        assert_eq!(ir_length_code(2048), Some((1, 3)));
+        // The formula the device applies, back the other way.
+        for (mul, exp) in [(1, 0), (1, 1), (1, 2), (1, 3)] {
+            let samples = mul * 256 * (1usize << exp);
+            assert_eq!(ir_length_code(samples), Some((mul as i64, exp as i64)));
+        }
+        // Everything else is refused rather than rounded — over the ceiling is the case that
+        // wedges the device.
+        assert_eq!(ir_length_code(4096), None);
+        assert_eq!(ir_length_code(2049), None);
+        assert_eq!(ir_length_code(1500), None);
+        assert_eq!(ir_length_code(128), None);
+        assert_eq!(ir_length_code(0), None);
+    }
+
+    #[test]
+    fn a_shorter_ir_declares_its_own_length() {
+        // A 1024-sample upload must say `1, 2`, not the 2048 the capture happens to carry.
+        let body = ir_upload(1, 0, "half", &vec![0u8; 4096]).unwrap();
+        let hay = |k: u8, v: u8| body.windows(2).any(|w| w == [k, v]);
+        assert!(hay(0x72, 0x01), "114 should be 1");
+        assert!(hay(0x73, 0x02), "115 should be 2 for 1024 samples");
+    }
+
+    #[test]
+    fn a_rename_carries_the_slot_and_the_padded_name() {
+        let body = ir_rename(0x0102, 7, "new name");
+        assert_eq!(&body[..2], &[0x83, 0x66]);
+        // The name field is a 32-byte str16 like the upload's.
+        let at = body
+            .windows(3)
+            .position(|w| w == [0xda, 0x00, 0x20])
+            .unwrap();
+        assert_eq!(&body[at + 3..at + 11], b"new name");
+        assert_eq!(body.len(), at + 3 + IR_NAME_LEN);
+    }
+
+    #[test]
+    fn a_delete_names_only_its_slot() {
+        assert_eq!(
+            ir_delete(0x0304, 9),
+            [
+                0x83, 0x66, 0xcd, 0x03, 0x04, 0x64, 0x0f, 0x65, 0x81, 0x70, 0x09
+            ]
+        );
     }
 
     #[test]

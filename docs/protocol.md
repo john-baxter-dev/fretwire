@@ -910,12 +910,16 @@ driven against a live pedal.
 | **upload** | **9** | `{112:slot, 113:checksum, 109:name, 114,115,123,124,125, 110:blob}` | `103: 1`, then a status push |
 | **stream a blob** | **11** | `{112:slot, 101:2}` | the 8192-byte blob, paged |
 | **select a slot** | **12** | `{112:slot}` | that slot's whole metadata record |
-| **commit** | **13** | `{101:2}` | the directory, as an array of records |
+| **commit / list** | **13** | `{101:2}` | the directory, as an array of records |
+| **rename** | **10** | `{112:slot, 109:name}` | status |
+| **delete** | **15** | `{112:slot}` | status |
 | **session end** | **254** | `{}` | `104: nil` |
 
-**Op 12 is the cheap read.** Its reply carries the slot's index, checksum, name and flags, so the
-whole store enumerates in 128 small replies rather than a megabyte of audio. `Session::ir_directory`
-does exactly that inside one session.
+**Two listings, and they answer with different fields.** Op **13** returns the whole directory in
+one request, each entry carrying the slot's name and the **MD5 of its stored bytes** — but no
+checksum and no length. Op **12** answers per slot with the checksum and the declared length but no
+MD5, so enumerating that way costs 128 round trips and is only worth it when the *empty* slots
+matter. `Session::ir_directory` is the first, `Session::ir_scan` the second.
 
 ### An IR is 2048 samples, stored verbatim [solid]
 The blob is **8192 bytes = 2048 little-endian `f32`**, mono, at the device's 48 kHz. No header, no
@@ -935,20 +939,48 @@ crc32, crc32-inverted, adler32, byte-sum, big-endian sum and xor were all checke
 capture and all differ. `fretwire_protocol::edit::ir_checksum`. The read path verifies it on every
 export, so a torn reassembly is an error rather than a file that is quietly a few samples short.
 
-### `114` is the occupancy flag [solid] — corrects a prior reading
-`114/115/123/124/125` were written up as constant "format flags" (`1, 3, false, false, 0`) because
-every sample we had came from a **populated** slot. Reading an **empty** one separates two of them:
+### `114`/`115` declare the stored length [solid] — corrects two prior readings
+The device stores **`114 x 256 x 2^115`** samples. With the multiplier pinned at 1, the exponent
+alone selects 256, 512, 1024 or 2048:
 
-| | `114` | `115` |
+| `114` | `115` | stored |
 |---|---|---|
-| slot holds an IR | `1` | `3` |
-| slot is empty | `0` | `1` |
+| 1 | 0 | 256 |
+| 1 | 1 | 512 |
+| 1 | 2 | 1024 |
+| 1 | 3 | 2048 |
+| 0 | – | nothing — an empty slot |
 
-So `114` is the device's own answer to "is this slot used", and it is not the same question as "does
-this slot have a name". Writing an all-zero blob under an empty name leaves a slot reporting
-`114: 1` with no name and a zero checksum — **a silent IR, not an empty slot**, and one that would
-give silence rather than a bypass if a preset pointed an IR block at it. `IrSlot::is_used` reads
-`114` for that reason. `123/124/125` stay constant across empty and full alike and remain unmapped.
+Two earlier readings here were wrong, and both for the same reason: every sample this project had
+came from a **populated** slot, where the pair is a constant `1, 3`.
+
+1. They were written up as constant "format flags". They are a length.
+2. Then, after an empty slot turned up reporting `0, 1`, `114` was written up as an **occupancy
+   flag**. It is not — the zero is a length of zero. `IrSlot::is_used` now asks whether the stored
+   length is non-zero, which gives the same answer for a better reason.
+
+A third reading died with them. Writing a record with `114: 0` under an empty name looked like a
+free delete, and when the device answered `1, 3` anyway that was written up as "the device
+maintains these and ignores the caller". Also wrong: they *are* caller input, and the device was
+correcting an invalid declaration against the 2048 samples actually sent. The real delete is op 15.
+
+**This field is a hazard, not a decoration.** Data shorter than the declared length is zero-padded
+and harmless. Data **longer** than it wedges the device's transfer state machine badly enough to
+need the power pulled. `edit::ir_length_code` derives the pair from the sample count and
+`edit::ir_upload` refuses anything that is not a stored length, so a caller cannot state one that
+disagrees with what it sends. [the table is `tonepush`'s, measured by content hash; the `1, 3` and
+`0, 1` rows are confirmed on this device]
+
+`123/124/125` are `false, false, 0` on every slot, empty or full — and are not IR-specific, since
+preset list entries carry the same trio. Still unmapped.
+
+### Key `104` is the MD5 of the stored bytes [solid]
+Each op-13 directory entry carries a 33-byte `104`: the MD5 of the slot's sample bytes *after* the
+device's zero-padding, lowercase hex plus a NUL. Confirmed against this device — a slot holding
+2048 known samples reports the same digest Python's `hashlib` gives for those bytes.
+
+That makes verifying an upload free and much stronger than the `113` word sum, which any reordering
+of the samples collides with. `Session::ir_upload` checks both.
 
 ### Writing a slot is a flash write, and the reply arrives twice [solid]
 Op 9 is too big for one frame (8259 bytes of TLV) and goes out on the **same paced bulk transfer as
@@ -963,24 +995,22 @@ re-reads the slot and compares checksums instead.
 Unlike every other edit in this project, this one **does not live in the edit buffer**: there is no
 reload that undoes it. `ir_upload` refuses an occupied slot unless told to overwrite.
 
-### `114`/`115` are the device's to set, not the caller's [solid]
-The upload record carries `114` and `115`, so the obvious reconstruction of a delete is to write the
-record an empty slot reports — silent blob, no name, `114: 0, 115: 1`. **The device ignores them.**
-It took the blob and the empty name and then reported `114: 1, 115: 3` anyway, which settles what
-those fields are: state the device maintains and echoes back, not input it accepts.
-[refuted — live, 2026-08-22. `edit::ir_clear` is kept to reproduce it.]
+### Delete and rename [solid — verified live]
+**Op 15** `{112: slot}` empties a slot. Afterwards it reports field-for-field identically to a slot
+that has never been written — same zero length, same empty name, same flags. Emptying an already
+empty slot is not an error.
 
-So a slot can be *overwritten* but not emptied, and the closest available thing — a nameless silent
-IR — is a distinct state from an empty slot rather than a substitute for one.
+**Op 10** `{112: slot, 109: name}` renames, taking the same 32-byte NUL-padded field an upload
+carries. The stored MD5 is unchanged across a rename, which is what confirms it touches the name
+and not the samples.
 
-### Not decoded: delete, rename, reorder
-Op **10** is conspicuously absent from a family that otherwise runs 9, 11, 12, 13, and is the
-obvious candidate for delete. It **refuses a `{112: slot}` target with code `-3`**, the same refusal
-an out-of-range slot draws, so either it is not delete or it wants a different target shape. Other
-shapes (`{112: slot, 101: 2}`, and either of those after an op-12 select) are what `fretwire
-ir-probe <op> <slot> [--kind] [--select]` exists to try; they have not been run. Rename and reorder
-have never been captured either. Anyone with HX Edit and a capture setup closes all three in one
-session — which is a much cheaper route than probing opcodes at a live pedal.
+Both are small commands, both write flash, and both are followed by op 13 here to refresh the
+directory. An earlier probe of op 10 drew `-3` only because it was sent as `{112: slot}` with no
+name — the opcode was right and the target was short.
+
+### Still not decoded: reorder
+Moving an IR between slots has never been captured, and may not exist as an opcode at all — a
+reorder is expressible as delete plus upload. This is the last gap in the family.
 
 ## Resolved vs. still open
 - [x] Endpoints / framing / channels / sequence.

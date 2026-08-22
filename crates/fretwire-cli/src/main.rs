@@ -291,8 +291,9 @@ enum Command {
     /// not sit in the edit buffer and cannot be undone by reloading. Export the slot first if it
     /// holds anything you want to keep.
     ///
-    /// The file is resampled to nothing: it is truncated or zero-padded to 2048 samples and its
-    /// first channel is taken. A file that is not already 48 kHz is refused unless --force.
+    /// The file is resampled to nothing: it is truncated or zero-padded to 2048 samples — the
+    /// longest the device stores — and its first channel is taken. A file that is not already
+    /// 48 kHz is refused unless --force.
     IrUpload {
         slot: i64,
         wav: std::path::PathBuf,
@@ -306,6 +307,12 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
+    /// Empty a user IR slot (op 15). **WRITES DEVICE FLASH.**
+    ///
+    /// Export it first if its contents matter — there is no undo.
+    IrDelete { slot: i64 },
+    /// Rename the IR in a slot (op 10). **WRITES DEVICE FLASH** — the name only.
+    IrRename { slot: i64, name: String },
     /// PROBE: send an arbitrary opcode inside an IR session with a `{112: slot}` target.
     ///
     /// For mapping the IR op family — ops 9/11/12/13 are decoded, the rest are not. Prints
@@ -943,27 +950,37 @@ fn main() -> Result<()> {
         Command::DiffStream { a, b } => diff_stream(&a, &b)?,
         Command::IrList { all } => {
             let mut s = fretwire_core::Session::connect()?;
-            let slots = s.ir_directory()?;
+            // The directory is one request and carries each slot's stored hash; the sweep is 128
+            // and is only worth it when the empty slots are the point.
+            let slots = if all { s.ir_scan()? } else { s.ir_directory()? };
             let shown: Vec<_> = slots.iter().filter(|i| all || i.is_used()).collect();
             if shown.is_empty() {
                 println!("no IRs loaded ({} slots read)", slots.len());
             }
+            // The two listings answer with different fields — the directory carries each slot's
+            // stored hash but no checksum or length, the sweep the reverse — so every column is
+            // optional and blank where that listing has nothing to say.
             for i in shown {
-                match i.checksum {
-                    Some(c) => println!(
-                        "{:>3}  {:<32} {c:#010x}{}",
-                        i.index,
-                        i.display_name(),
-                        // A populated slot whose blob sums to zero is silence, not emptiness, and
-                        // the two look identical in every other column.
-                        if i.is_used() && c == 0 {
-                            "  (silent)"
-                        } else {
-                            ""
-                        }
-                    ),
-                    None => println!("{:>3}  {}", i.index, i.display_name()),
-                }
+                let len = match i.stored_samples() {
+                    0 => String::new(),
+                    n => format!("{n} smp"),
+                };
+                let sum = i
+                    .checksum
+                    .map_or_else(String::new, |c| format!("{c:#010x}"));
+                // A populated slot whose samples are all zero is silence, not emptiness, and the
+                // two look identical in every other column.
+                let silent = if i.is_used() && i.checksum == Some(0) {
+                    "  (silent)"
+                } else {
+                    ""
+                };
+                println!(
+                    "{:>3}  {:<32} {len:>9}  {sum:<10}  {}{silent}",
+                    i.index,
+                    i.display_name(),
+                    i.md5.as_deref().unwrap_or("")
+                );
             }
         }
         Command::IrInfo { slot } => {
@@ -1044,6 +1061,22 @@ fn main() -> Result<()> {
                 landed.checksum.unwrap_or(0),
                 fretwire_data::ir::peak(&blob)
             );
+        }
+        Command::IrDelete { slot } => {
+            let mut s = fretwire_core::Session::connect()?;
+            let before = s.ir_info(slot)?;
+            if let Some(b) = &before
+                && b.is_used()
+            {
+                println!("emptying slot {slot}, which held \"{}\"", b.display_name());
+            }
+            s.ir_delete(slot)?;
+            println!("IR {slot} emptied");
+        }
+        Command::IrRename { slot, name } => {
+            let mut s = fretwire_core::Session::connect()?;
+            let landed = s.ir_rename(slot, &name)?;
+            println!("IR {slot} is now \"{}\"", landed.name);
         }
         Command::IrProbe {
             op,
@@ -1783,6 +1816,9 @@ mod tests {
             index,
             checksum: None,
             name: name.to_string(),
+            md5: None,
+            length_mul: 1,
+            length_exp: 3,
             flags: fretwire_data::ir::IrFlags::default(),
         };
         assert_eq!(

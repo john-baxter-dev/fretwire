@@ -2711,23 +2711,45 @@ of pacing tuned against 20+ recorded Floor failures, `write_preset`'s transfer l
 this is the shape it always had. The preset path was re-verified live afterwards (`write-roundtrip`:
 5 chunks, 5 real credits, acked, no stall — the documented healthy numbers).
 
-### Delete: two reconstructions, both refuted
-- **Op 10 refuses a `{112: slot}` target with code `-3`** — the same refusal an out-of-range slot
-  draws. Either it is not delete, or it wants a different target shape. `fretwire ir-probe <op>
-  <slot> [--kind] [--select]` tries the others; those runs are blocked pending permission to send
-  undocumented opcodes to hardware.
-- **Writing an "empty" record does not clear a slot [refuted].** The upload carries `114`/`115`, so
-  writing the `0, 1` an empty slot reports looked like a free delete. The device took the silent
-  blob and the empty name and then reported `114: 1, 115: 3` anyway — which is itself the finding:
-  **those fields are device state, echoed back, not caller input.** `edit::ir_clear` is kept to
-  reproduce it; there is no `Session::ir_clear`, because a clear that does not clear is worse than
-  none.
+### Delete and rename: `tonepush` had them all along
+Two reconstructions failed live first — op 10 sent as `{112: slot}` drew `-3`, and writing an
+"empty" record via op 9 did not clear a slot. Reading `tonepush`'s `PROTOCOL.md` settled both in
+minutes:
 
-A single HX Edit capture of a delete settles this and costs nothing; probing opcodes at a live
-pedal is the expensive route.
+- **Delete is op 15** `{112: slot}`. Verified: afterwards the slot reads field-for-field identically
+  to one that has never been written.
+- **Rename is op 10** `{112: slot, 109: name}` — the probe drew `-3` because it was sent *without*
+  the name. The opcode was right and the target was short.
+
+**And it corrected two of our own claims, plus one of its refutations.** `114`/`115` are neither
+format flags nor an occupancy flag: the device stores **`114 x 256 x 2^115` samples**, so the `0`
+an empty slot reports is a length of zero. The "device ignores these and echoes them back" note was
+wrong too — they *are* caller input, and the device was correcting an invalid declaration against
+the data actually sent. `IrSlot::is_used` now asks whether the stored length is non-zero: same
+answer, right reason.
+
+That field is a live hazard. Data **longer** than the declared length wedges the device's transfer
+state machine badly enough to need the power pulled — which is exactly what the failed clear
+attempt did (declared zero, sent 2048). It reported back cleanly, so nothing was harmed, but that
+was luck. `edit::ir_length_code` now derives the pair from the sample count and `ir_upload` refuses
+any length the device does not store, so the disagreement is unrepresentable.
+
+**Key `104` is the MD5** of a slot's stored bytes after padding. Verified against this device — the
+digest it reports for slot 0 is what `hashlib` gives for the same bytes. Uploads now check it as
+well as the `113` word sum, which any reordering of the samples would collide with. MD5 is
+hand-rolled in `fretwire_data::ir` (RFC 1321 vectors in the tests) rather than adding a dependency.
+
+**Two listings, different fields.** Op 13 returns the whole directory in one request with each
+slot's name and hash; op 12 answers per slot with the checksum and length. `ir_directory` is the
+first — one round trip where the sweep took 128 — and `ir_scan` the second, for when the empty
+slots are the point.
+
+The full cycle is verified live: upload → hash-checked → rename (hash unchanged, so it touched only
+the name) → delete → reads identical to untouched. The dev pedal is back to exactly its original
+state, one IR in slot 0.
 
 ### What else is not done
-- **Slot 1 of the dev pedal holds a nameless silent IR** — residue of the round-trip test, left
-  there because there is no delete. Slot 0's original is backed up and byte-verified.
+- **Reorder** — moving an IR between slots is undecoded, and may not exist as an opcode: delete
+  plus upload expresses it. The last gap in the family.
 - **No GUI.** The backend and CLI are done; nothing in the Tauri app exposes IRs yet. That, and how
   a preset's IR block *references* a user slot, are the next pieces.

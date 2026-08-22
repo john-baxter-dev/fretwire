@@ -35,20 +35,38 @@ pub struct IrSlot {
     pub checksum: Option<u32>,
     /// The slot's name, NUL-padding stripped. Empty for an unused slot.
     pub name: String,
-    /// Flags `114/115/123/124/125`, in that order. See [`IrFlags`].
+    /// The MD5 of the stored samples, lowercase hex, when the record carries one (key `104`).
+    /// Only a directory listing does; a slot select does not.
+    pub md5: Option<String>,
+    /// Key `114`, the length **multiplier**. See [`IrSlot::stored_samples`].
+    pub length_mul: i64,
+    /// Key `115`, the length **exponent**. See [`IrSlot::stored_samples`].
+    pub length_exp: i64,
+    /// Keys `123/124/125`, echoed back verbatim. See [`IrFlags`].
     pub flags: IrFlags,
 }
 
 impl IrSlot {
+    /// How many samples the device stores here: **`114 x 256 x 2^115`**.
+    ///
+    /// An empty slot reports `0, 1` and so stores nothing, which is why these two once looked like
+    /// an occupancy flag — the zero is a length, not a boolean.
+    pub fn stored_samples(&self) -> i64 {
+        // A garbage exponent off the wire must not shift out of range.
+        let exp = self.length_exp.clamp(0, 31) as u32;
+        self.length_mul
+            .saturating_mul(256)
+            .saturating_mul(1i64 << exp)
+    }
+
     /// Whether the slot holds an IR.
     ///
-    /// Flag `114` is the device's own answer and is what this trusts; the name is a fallback, for
-    /// a device that turns out to report occupancy differently. The two can disagree, and the
-    /// difference is not academic: a slot holding a **nameless silent IR** reads as empty by name
-    /// and as occupied by flag, and it is occupied — assigning it to an IR block gives silence,
-    /// not a bypass.
+    /// A stored length of zero is the device's own answer, and the name is a fallback. The two can
+    /// disagree, and the difference is not academic: a slot holding a **nameless silent IR** reads
+    /// as empty by name and as occupied by length, and it is occupied — assigning it to an IR
+    /// block gives silence, not a bypass.
     pub fn is_used(&self) -> bool {
-        self.flags.f114 != 0 || !self.name.is_empty()
+        self.stored_samples() > 0 || !self.name.is_empty()
     }
 
     /// A name for display, standing in for the nameless.
@@ -61,24 +79,18 @@ impl IrSlot {
     }
 }
 
-/// The flags an IR record carries. See [`IrSlot::flags`].
+/// Keys `123/124/125`, which an IR record echoes back verbatim.
 ///
-/// Two of these were read as constants for as long as every sample came from a populated slot.
-/// Reading an **empty** one separates them: `114: 0, 115: 1` where a populated slot says
-/// `114: 1, 115: 3`. [solid — live on an HX Stomp 2026-08-22, an untouched slot beside one we had
-/// just written]
+/// Not IR-specific — preset list entries carry the same trio, `false, false, 0` everywhere seen.
+/// Their meaning is untested. (Keys `114`/`115`, which used to live here as "format flags", are a
+/// declared length and moved to [`IrSlot::stored_samples`].)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct IrFlags {
-    /// Key 114 — **whether the slot holds an IR**: `1` populated, `0` empty. [solid]
-    pub f114: i64,
-    /// Key 115 — `3` populated, `1` empty. Tracks occupancy too, so what it adds over `114` is
-    /// unknown; a slot format or a source kind would both fit. [hypothesis]
-    pub f115: i64,
-    /// Key 123 — `false` on every slot seen, empty or full.
+    /// Key 123.
     pub f123: bool,
-    /// Key 124 — `false` on every slot seen, empty or full.
+    /// Key 124.
     pub f124: bool,
-    /// Key 125 — `0` on every slot seen, empty or full.
+    /// Key 125.
     pub f125: i64,
 }
 
@@ -101,9 +113,13 @@ pub fn parse_slot(v: &Value) -> Option<IrSlot> {
         name: map_get(v, 109)
             .and_then(value_bytes)
             .map_or_else(String::new, trim_name),
+        md5: map_get(v, 104)
+            .and_then(value_bytes)
+            .map(|b| trim_name(b).to_ascii_lowercase())
+            .filter(|s| s.len() == 32 && s.chars().all(|c| c.is_ascii_hexdigit())),
+        length_mul: map_get(v, 114).and_then(Value::as_i64).unwrap_or_default(),
+        length_exp: map_get(v, 115).and_then(Value::as_i64).unwrap_or_default(),
         flags: IrFlags {
-            f114: map_get(v, 114).and_then(Value::as_i64).unwrap_or_default(),
-            f115: map_get(v, 115).and_then(Value::as_i64).unwrap_or_default(),
             f123: map_get(v, 123).and_then(Value::as_bool).unwrap_or_default(),
             f124: map_get(v, 124).and_then(Value::as_bool).unwrap_or_default(),
             f125: map_get(v, 125).and_then(Value::as_i64).unwrap_or_default(),
@@ -289,6 +305,103 @@ pub fn from_wav(bytes: &[u8]) -> Result<(Vec<u8>, u32), WavError> {
     Ok((blob, fmt.rate))
 }
 
+/// MD5, for the one field the device reports it in.
+///
+/// Each entry in the IR directory carries key `104`: the MD5 of the slot's stored sample bytes,
+/// *after* the device's zero-padding, as lowercase hex. That makes end-to-end verification of an
+/// upload free and far stronger than the `113` word sum, which any reordering of the samples
+/// collides with. Hand-rolled rather than pulling in a dependency for one 64-round function.
+///
+/// This is a checksum for comparing against a value the device computed, not a security primitive.
+pub fn md5_hex(data: &[u8]) -> String {
+    /// Per-round left-rotation amounts.
+    const S: [u32; 64] = [
+        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5,
+        9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10,
+        15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+    ];
+    // K[i] = floor(2^32 * abs(sin(i + 1))), the constants from RFC 1321.
+    const K: [u32; 64] = [
+        0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613,
+        0xfd469501, 0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193,
+        0xa679438e, 0x49b40821, 0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d,
+        0x02441453, 0xd8a1e681, 0xe7d3fbc8, 0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed,
+        0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a, 0xfffa3942, 0x8771f681, 0x6d9d6122,
+        0xfde5380c, 0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70, 0x289b7ec6, 0xeaa127fa,
+        0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665, 0xf4292244,
+        0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
+        0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb,
+        0xeb86d391,
+    ];
+
+    let mut msg = data.to_vec();
+    let bit_len = (data.len() as u64).wrapping_mul(8);
+    msg.push(0x80);
+    while msg.len() % 64 != 56 {
+        msg.push(0);
+    }
+    msg.extend_from_slice(&bit_len.to_le_bytes());
+
+    let [mut a0, mut b0, mut c0, mut d0] = [0x67452301u32, 0xefcdab89, 0x98badcfe, 0x10325476];
+
+    for block in msg.as_chunks::<64>().0 {
+        let m: [u32; 16] = std::array::from_fn(|i| {
+            u32::from_le_bytes([
+                block[i * 4],
+                block[i * 4 + 1],
+                block[i * 4 + 2],
+                block[i * 4 + 3],
+            ])
+        });
+        let (mut a, mut b, mut c, mut d) = (a0, b0, c0, d0);
+        for i in 0..64 {
+            let (f, g) = match i / 16 {
+                0 => ((b & c) | (!b & d), i),
+                1 => ((d & b) | (!d & c), (5 * i + 1) % 16),
+                2 => (b ^ c ^ d, (3 * i + 5) % 16),
+                _ => (c ^ (b | !d), (7 * i) % 16),
+            };
+            let tmp = d;
+            d = c;
+            c = b;
+            b = b.wrapping_add(
+                f.wrapping_add(a)
+                    .wrapping_add(K[i])
+                    .wrapping_add(m[g])
+                    .rotate_left(S[i]),
+            );
+            a = tmp;
+        }
+        a0 = a0.wrapping_add(a);
+        b0 = b0.wrapping_add(b);
+        c0 = c0.wrapping_add(c);
+        d0 = d0.wrapping_add(d);
+    }
+
+    let mut out = String::with_capacity(32);
+    for word in [a0, b0, c0, d0] {
+        for byte in word.to_le_bytes() {
+            out.push_str(&format!("{byte:02x}"));
+        }
+    }
+    out
+}
+
+/// The MD5 the device will report for `blob` once stored in a slot of `stored_samples` samples.
+///
+/// The device zero-pads what it is given up to the declared length and hashes *that*, so a short
+/// upload's hash is not the hash of the file.
+pub fn stored_md5(blob: &[u8], stored_samples: usize) -> String {
+    let want = stored_samples * 4;
+    if blob.len() >= want {
+        md5_hex(&blob[..want])
+    } else {
+        let mut padded = blob.to_vec();
+        padded.resize(want, 0);
+        md5_hex(&padded)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,8 +430,7 @@ mod tests {
         assert_eq!(s.checksum, Some(0xc0a0_76ed));
         assert_eq!(s.name, "G12-65 212 C Hi-Gn 421+57 Celes");
         assert!(s.is_used());
-        assert_eq!(s.flags.f114, 1);
-        assert_eq!(s.flags.f115, 3);
+        assert_eq!(s.stored_samples(), 2048);
     }
 
     #[test]
@@ -330,6 +442,7 @@ mod tests {
         ]);
         let s = parse_slot(&v).unwrap();
         assert_eq!(s.index, 9);
+        assert_eq!(s.stored_samples(), 0);
         assert!(!s.is_used());
         assert_eq!(s.display_name(), "—");
     }
@@ -347,6 +460,7 @@ mod tests {
         ]);
         let s = parse_slot(&v).unwrap();
         assert!(s.is_used());
+        assert_eq!(s.stored_samples(), 2048);
         assert_eq!(s.display_name(), "(unnamed)");
     }
 
@@ -440,5 +554,71 @@ mod tests {
             from_wav(&wav).unwrap_err(),
             WavError::Unsupported(_)
         ));
+    }
+
+    #[test]
+    fn md5_matches_the_rfc_1321_vectors() {
+        assert_eq!(md5_hex(b""), "d41d8cd98f00b204e9800998ecf8427e");
+        assert_eq!(md5_hex(b"a"), "0cc175b9c0f1b6a831c399e269772661");
+        assert_eq!(md5_hex(b"abc"), "900150983cd24fb0d6963f7d28e17f72");
+        assert_eq!(
+            md5_hex(b"message digest"),
+            "f96b697d7cb7938d525a2f31aaf161d0"
+        );
+        assert_eq!(
+            md5_hex(b"abcdefghijklmnopqrstuvwxyz"),
+            "c3fcd3d76192e4007dfb496cca67e13b"
+        );
+        assert_eq!(
+            md5_hex(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"),
+            "d174ab98d277d9f5a5611c2c9f419d9f"
+        );
+        // Spans a block boundary — 80 bytes, so two blocks with the length in the second.
+        assert_eq!(
+            md5_hex(
+                b"12345678901234567890123456789012345678901234567890123456789012345678901234567890"
+            ),
+            "57edf4a22be3c955ac49da2e2107b67a"
+        );
+    }
+
+    #[test]
+    fn the_stored_hash_covers_the_devices_zero_padding() {
+        // Half an IR stored in a full-length slot hashes as itself plus 4 KB of zeros — not as
+        // the file, which is the trap this exists to avoid.
+        let half = vec![7u8; 4096];
+        let mut padded = half.clone();
+        padded.resize(IR_BLOB_LEN, 0);
+        assert_eq!(stored_md5(&half, IR_SAMPLES), md5_hex(&padded));
+        // Given exactly the stored length, it is the plain hash.
+        assert_eq!(stored_md5(&padded, IR_SAMPLES), md5_hex(&padded));
+    }
+
+    #[test]
+    fn a_directory_entry_carries_its_hash() {
+        let v = Value::Map(vec![
+            (Value::from(112), Value::from(2)),
+            (Value::from(109), Value::from("x\0")),
+            (Value::from(114), Value::from(1)),
+            (Value::from(115), Value::from(3)),
+            (
+                Value::from(104),
+                Value::from("D41D8CD98F00B204E9800998ECF8427E\0"),
+            ),
+        ]);
+        // Lowercased, NUL stripped — the device sends it padded like a name.
+        assert_eq!(
+            parse_slot(&v).unwrap().md5.as_deref(),
+            Some("d41d8cd98f00b204e9800998ecf8427e")
+        );
+    }
+
+    #[test]
+    fn a_hash_field_that_is_not_a_hash_is_dropped() {
+        let v = Value::Map(vec![
+            (Value::from(112), Value::from(2)),
+            (Value::from(104), Value::from("not a hash")),
+        ]);
+        assert_eq!(parse_slot(&v).unwrap().md5, None);
     }
 }

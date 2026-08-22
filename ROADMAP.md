@@ -400,12 +400,13 @@ start capture → do the single thing → stop:
       The `113` checksum (a little-endian word sum, not a CRC) was solved 2026-07-22 and this line
       went on saying it was the blocker; it was not.
       See `docs/protocol.md` "The user IR store".
-- [ ] **IR management — what is left.** **Delete, rename and reorder are not decoded**, so a slot
-      can be overwritten but not emptied. Op **10** is the gap in an otherwise contiguous 9/11/12/13
-      family and is the obvious candidate; probing it needs a slot that is expendable
-      (`fretwire ir-probe`). Also unfinished: how a preset's IR block **references** a user slot vs
-      a built-in cab IR, and a **GUI** IR panel (the backend is done; nothing in the Tauri app
-      exposes it yet).
+- [x] **IR delete and rename** (2026-08-22, verified live) — op **15** `{112:slot}` empties a slot
+      (afterwards it reads field-for-field like one never written), op **10** `{112:slot, 109:name}`
+      renames. Both from `tonepush`'s `PROTOCOL.md`, not from a capture.
+- [ ] **IR management — what is left.** **Reorder** is undecoded and may not exist as an opcode
+      (delete + upload expresses it). Also unfinished: how a preset's IR block **references** a user
+      slot vs a built-in cab IR, and a **GUI** IR panel (the backend is done; nothing in the Tauri
+      app exposes it yet).
 - [ ] **Global / I/O settings** — extend op 25 (`{118:id, 119:value}`); map the id space (only id
       134 known; the preset-load pushes expose more `118/119` ids to catalog).
 - [x] **Save As** (GUI, 2026-06-29) — write the edit buffer to a chosen slot under a new name (op 71);

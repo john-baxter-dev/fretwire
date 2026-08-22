@@ -371,8 +371,12 @@
       <div class="ctrl">
         <span class="cap">{p.name}</span>
         {#if c === "enum"}
+          <!-- The option's value is the wire value, which starts at `enum_base` and not at 0 —
+               `Note Sync` labels 1..=19. Offsetting here keeps read and write on the same entry;
+               indexing the list from 0 displayed one note past the pedal and wrote one short of
+               the pick (issue #8). -->
           <select value={p.value} onchange={(e) => onEnum(block.slot, paired, p.index, Number(e.currentTarget.value))}>
-            {#each p.enum_labels as lbl, i}<option value={i}>{lbl}</option>{/each}
+            {#each p.enum_labels as lbl, i}<option value={i + (p.enum_base ?? 0)}>{lbl}</option>{/each}
           </select>
         {:else if c === "bool"}
           <label class="switch">

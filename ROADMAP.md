@@ -304,6 +304,9 @@ start capture → do the single thing → stop:
       `HX_ModelCatalog.json` for a stated grouping before writing UI.
       Available now without any of that: hide `Note Sync` while `Tempo Sync` is off — that pairing
       *is* unambiguous, being the same ordinal.
+      (The note *values* were off by one until 2026-08-21 — a discrete control's labels span the
+      param's `min..=max`, and `sync_note` starts at 1. Fixed for every enum, issue #8; see STATUS
+      "thirty-first round". Unrelated to the grouping question above.)
 
 ## Phase 7 — Preset & device management
 - [x] **Setlist export** — BUILT (2026-07-07; multi-setlist, cancellable and renamed 2026-08-20;

@@ -84,6 +84,30 @@ fn loads_preset_into_named_editable_blocks() {
     assert_eq!(mix_p.display_name(), "Mix");
     assert_eq!(mix_p.meta.label, None);
 
+    // Note Sync's 19 note values are labelled over the param's own range (`min: 1, max: 19`), not
+    // from 0 — so the wire value indexes the list from `enum_base`. The Tremolo's stored 6 is the
+    // pedal's "1/4"; reading it as `enum_labels[6]` gave "1/4 Triplet", one entry past what the
+    // screen showed, and the dropdown wrote one entry short of the note picked [issue #8].
+    let sync = &ht.params[8].meta;
+    assert_eq!(sync.display_type.as_deref(), Some("sync_note"));
+    assert_eq!((sync.min, sync.max), (Some(1.0), Some(19.0)));
+    assert_eq!(sync.enum_labels.len(), 19);
+    assert_eq!(sync.enum_base(), 1);
+    assert_eq!(sync.enum_label(6), Some("1/4"));
+    assert_eq!(sync.enum_label(1), Some("1/1")); // the first note is value 1, not 0
+    assert_eq!(sync.enum_label(19), Some("1/64 Triplet"));
+    assert_eq!(sync.enum_label(0), None); // below the range the device accepts
+    assert_eq!(sync.enum_label(20), None);
+
+    // A zero-based enum is unaffected: base 0, so value == index.
+    let cab = preset
+        .blocks
+        .iter()
+        .find_map(|b| b.paired_params.iter().find(|p| p.name == "Mic"))
+        .unwrap();
+    assert_eq!(cab.meta.enum_base(), 0);
+    assert_eq!(cab.meta.enum_label(0), Some("57 Dynamic"));
+
     // Params carry UI metadata (range + widget) from the model table, matched by name.
     let mix = ht.params.iter().find(|p| p.name == "Mix").unwrap();
     assert_eq!(mix.meta.min, Some(0.0));

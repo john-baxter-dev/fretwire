@@ -115,8 +115,14 @@ pub struct ParamDto {
     /// `.models` valueType: 0 = enum dropdown, 1 = float knob, 2 = bool switch.
     pub value_type: Option<i64>,
     pub display_type: Option<String>,
-    /// For enum params: ordered option labels; the written value is the index into this list.
+    /// For enum params: ordered option labels. The written value is the label's position **plus
+    /// `enum_base`** — see below.
     pub enum_labels: Vec<String>,
+    /// The wire value of `enum_labels[0]`: a discrete control's labels span the param's `min..=max`,
+    /// which is not always 0 (`Note Sync` is 19 note values over 1..=19). Rendering the list from 0
+    /// showed the note after the one on the pedal and wrote the one before the one picked
+    /// [issue #8]. See [`fretwire_core::editor::ParamMeta::enum_base`].
+    pub enum_base: i64,
     /// For segmented floats (cab mic Angle: 0°/45°): the discrete stops — render as buttons; the
     /// stop's `value` is written via the ordinary float path. Empty for continuous params.
     pub stops: Vec<SegStopDto>,
@@ -178,6 +184,7 @@ impl From<&EditorParam> for ParamDto {
             value_type: p.meta.value_type,
             display_type: p.meta.display_type.clone(),
             enum_labels: p.meta.enum_labels.clone(),
+            enum_base: p.meta.enum_base(),
             stops: p
                 .meta
                 .stops

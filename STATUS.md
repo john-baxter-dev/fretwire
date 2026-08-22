@@ -2516,3 +2516,34 @@ That needs a diff experiment on a Floor, whose 8 switches and 2 expression pedal
 ID space, before any UI work is worth starting.
 
 Five captures are now named in `ROADMAP.md` Phase 1 — each a single action in HX Edit.
+
+## Thirty-first round (2026-08-21): **every discrete enum was read one entry off its range** [solid]
+
+Issue #8, found while verifying #7: switch a delay's Time knob to tempo sync and the pedal shows
+`1/4` where fretwire showed `1/4 Triplet` — the next entry down the list. In the other direction,
+picking `1/4 Dotted` in the GUI moved the pedal to `1/2 Trip`, and picking the very first note (`1/1`)
+moved the pedal to `1/1` and then snapped the GUI to `1/2 Dotted`.
+
+`ParamMeta::enum_labels` is `HelixControls.json[displayType].format`, and we indexed it with the raw
+wire value. But a discrete control's label list covers the param's **`min..=max`**, not `0..=max`:
+`sync_note` is 19 notes over `min: 1, max: 19`. So the value is `min + position`, and reading it as a
+bare index shows the label one past the truth. Writing had the same skew — the `<option>` value was
+the list position, so the device got one less than intended, and position 0 wrote a `0` the device
+clamped back up to 1 (which is why `1/1` looked half-right: the pedal landed correctly and the
+read-back then displayed `labels[1]`).
+
+Not a `sync_note` special case. Across the shipped `.models` files every labelled enum whose range
+doesn't start at 0 has exactly `max - min + 1` labels — `ir_select` (1..=128), the Variax tunings
+(-12..=12), `pitch_shift` (-8..=8), `crisscross_wave_shape` (2..=3), `synthharmony_interval1`
+(1..=8). The negative-min ones were worse than off-by-one: a raw value of `-3` indexed nothing, so
+those dropdowns had no selected entry at all. `sync_note` is simply the one that got looked at,
+because it is on 121 params across 107 models and has a screen next to it to disagree with.
+
+`ParamMeta::enum_base()` (= `min`, or 0) and `ParamMeta::enum_label(value)` now own the rule; the CLI
+formats through it, `ParamDto` ships `enum_base` and the panel offsets its `<option>` values by it,
+so read and write move together. A catalog-wide test asserts the `max - min + 1` invariant over
+every offset enum in the data rather than pinning the one control, and the mock's delay carries a
+1-based `Note Sync` so the offset is exercised in the browser.
+
+Still separate rows, not the compound Time control — that remains blocked on evidence (ROADMAP
+Phase 6), and it was the *labels* that were wrong here, not the decision to list them.

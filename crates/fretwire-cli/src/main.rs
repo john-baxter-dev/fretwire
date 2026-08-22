@@ -1347,10 +1347,7 @@ fn fmt_param(p: &fretwire_core::editor::EditorParam) -> String {
     let raw = fmt_value(p.value);
     let pretty = match p.value {
         Float(f) => p.meta.format.as_ref().and_then(|nf| nf.display(f.into())),
-        Int(i) => usize::try_from(i)
-            .ok()
-            .and_then(|i| p.meta.enum_labels.get(i))
-            .cloned(),
+        Int(i) => p.meta.enum_label(i).map(str::to_string),
         Bool(_) => None,
     };
     match pretty {

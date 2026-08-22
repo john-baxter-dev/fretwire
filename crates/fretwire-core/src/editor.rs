@@ -86,10 +86,14 @@ pub struct ParamMeta {
     /// The param's `valueType` from `.models`: `0` = integer enum (rendered as a dropdown), `1` =
     /// float knob (slider), `2` = bool switch. `None` if the model didn't describe it.
     pub value_type: Option<i64>,
-    /// For an enum param (`value_type == 0`), the ordered option labels — the value written is the
-    /// **index** into this list. Sourced from `HelixControls.json[display_type].format` when that
-    /// control is `isDiscrete` (e.g. the cab `Mic` selector → "57 Dynamic", "421 Dynamic", …).
-    /// Empty when the param isn't a known discrete enum.
+    /// For an enum param (`value_type == 0`), the ordered option labels. Sourced from
+    /// `HelixControls.json[display_type].format` when that control is `isDiscrete` (e.g. the cab
+    /// `Mic` selector → "57 Dynamic", "421 Dynamic", …). Empty when the param isn't a known
+    /// discrete enum.
+    ///
+    /// The list spans the param's **`min..=max`**, so the value written is the label's position
+    /// plus [`Self::enum_base`] — *not* its bare index. Most enums start at 0 and the two agree;
+    /// the ones that don't are why [`Self::enum_label`] exists. See it for the evidence.
     pub enum_labels: Vec<String>,
     /// For a **segmented float** (a float param HX Edit renders as a few discrete positions, e.g.
     /// the cab mic `Angle`: 0°/45°): the allowed stops. The value written is the stop's `value`
@@ -111,6 +115,29 @@ pub struct ParamMeta {
     /// centre. What a double-click on the control resets to. `None` for the routing nodes, whose
     /// params aren't in the `.models` files at all.
     pub default: Option<f64>,
+}
+
+impl ParamMeta {
+    /// The wire value of the **first** entry in [`Self::enum_labels`] — the param's `min`, or 0
+    /// when the model table doesn't bound it.
+    ///
+    /// A discrete control's label list covers `min..=max`, not `0..=max`: `sync_note` is 19 note
+    /// values over `min: 1, max: 19`, `ir_select` is 128 over `1..=128`, the Variax tunings are 25
+    /// over `-12..=12`. Every enum in the shipped data whose `min` isn't 0 has exactly
+    /// `max - min + 1` labels, so the offset is the rule and not a `sync_note` special case.
+    ///
+    /// [issue #8 — reading the list from 0 showed the note *after* the one on the pedal's screen,
+    /// and writing an index moved the pedal one step short of the note that was picked.]
+    pub fn enum_base(&self) -> i64 {
+        self.min.filter(|m| m.is_finite()).unwrap_or(0.0) as i64
+    }
+
+    /// The label a wire value reads as, or `None` when this param is not a labelled enum or the
+    /// value falls outside the list.
+    pub fn enum_label(&self, value: i64) -> Option<&str> {
+        let i = usize::try_from(value - self.enum_base()).ok()?;
+        self.enum_labels.get(i).map(String::as_str)
+    }
 }
 
 /// One position of a segmented float control (see [`ParamMeta::stops`]).
@@ -1817,6 +1844,34 @@ mod tests {
             .expect("Level has a display format");
         assert_eq!(lvl.display(0.0).as_deref(), Some("+0.0 dB"));
         assert_eq!(lvl.display(-4.89).as_deref(), Some("-4.9 dB"));
+    }
+
+    /// The offset rule behind [`ParamMeta::enum_base`], checked against the whole shipped catalog
+    /// rather than the one control that exposed it. Every labelled enum whose range doesn't start
+    /// at 0 has exactly one label per value in `min..=max` — so `value - min` is the index, and a
+    /// data drop that broke that would fail here instead of silently shifting a dropdown by one.
+    #[test]
+    fn a_labelled_enum_covers_its_declared_range() {
+        let meta = dev_catalog().param_meta;
+        let mut offset_enums = 0;
+        for (model, params) in &meta {
+            for (name, m) in params {
+                if m.enum_labels.is_empty() || m.enum_base() == 0 {
+                    continue;
+                }
+                let (min, max) = (m.min.unwrap(), m.max.unwrap());
+                assert_eq!(
+                    m.enum_labels.len(),
+                    (max - min) as usize + 1,
+                    "{model}.{name} ({:?}) labels {min}..={max}",
+                    m.display_type
+                );
+                assert_eq!(m.enum_label(min as i64), Some(m.enum_labels[0].as_str()));
+                offset_enums += 1;
+            }
+        }
+        // sync_note alone is on 100+ models; a zero here would mean the check stopped checking.
+        assert!(offset_enums > 100, "only {offset_enums} offset enums seen");
     }
 
     #[test]

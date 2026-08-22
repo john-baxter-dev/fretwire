@@ -933,19 +933,50 @@ impl PresetStream {
 }
 
 /// A footswitch/controller assignment from the preset's assignment table (key `4`).
+///
+/// Corrected against live hardware 2026-08-21 — see the field notes. The previous reading took its
+/// key numbering from the *request* that makes an assignment (op 37), where the same information is
+/// keyed differently; every field below that says "not key N" is a place those two disagree.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Assignment {
-    /// Controller/footswitch number (assignment-table index, echoed at inner key `0`).
+    /// Source ordinal — which physical control drives this. It is the entry's index in the key-`4`
+    /// array, and inner key `0` echoes it.
+    ///
+    /// **FS1 = 3, FS2 = 4** [solid — assigned each in turn on a Stomp and diffed the document].
+    /// Consecutive, so FS3 = 5 is the obvious inference but is untested. `tonepush`'s notes put
+    /// EXP1 at 1, which fits the same run and is [unverified] here.
     pub controller: i64,
-    /// Controller type (inner key `1`; e.g. 4 = footswitch). Raw — semantics TBD.
+    /// Inner key `1`. **Not** parameter-vs-bypass: all three assignments captured here are
+    /// parameters, and two of them carry `0`. [solid as a refutation — `tonepush` documents this key
+    /// as "4 a parameter, 0 a bypass"; `Time` and `Mix` are parameters with key `1` = 0.]
+    ///
+    /// What it *is* reads as the target's **value type** — `0` on both continuous parameters,
+    /// `4` on the boolean `OD Switch`. [hypothesis — three samples, no counter-example.]
+    ///
+    /// To tell a parameter entry from a bypass entry, test for key `6` (the parameter reference)
+    /// rather than this key.
     pub ctype: Option<i64>,
     /// Target block slot the control drives (inner key `5`).
     pub target_slot: Option<i64>,
-    /// Target parameter index within that block (inner key `6 → 28`).
+    /// Target parameter index within that block — inner key `6 → 29`.
+    ///
+    /// **Key `29`, not `28`.** `28` is the model path and is `0` on everything observed, so reading
+    /// it reported parameter 0 for every assignment in every preset. [solid — assigning `Mix`
+    /// (index 2) to FS2 and diffing the document gives `6: {28: 0, 29: 2}`; `Time` (index 0) on FS1
+    /// gives `{28: 0, 29: 0}`, which is why the old reading looked right whenever the target
+    /// happened to be parameter 0.]
     pub param_index: Option<i64>,
-    /// Min / max values the control sweeps between (inner keys `4` / `7`).
-    pub min: Option<i64>,
-    pub max: Option<i64>,
+    /// Model path the parameter lives on (inner key `6 → 28`) — `0` on every sample so far.
+    pub path: Option<i64>,
+    /// The ends of the control's travel (inner keys `2` and `3`), in the parameter's own raw units.
+    ///
+    /// Kept as raw [`Value`] because the type follows the parameter: `false`/`true` for a switch,
+    /// `0`/`1` for a 0..1 knob, `0`/`8` for a delay time.
+    ///
+    /// **Not keys `4`/`7`**, which have been `0` on all three samples — the old reading reported
+    /// every sweep as `0 → 0`. [solid]
+    pub min: Option<Value>,
+    pub max: Option<Value>,
 }
 
 /// One snapshot's stored state, from a preset's key `10 → 10` array.
@@ -1042,9 +1073,26 @@ impl PresetStream {
         (active, names)
     }
 
-    /// Decode the footswitch/controller assignment table (preset key `4`, `Array[10]`). Returns
-    /// only populated entries. Each is `Array[1]` of `{0:0, 1: {0:ctrl, 1:type, 5:slot,
-    /// 6:{28:param}, 4:min, 7:max, …}}`. [partial — structure verified live, some flags raw]
+    /// Decode the footswitch/controller assignment table (preset key `4`, `Array[10]`).
+    ///
+    /// The array is indexed by **source ordinal** — one entry per physical control, `nil` where
+    /// that control drives nothing.
+    ///
+    /// **Only parameter controllers live here.** Assigning a block's *bypass* to a footswitch does
+    /// not touch this table at all — that goes to `3 → 8`, the footswitch layout, as a node of type
+    /// `1` (see [`Self::footswitch_layout`]). [solid — assigning a Simple Delay's bypass to FS1 on a
+    /// Stomp leaves key `4` entirely `nil`.] `tonepush` shows a bypass *inside* key 4, but its
+    /// example is a wah's auto-engage on an expression pedal, which is a different feature. A populated entry is an array of `{0: place-in-table, 1: def}`,
+    /// one per assignment on that source, and the def is
+    /// `{0: source, 1: value-type, 2: min, 3: max, 5: slot, 6: {28: path, 29: param}, …}`.
+    ///
+    /// All of them are returned, not just the first: one source can drive several things (an
+    /// expression pedal on both a parameter and a bypass is the ordinary case), and taking
+    /// `first()` silently dropped the rest.
+    ///
+    /// [solid for source ordinal, parameter index and travel — each pinned by a live diff on a
+    /// Stomp, 2026-08-21. See [`Assignment`] for what each key means and which readings it
+    /// replaced.]
     pub fn assignments(&self) -> Vec<Assignment> {
         let table = match self.field(4) {
             Some(Value::Array(a)) => a,
@@ -1053,21 +1101,31 @@ impl PresetStream {
         table
             .iter()
             .enumerate()
-            .filter_map(|(i, entry)| {
-                let def = match entry {
-                    Value::Array(a) => map_get(a.first()?, 1)?,
-                    _ => return None,
+            .flat_map(|(i, entry)| {
+                let items: &[Value] = match entry {
+                    Value::Array(a) => a,
+                    _ => &[],
                 };
-                let g = |k: i64| map_get(def, k).and_then(Value::as_i64);
-                Some(Assignment {
-                    controller: g(0).unwrap_or(i as i64),
-                    ctype: g(1),
-                    target_slot: g(5),
-                    param_index: map_get(def, 6)
-                        .and_then(|p| map_get(p, 28))
-                        .and_then(Value::as_i64),
-                    min: g(4),
-                    max: g(7),
+                items.iter().filter_map(move |item| {
+                    let def = map_get(item, 1)?;
+                    let g = |k: i64| map_get(def, k).and_then(Value::as_i64);
+                    // Key 6 carries the parameter as `{28: path, 29: index}` — the reverse of the
+                    // op-37 request, where 28 is the index. Reading the request's shape here made
+                    // every assignment report parameter 0.
+                    let p = |k: i64| {
+                        map_get(def, 6)
+                            .and_then(|m| map_get(m, k))
+                            .and_then(Value::as_i64)
+                    };
+                    Some(Assignment {
+                        controller: g(0).unwrap_or(i as i64),
+                        ctype: g(1),
+                        target_slot: g(5),
+                        param_index: p(29),
+                        path: p(28),
+                        min: map_get(def, 2).cloned(),
+                        max: map_get(def, 3).cloned(),
+                    })
                 })
             })
             .collect()
@@ -1856,26 +1914,44 @@ mod list_tests {
         );
     }
 
+    /// One source driving **two** things at once — the case no capture we hold demonstrates, and
+    /// the one the old `first()`-only decoder silently dropped half of. Shaped after `tonepush`'s
+    /// documented example (an expression pedal on both a parameter and a bypass); synthetic on
+    /// purpose, because every real fixture here has at most one assignment per source.
+    ///
+    /// The single-assignment path is covered against real captures in `tests/assignments.rs`.
     #[test]
-    fn parses_assignments() {
-        // Mirrors preset 20: footswitch 7 -> slot 15, param 0.
-        let def = Value::Map(vec![
-            (Value::from(0), Value::from(7)),
-            (Value::from(1), Value::from(4)),
-            (Value::from(4), Value::from(0)),
-            (Value::from(5), Value::from(15)),
-            (
-                Value::from(6),
-                Value::Map(vec![(Value::from(28), Value::from(0))]),
-            ),
-            (Value::from(7), Value::from(0)),
+    fn parses_every_assignment_on_one_source() {
+        let def = |place: i64, param: i64| {
+            Value::Map(vec![
+                (Value::from(0), Value::from(1)),
+                (Value::from(1), Value::from(0)),
+                (Value::from(2), Value::from(0.25f32)),
+                (Value::from(3), Value::from(0.75f32)),
+                (Value::from(4), Value::from(0)),
+                (Value::from(5), Value::from(place)),
+                (
+                    Value::from(6),
+                    Value::Map(vec![
+                        (Value::from(28), Value::from(0)),
+                        (Value::from(29), Value::from(param)),
+                    ]),
+                ),
+                (Value::from(7), Value::from(0)),
+            ])
+        };
+        let entry = Value::Array(vec![
+            Value::Map(vec![
+                (Value::from(0), Value::from(0)),
+                (Value::from(1), def(1, 4)),
+            ]),
+            Value::Map(vec![
+                (Value::from(0), Value::from(1)),
+                (Value::from(1), def(2, 9)),
+            ]),
         ]);
-        let entry = Value::Array(vec![Value::Map(vec![
-            (Value::from(0), Value::from(0)),
-            (Value::from(1), def),
-        ])]);
         let mut table = vec![Value::Nil; 10];
-        table[7] = entry;
+        table[1] = entry;
         let preset = Value::Map(vec![(Value::from(4), Value::Array(table))]);
         let ps = PresetStream {
             magic: "l6-helix".to_string(),
@@ -1884,11 +1960,15 @@ mod list_tests {
             header_slots: Vec::new(),
         };
         let a = ps.assignments();
-        assert_eq!(a.len(), 1);
-        assert_eq!(a[0].controller, 7);
-        assert_eq!(a[0].ctype, Some(4));
-        assert_eq!(a[0].target_slot, Some(15));
-        assert_eq!(a[0].param_index, Some(0));
+        assert_eq!(a.len(), 2, "both assignments on the source must survive");
+        assert_eq!(a[0].target_slot, Some(1));
+        assert_eq!(a[0].param_index, Some(4));
+        assert_eq!(a[1].target_slot, Some(2));
+        assert_eq!(a[1].param_index, Some(9));
+        // Both report the source they hang off, not their place in the table.
+        assert_eq!((a[0].controller, a[1].controller), (1, 1));
+        assert_eq!(a[0].min, Some(Value::from(0.25f32)));
+        assert_eq!(a[0].max, Some(Value::from(0.75f32)));
     }
 
     #[test]

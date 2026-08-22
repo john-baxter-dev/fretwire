@@ -1335,8 +1335,31 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
                 .target_slot
                 .map(|s| format!("slot {s}"))
                 .unwrap_or_else(|| "?".into());
-            println!("  controller {} -> {}{}", a.controller, slot, param);
+            let travel = match (&a.min, &a.max) {
+                (Some(lo), Some(hi)) => format!("  [{lo} -> {hi}]"),
+                _ => String::new(),
+            };
+            println!(
+                "  {} -> {}{}{}",
+                source_name(a.controller),
+                slot,
+                param,
+                travel
+            );
         }
+    }
+}
+
+/// Name the physical control an assignment's source ordinal refers to.
+///
+/// FS1 = 3 and FS2 = 4 are [solid] — each was assigned on a Stomp and the document diffed. The rest
+/// are inferred from that run being consecutive and from `tonepush`'s notes putting EXP1 at 1, so
+/// anything unproven prints as a bare ordinal rather than a guess with a confident label on it.
+fn source_name(ordinal: i64) -> String {
+    match ordinal {
+        3 => "FS1".into(),
+        4 => "FS2".into(),
+        n => format!("controller {n}"),
     }
 }
 

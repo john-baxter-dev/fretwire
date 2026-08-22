@@ -210,13 +210,39 @@ of a `Map{7}` node:
   param-descriptor shape used in the assignment table — see below). [solid — verified live]
 - `14` = user label string; `13` = has-label flag (e.g. a `Harmonic Tremolo` renamed `Tremolo`).
 
-### Controllers / footswitch assignments (`4`), snapshots (`10`/`2`) [partial — 2026-06-24]
-- **`4` = `Array[10]`** — **parameter**-controller assignment table. A populated entry is `Array[1]`
-  of `{0:0, 1: Map{9}}` where the inner map is `{0:<controller#>, 1:<type>, 4:<min>, 5:<target slot>,
-  6:{28:<param idx>, 29, 41}, 7:<max>, …}` — i.e. *controller N drives slot/param*. Example: a
-  Dual-Amp preset's entry `[7]` = controller 7 → slot 15 param 0 (an amp drive switch on a footswitch).
-  The controller-number → physical-control (which footswitch / EXP) mapping is **not yet decoded** —
-  HX's internal controller-ID scheme; needs a diff experiment or docs.
+### Controllers / footswitch assignments (`4`), snapshots (`10`/`2`) [solid — corrected 2026-08-21]
+- **`4` = `Array[10]`** — **parameter**-controller assignment table, **indexed by source ordinal**:
+  one position per physical control, `nil` where that control drives nothing. A populated entry is an
+  `Array` of `{0:<place in table>, 1: Map}` — **one item per assignment on that source**, so a control
+  driving two things has two items. The inner map is
+  `{0:<source>, 1:<value type>, 2:<min>, 3:<max>, 5:<target slot>, 6:{28:<path>, 29:<param idx>, 41}, …}`.
+- **The parameter index is `6 → 29`; `6 → 28` is the model path.** This is the reverse of the op-37
+  *request* that creates an assignment, where 28 carries the index — and reading the request's shape
+  here reported parameter 0 for every assignment in every preset, because the path is 0 throughout.
+  [solid — assigning `Mix` (index 2) to FS2 on a Stomp and diffing gives `6: {28: 0, 29: 2}`;
+  `captures/assign_two_footswitches.msgpack.bin`, pinned by `fretwire-data/tests/assignments.rs`.]
+  The bug hid for as long as it did because an assignment onto parameter 0 reads correctly either way.
+- **The travel ends are keys `2` and `3`, not `4`/`7`** (which are `0` on every sample held). They are
+  in the parameter's own raw units and follow its type: `false`/`true` for a switch, `0`/`1` for a
+  0..1 knob, `0`/`8` for a delay time. [solid — three samples]
+- **Source ordinal → physical control:** **FS1 = 3, FS2 = 4** [solid — assigned each in turn and
+  diffed]. Consecutive, so FS3 = 5 is the obvious inference but is untested. `tonepush`'s notes put
+  **EXP1 = 1**, which fits the same run; [unverified] here for want of an expression pedal.
+- **Only parameter controllers live in key `4`.** Assigning a block's **bypass** to a footswitch
+  does not touch this table — that is recorded in `3 → 8` as a type-1 node, which we already read.
+  [solid — assigning a Simple Delay's bypass to FS1 leaves key `4` entirely `nil`;
+  `captures/assign_bypass_on_fs1.msgpack.bin`.] `tonepush` shows a bypass *inside* key 4, but its
+  example is a wah auto-engaging off an expression pedal — a different feature, and probably the only
+  way a bypass reaches this table.
+- **Key `1` is not parameter-vs-bypass** [solid as a refutation]. `tonepush` documents it as
+  "4 a parameter, 0 a bypass"; every assignment we have captured is a parameter and two of the three
+  carry `0`. To tell the two apart, test for the presence of key `6` (the parameter reference).
+  What key `1` *is* reads as the target's **value type** — `0` on both continuous parameters
+  (`Time`, `Mix`), `4` on the boolean one (`OD Switch`). [hypothesis — three samples, no
+  counter-example.]
+- Worked example: the Dual-Amp preset's entry `[7]` is controller 7 → slot 15 **param 9**, the
+  Grammatico GSG's `OD Switch`, swept `false`→`true`. (Previously recorded here as "param 0, an amp
+  drive switch" — the description was right, the index was the bug above.)
 - **`3 → 8` is the footswitch / stomp layout, not the signal path.** Each array position is a
   footswitch; a populated entry names the block whose **bypass** that switch toggles (with its slot
   at `11 → 8`). Empty position = unbound switch (FS3 is the global tap/tuner). **A block's bypass

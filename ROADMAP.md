@@ -288,14 +288,24 @@ start capture → do the single thing → stop:
       **Needs the captures below.** Risk worth pricing in before starting: HX Edit may not use a
       dedicated op at all but rewrite the preset via op 21, which turns this into "construct a type-2
       node" — and that shape is only partly decoded (`6` is not a model id, `11 → 9` = `{28,29,41}`).
-- [ ] **Parameter controllers** (EXP pedal / a switch driving a param — preset key `4`). Blocked
-      *before* the write side: reading is **[partial]**. We decode the table's shape (controller # →
-      slot/param, min, max) but **not** which physical control a controller number is, so we cannot
-      honestly display "Wah is on EXP1", never mind set it. Needs a deliberate diff experiment before
-      any UI: assign one param to FS1, then EXP1, then a high-numbered switch, and diff the
-      controller numbers; then the min/max/type semantics; then the write op. **Best captured on a
-      Helix Floor** — 8 switches and two expression pedals sample the ID space, where a Stomp's 3
-      switches would leave most of it unexplored.
+- [x] **Parameter controllers — reading** (EXP pedal / a switch driving a param — preset key `4`).
+      **Unblocked 2026-08-21.** The diff experiment was run on a Stomp: assign a param to FS1, then a
+      second to FS2, and diff the document each time. Key `4` is indexed by **source ordinal**
+      (**FS1 = 3, FS2 = 4**; `tonepush` puts EXP1 at 1), the parameter index is `6 → 29` not `6 → 28`,
+      and the travel is keys `2`/`3` not `4`/`7` — all three were being read wrong, so every
+      assignment reported "param 0, 0 → 0". Fixed in `PresetStream::assignments`, pinned by
+      `fretwire-data/tests/assignments.rs`, written up in `docs/preset-format.md`. `pull` now prints
+      `FS1 -> slot 16 param 0  [0 -> 8]`.
+- [ ] **Parameter controllers — the rest.** Three follow-ups, none blocking:
+      - Confirm **EXP1 = 1** and the ordinals past FS2. Needs an expression pedal; a Stomp's three
+        switches leave most of the ID space unsampled, so a **Helix Floor** (8 switches, 2 pedals)
+        remains the better instrument for the full map.
+      - Decide **key `1`** positively. Their "4 a parameter, 0 a bypass" is now **refuted** — a
+        footswitch bypass never enters key `4` (it goes to `3 → 8`), and our parameter samples carry
+        both 0 and 4. "Value type" fits all three; confirming it wants a wider sample, and a key-4
+        bypass entry probably requires an expression pedal doing wah auto-engage.
+      - The **write op is `37`** per `tonepush` (`{98: block, 95: target, 96: scope, 74: flags,
+        71: MIDI CC}`) — untested here, and worth verifying by capture before we send one.
 
 - [ ] **Tempo-sync as one control** (issue #5) — HX Edit and the pedal both fold `TempoSync{n}` /
       `SyncSelect{n}` into the time knob: switch sync on and the knob becomes a note-value selector

@@ -988,9 +988,16 @@ the whole preset.
     FS3 -> {102: 2, 65: false, 109: nil, 66: nil, 67: nil}
 
 Key `102` is the switch index, **zero-based**, so the one-based argument the CLI takes is ours and
-not the wire's. `65` is a bool that is false on all three; `109` is the key that carries a *name*
-elsewhere in this protocol (it is the IR name), so a custom switch label is the obvious reading;
-`66` and `67` are the two remaining slots, one of which is presumably the LED colour.
+not the wire's — that much is `[solid]`, confirmed across three switches.
+
+Everything else is `[hypothesis]`: `65` momentary, `109` label, `66` colour, `67` assignments. `109`
+carries a *name* elsewhere in this protocol (it is the IR name), which is a suggestive analogy and
+not an observation. **An HX Stomp cannot set a custom switch label from its own panel** — that is an
+HX Edit feature — so if `109` is the label, this device may never move it on its own, and the key
+would have to be confirmed by writing it.
+
+`67` is the cheap one: assign a block to a switch and re-read. Nothing else in the record should
+move, and a key that goes from `nil` to a value in that single step is named.
 
 **All of it is `nil` here because nothing on this preset has been customised**, which is exactly why
 the shape is decodable and the meanings are not. Setting a colour and a label on one switch from the

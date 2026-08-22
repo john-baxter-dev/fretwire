@@ -2184,12 +2184,19 @@ impl Session {
         out
     }
 
-    /// Ask the device what footswitch `switch` carries — its assignments, label, LED colour and
-    /// latching type (op 33). **`switch` is one-based**: 1 is Footswitch 1.
+    /// Ask the device for footswitch `switch`'s record (op 33). **`switch` is one-based**: 1 is
+    /// Footswitch 1.
     ///
-    /// Pure read; returns the decoded reply as-is, because the reply's own key space is only
-    /// partly mapped: `{102: switch0, 65: momentary, 109: label, 66: colour, 67: assignments}`.
-    /// [solid — verified live on an HX Stomp 2026-08-22]
+    /// Pure read, returning the reply as-is, because its key space is barely mapped. The **shape**
+    /// is `{102, 65, 109, 66, 67}` [solid — live HX Stomp, 2026-08-22], and `102` is the switch
+    /// index, zero-based, confirmed across FS1-3.
+    ///
+    /// The other four are **`[hypothesis]`**: `65` momentary, `109` label, `66` colour, `67`
+    /// assignments. Every one of them read `nil` on all three switches of a preset with nothing
+    /// customised, which is precisely why they are unconfirmed — `109` carrying a name elsewhere in
+    /// this protocol is a suggestive analogy, not an observation. Assigning a block to a switch and
+    /// re-reading would settle `67` on its own. (This block previously carried the whole mapping
+    /// under a `[solid]` tag; only the shape had ever been checked.)
     pub fn read_switch(
         &mut self,
         switch: i64,

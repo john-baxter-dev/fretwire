@@ -3211,3 +3211,62 @@ entry claims nothing but its PID.
 vendor interface layout across every family member whose descriptors we have seen — but that is
 inference, and the tier says so. One `fretwire pull` from an owner would settle its model code and
 its preset geometry in a single reply.
+
+## Forty-sixth round (2026-08-23): **eight Ins/Outs ids, from a second pedal (PR #11)**
+
+Robert Tsai owns an HX Stomp XL and ran the loop this repo documents — change one thing on the
+pedal's menus, dump, diff — on the one section nobody here could reach. **Five new ids:** `2` and
+`3` (send/return L and R level), `153` (USB in 1/2 trim), `154` (return type: aux in / return), and
+`158` (phones monitor: main L/R / send). Three more got the pedal's own wording rather than ours:
+`31` **Input Level**, `94` **Output Level**, and `156` **Volume Controls**, whose two positions the
+XL calls **Phones** and **Main+HP** — the same two states the owner of the first pedal had described
+in prose, now in the menu's words.
+
+That is 27 ids in the table and 28 identified, against 166 that answer.
+
+### The first entries not read off a Stomp
+Every row in `settings` until now came from one HX Stomp. Five now come from an XL, and they are
+marked `[XL]` at the entry, the same way the Floor's setlist names and the factory EQ carry the unit
+they were seen on. It costs nothing to be wrong about which pedal has which id: `scan_settings`
+treats a refusal as absence, and `settings_read` asks for exactly the ids we can name, so an id the
+XL has and a Stomp doesn't is simply not a row on a Stomp. `3` is the one to watch — whether a plain
+Stomp answers it at all is unchecked.
+
+### Two orders, because the table has two readers
+The PR put the Ins/Outs rows in menu order, which is what the panel wanted, and broke
+`ids_are_unique_and_sorted` doing it — the table had been declared id-ordered and tested for it. The
+reviewer's own objection was the better argument for keeping that: a table you can only search with
+a text editor is worse to work in, and every one of these ids is looked up by number.
+
+So both, and neither implied by the other. `SETTINGS` stays in id order. `MENU_ORDER` is a list of
+**ids** in the order the pedal's screen lists them, `menu_rank` gives an unplaced id a rank past the
+end, and `settings_read` sorts its rows by `(menu_rank, id)`. The panel is unchanged — it still
+renders each group in the order the rows arrive — and now the raw sweep gets the same ordering the
+named view does, which it previously didn't. The mock carries the same two lists, since it is the
+thing the browser dev loop renders.
+
+### `127` is **Auto In-Z**. The old name was invented here, not misheard
+The XL has no *Guitar In-Z* anywhere in Global Settings; it has a two-valued **Auto In-Z**
+(`First` / `Enabled`), tenth under **Preferences**. `127` has only ever shown `0` and `1` — a poor
+fit for an impedance list and an exact one for a two-position setting.
+
+The first guess was that the sweep log had mis-transcribed it. It hadn't. The pedal's owner only
+ever called it *Auto In-Z*, which is what the pedal showed, and `git log -S` puts the string's whole
+history in one commit: `07d20ad`, the thirty-eighth round's write-up, where **Guitar In-Z** appears
+already formed in `STATUS.md`, the CLI gloss and `docs/protocol.md` at once. Nothing was
+transcribed. A Helix setting that sounds like the real one got written down in its place, and the
+**Ins/Outs** group followed, because Ins/Outs is where a Helix keeps *Guitar In-Z*.
+
+That is the part worth keeping. The same entry carefully refused to name its two values —
+`Kind::Choice(&[])`, with a comment about not labelling from memory — while carrying a name nobody
+had read off a menu. The rule this table states about values was never applied to the `name` field,
+and the invented name was the more visible half: it put the row in the wrong section of the panel,
+next to eight real Ins/Outs ids, where it looked like it belonged for a day. It took an owner of a
+*different* pedal to notice, which is not a review process.
+
+**Still open, and bigger than one id:** every name here that nobody has quoted off a menu is now
+suspect on the same grounds. `156` was already corrected by its owner (*Volume Controls*, not
+"volume knob assignment"), and `31`/`94` by the XL's. A single walk through Global Settings with the
+table open would settle the rest. And `127`'s two values are still unnamed — `0` and `1` were seen
+with the menu entry unrecorded either side, so which one is `First` isn't recoverable after the
+fact.

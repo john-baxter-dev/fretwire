@@ -548,16 +548,18 @@ real session.
       like the rest (effects only, no amps or cabs), so nothing is inherited from the Stomp.
       **Still open:** everything else. One `pull` from an owner would settle its model code and
       preset geometry.
-- [x] **Global settings — op 24 reads, op 25 writes, 19 ids named (2026-08-22).** The namespace is
+- [x] **Global settings — op 24 reads, op 25 writes, 27 ids named (2026-08-22, and eight Ins/Outs
+      ids from an HX Stomp XL owner on 2026-08-23).** The namespace is
       flat and numbered; a 601-id sweep costs 1.4 s, so `settings-dump` / `settings-diff` maps it
       with no capture at all. `fretwire_protocol::settings` is the shared table, the CLI has
       `setting-get`/`setting-set`, and the GUI has a **Globals** panel. Id 27 (preset numbering)
       retired the manual toggle it was blocking.
       The global EQ is fully mapped: `190`-`200`, three bands of frequency/Q/gain then the two
       cuts, and the GUI draws it as a response curve.
-      **Still open:** 143 answering ids are unidentified; `127` (Guitar In-Z) has observed values
-      with no recorded menu entries; `201`-`203` are unknown (an earlier "global EQ" gloss was
-      withdrawn). Writes are gated to identified ids only.
+      **Still open:** 138 answering ids are unidentified; `127` (**Auto In-Z**, renamed from a
+      mis-transcribed "Guitar In-Z" on 2026-08-23) has two observed values and neither is named;
+      `201`-`203` are unknown (an earlier "global EQ" gloss was withdrawn). Writes are gated to
+      identified ids only.
 
 - [x] **The footswitch record is decoded (2026-08-22).** Op 33 returns
       `{102: switch (zero-based), 65: ?, 109: label, 66: ?, 67: [assignments]}`, and an assignment is

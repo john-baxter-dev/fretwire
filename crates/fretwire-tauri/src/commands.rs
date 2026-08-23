@@ -1277,7 +1277,7 @@ mod numbering_tests {
 
 /// The device's global settings. **Reads only.**
 ///
-/// `all = false` reads just the identified ids — 19 reads, instant. `all = true` sweeps the whole
+/// `all = false` reads just the identified ids — 27 reads, instant. `all = true` sweeps the whole
 /// answering space (nothing above 226 responds on an HX Stomp) and includes the unidentified ids as
 /// `kind: "raw"`, which is what makes the panel usable for mapping the rest.
 #[tauri::command]
@@ -1291,10 +1291,16 @@ pub async fn settings_read(state: State<'_, AppState>, all: bool) -> R<Vec<Setti
             // unimplemented id on some other device is then simply absent, not an error.
             s.scan_settings(settings::SETTINGS.iter().map(|d| d.id))
         };
-        Ok(found
+        let mut rows: Vec<SettingDto> = found
             .iter()
             .map(|(id, v)| SettingDto::new(*id, v))
-            .collect())
+            .collect();
+        // The panel renders each group in the order the rows arrive, so this is where the pedal's
+        // own menu order gets applied. `settings::SETTINGS` stays in id order for the sake of
+        // reading it; an id nobody has placed in a menu keeps its numeric position, after the
+        // placed ones.
+        rows.sort_by_key(|r| (settings::menu_rank(r.id), r.id));
+        Ok(rows)
     })
     .await
 }

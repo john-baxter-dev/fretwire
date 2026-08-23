@@ -158,11 +158,15 @@ the ordinary edit envelope and are not block-addressed.
 **166 of ids 0..=600 answer on an HX Stomp** — nothing above 226 answers, so that is the ceiling
 rather than an artefact of where we stopped looking.
 
-**23 are identified.** All were read off a physical HX Stomp by changing one setting on the pedal's
-own menus and diffing two dumps [solid — 2026-08-22]:
+**28 are identified.** All were read off a physical pedal by changing one setting on its own menus
+and diffing two dumps: an HX Stomp [solid — 2026-08-22], plus the five marked **XL**, which came
+from an HX Stomp XL owner working the same loop [solid — 2026-08-23, PR #11]. An id one unit has and
+the other doesn't simply refuses on the other, and `scan_settings` reads a refusal as absence.
 
 | id | setting | type | values |
 |---|---|---|---|
+| 2 | send/return L level | `bool` | `true` line, `false` instrument — **XL** |
+| 3 | send/return R level | `bool` | `true` line, `false` instrument — **XL** |
 | 9 | MIDI base channel | `int` | zero-based: `3` is channel 4 |
 | 11 | MIDI over USB | `bool` | |
 | 14 | tempo scope | `int` | `0` snapshot, `1` preset, `2` global |
@@ -173,8 +177,11 @@ own menus and diffing two dumps [solid — 2026-08-22]:
 | 73 | snapshot edits | `int` | `0` recall, `1` discard |
 | 81 | bypass type | `bool` | `true` DSP, `false` analog |
 | 94 | output level | `bool` | `true` line, `false` instrument |
-| 127 | guitar In-Z | `int` | `0` and `1` observed — see below |
-| 156 | volume knob controls | `int` | `1` headphones only, `2` main + headphones |
+| 127 | auto In-Z | `int` | `0` and `1` observed, neither named — see below |
+| 153 | USB in 1/2 trim | num, dB | wire type not recorded — **XL** |
+| 154 | return type | `bool` | `true` aux in, `false` return — **XL** |
+| 156 | volume controls | `int` | `1` phones, `2` main+HP |
+| 158 | phones monitor | `int` | `1` main L/R, `2` send — **XL** |
 | 190 | global EQ low frequency | `f32` Hz | |
 | 191 | global EQ low Q | `f32` | |
 | 192 | global EQ low gain | `f32` dB | |
@@ -220,10 +227,17 @@ from the pattern and then confirmed on the pedal rather than left as an inferenc
 was a guess made before any of the above was measured; the EQ bands turned out to be 190-200, so the
 gloss is withdrawn rather than kept as a maybe.
 
-**`127` carries values, not meanings, yet.** It was logged with labels ambiguous enough that the
-mapping from value to menu entry can't be read back off the log, so only the observed integers are
-recorded. One more pass, naming the exact menu entry before and after. (`156` was in the same state
-until its owner named both positions: `1` leaves the main outputs alone.)
+**`127` is `Auto In-Z`, and this file called it `guitar In-Z` for a day** [corrected 2026-08-23].
+The pedal shows **Auto In-Z**, two-valued (`First` / `Enabled`), tenth under **Preferences**. The
+wrong name did not come from the pedal or from the person at it — the thirty-eighth round's write-up
+supplied a Helix setting that sounds like it, and put the row under **Ins/Outs** because that is
+where a Helix keeps *Guitar In-Z*. An XL owner noticed the entry doesn't exist on that pedal, which
+is what surfaced it. Name and group are both corrected.
+
+Its **values are still unnamed**: `0` and `1` were observed with the menu entry not recorded either
+side, so which one is `First` can't be recovered after the fact. One pass at the pedal, naming the
+exact entry before and after, finishes it. (`156` was in the same state until its owner named both
+positions: `1` leaves the main outputs alone.)
 
 **Not in this namespace: the input noise gate.** It is per-preset — `noiseGate`/`threshold`/`decay`
 on the fixed input node at slot 0 of each DSP, set with the ordinary set-value op. See
@@ -234,6 +248,12 @@ and we had it written up as `OP_READ_PREP`, a "read-sequence prepare step", beca
 replayed it. It is not a prepare step — the handshake is fetching setting 128 along the way. The
 missing read side that made this whole area look capture-blocked was a call we had been making
 since the first handshake.
+
+### Two orders, on purpose
+`fretwire_protocol::settings::SETTINGS` is kept **in id order** — it is searched by number as often
+as it is read through — and the pedal's own menu order lives beside it as `MENU_ORDER`, a list of
+ids. `settings_read` sorts its rows by `(menu_rank, id)`, so the panel shows Ins/Outs the way the
+pedal's screen does while an id nobody has placed in a menu keeps its numeric position at the end.
 
 ### Settings are typed, and the type is enforced [solid]
 A write whose value type differs from what the device already holds is refused with `-3`. Tempo is

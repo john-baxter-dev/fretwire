@@ -735,8 +735,14 @@ function irCheckSlot(slot) {
 }
 
 // The mock pedal's globals. Only the ids fretwire has identified are named; `raw` stands in for the
-// ~147 that answer and have never been explained, so the panel's read-only tier is exercised too.
+// ~138 that answer and have never been explained, so the panel's read-only tier is exercised too.
+// Keyed in id order, like `fretwire_protocol::settings::SETTINGS`; MENU_ORDER below is what puts
+// them in the pedal's own menu order, exactly as the real backend does it.
 const SETTINGS = new Map([
+  [2, { v: false, name: "Send/Return L", group: "Ins/Outs", kind: "flag",
+        labels: ["Line", "Instrument"] }],
+  [3, { v: false, name: "Send/Return R", group: "Ins/Outs", kind: "flag",
+        labels: ["Line", "Instrument"] }],
   [9, { v: 0, name: "MIDI base channel", group: "MIDI", kind: "choice",
         options: Array.from({ length: 16 }, (_, i) => [i, String(i + 1)]) }],
   [11, { v: true, name: "MIDI over USB", group: "MIDI", kind: "flag", labels: ["On", "Off"] }],
@@ -745,18 +751,23 @@ const SETTINGS = new Map([
   [16, { v: 120, name: "Tempo", group: "Tempo", kind: "number", unit: "BPM" }],
   [27, { v: false, name: "Preset numbering", group: "Displays", kind: "flag",
          labels: ["000-127", "01A-32D"] }],
-  [31, { v: false, name: "Input level", group: "Ins/Outs", kind: "flag",
+  [31, { v: false, name: "Input Level", group: "Ins/Outs", kind: "flag",
          labels: ["Line", "Instrument"] }],
   [73, { v: 0, name: "Snapshot edits", group: "Preferences", kind: "choice",
          options: [[0, "Recall"], [1, "Discard"]] }],
   [81, { v: false, name: "Bypass type", group: "Preferences", kind: "flag",
          labels: ["DSP bypass", "Analog bypass"] }],
-  [94, { v: true, name: "Output level", group: "Ins/Outs", kind: "flag",
+  [94, { v: true, name: "Output Level", group: "Ins/Outs", kind: "flag",
          labels: ["Line", "Instrument"] }],
   // Observed values with no recorded menu entries — an empty option list must stay legal.
-  [127, { v: 0, name: "Guitar In-Z", group: "Ins/Outs", kind: "choice", options: [] }],
-  [156, { v: 1, name: "Volume knob controls", group: "Ins/Outs", kind: "choice",
-          options: [[1, "Headphones only"], [2, "Main + headphones"]] }],
+  [127, { v: 0, name: "Auto In-Z", group: "Preferences", kind: "choice", options: [] }],
+  [153, { v: 0, name: "USB In 1/2 Trim", group: "Ins/Outs", kind: "number", unit: "dB" }],
+  [154, { v: false, name: "Return Type", group: "Ins/Outs", kind: "flag",
+          labels: ["Aux In", "Return"] }],
+  [156, { v: 1, name: "Volume Controls", group: "Ins/Outs", kind: "choice",
+          options: [[1, "Phones"], [2, "Main+HP"]] }],
+  [158, { v: 1, name: "Phones Monitor", group: "Ins/Outs", kind: "choice",
+          options: [[1, "Main L/R"], [2, "Send"]] }],
   [190, { v: 110, name: "EQ low frequency", group: "Global EQ", kind: "number", unit: "Hz" }],
   [191, { v: 0.707, name: "EQ low Q", group: "Global EQ", kind: "number", unit: "" }],
   [192, { v: 0, name: "EQ low gain", group: "Global EQ", kind: "number", unit: "dB" }],
@@ -771,6 +782,14 @@ const SETTINGS = new Map([
 ]);
 // Ids that answer but have never been identified. Read-only, and shown only with `all`.
 const RAW_IDS = [12, 128, 210, 226];
+
+// The pedal's own menu order, for the ids somebody has placed — mirrors
+// `fretwire_protocol::settings::MENU_ORDER`. Anything absent sorts after all of it, by id.
+const MENU_ORDER = [31, 94, 2, 3, 154, 153, 158, 156];
+const menuRank = (id) => {
+  const i = MENU_ORDER.indexOf(id);
+  return i === -1 ? MENU_ORDER.length : i;
+};
 
 // The pedal's factory EQ, read off a unit after every Global EQ knob was pushed in. Only the EQ
 // has one — a null default is how "we have never watched this reset" is expressed, and the panel
@@ -798,9 +817,8 @@ const HANDLERS = {
   // null) is what exercises the adopt path; `null` would exercise only the fallback.
   device_numbering: () => (SETTINGS.get(27).v ? "flat" : "banked"),
   settings_read: ({ all }) => {
-    const ids = all
-      ? [...SETTINGS.keys(), ...RAW_IDS].sort((a, b) => a - b)
-      : [...SETTINGS.keys()];
+    const ids = all ? [...SETTINGS.keys(), ...RAW_IDS] : [...SETTINGS.keys()];
+    ids.sort((a, b) => menuRank(a) - menuRank(b) || a - b);
     return ids.map(settingDto);
   },
   settings_write: ({ id, value }) => {

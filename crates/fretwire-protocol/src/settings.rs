@@ -2,16 +2,17 @@
 //!
 //! Settings are a flat numbered space read with op 24 and written with op 25 (see
 //! `docs/protocol.md`). Nothing here is documented by Line 6; every entry was read off a physical
-//! HX Stomp by changing one thing on the pedal's own menus and diffing two dumps.
+//! pedal by changing one thing on its own menus and diffing two dumps — an HX Stomp for most of
+//! them, an HX Stomp XL for the five marked `[XL]` below.
 //!
-//! **166 of ids 0..=600 answer on an HX Stomp. 23 are identified; 22 of them are here.** The
-//! nineteenth is id 28, the current preset index — device state rather than a preference, written
+//! **166 of ids 0..=600 answer on an HX Stomp. 28 are identified; 27 of them are here.** The odd
+//! one out is id 28, the current preset index — device state rather than a preference, written
 //! properly by `Session::goto_preset`, and deliberately not offered as a settings row.
 //!
-//!  That ratio is the normal state
-//! of this table, not a gap to be filled in with plausible guesses: an id whose meaning nobody has
-//! observed is simply absent, and the UI shows it as a raw number rather than inventing a label.
-//! Adding one costs about thirty seconds with `fretwire settings-diff`.
+//! That ratio is the normal state of this table, not a gap to be filled in with plausible guesses:
+//! an id whose meaning nobody has observed is simply absent, and the UI shows it as a raw number
+//! rather than inventing a label. Adding one costs about thirty seconds with
+//! `fretwire settings-diff`.
 
 /// How a setting's value should be presented and edited.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -41,30 +42,22 @@ pub struct Setting {
     pub kind: Kind,
 }
 
-/// Every setting id we have identified. **Read off a physical HX Stomp, 2026-08-22.**
+/// Every setting id we have identified.
 ///
-/// Ordered by appearance in on-device UI. Ids not here answer but are unidentified — see the module note.
+/// **Read off a physical HX Stomp, 2026-08-22**, except the five marked `[XL]`, which an HX Stomp
+/// XL owner read off that pedal the same way and contributed [2026-08-23]. Where the two units'
+/// menus name a thing differently the XL's wording is used, because it is the one we have in
+/// writing; an id the XL has and the Stomp does not simply refuses on a Stomp, and `scan_settings`
+/// treats a refusal as absence rather than as an error.
+///
+/// **Ordered by id**, which is how the table is searched — presentation order lives in
+/// [`MENU_ORDER`], so that finding id 154 here never needs a text search. Ids not here answer but
+/// are unidentified — see the module note.
 pub const SETTINGS: &[Setting] = &[
     Setting {
-        id: 31,
-        name: "Input Level",
-        group: "Ins/Outs",
-        kind: Kind::Flag {
-            on: "Line",
-            off: "Instrument",
-        },
-    },
-    Setting {
-        id: 94,
-        name: "Output Level",
-        group: "Ins/Outs",
-        kind: Kind::Flag {
-            on: "Line",
-            off: "Instrument",
-        },
-    },
-    Setting {
         id: 2,
+        // [XL] The XL lists the loop's two sides separately. Whether both ids answer on a plain
+        // Stomp has not been checked; if one doesn't, it is absent from the panel and that is all.
         name: "Send/Return L",
         group: "Ins/Outs",
         kind: Kind::Flag {
@@ -74,45 +67,13 @@ pub const SETTINGS: &[Setting] = &[
     },
     Setting {
         id: 3,
+        // [XL]
         name: "Send/Return R",
         group: "Ins/Outs",
         kind: Kind::Flag {
             on: "Line",
             off: "Instrument",
         },
-    },
-    Setting {
-        id: 154,
-        name: "Return Type",
-        group: "Ins/Outs",
-        kind: Kind::Flag {
-            on: "Aux In",
-            off: "Return",
-        },
-    },
-    Setting {
-        id: 153,
-        name: "USB In 1/2 Trim",
-        group: "Ins/Outs",
-        kind: Kind::Number {
-            unit: "dB",
-            off: None,
-        },
-    },
-    Setting {
-        id: 158,
-        name: "Phones Monitor",
-        group: "Ins/Outs",
-        kind: Kind::Choice(&[(1, "Main L/R"), (2, "Send")]),
-    },
-    Setting {
-        id: 156,
-        // Both observed states named by the owner: 1 -> 2 was the move to "main + headphones", so
-        // 1 is the headphone-only position, where the knob leaves the main outputs alone. `0` has
-        // never been seen and is not assumed to exist.
-        name: "Volume Controls",
-        group: "Ins/Outs",
-        kind: Kind::Choice(&[(1, "Phones"), (2, "Main+HP")]),
     },
     Setting {
         id: 9,
@@ -173,6 +134,15 @@ pub const SETTINGS: &[Setting] = &[
         },
     },
     Setting {
+        id: 31,
+        name: "Input Level",
+        group: "Ins/Outs",
+        kind: Kind::Flag {
+            on: "Line",
+            off: "Instrument",
+        },
+    },
+    Setting {
         id: 73,
         name: "Snapshot edits",
         group: "Preferences",
@@ -188,12 +158,68 @@ pub const SETTINGS: &[Setting] = &[
         },
     },
     Setting {
-        id: 127,
-        // Observed as 0 and 1 with the menu entries not recorded either side, so the values are
-        // listed without names rather than being labelled from memory.
-        name: "Guitar In-Z",
+        id: 94,
+        name: "Output Level",
         group: "Ins/Outs",
+        kind: Kind::Flag {
+            on: "Line",
+            off: "Instrument",
+        },
+    },
+    Setting {
+        id: 127,
+        // **Called "Guitar In-Z" here from 2026-08-22 to 2026-08-23, which is not a name this
+        // pedal has ever shown.** The pedal said *Auto In-Z*; the write-up supplied a Helix
+        // setting that sounds like it, and the Ins/Outs group came along with it because that is
+        // where a Helix keeps *Guitar In-Z*. An XL owner reported the discrepancy and the Stomp's
+        // owner confirmed which one they had actually read out.
+        //
+        // Worth keeping the comment: this entry refused to name its two values because nobody had
+        // seen them, and then carried an invented name for a day. The rule this module states
+        // applies to the `name` field too.
+        //
+        // The values are still unnamed — 0 and 1 were observed with the menu entry not recorded
+        // either side, so which one is `First` is not recoverable after the fact.
+        name: "Auto In-Z",
+        group: "Preferences",
         kind: Kind::Choice(&[]),
+    },
+    Setting {
+        id: 153,
+        // [XL]
+        name: "USB In 1/2 Trim",
+        group: "Ins/Outs",
+        kind: Kind::Number {
+            unit: "dB",
+            off: None,
+        },
+    },
+    Setting {
+        id: 154,
+        // [XL]
+        name: "Return Type",
+        group: "Ins/Outs",
+        kind: Kind::Flag {
+            on: "Aux In",
+            off: "Return",
+        },
+    },
+    Setting {
+        id: 156,
+        // Both observed states named by the owner: 1 -> 2 was the move to "main + headphones", so
+        // 1 is the headphone-only position, where the knob leaves the main outputs alone. `0` has
+        // never been seen and is not assumed to exist. The two labels are the XL menu's own
+        // wording for those positions [2026-08-23].
+        name: "Volume Controls",
+        group: "Ins/Outs",
+        kind: Kind::Choice(&[(1, "Phones"), (2, "Main+HP")]),
+    },
+    Setting {
+        id: 158,
+        // [XL]
+        name: "Phones Monitor",
+        group: "Ins/Outs",
+        kind: Kind::Choice(&[(1, "Main L/R"), (2, "Send")]),
     },
     Setting {
         id: 190,
@@ -296,6 +322,32 @@ pub const SETTINGS: &[Setting] = &[
     },
 ];
 
+/// The order the pedal's own menus list these in, for the ids where somebody has walked the menu.
+///
+/// [`SETTINGS`] stays in id order because that is how it is read and edited here; a panel wants the
+/// order the pedal puts them in, and the two are not the same list. Keeping the second one as ids
+/// rather than as the table's order is what lets both be true at once.
+///
+/// Ids absent from here sort after every id present, by id — see [`menu_rank`]. That is the honest
+/// default: nobody has placed them, so they keep their numeric position rather than being guessed
+/// into the middle of a menu.
+///
+/// **Ins/Outs, as an HX Stomp XL shows it** [2026-08-23] — that group is complete. Preferences is
+/// not placed at all: id 127 is known to be its tenth item, but 73 and 81 are unplaced, and one
+/// known position out of three would sort the other two ahead of it and be worse than no order.
+pub const MENU_ORDER: &[i64] = &[31, 94, 2, 3, 154, 153, 158, 156];
+
+/// Where `id` sits in the pedal's menus — `MENU_ORDER.len()` for an id nobody has placed.
+///
+/// Sort a row list by `(menu_rank(id), id)` to get menu order where it is known and id order
+/// everywhere else.
+pub fn menu_rank(id: i64) -> usize {
+    MENU_ORDER
+        .iter()
+        .position(|&m| m == id)
+        .unwrap_or(MENU_ORDER.len())
+}
+
 /// The device's own factory value for `id`, where we have observed one.
 ///
 /// **Only the global EQ, and only from one unit.** The pedal resets a setting when you push its
@@ -354,6 +406,9 @@ pub const GROUPS: &[&str] = &[
 mod tests {
     use super::*;
 
+    /// Id order is the table's contract, not an accident: this file is searched by number as often
+    /// as it is read top to bottom. Menu order is [`MENU_ORDER`]'s job, so a new setting goes in at
+    /// its number and gets placed there, not spliced into the middle of the table.
     #[test]
     fn ids_are_unique_and_sorted() {
         let ids: Vec<i64> = SETTINGS.iter().map(|s| s.id).collect();
@@ -424,6 +479,32 @@ mod tests {
         assert_eq!(default_of(199), Some(19.9));
         assert_eq!(default_of(200), Some(20100.0));
         assert_eq!(default_of(27), None);
+    }
+
+    /// `MENU_ORDER` is a view onto the table, so every id in it must be one the table has, and no
+    /// id may appear twice — either would silently drop a row or render one in two places.
+    #[test]
+    fn menu_order_places_real_ids_once() {
+        let mut seen = Vec::new();
+        for &id in MENU_ORDER {
+            assert!(
+                by_id(id).is_some(),
+                "MENU_ORDER places id {id}, which SETTINGS does not have"
+            );
+            assert!(!seen.contains(&id), "MENU_ORDER places id {id} twice");
+            seen.push(id);
+        }
+    }
+
+    /// An id nobody has placed sorts after every id somebody has, rather than to the top — the
+    /// unplaced majority must not push the menu-ordered block down the panel.
+    #[test]
+    fn unplaced_ids_sort_after_placed_ones() {
+        assert!(menu_rank(31) < menu_rank(94));
+        assert!(menu_rank(156) < menu_rank(190));
+        assert_eq!(menu_rank(190), MENU_ORDER.len());
+        // Not a setting at all, and not a panic either.
+        assert_eq!(menu_rank(-1), MENU_ORDER.len());
     }
 
     /// A choice with no entries is how "observed, never explained" is recorded — it must stay

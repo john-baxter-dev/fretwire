@@ -43,8 +43,77 @@ pub struct Setting {
 
 /// Every setting id we have identified. **Read off a physical HX Stomp, 2026-08-22.**
 ///
-/// Ordered by id. Ids not here answer but are unidentified — see the module note.
+/// Ordered by appearance in on-device UI. Ids not here answer but are unidentified — see the module note.
 pub const SETTINGS: &[Setting] = &[
+    Setting {
+        id: 31,
+        name: "Input Level",
+        group: "Ins/Outs",
+        kind: Kind::Flag {
+            on: "Line",
+            off: "Instrument",
+        },
+    },
+    Setting {
+        id: 94,
+        name: "Output Level",
+        group: "Ins/Outs",
+        kind: Kind::Flag {
+            on: "Line",
+            off: "Instrument",
+        },
+    },
+    Setting {
+        id: 2,
+        name: "Send/Return L",
+        group: "Ins/Outs",
+        kind: Kind::Flag {
+            on: "Line",
+            off: "Instrument",
+        },
+    },
+    Setting {
+        id: 3,
+        name: "Send/Return R",
+        group: "Ins/Outs",
+        kind: Kind::Flag {
+            on: "Line",
+            off: "Instrument",
+        },
+    },
+    Setting {
+        id: 154,
+        name: "Return Type",
+        group: "Ins/Outs",
+        kind: Kind::Flag {
+            on: "Aux In",
+            off: "Return",
+        },
+    },
+    Setting {
+        id: 153,
+        name: "USB In 1/2 Trim",
+        group: "Ins/Outs",
+        kind: Kind::Number {
+            unit: "dB",
+            off: None,
+        },
+    },
+    Setting {
+        id: 158,
+        name: "Phones Monitor",
+        group: "Ins/Outs",
+        kind: Kind::Choice(&[(1, "Main L/R"), (2, "Send")]),
+    },
+    Setting {
+        id: 156,
+        // Both observed states named by the owner: 1 -> 2 was the move to "main + headphones", so
+        // 1 is the headphone-only position, where the knob leaves the main outputs alone. `0` has
+        // never been seen and is not assumed to exist.
+        name: "Volume Controls",
+        group: "Ins/Outs",
+        kind: Kind::Choice(&[(1, "Phones"), (2, "Main+HP")]),
+    },
     Setting {
         id: 9,
         name: "MIDI base channel",
@@ -104,15 +173,6 @@ pub const SETTINGS: &[Setting] = &[
         },
     },
     Setting {
-        id: 31,
-        name: "Input level",
-        group: "Ins/Outs",
-        kind: Kind::Flag {
-            on: "Line",
-            off: "Instrument",
-        },
-    },
-    Setting {
         id: 73,
         name: "Snapshot edits",
         group: "Preferences",
@@ -128,30 +188,12 @@ pub const SETTINGS: &[Setting] = &[
         },
     },
     Setting {
-        id: 94,
-        name: "Output level",
-        group: "Ins/Outs",
-        kind: Kind::Flag {
-            on: "Line",
-            off: "Instrument",
-        },
-    },
-    Setting {
         id: 127,
         // Observed as 0 and 1 with the menu entries not recorded either side, so the values are
         // listed without names rather than being labelled from memory.
         name: "Guitar In-Z",
         group: "Ins/Outs",
         kind: Kind::Choice(&[]),
-    },
-    Setting {
-        id: 156,
-        // Both observed states named by the owner: 1 -> 2 was the move to "main + headphones", so
-        // 1 is the headphone-only position, where the knob leaves the main outputs alone. `0` has
-        // never been seen and is not assumed to exist.
-        name: "Volume knob controls",
-        group: "Ins/Outs",
-        kind: Kind::Choice(&[(1, "Headphones only"), (2, "Main + headphones")]),
     },
     Setting {
         id: 190,

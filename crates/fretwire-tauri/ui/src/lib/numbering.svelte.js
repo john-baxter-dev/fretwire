@@ -1,37 +1,44 @@
 // How preset slots are written in the UI: the pedal's banked form (`01A`, `01B`, `01C`, `02A`) or
 // the flat slot number (`000`, `001`, …).
 //
-// Both are correct — which one the *hardware* shows is a Global Setting on the device, so there is
-// no single right answer to bake in. As of 2026-08-22 we can read it: setting id 27, `true` for the
-// flat form and `false` for the banked one (`docs/protocol.md`). So the pedal supplies the default
-// and the user's own toggle overrides it — a preference is only stored once someone sets one, which
-// is what keeps "the pedal says flat" from being permanently overruled by a default nobody chose.
-// See `Device::presets_per_bank`.
+// **This is the pedal's setting, not ours.** Which form the hardware shows is Global Setting id 27
+// (`true` = flat, `false` = banked — see `docs/protocol.md`), and as of 2026-08-22 we can both read
+// and write it. So the sidebar's "Number presets" item is a view of that setting: it shows what the
+// pedal is set to, and picking the other form changes the pedal. Nothing to keep in sync, because
+// there is only one value — the same one the Globals panel's "Preset numbering" row edits.
+//
+// The local preference below is the fallback for the case where that isn't true: a device that
+// doesn't answer id 27 (any model we haven't measured), or no device at all. There the toggle can
+// only be cosmetic, so it is, and the choice is remembered.
+
+import { BANKED, FLAT, isForm, other, flagFor, formForFlag } from "./numbering-forms.js";
 
 const KEY = "fretwire.presetNumbering";
-const BANKED = "banked";
-const FLAT = "flat";
 
 function load() {
   // Storage throws outright in some webview configurations rather than returning null, and a
-  // preference is never worth failing to start over. `null` means "nobody has chosen", which is
-  // distinct from having chosen the banked form — only the former defers to the device.
+  // preference is never worth failing to start over.
   try {
     const v = localStorage.getItem(KEY);
-    return v === FLAT || v === BANKED ? v : null;
+    return isForm(v) ? v : null;
   } catch {
     return null;
   }
 }
 
-const chosen = load();
+/**
+ * The live form. Read `numbering.mode`; write through `setNumbering` (local) or
+ * `applyDeviceNumbering` (what the pedal reported).
+ *
+ * `deviceBacked` is what the sidebar checks to decide whether toggling should write to the pedal.
+ * It is set only by a device that actually answered id 27, and cleared on disconnect, so it is
+ * never true while there is nothing to write to.
+ */
+export const numbering = $state({ mode: load() ?? BANKED, deviceBacked: false });
 
-/** The live preference. Read `numbering.mode`; write through `setNumbering`. */
-export const numbering = $state({ mode: chosen ?? BANKED, explicit: chosen != null });
-
+/** Remember a form locally. Only reached when the pedal has no say — see the header. */
 export function setNumbering(mode) {
   numbering.mode = mode === FLAT ? FLAT : BANKED;
-  numbering.explicit = true;
   try {
     localStorage.setItem(KEY, numbering.mode);
   } catch {
@@ -40,25 +47,32 @@ export function setNumbering(mode) {
 }
 
 /**
- * Adopt what the pedal itself is set to, as the *default* only — a user who has picked a form keeps
- * it, and this never writes to storage, so the device stays the source of truth on every start.
+ * Take the form the pedal reports. The device is the authority whenever it has one, so unlike the
+ * old default-only adoption this always wins — that asymmetry is what used to let a local toggle
+ * silently outrank the Globals panel's own "Preset numbering" row.
  *
  * `mode` is whatever `device_numbering` returned, including `null` for a device that doesn't answer
- * setting 27. Anything unrecognised leaves the current mode alone rather than falling back to a
- * guess, because the whole point here is to stop guessing.
+ * id 27. Anything unrecognised leaves the current mode alone and leaves `deviceBacked` false,
+ * because the whole point here is to stop guessing.
  */
-export function adoptDeviceNumbering(mode) {
-  if (numbering.explicit) return false;
-  if (mode !== FLAT && mode !== BANKED) return false;
+export function applyDeviceNumbering(mode) {
+  if (!isForm(mode)) return false;
   numbering.mode = mode;
+  numbering.deviceBacked = true;
   return true;
 }
 
-export function toggleNumbering() {
-  setNumbering(numbering.mode === BANKED ? FLAT : BANKED);
+/** Back to a local-only preference — the pedal is gone, so it can no longer be the authority. */
+export function forgetDeviceNumbering() {
+  numbering.deviceBacked = false;
+  const stored = load();
+  if (stored) numbering.mode = stored;
 }
 
-export const isBanked = () => numbering.mode === BANKED;
+/** The form that is *not* the current one — what a toggle would switch to. */
+export const otherMode = () => other(numbering.mode);
+
+export { flagFor as numberingFlag, formForFlag };
 
 /**
  * The slot column for a preset row — `p` is a listing entry with `index` and (where the backend

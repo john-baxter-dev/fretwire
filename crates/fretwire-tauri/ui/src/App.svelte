@@ -10,7 +10,15 @@
   import Dialog from "./lib/Dialog.svelte";
   import Toast from "./lib/Toast.svelte";
   import FirstRun from "./lib/FirstRun.svelte";
-  import { slotLabel, adoptDeviceNumbering } from "./lib/numbering.svelte.js";
+  import {
+    slotLabel,
+    numbering,
+    setNumbering,
+    applyDeviceNumbering,
+    forgetDeviceNumbering,
+    numberingFlag,
+    formForFlag,
+  } from "./lib/numbering.svelte.js";
   import GlobalsPanel from "./lib/GlobalsPanel.svelte";
 
 
@@ -694,11 +702,12 @@
       } catch (e) {
         crossSetlistWrite = true; // the mock has no such command; it can't touch hardware anyway
       }
-      // Take the pedal's own preset-numbering form as the default, before the first listing
-      // renders, so the slot column doesn't visibly re-label itself. A user who has picked a form
-      // keeps it, and a device that doesn't answer setting 27 leaves the preference alone.
+      // Take the pedal's own preset-numbering form, before the first listing renders so the slot
+      // column doesn't visibly re-label itself. This is the pedal's setting and we now write it
+      // too, so it wins outright; a device that doesn't answer setting 27 leaves the local
+      // preference in place and the menu toggle stays cosmetic for it.
       try {
-        adoptDeviceNumbering(await invoke("device_numbering"));
+        applyDeviceNumbering(await invoke("device_numbering"));
       } catch (e) {
         /* non-fatal — the manual toggle is still there */
       }
@@ -731,6 +740,7 @@
     setlists = [];
     viewBank = 0;
     selectedSlot = null;
+    forgetDeviceNumbering();
     status = "Disconnected — pedal back to standalone.";
   }
 
@@ -744,6 +754,7 @@
     setlists = [];
     viewBank = 0;
     selectedSlot = null;
+    forgetDeviceNumbering();
     status = message ?? "The pedal stopped responding. Power-cycle it, then reconnect.";
     toast(status);
   }
@@ -795,6 +806,9 @@
   // changes the consequence enough to show alongside rather than leave the user guessing.
   const TEMPO_ID = 16;
   const TEMPO_SCOPE_ID = 14;
+  // Preset numbering — a Global Setting the preset sidebar edits directly as well as the Globals
+  // panel's own row. See `lib/numbering.svelte.js`.
+  const NUMBERING_ID = 27;
   const SCOPE_NAMES = { 0: "per snapshot", 1: "per preset", 2: "global" };
 
   let tempo = $state(null);
@@ -862,6 +876,32 @@
     if (!globals.length) await refreshGlobals();
   }
 
+  /**
+   * Switch the preset-numbering form from the preset sidebar's ⋯ menu.
+   *
+   * On any pedal that answers setting 27 this *is* the pedal's setting: it writes it, and the mode
+   * follows the device's read-back rather than the click, so a refused write leaves the menu
+   * showing what the pedal actually is. Where the pedal has no such setting to write there is
+   * nothing to keep in sync and the choice is simply remembered locally.
+   */
+  async function setNumberingMode(mode) {
+    if (!numbering.deviceBacked) {
+      setNumbering(mode);
+      return;
+    }
+    try {
+      const after = await invoke("settings_write", {
+        id: NUMBERING_ID,
+        value: numberingFlag(mode),
+      });
+      applyDeviceNumbering(formForFlag(after.value));
+      // Keep the Globals panel's row in step if it has been opened — same setting, two views.
+      globals = globals.map((g) => (g.id === after.id ? after : g));
+    } catch (e) {
+      toast("preset numbering: " + e);
+    }
+  }
+
   async function toggleGlobalsRaw() {
     globalsRaw = !globalsRaw;
     await refreshGlobals();
@@ -874,8 +914,10 @@
       // Replace in place rather than re-reading everything: the reply is the device's own read-back
       // of that id, so it is already the authority on what landed.
       globals = globals.map((s) => (s.id === after.id ? after : s));
-      // The preset list numbers itself from this one, so it has to follow immediately.
-      if (after.id === 27) adoptDeviceNumbering(after.value ? "flat" : "banked");
+      // The preset list numbers itself from this one, so it has to follow immediately — and it
+      // does so unconditionally now, which is what stops the sidebar's own toggle from outranking
+      // this row (they are two views of setting 27, not two settings).
+      if (after.id === NUMBERING_ID) applyDeviceNumbering(formForFlag(after.value));
       // …and the toolbar's BPM field is a second view of ids 16 and 14.
       if (after.id === TEMPO_ID && typeof after.value === "number") tempo = after.value;
       if (after.id === TEMPO_SCOPE_ID && typeof after.value === "number") {
@@ -1020,7 +1062,7 @@
 <main>
   {#if preset}
     <div class="workspace">
-      <PresetList {presets} currentIndex={preset.index} dirty={preset.dirty} {setlists} {viewBank} currentBank={presetBank} writeBlocked={foreignSetlist} {onPickSetlist} {onGoto} {onSave} {onSaveAs} {onRename} {onExport} {onRestore} {onCopyPreset} {onPastePreset} {presetClip} />
+      <PresetList {presets} currentIndex={preset.index} dirty={preset.dirty} {setlists} {viewBank} currentBank={presetBank} writeBlocked={foreignSetlist} {onPickSetlist} {onGoto} {onSave} {onSaveAs} {onRename} {onExport} {onRestore} {onCopyPreset} {onPastePreset} {presetClip} onNumbering={setNumberingMode} />
       <div class="content">
         <div class="meta">
           <span>

@@ -159,5 +159,28 @@ ok(cats.length > 0, "the mock lists categories");
 ok(cats.every((c) => "color" in c), "every category row carries a colour field");
 ok(cats.every((c) => c.color === null), "the mock has no reference data, so every colour is null");
 
+// --- preset numbering: the sidebar toggle writes setting 27, so the polarity is load-bearing ---
+//
+// `lib/numbering-forms.js` is what the sidebar's ⋯ menu turns a click into. If `flagFor` were the
+// wrong way round nothing would error — the pedal would just be set to the form the user was
+// trying to leave. Round-trip it through the mock's real settings_write to pin both directions.
+const forms = await import("../src/lib/numbering-forms.js");
+
+ok(forms.flagFor("flat") === 1 && forms.flagFor("banked") === 0, "flat is the flag's on state");
+ok(forms.formForFlag(true) === "flat" && forms.formForFlag(false) === "banked", "…and back");
+ok(forms.other("flat") === "banked" && forms.other("banked") === "flat", "the toggle alternates");
+
+for (const want of ["flat", "banked", "flat"]) {
+  const after = await mock.invoke("settings_write", { id: 27, value: forms.flagFor(want) });
+  ok(
+    forms.formForFlag(after.value) === want,
+    `picking "${want}" in the sidebar leaves the pedal on "${want}"`,
+  );
+  ok(
+    (await mock.invoke("device_numbering")) === want,
+    `…and device_numbering agrees, so a reconnect shows the same form`,
+  );
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

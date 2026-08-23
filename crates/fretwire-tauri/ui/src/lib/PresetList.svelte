@@ -1,5 +1,5 @@
 <script>
-  import { numbering, toggleNumbering, slotLabel, canBank } from "./numbering.svelte.js";
+  import { numbering, otherMode, slotLabel, canBank } from "./numbering.svelte.js";
 
   // Preset browser sidebar: the full setlist, current highlighted, click to load. Save and Save As
   // (choose target slot + name, covering copy and overwrite) stay on the surface with Copy/Paste,
@@ -24,15 +24,17 @@
     onRestore,
     onCopyPreset,
     onPastePreset,
+    // Switch the preset-numbering form. On a pedal that answers setting 27 this writes the pedal's
+    // own Global Setting, so the menu item is that setting rather than a second opinion about it.
+    onNumbering,
     // Name of the preset on the paste buffer, or null when it's empty.
     presetClip = null,
   } = $props();
 
   // How the pedal writes a slot on its own screen — `01A`, `01B`, `01C`, `02A` — when the backend
-  // knows this device's banking and the user hasn't asked for flat numbers. Matching the panel is
-  // the point: someone reading a preset off the hardware should find the same string here. Which
-  // form the panel uses is itself a Global Setting on the device, hence the toggle. See
-  // `lib/numbering.svelte.js`.
+  // knows this device's banking. Matching the panel is the point: someone reading a preset off the
+  // hardware should find the same string here. Which form the panel uses is a Global Setting on the
+  // device, and the menu item below edits that setting. See `lib/numbering.svelte.js`.
   const pad = (p) => slotLabel(p);
   // Only worth offering where the backend actually knows the banking — otherwise both settings
   // render the same flat number and the menu item is a lie.
@@ -108,8 +110,10 @@
             <button
               role="menuitemcheckbox"
               aria-checked={numbering.mode === "banked"}
-              title="The pedal itself can show either form — this is a Global Setting on the device. Match whichever yours is set to."
-              onclick={() => run(toggleNumbering)}
+              title={numbering.deviceBacked
+                ? "The pedal's own setting (Global Settings ▸ Displays ▸ Preset numbering). Changing it here changes it on the pedal."
+                : "This pedal doesn't report its numbering setting, so this only changes how fretwire shows them."}
+              onclick={() => run(() => onNumbering(otherMode()))}
               >Number presets: {numbering.mode === "banked" ? "01A" : "000"}</button>
           {/if}
         </div>

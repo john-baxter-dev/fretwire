@@ -18,6 +18,8 @@ layout — no logos, no lettering, no panel graphics.
 | `ui/src/lib/icons/models.js` | the per-model table, the amp rules, the cab finishes |
 | `ui/src/lib/icons/spec.js` | resolves a model to a spec; category icons |
 | `ui/src/lib/icons/ModelIcon.svelte` | the component the chain and the picker use |
+| `ui/src/lib/icons/mics.js` | microphone silhouettes, for the cab mic view |
+| `ui/src/lib/CabMicView.svelte` | the cab's mic placement, drawn |
 
 ## How a model resolves
 
@@ -47,6 +49,44 @@ shapes `render.js` knows are `stomp`, `stompWide`, `stompNarrow`, `round`, `wedg
 spec fields: `knobs`, `layout` (`row` / `arc` / `grid`), `sw` (footswitches), `plate` (a contrasting
 faceplate), `mark` (`window` / `stripe` / `bars`), `glyph` (a rack's lit display: `arch`, `room`,
 `cave`, `plate`, `shimmer`, `gate`, `echo`, `particle`, `wave`), `led`, `speakers`, `mic`, `stack`.
+
+## The cab mic view
+
+A cab's parameters get a picture beside them: the microphone, how far off the grille it stands, where
+across the cone it sits, and how far it is tilted. `ParamPanel` draws it for any param list carrying
+both a `Mic` and a `Distance`, which is both shapes the device has — the paired cab on an amp+cab
+block, and a standalone Cab block — without needing to know the category.
+
+It sits in a flex row with the param grid rather than in a band above it: the drawing is wider than
+it is tall and the grid is not, so stacking them left a strip of dead panel across the middle. The
+grid takes the width the drawing doesn't, down to about 600px of panel, below which the drawing
+wraps underneath and centres.
+
+It is a *view* of those parameters, not a second source of truth: it reads the same array the grid
+below edits and writes through the same callbacks, so the device's re-read still settles the value.
+Dragging the mic sets Distance (horizontally) and Position (vertically), arrow keys do the same one
+step at a time, and Angle keeps its segmented buttons in the grid — the drawing shows the tilt as an
+arc at the capsule.
+
+Same rule as the model icons: no artwork is read or shipped. The reference data names a mic only as a
+string (`"57 Dynamic"`, `"4038 Ribbon"` — the `mic` and `cabMICir` discrete controls in
+`HelixControls.json`), and `mics.js` turns the number in that string into proportions and a finish.
+Unlisted mics fall back to their family — Dynamic, Ribbon or Condenser — so a firmware update adding
+one still draws something.
+
+Two things in the drawing are conventions rather than data, and are worth knowing before trusting
+them:
+
+- **The radial scale is linear.** Position runs 0..1 (displayed 0..10, `Center`..`Edge`) and the view
+  maps it straight onto the cone's radius. Whether the device's own mapping is linear is not
+  something the reference data says.
+- **"Cap edge" is drawn at Position's own default** (0.23 on the stock cabs), because that default is
+  the classic just-off-the-dust-cap placement. That ties the tick to the data instead of to a radius
+  the drawing invented, but it is an inference about what the default *means*, not a measurement of
+  the modelled speaker.
+
+The legacy cab family (category 2) has no Position or Angle at all — only Mic and Distance — so those
+parts of the drawing are simply omitted for it.
 
 ## Reviewing the set
 

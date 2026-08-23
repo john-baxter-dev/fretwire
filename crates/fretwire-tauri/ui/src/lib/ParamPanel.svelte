@@ -3,6 +3,7 @@
   // switch), for both the main model and any paired cab/IR. Commits go up via callbacks; the parent
   // re-reads the preset so values reflect the device.
   import ModelPicker from "./ModelPicker.svelte";
+  import CabMicView from "./CabMicView.svelte";
 
   let {
     block,
@@ -420,153 +421,166 @@
 {/if}
 
 {#snippet controls(params, paired)}
-  <div class="grid">
-    {#each params as p (p.index)}
-      {@const k = key(paired, p)}
-      {@const c = control(p)}
-      {@const asg = assignmentFor(paired, p.index)}
-      <div class="ctrl" class:assigned={!!asg}>
-        <span class="cap">
-          {p.name}
-          <button
-            class="asgbtn"
-            class:on={!!asg}
-            title={asg
-              ? `Driven by ${asg.source_name} — click to change`
-              : "Put this parameter under a footswitch or expression pedal"}
-            onclick={() => (openAssign = openAssign === k ? null : k)}>{asg ? asg.source_name : "\u21e2"}</button
-          >
-        </span>
-        {#if c === "enum"}
-          <!-- The option's value is the wire value, which starts at `enum_base` and not at 0 —
-               `Note Sync` labels 1..=19. Offsetting here keeps read and write on the same entry;
-               indexing the list from 0 displayed one note past the pedal and wrote one short of
-               the pick (issue #8). -->
-          <select value={p.value} onchange={(e) => onEnum(block.slot, paired, p.index, Number(e.currentTarget.value))}>
-            {#each p.enum_labels as lbl, i}<option value={i + (p.enum_base ?? 0)}>{lbl}</option>{/each}
-          </select>
-        {:else if c === "bool"}
-          <label class="switch">
-            <input
-              type="checkbox"
-              checked={p.value >= 0.5}
-              onchange={(e) => onEnum(block.slot, paired, p.index, e.currentTarget.checked ? 1 : 0)}
-            />
-            <span>{p.value >= 0.5 ? "On" : "Off"}</span>
-          </label>
-        {:else if c === "unsettable"}
-          <span
-            class="val unranged"
-            title="The device carries this value but fretwire has no confirmed way to address it, so it is read-only here rather than a control that would be refused."
-            >{p.kind === "bool" ? (p.value >= 0.5 ? "On" : "Off") : fmtVal(p, p.value)}</span
-          >
-        {:else if c === "unranged"}
-          <span
-            class="val unranged"
-            title="No range for this parameter in the reference data, so fretwire won't send a value it can't bound — an out-of-range integer can hang the device."
-            >{fmtVal(p, p.value)}</span
-          >
-        {:else if c === "seg"}
-          {@const active = nearestStop(p)}
-          <div class="seg">
-            {#each p.stops as s (s.value)}
-              <button
-                class="segbtn"
-                class:active={s.value === active.value}
-                onclick={() => s.value !== active.value && onFloat(block.slot, paired, p.index, s.value)}
-              >{s.label}</button>
-            {/each}
-          </div>
-        {:else}
-          {@const isInt = c === "int"}
-          {@const r = range(p, isInt)}
-          <div class="slider">
-            <input
-              type="range"
-              min={r.min}
-              max={r.max}
-              step={r.step}
-              value={live[k] ?? p.value}
-              use:wheelable={(e) => nudge(e, k, p, paired, isInt, r)}
-              ondblclick={() => resetToDefault(k, p, paired, isInt)}
-              title={p.default != null
-                ? `Double-click to reset to ${fmtVal(p, p.default)}`
-                : "Shift+scroll to nudge"}
-              oninput={(e) => {
-                const v = e.currentTarget.valueAsNumber;
-                live[k] = v;
-                if (!isInt) preview(k, paired, p, v);
-              }}
-              onchange={(e) => commit(k, e.currentTarget.valueAsNumber, paired, p, isInt)}
-            />
-            {#if typing === k}
+  <!-- A cab's params get the mic drawing *beside* them. Detected from the params themselves rather
+       than the category, because the two cab families differ (the legacy one has no Position or
+       Angle) and because a paired cab and a standalone Cab block are the same list either way.
+       Above the grid it was a band of dead space — the drawing is wider than it is tall and the
+       grid is not, so side by side is what actually fills the panel. It wraps under the params when
+       there isn't room for both. -->
+  {@const showMic =
+    params.some((p) => p.name === "Mic") && params.some((p) => p.name === "Distance")}
+  <div class="controls" class:withmic={showMic}>
+    <div class="grid">
+      {#each params as p (p.index)}
+        {@const k = key(paired, p)}
+        {@const c = control(p)}
+        {@const asg = assignmentFor(paired, p.index)}
+        <div class="ctrl" class:assigned={!!asg}>
+          <span class="cap">
+            {p.name}
+            <button
+              class="asgbtn"
+              class:on={!!asg}
+              title={asg
+                ? `Driven by ${asg.source_name} — click to change`
+                : "Put this parameter under a footswitch or expression pedal"}
+              onclick={() => (openAssign = openAssign === k ? null : k)}>{asg ? asg.source_name : "\u21e2"}</button
+            >
+          </span>
+          {#if c === "enum"}
+            <!-- The option's value is the wire value, which starts at `enum_base` and not at 0 —
+                 `Note Sync` labels 1..=19. Offsetting here keeps read and write on the same entry;
+                 indexing the list from 0 displayed one note past the pedal and wrote one short of
+                 the pick (issue #8). -->
+            <select value={p.value} onchange={(e) => onEnum(block.slot, paired, p.index, Number(e.currentTarget.value))}>
+              {#each p.enum_labels as lbl, i}<option value={i + (p.enum_base ?? 0)}>{lbl}</option>{/each}
+            </select>
+          {:else if c === "bool"}
+            <label class="switch">
               <input
-                class="val typing"
-                value={typed}
-                oninput={(e) => (typed = e.currentTarget.value)}
-                onblur={() => commitTyped(k, p, paired, isInt)}
-                onkeydown={(e) => {
-                  if (e.key === "Enter") e.currentTarget.blur();
-                  else if (e.key === "Escape") { typing = null; e.currentTarget.blur(); }
-                }}
-                use:focusOnMount
+                type="checkbox"
+                checked={p.value >= 0.5}
+                onchange={(e) => onEnum(block.slot, paired, p.index, e.currentTarget.checked ? 1 : 0)}
               />
-            {:else}
-              <button class="val" title="Click to type a value" onclick={() => openTyping(k, p)}>
-                {fmtVal(p, live[k] ?? p.value)}
-              </button>
-            {/if}
-          </div>
-        {/if}
-        {#if openAssign === k}
-          <div class="asgrow">
-            <label>
-              Controlled by
-              <select
-                value={asg?.source ?? 0}
-                onchange={(e) =>
-                  onAssignParam(block.slot, paired, p.index, Number(e.currentTarget.value))}
-              >
-                {#each SOURCES as src}<option value={src.value}>{src.label}</option>{/each}
-              </select>
+              <span>{p.value >= 0.5 ? "On" : "Off"}</span>
             </label>
-            {#if asg}
-              <!-- The travel ends are in the parameter's own units, which is why they reuse the
-                   parameter's own range rather than a 0..1 sweep: a pitch block's ends are
-                   semitones. Bools have no meaningful middle, so they get a two-state select. -->
-              {@const tr = range(p, control(p) === "int")}
-              {#each [["Min", false], ["Max", true]] as [lbl, isMax]}
-                {@const v = (isMax ? asg.max : asg.min) ?? (isMax ? tr.max : tr.min)}
-                <label class="travel">
-                  {lbl}
-                  {#if p.kind === "bool"}
-                    <select
-                      value={v >= 0.5 ? 1 : 0}
-                      onchange={(e) =>
-                        onAssignTravel(block.slot, paired, p.index, isMax, Number(e.currentTarget.value))}
-                    >
-                      <option value={0}>Off</option>
-                      <option value={1}>On</option>
-                    </select>
-                  {:else}
-                    <input
-                      type="range"
-                      min={tr.min}
-                      max={tr.max}
-                      step={tr.step}
-                      value={v}
-                      onchange={(e) =>
-                        onAssignTravel(block.slot, paired, p.index, isMax, e.currentTarget.valueAsNumber)}
-                    />
-                    <span class="tval">{fmtVal(p, v)}</span>
-                  {/if}
-                </label>
+          {:else if c === "unsettable"}
+            <span
+              class="val unranged"
+              title="The device carries this value but fretwire has no confirmed way to address it, so it is read-only here rather than a control that would be refused."
+              >{p.kind === "bool" ? (p.value >= 0.5 ? "On" : "Off") : fmtVal(p, p.value)}</span
+            >
+          {:else if c === "unranged"}
+            <span
+              class="val unranged"
+              title="No range for this parameter in the reference data, so fretwire won't send a value it can't bound — an out-of-range integer can hang the device."
+              >{fmtVal(p, p.value)}</span
+            >
+          {:else if c === "seg"}
+            {@const active = nearestStop(p)}
+            <div class="seg">
+              {#each p.stops as s (s.value)}
+                <button
+                  class="segbtn"
+                  class:active={s.value === active.value}
+                  onclick={() => s.value !== active.value && onFloat(block.slot, paired, p.index, s.value)}
+                >{s.label}</button>
               {/each}
-            {/if}
-          </div>
-        {/if}
-      </div>
-    {/each}
+            </div>
+          {:else}
+            {@const isInt = c === "int"}
+            {@const r = range(p, isInt)}
+            <div class="slider">
+              <input
+                type="range"
+                min={r.min}
+                max={r.max}
+                step={r.step}
+                value={live[k] ?? p.value}
+                use:wheelable={(e) => nudge(e, k, p, paired, isInt, r)}
+                ondblclick={() => resetToDefault(k, p, paired, isInt)}
+                title={p.default != null
+                  ? `Double-click to reset to ${fmtVal(p, p.default)}`
+                  : "Shift+scroll to nudge"}
+                oninput={(e) => {
+                  const v = e.currentTarget.valueAsNumber;
+                  live[k] = v;
+                  if (!isInt) preview(k, paired, p, v);
+                }}
+                onchange={(e) => commit(k, e.currentTarget.valueAsNumber, paired, p, isInt)}
+              />
+              {#if typing === k}
+                <input
+                  class="val typing"
+                  value={typed}
+                  oninput={(e) => (typed = e.currentTarget.value)}
+                  onblur={() => commitTyped(k, p, paired, isInt)}
+                  onkeydown={(e) => {
+                    if (e.key === "Enter") e.currentTarget.blur();
+                    else if (e.key === "Escape") { typing = null; e.currentTarget.blur(); }
+                  }}
+                  use:focusOnMount
+                />
+              {:else}
+                <button class="val" title="Click to type a value" onclick={() => openTyping(k, p)}>
+                  {fmtVal(p, live[k] ?? p.value)}
+                </button>
+              {/if}
+            </div>
+          {/if}
+          {#if openAssign === k}
+            <div class="asgrow">
+              <label>
+                Controlled by
+                <select
+                  value={asg?.source ?? 0}
+                  onchange={(e) =>
+                    onAssignParam(block.slot, paired, p.index, Number(e.currentTarget.value))}
+                >
+                  {#each SOURCES as src}<option value={src.value}>{src.label}</option>{/each}
+                </select>
+              </label>
+              {#if asg}
+                <!-- The travel ends are in the parameter's own units, which is why they reuse the
+                     parameter's own range rather than a 0..1 sweep: a pitch block's ends are
+                     semitones. Bools have no meaningful middle, so they get a two-state select. -->
+                {@const tr = range(p, control(p) === "int")}
+                {#each [["Min", false], ["Max", true]] as [lbl, isMax]}
+                  {@const v = (isMax ? asg.max : asg.min) ?? (isMax ? tr.max : tr.min)}
+                  <label class="travel">
+                    {lbl}
+                    {#if p.kind === "bool"}
+                      <select
+                        value={v >= 0.5 ? 1 : 0}
+                        onchange={(e) =>
+                          onAssignTravel(block.slot, paired, p.index, isMax, Number(e.currentTarget.value))}
+                      >
+                        <option value={0}>Off</option>
+                        <option value={1}>On</option>
+                      </select>
+                    {:else}
+                      <input
+                        type="range"
+                        min={tr.min}
+                        max={tr.max}
+                        step={tr.step}
+                        value={v}
+                        onchange={(e) =>
+                          onAssignTravel(block.slot, paired, p.index, isMax, e.currentTarget.valueAsNumber)}
+                      />
+                      <span class="tval">{fmtVal(p, v)}</span>
+                    {/if}
+                  </label>
+                {/each}
+              {/if}
+            </div>
+          {/if}
+        </div>
+      {/each}
+    </div>
+    {#if showMic}
+      <CabMicView {params} {paired} slot={block.slot} {onFloat} {onPreview} {fmtVal} />
+    {/if}
   </div>
 {/snippet}
 
@@ -669,6 +683,21 @@
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
     gap: 10px 32px;
+  }
+  /* Cab blocks only: the drawing sits beside the params instead of banding across the top. The
+     grid keeps its own auto-fill columns in whatever width is left, and `min-width: 0` is what
+     lets it actually give width back — a grid item defaults to its content's min size and would
+     otherwise shove the drawing off the panel. Below ~600px there is no room for both and the
+     drawing wraps underneath. */
+  .controls.withmic {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 12px 24px;
+  }
+  .controls.withmic .grid {
+    flex: 1 1 300px;
+    min-width: 0;
   }
   .ctrl {
     display: grid;

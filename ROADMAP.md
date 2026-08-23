@@ -146,6 +146,15 @@ start capture → do the single thing → stop:
       wasn't identified — see the "Known guesses" table in `docs/icons.md`, correct opportunistically
       (one line each in `models.js`). Also open: the picker's category `<select>` is text-only (a
       native option can't hold an icon).
+- [x] **Cab mic view** (2026-08-22): a cab's params are drawn — speaker in cross-section, the mic at
+      its distance/position/angle, ticked `Edge` / `Cap edge` / `Center`. Drag or arrow-key the mic
+      to set Distance and Position. Mic silhouettes generated from `icons/mics.js`; see the "cab mic
+      view" section of `docs/icons.md`. **Follow-ups:** (a) the radial scale assumes Position is
+      linear in radius and pins "Cap edge" to Position's default — neither is stated by the
+      reference data; (b) a **legacy** cab (category 2) reaches its mic through the extras table and
+      the meta lookup misses it — `cab.models` names it `@mic` while `name_params` looks it up as
+      `Mic` — so it renders read-only with no mic names and the view falls back to a generic
+      silhouette. Untested either way: no legacy cab appears in any capture we hold.
 - [x] **Live-follow** of panel changes (footswitch bypass / snapshot / preset) via the
       status-channel state-push (`Session::poll_events`).
 - [x] **Move** (op 43) + **add** (op 39) block — protocol + CLI verified live.
@@ -384,13 +393,12 @@ start capture → do the single thing → stop:
       called a backup gets trusted as one. `fretwire_data::hxb` already reads HX Edit's own `.hxb`,
       which is the reference for what a real one contains — and a plausible import path once the
       `tone` JSON → wire blob conversion exists.
-      > Decoding op 25 buys one small thing early: **preset numbering**. Whether the pedal writes
-      > `01A` or `000` is a global, and it is **confirmed absent from every stream we already read**
-      > — flipping it on a live Stomp left the browse listing and the preset stream byte-identical
-      > (2026-08-21, [solid]). So the GUI carries a manual toggle
-      > (`ui/src/lib/numbering.svelte.js`) and op 25 is the *only* thing that can replace it with a
-      > detected default. Small, but it is the cheapest possible first consumer of the globals
-      > decode — one field, no restore semantics, no risk.
+      > **Done (2026-08-22).** Decoding op 25 bought one small thing early: **preset numbering**.
+      > Whether the pedal writes `01A` or `000` is a global, and it is **confirmed absent from every
+      > stream we already read** — flipping it on a live Stomp left the browse listing and the
+      > preset stream byte-identical (2026-08-21, [solid]). The GUI's manual toggle is now a view of
+      > setting 27 rather than a guess beside it: op 24 supplies the form at connect and op 25
+      > writes it when the toggle is used.
 - [x] **IR management — read and write** (2026-08-22, verified live). The one device capability
       HX Edit had entirely to itself, and the reason a Linux user still needed a Windows box.
       `Session::{ir_info,ir_directory,ir_export,ir_upload}`; CLI `ir-list`, `ir-info`, `ir-export`,
@@ -558,7 +566,9 @@ real session.
       flat and numbered; a 601-id sweep costs 1.4 s, so `settings-dump` / `settings-diff` maps it
       with no capture at all. `fretwire_protocol::settings` is the shared table, the CLI has
       `setting-get`/`setting-set`, and the GUI has a **Globals** panel. Id 27 (preset numbering)
-      retired the manual toggle it was blocking.
+      turned the preset sidebar's manual toggle into a view of the pedal's own setting — it reads
+      the form at connect and writes it when switched, so the sidebar item and the Globals panel's
+      "Preset numbering" row are two views of one value (2026-08-22).
       The global EQ is fully mapped: `190`-`200`, three bands of frequency/Q/gain then the two
       cuts, and the GUI draws it as a response curve.
       **Still open:** 138 answering ids are unidentified; `127` (**Auto In-Z**, renamed from a

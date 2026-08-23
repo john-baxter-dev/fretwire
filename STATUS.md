@@ -29,6 +29,35 @@ to its effect family and then to the category, so nothing is ever blank. None of
 read or shipped — see `docs/icons.md`. Chain cells grew to 104x50 to fit the icon and a two-line
 label.
 
+**Default window size (2026-08-22):** 960x640 was too small to use. Now **1360x860**, with minimums
+of 860x600 so it can't be dragged back into that state. The width is measured, not guessed: the
+chain draws `84 + columns * 120` px (`Chain.svelte`), so a full eight-column HX Stomp chain is 1044,
+and the 230px sidebar, 32px page padding and 16px workspace gap add 278 around it — 1322 to see the
+Out node without scrolling, rounded up for a scrollbar. (An interim 1280 was 42px short of exactly
+that, which is how it was noticed.)
+Tauri takes a configured size literally, and 860 is taller than a 1366x768 laptop's screen, so
+`main.rs::fit_window_to_screen` shrinks it to the monitor's work area at startup and re-centres —
+per axis, and only ever downward. The arithmetic is `shrink_to_fit`, unit-tested, because the window
+half of it needs a compositor to exercise.
+
+**Cab mic view (2026-08-22):** a cab's params are now drawn as well as listed — the speaker in
+cross-section, the mic standing off the grille, and the radial scale Position runs along, ticked
+`Edge` / `Cap edge` / `Center`. It sits *beside* the param grid (wrapping under it on a narrow
+panel), not above — stacked, it banded dead space across the middle of the panel. Drag the mic (or arrow-key it) to set Distance and Position; the
+tilt is drawn as an arc at the capsule and Angle keeps its segmented buttons. It draws for any param
+list carrying a `Mic` and a `Distance`, so the paired cab on an amp+cab and a standalone Cab block
+both get it, and the legacy cab family degrades to just mic-and-distance. Mic silhouettes are
+generated from `ui/src/lib/icons/mics.js` — no artwork, same rule as the model icons.
+
+**Fixed: a cab push landed on the amp (2026-08-22, issue #11).** Status pushes carry key `26` — the
+same main/paired sub-model selector the edit ops take — and the decoder dropped it, so a change to a
+paired cab arrived as a change to the block's own model. On an amp+cab that aliases the cab's
+`Distance` (paired 2) onto the amp's `Mid` (main 2): moving mic distance moved the Mid slider in the
+editor. Exactly the shape of the key-29 bug fixed the day before (issue #5), one axis over. The
+write path was never wrong — `set_paired_value` has always sent `26:1` — so nothing reached the
+device incorrectly; the editor's *display* was. `StatusPush::Param` now carries `paired`, and the
+GUI's push overlay keys on it and patches `paired_params` instead of always patching `params`.
+
 **Routing flexibility (2026-07-06, verified live):** the grid now covers the full parallel-path
 lifecycle — **serial→split creation by drag** (the split/mixer node slots exist in the 20-slot array
 even on serial presets [solid, preset1 fixture], so the empty B row is revealed during a drag and one
@@ -2904,14 +2933,21 @@ The preset-numbering form — `000`-`127` or `01A`-`32D` — was the one setting
 way to work around, because the twenty-eighth round proved it never reaches the wire in any stream
 we read. It doesn't; it just isn't in a stream, it's a setting, and `read_setting(27)` answers it.
 
-The GUI now **takes the pedal's own form as the default** and keeps the manual toggle as an
-override. The distinction that makes this work is storing *nothing* until someone actually picks:
-the old store defaulted to `banked` and persisted it, which would have permanently overruled a pedal
-set to flat with a default nobody chose. `numbering.explicit` is the flag, and the device is
-re-consulted on every connect rather than cached.
+**Update (2026-08-22): the toggle is now the setting, not an override of it.** Adopting the pedal's
+form as a *default* still left two controls for one value — the sidebar's ⋯ menu and the Globals
+panel's "Preset numbering" row — and a local override silently outranked the panel. Now the sidebar
+item reads setting 27 at connect and **writes it** when switched (op 25, the same path the Globals
+row uses), and the mode always follows the device's read-back rather than the click, so a refused
+write leaves the menu showing what the pedal actually is. The local preference survives only as the
+fallback for a device that doesn't answer id 27, where there is nothing to write to and the toggle
+can only be cosmetic; `forgetDeviceNumbering()` restores it on disconnect.
 
-Three literals cross-pinned, the same way the IR DTO keys are: `commands.rs::numbering_word`, the
-store's comparisons, and the mock's `device_numbering`.
+Polarity is the hazard here — id 27's flag is `on = 000-127`, so `true` is the *flat* form, and
+getting it backwards would fail nowhere and just set the user's pedal to the form they were trying
+to leave. The mapping lives in `ui/src/lib/numbering-forms.js` (plain JS, so node can import it
+without the Svelte compiler) and is round-tripped through the mock's real `settings_write` in
+`tests/globals-mock.mjs`. Three literals stay cross-pinned as before:
+`commands.rs::numbering_word`, the store's comparisons, and the mock's `device_numbering`.
 
 ### Withdrawn: `201`-`203` are not the global EQ
 An earlier gloss in `docs/protocol.md` and in the CLI called them that. The EQ turned out to be

@@ -568,7 +568,8 @@ real session.
       `setting-get`/`setting-set`, and the GUI has a **Globals** panel. Id 27 (preset numbering)
       turned the preset sidebar's manual toggle into a view of the pedal's own setting — it reads
       the form at connect and writes it when switched, so the sidebar item and the Globals panel's
-      "Preset numbering" row are two views of one value (2026-08-22).
+      "Preset numbering" row are two views of one value (2026-08-22; verified live 2026-08-23,
+      switching in the GUI changes the form on the pedal's own screen).
       The global EQ is fully mapped: `190`-`200`, three bands of frequency/Q/gain then the two
       cuts, and the GUI draws it as a response curve.
       **Still open:** 138 answering ids are unidentified; `127` (**Auto In-Z**, renamed from a

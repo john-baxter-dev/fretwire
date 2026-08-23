@@ -2936,7 +2936,8 @@ The preset-numbering form — `000`-`127` or `01A`-`32D` — was the one setting
 way to work around, because the twenty-eighth round proved it never reaches the wire in any stream
 we read. It doesn't; it just isn't in a stream, it's a setting, and `read_setting(27)` answers it.
 
-**Update (2026-08-22): the toggle is now the setting, not an override of it.** Adopting the pedal's
+**Update (2026-08-22, verified live 2026-08-23 — GUI toggle to the pedal's own screen): the toggle
+is now the setting, not an override of it.** Adopting the pedal's
 form as a *default* still left two controls for one value — the sidebar's ⋯ menu and the Globals
 panel's "Preset numbering" row — and a local override silently outranked the panel. Now the sidebar
 item reads setting 27 at connect and **writes it** when switched (op 25, the same path the Globals

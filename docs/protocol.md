@@ -74,12 +74,29 @@ then a query: OUT 01 00 0X 00 01 00 00 00 0X 00 00 00       ->  IN .. 0X "P33"/"
   **current preset** (frame 4272 IN begins `da 0a … 6c 36 2d 68 65 6c 69 78` = "l6-helix") — the
   same paged MessagePack mechanism as "Preset open" below.
 
-**Status pushes carry key 29 too, and it matters.** A panel change mirrors back the same map an
-op-30 edit sends — `{98: slot, 29: by_index, 26: 0, 28: index, 119: value}` — including key 29, which
-says whether key 28 indexes the model's param list (`true`) or the block's **extra** values
-(`false`: `Trails`, a legacy cab's mic index). Both spaces start at 0, so a decoder that drops key 29
-delivers a trails toggle to the model's param 0. [solid — `dynamic_ambience_trails_on_off.pcapng`
-against `dynamic_ambience_mix_modify.pcapng`; reported as issue #5]
+**Status pushes carry keys 29 *and* 26 too, and both matter.** A panel change mirrors back the same
+map an op-30 edit sends — `{98: slot, 29: by_index, 26: model_sel, 28: index, 119: value}` — so a
+push names its index space the same way an edit does, and a slot can hold **three** spaces that all
+start at 0:
+
+| key | value | key 28 indexes |
+| --- | --- | --- |
+| `29` | `true` (default) | the selected model's param list |
+| `29` | `false` | the block's **extra** values (`Trails`, a legacy cab's mic index) |
+| `26` | `0` (default) | the block's own model |
+| `26` | `1` | the block's **paired cab/IR** |
+
+Dropping either one silently drives a different control. Key 29 was the first half: a trails toggle
+arrived as the model's param 0, so toggling Trails on the pedal swept the *Time* slider. [solid —
+`dynamic_ambience_trails_on_off.pcapng` against `dynamic_ambience_mix_modify.pcapng`; issue #5]
+
+Key 26 was the second: on an amp+cab block the cab's `Distance` is paired param **2** and the amp's
+`Mid` is main param **2**, so a mic-distance push arrived as a Mid change and moving mic distance
+appeared to move the amp's Mid. The write direction was never affected — `edit::set_paired_value`
+has always sent `26:1`, byte-exact against the cab captures — only the read-back. [solid on the
+shape (the push mirrors the edit map field for field, and key 26 is verified on the edit side); the
+`26:1` *push* itself is inferred rather than captured, as no capture moves a cab param from the
+pedal's own panel. Issue #11]
 
 **Unifying insight:** those queries use the **same MessagePack envelope as edits**. The meter query
 `83 66 cd 03 e8 64 4c 65 80` = `{102: 0x03e8, 100: 76, 101: {}}` — key 102 a counter, key 100 the

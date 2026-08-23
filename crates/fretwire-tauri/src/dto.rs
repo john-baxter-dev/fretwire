@@ -28,6 +28,9 @@ pub enum PushDto {
         /// `true` when `param` is an index into the block's extra values, matching a
         /// [`ParamDto::extra_index`] rather than a [`ParamDto::index`].
         extra: bool,
+        /// `true` when the change is on the block's paired cab/IR rather than its own model — the
+        /// two param lists both start at 0, so this picks which one `param` indexes.
+        paired: bool,
     },
 }
 
@@ -48,10 +51,12 @@ pub fn push_dtos(pushes: &[StatusPush]) -> Vec<PushDto> {
                 param,
                 value,
                 extra,
+                paired,
             } => Some(PushDto::Param {
                 slot: *slot,
                 param: *param,
                 extra: *extra,
+                paired: *paired,
                 value: fin(match value {
                     ParamValue::Float(f) => *f as f64,
                     ParamValue::Int(i) => *i as f64,

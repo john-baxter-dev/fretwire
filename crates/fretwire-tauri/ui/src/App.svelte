@@ -248,11 +248,17 @@
   const pendingBypasses = new Map(); // slot → bypassed, from footswitch pushes
   const pendingParams = new Map(); // paramKey(slot, param, extra) → value, from panel-knob pushes
 
-  // A push addresses either the model's param list or the block's extra values, and **both spaces
-  // start at 0** — so the space has to be part of the key. Keying on the number alone delivered
-  // Trails (extra 0) to the model's param 0, which is how a tester found this: turning Trails on
-  // the pedal swept the Time slider. See PushDto::Param / ParamDto::extra_index.
-  const paramKey = (slot, param, extra) => `${slot}:${extra ? "x" : "p"}${param}`;
+  // A push addresses one of *three* index spaces in a slot — the block's own param list, its
+  // paired cab's param list, or the block's extra values — and **all three start at 0**, so the
+  // space has to be part of the key. Keying on the number alone delivered Trails (extra 0) to the
+  // model's param 0, which is how a tester found the first half: turning Trails on the pedal swept
+  // the Time slider. The paired axis is the same bug one over — a cab's Distance (paired 2) landing
+  // on an amp's Mid (main 2), so moving mic distance appeared to move the amp's Mid. [issue #11]
+  // See PushDto::Param / ParamDto::extra_index.
+  // The two axes are independent — a legacy cab reaches its Mic through the *extras* table on the
+  // *paired* model — so both go in the key rather than one shadowing the other.
+  const paramKey = (slot, param, extra, paired) =>
+    `${slot}:${paired ? "c" : "p"}${extra ? "x" : ""}${param}`;
 
   // A footswitch bypass is fully described by its own push, so apply it directly. This is also why
   // the re-read can't be trusted for it: the device's readable stream lags its own push, so a fresh
@@ -275,17 +281,28 @@
   // the whole preset for every notch would flood the device for no new information.
   function applyParams() {
     if (!preset || !pendingParams.size) return;
-    const patch = (b) => {
-      if (!b?.params) return b;
+    // One list at a time, told apart by `paired` — an amp+cab block carries two of them and a
+    // push names which it meant.
+    const patchList = (slot, list, paired) => {
+      if (!list) return [list, false];
       let touched = false;
-      const params = b.params.map((p) => {
+      const next = list.map((p) => {
         const isExtra = p.extra_index != null;
-        const v = pendingParams.get(paramKey(b.slot, isExtra ? p.extra_index : p.index, isExtra));
+        const v = pendingParams.get(
+          paramKey(slot, isExtra ? p.extra_index : p.index, isExtra, paired),
+        );
         if (v === undefined || v === p.value) return p;
         touched = true;
         return { ...p, value: v };
       });
-      return touched ? { ...b, params } : b;
+      return [next, touched];
+    };
+    const patch = (b) => {
+      if (!b?.params) return b;
+      const [params, hit] = patchList(b.slot, b.params, false);
+      const [paired_params, pairedHit] = patchList(b.slot, b.paired_params, true);
+      if (!hit && !pairedHit) return b;
+      return { ...b, params, ...(b.paired_params ? { paired_params } : {}) };
     };
     preset = {
       ...preset,
@@ -362,7 +379,7 @@
       } else if (p.kind === "Bypass") {
         pendingBypasses.set(p.slot, !p.enabled);
       } else if (p.kind === "Param") {
-        pendingParams.set(paramKey(p.slot, p.param, p.extra), p.value);
+        pendingParams.set(paramKey(p.slot, p.param, p.extra, p.paired), p.value);
       }
     }
     if (pendingPresetChange) {

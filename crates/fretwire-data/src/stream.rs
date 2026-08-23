@@ -1428,6 +1428,11 @@ pub enum StatusPush {
         /// list — the two are separate spaces that both start at 0, so a consumer that ignores
         /// this applies `Trails` (extra 0) to whatever the model's param 0 happens to be.
         extra: bool,
+        /// `true` when the change is on the block's **paired cab/IR** rather than its own model
+        /// (wire key `26`, the same sub-model selector the edit ops take). An amp+cab block has
+        /// two param lists that both start at 0, so a consumer that ignores this applies the cab's
+        /// `Distance` (paired 2) to the amp's `Mid` (main 2).
+        paired: bool,
     },
     /// The device's idle mirror (`type 22` with a nil payload) — "nothing changed", sent
     /// continuously. Distinct from [`StatusPush::Other`] so logging the undecoded pushes doesn't
@@ -1469,8 +1474,9 @@ pub fn parse_status_push(frame_body: &[u8]) -> Option<StatusPush> {
     if let Some(index) = map_get(inner, 108).and_then(Value::as_i64) {
         return Some(StatusPush::Preset(index));
     }
-    // A panel parameter change mirrors back the *same* `{98: slot, 29: by_index, 26: 0, 28: index,
-    // 119: value}` map the op-30 `set_value` edit sends, under the same push type number (30).
+    // A panel parameter change mirrors back the *same* `{98: slot, 29: by_index, 26: model_sel,
+    // 28: index, 119: value}` map the op-30 `set_value` edit sends, under the same push type
+    // number (30).
     // Turning the Drive knob on a US Princess emits a run of these with slot 5, index 0 and a
     // descending f32 — which is how it was identified. [solid — 2026-08-02, HX Stomp]
     //
@@ -1481,17 +1487,26 @@ pub fn parse_status_push(frame_body: &[u8]) -> Option<StatusPush> {
     // toggling Trails on the pedal moved the *Time* slider in the editor. Absent, assume the
     // ordinary space, which is what every pre-2026-08-21 caller assumed for all of them.
     // [solid — `captures/dynamic_ambience_trails_on_off.pcapng` vs `dynamic_ambience_mix_modify`]
+    //
+    // **Key 26 is load-bearing for the same reason**, on the other axis: it selects the *model*
+    // within the slot — `0` the block's own, `1` its paired cab/IR — exactly as it does on the way
+    // out (`edit::MODEL_MAIN` / `MODEL_PAIRED`). An amp+cab slot has two param lists that both
+    // start at 0, so dropping it made the cab's `Distance` (paired 2) arrive as the amp's `Mid`
+    // (main 2), and moving mic distance swept the Mid knob in the editor. Absent, assume the main
+    // model. [issue #11]
     if let (Some(slot), Some(param), Some(value)) = (
         map_get(inner, 98).and_then(Value::as_i64),
         map_get(inner, 28).and_then(Value::as_i64),
         map_get(inner, 119).and_then(ParamValue::from_value),
     ) {
         let extra = map_get(inner, 29).and_then(Value::as_bool) == Some(false);
+        let paired = map_get(inner, 26).and_then(Value::as_i64) == Some(1);
         return Some(StatusPush::Param {
             slot,
             param,
             value,
             extra,
+            paired,
         });
     }
     Some(StatusPush::Other(typ))
@@ -1859,9 +1874,11 @@ mod list_tests {
                 param,
                 value,
                 extra,
+                paired,
             }) => {
                 assert_eq!((slot, param), (5, 0));
                 assert!(!extra, "key 29 is true here — the model's param space");
+                assert!(!paired, "key 26 is 0 here — the block's own model");
                 match value {
                     ParamValue::Float(f) => assert!((f - 0.4).abs() < 1e-6, "got {f}"),
                     other => panic!("expected a float, got {other:?}"),
@@ -1892,6 +1909,7 @@ mod list_tests {
                 param: 0,
                 value: ParamValue::Bool(true),
                 extra: true,
+                paired: false,
             })
         );
         // The off frame differs in exactly one byte — the value — so a decoder that got the index
@@ -1905,7 +1923,54 @@ mod list_tests {
                 param: 0,
                 value: ParamValue::Bool(false),
                 extra: true,
+                paired: false,
             })
+        );
+    }
+
+    /// The same push shape again, on the **other** index axis: a change to the block's *paired
+    /// cab*, which key 26 selects (`1`) rather than the block's own model (`0`).
+    ///
+    /// Provenance: the captured US Princess knob frame above with that one byte flipped — we have
+    /// no capture of a cab param being moved from the pedal's own panel. It is not a guess about
+    /// the *shape*, though: the push mirrors the op-30 edit map field for field, and key 26 there
+    /// is byte-exact verified against real cab mic-distance/angle captures
+    /// (`edit::set_paired_value`). What it pins down is that we read the field at all.
+    ///
+    /// Ignoring it is what made scrolling a cab's `Distance` (paired param 2) drive the amp's
+    /// `Mid` (main param 2) in the editor — both lists start at 0. [issue #11]
+    #[test]
+    fn a_paired_cab_push_is_not_the_main_models_param() {
+        let main = [
+            0, 0, 4, 0, 27, 0, 0, 0, 130, 105, 30, 106, 132, 82, 0, 68, 6, 121, 20, 106, 133, 98,
+            5, 29, 195, 26, 0, 28, 2, 119, 202, 62, 204, 204, 204,
+        ];
+        let mut cab = main;
+        cab[26] = 1; // key 26: main model -> paired cab
+
+        let Some(StatusPush::Param {
+            paired: main_paired,
+            param: main_param,
+            ..
+        }) = parse_status_push(&main)
+        else {
+            panic!("expected a Param push")
+        };
+        assert_eq!((main_paired, main_param), (false, 2));
+
+        let Some(StatusPush::Param {
+            paired: cab_paired,
+            param: cab_param,
+            slot,
+            ..
+        }) = parse_status_push(&cab)
+        else {
+            panic!("expected a Param push")
+        };
+        assert_eq!(
+            (cab_paired, cab_param, slot),
+            (true, 2, 5),
+            "same slot and same index, different model"
         );
     }
 

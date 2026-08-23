@@ -54,12 +54,20 @@ const PARAMS = {
     P.float(0, "Drive", 5.5), P.float(1, "Bass", 5), P.float(2, "Mid", 6), P.float(3, "Treble", 5.5),
     P.float(4, "Presence", 4), P.float(5, "Ch Vol", 5), P.bool(6, "Bright", false), P.float(7, "Master", 7),
   ],
+  // The modern cab shape (category 19), in the device's own order and with the mic names the
+  // `cabMICir` control actually carries. Kept faithful because two of its indices are load-bearing
+  // for regressions: Distance is **2**, the same index the amp's Mid sits at, which is what made a
+  // cab push land on the amp (issue #11) — `fretwireMock.knob(3, 2, 6, false, true)` is that case.
   cab: () => [
-    P.enum(0, "Mic", 2, ["57 Dynamic", "121 Dynamic", "4038 Ribbon", "67 Condenser", "87 Condenser"]),
-    P.float(1, "Distance", 4, 1, 12),
-    P.seg(2, "Angle", 0, [{ value: 0, label: "0 deg" }, { value: 45, label: "45 deg" }]),
-    P.float(3, "Low Cut", 80, 20, 500),
-    P.float(4, "High Cut", 8000, 2000, 12000), P.float(5, "Level", 0, -30, 12),
+    P.enum(0, "Mic", 0, [
+      "57 Dynamic", "421 Dynamic", "7 Dynamic", "906 Dynamic", "30 Dynamic", "121 Ribbon",
+      "160 Ribbon", "4038 Ribbon", "84 Ribbon", "414 Cond", "47 Cond FET", "67 Cond",
+    ]),
+    P.float(1, "Position", 0.23, 0, 1),
+    P.float(2, "Distance", 2, 1, 12),
+    P.seg(3, "Angle", 0, [{ value: 0, label: "0 deg" }, { value: 45, label: "45 deg" }]),
+    P.float(4, "Low Cut", 80, 19.9, 500),
+    P.float(5, "High Cut", 8000, 500, 20100), P.float(6, "Level", 0, -60, 6),
   ],
   reverb: () => [
     P.enum(0, "Type", 0, ["Room", "Hall", "Plate", "Spring", "Chamber"]),
@@ -1380,17 +1388,23 @@ if (typeof window !== "undefined") {
       emit("device-pushes", [{ kind: "Bypass", slot, enabled }]);
     },
     /**
-     * Turn a parameter with the pedal's own knob. `extra` selects the index space: `false` (the
-     * default) means `param` indexes the model's param list, `true` means the block's extra values
-     * — `fretwireMock.knob(2, 0, 1, true)` is Trails on, which must **not** move the model's
-     * param 0. That confusion was a real bug (issue #5).
+     * Turn a parameter with the pedal's own knob. `extra` and `paired` select the index space:
+     * with both `false` (the default) `param` indexes the model's own param list, `extra` means
+     * the block's extra values, `paired` means its cab/IR's list. All three start at 0.
+     *
+     * `fretwireMock.knob(2, 0, 1, true)` is Trails on, which must **not** move the model's param 0
+     * (issue #5); `fretwireMock.knob(6, 2, 3, false, true)` is a cab's Distance, which must **not**
+     * move the amp's Mid (issue #11).
      */
-    knob(slot, param, value, extra = false) {
-      const p = (current.slots[slot]?.params ?? []).find((q) =>
+    knob(slot, param, value, extra = false, paired = false) {
+      const list = paired
+        ? (current.slots[slot]?.paired_params ?? [])
+        : (current.slots[slot]?.params ?? []);
+      const p = list.find((q) =>
         extra ? q.extra_index === param : q.extra_index == null && q.index === param,
       );
       if (p) p.value = value;
-      emit("device-pushes", [{ kind: "Param", slot, param, value, extra }]);
+      emit("device-pushes", [{ kind: "Param", slot, param, value, extra, paired }]);
     },
     /** Switch snapshot as if from the panel. */
     snapshot(index) {

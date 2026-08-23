@@ -1931,11 +1931,11 @@ mod list_tests {
     /// The same push shape again, on the **other** index axis: a change to the block's *paired
     /// cab*, which key 26 selects (`1`) rather than the block's own model (`0`).
     ///
-    /// Provenance: the captured US Princess knob frame above with that one byte flipped — we have
-    /// no capture of a cab param being moved from the pedal's own panel. It is not a guess about
-    /// the *shape*, though: the push mirrors the op-30 edit map field for field, and key 26 there
-    /// is byte-exact verified against real cab mic-distance/angle captures
-    /// (`edit::set_paired_value`). What it pins down is that we read the field at all.
+    /// Provenance: the captured US Princess knob frame above with that one byte flipped. The
+    /// *behaviour* is measured, though — sweeping a cab's Distance on the pedal's own panel sends
+    /// `26:1`, and sweeping the amp's Mid in the same slot sends `26:0` with the same `28:2`, which
+    /// is the whole collision in one capture (`captures/paired_cab_push.md`, HX Stomp fw 3.80,
+    /// 2026-08-23). This test is the unit-level guard on reading the field at all.
     ///
     /// Ignoring it is what made scrolling a cab's `Distance` (paired param 2) drive the amp's
     /// `Mid` (main param 2) in the editor — both lists start at 0. [issue #11]

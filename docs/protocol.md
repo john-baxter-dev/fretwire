@@ -93,10 +93,12 @@ arrived as the model's param 0, so toggling Trails on the pedal swept the *Time*
 Key 26 was the second: on an amp+cab block the cab's `Distance` is paired param **2** and the amp's
 `Mid` is main param **2**, so a mic-distance push arrived as a Mid change and moving mic distance
 appeared to move the amp's Mid. The write direction was never affected — `edit::set_paired_value`
-has always sent `26:1`, byte-exact against the cab captures — only the read-back. [solid on the
-shape (the push mirrors the edit map field for field, and key 26 is verified on the edit side); the
-`26:1` *push* itself is inferred rather than captured, as no capture moves a cab param from the
-pedal's own panel. Issue #11]
+has always sent `26:1`, byte-exact against the cab captures — only the read-back.
+
+Both forms are captured off one slot: sweeping the cab's `Distance` and then the amp's `Mid` on an
+amp+cab block sent 153 pushes, every one `28:2`, differing only in key 26 — 123 with `26:1` (values
+in inches, 1..12) and 30 with `26:0` (normalized 0..1). [solid — HX Stomp fw 3.80, 2026-08-23,
+`captures/paired_cab_push.md`; issue #11]
 
 **Unifying insight:** those queries use the **same MessagePack envelope as edits**. The meter query
 `83 66 cd 03 e8 64 4c 65 80` = `{102: 0x03e8, 100: 76, 101: {}}` — key 102 a counter, key 100 the

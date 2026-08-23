@@ -55,7 +55,10 @@ paired cab arrived as a change to the block's own model. On an amp+cab that alia
 `Distance` (paired 2) onto the amp's `Mid` (main 2): moving mic distance moved the Mid slider in the
 editor. Exactly the shape of the key-29 bug fixed the day before (issue #5), one axis over. The
 write path was never wrong — `set_paired_value` has always sent `26:1` — so nothing reached the
-device incorrectly; the editor's *display* was. `StatusPush::Param` now carries `paired`, and the
+device incorrectly; the editor's *display* was. **Confirmed on hardware 2026-08-23:** sweeping the
+cab's Distance and then the amp's Mid on one amp+cab slot sent 153 pushes, all `28:2`, separated
+only by key 26 (`captures/paired_cab_push.md`). The decode had been inferred from the edit map's
+shape; it is now measured. `StatusPush::Param` now carries `paired`, and the
 GUI's push overlay keys on it and patches `paired_params` instead of always patching `params`.
 
 **Routing flexibility (2026-07-06, verified live):** the grid now covers the full parallel-path

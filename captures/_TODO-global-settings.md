@@ -67,6 +67,12 @@ each file after exactly what was clicked, e.g.:
 setting, the 119 sequence maps values → menu options. For the pane-open capture, look for a
 read/query op and its reply shape (may ride the PRIMARY channel like the preset list does).
 
+## Follow-on
+The id space is mapped enough to ship (27 named as of 2026-08-23) and the deliverables below are
+done. What is **not** done is checking the names themselves against the pedal's screens — see
+[`_TODO-settings-names.md`](_TODO-settings-names.md), which exists because id `127` carried an
+invented name for a day.
+
 ## Deliverables
 - `docs/protocol.md`: a global-settings id table (`118 → setting, values → options`) tagged [solid].
 - `fretwire_core`: typed wrappers over `set_setting` + the read path; GUI Ins/Outs panel after that.

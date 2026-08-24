@@ -44,7 +44,7 @@ pub struct Setting {
 
 /// Every setting id we have identified.
 ///
-/// **Read off a physical HX Stomp, 2026-08-22**, except the five marked `[XL]`, which an HX Stomp
+/// **Read off a physical HX Stomp, 2026-08-22**, except those marked `[XL]`, which an HX Stomp
 /// XL owner read off that pedal the same way and contributed [2026-08-23]. Where the two units'
 /// menus name a thing differently the XL's wording is used, because it is the one we have in
 /// writing; an id the XL has and the Stomp does not simply refuses on a Stomp, and `scan_settings`
@@ -126,10 +126,10 @@ pub const SETTINGS: &[Setting] = &[
     },
     Setting {
         id: 27,
-        name: "Preset numbering",
-        group: "Displays",
+        name: "Preset Number",
+        group: "Preferences",
         kind: Kind::Flag {
-            on: "000-127",
+            on: "000-128",
             off: "01A-32D",
         },
     },
@@ -143,18 +143,42 @@ pub const SETTINGS: &[Setting] = &[
         },
     },
     Setting {
+        id: 65,
+        // [XL]
+        name: "Tempo Pitch",
+        group: "Preferences",
+        kind: Kind::Flag {
+            on: "Transpr",
+            off: "Authentc",
+        },
+    },
+    Setting {
+        id: 68,
+        // [XL]
+        name: "Tip Polarity",
+        group: "Preferences",
+        kind: Kind::Choice(&[(0, "Normal"), (1, "Inverted")]),
+    },
+    Setting {
+        id: 69,
+        // [XL]
+        name: "Ring Polarity",
+        group: "Preferences",
+        kind: Kind::Choice(&[(0, "Normal"), (1, "Inverted")]),
+    },
+    Setting {
         id: 73,
-        name: "Snapshot edits",
+        name: "Snapshot Edits",
         group: "Preferences",
         kind: Kind::Choice(&[(0, "Recall"), (1, "Discard")]),
     },
     Setting {
         id: 81,
-        name: "Bypass type",
+        name: "Bypass Type",
         group: "Preferences",
         kind: Kind::Flag {
-            on: "DSP bypass",
-            off: "Analog bypass",
+            on: "DSP",
+            off: "Analog",
         },
     },
     Setting {
@@ -165,6 +189,33 @@ pub const SETTINGS: &[Setting] = &[
             on: "Line",
             off: "Instrument",
         },
+    },
+    Setting {
+        id: 95,
+        // [XL]
+        name: "EXP/FS Tip",
+        group: "Preferences",
+        kind: Kind::Flag {
+            on: "FS7",
+            off: "EXP 1",
+        },
+    },
+    Setting {
+        id: 96,
+        // [XL]
+        name: "EXP/FS Ring",
+        group: "Preferences",
+        kind: Kind::Flag {
+            on: "FS8",
+            off: "EXP 2",
+        },
+    },
+    Setting {
+        id: 103,
+        // [XL]
+        name: "Snapshot Reselect",
+        group: "Preferences",
+        kind: Kind::Choice(&[(0, "Reload"), (1, "Toggle")]),
     },
     Setting {
         id: 127,
@@ -182,7 +233,14 @@ pub const SETTINGS: &[Setting] = &[
         // either side, so which one is `First` is not recoverable after the fact.
         name: "Auto In-Z",
         group: "Preferences",
-        kind: Kind::Choice(&[]),
+        kind: Kind::Choice(&[(0, "First"), (1, "Enabled")]),
+    },
+    Setting {
+        id: 136,
+        // [XL]
+        name: "Link Dual Cabs",
+        group: "Preferences",
+        kind: Kind::Choice(&[(0, "Off"), (1, "On")]),
     },
     Setting {
         id: 153,
@@ -331,11 +389,12 @@ pub const SETTINGS: &[Setting] = &[
 /// Ids absent from here sort after every id present, by id — see [`menu_rank`]. That is the honest
 /// default: nobody has placed them, so they keep their numeric position rather than being guessed
 /// into the middle of a menu.
-///
-/// **Ins/Outs, as an HX Stomp XL shows it** [2026-08-23] — that group is complete. Preferences is
-/// not placed at all: id 127 is known to be its tenth item, but 73 and 81 are unplaced, and one
-/// known position out of three would sort the other two ahead of it and be worse than no order.
-pub const MENU_ORDER: &[i64] = &[31, 94, 2, 3, 154, 153, 158, 156];
+pub const MENU_ORDER: &[i64] = &[
+    31, 94, 2, 3, 154, 153, 158, 156, // Ins/Outs
+    81, 73, 65, 95, 96, 68, 69, 27, 103, 127, 136, // Preferences
+    9, 11, // MIDI
+    14, 16, // Tempo
+];
 
 /// Where `id` sits in the pedal's menus — `MENU_ORDER.len()` for an id nobody has placed.
 ///
@@ -396,9 +455,9 @@ pub fn is_writable(id: i64) -> bool {
 pub const GROUPS: &[&str] = &[
     "Global EQ",
     "Ins/Outs",
+    "Preferences",
     "Tempo",
     "MIDI",
-    "Preferences",
     "Displays",
 ];
 
@@ -438,11 +497,11 @@ mod tests {
     #[test]
     fn preset_numbering_is_id_27() {
         let s = by_id(27).unwrap();
-        assert_eq!(s.name, "Preset numbering");
+        assert_eq!(s.name, "Preset Number");
         assert_eq!(
             s.kind,
             Kind::Flag {
-                on: "000-127",
+                on: "000-128",
                 off: "01A-32D"
             }
         );

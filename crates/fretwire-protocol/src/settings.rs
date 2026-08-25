@@ -202,6 +202,13 @@ pub const SETTINGS: &[Setting] = &[
         },
     },
     Setting {
+        id: 66,
+        // [XL]
+        name: "EXP 1 Position",
+        group: "EXP Pedals",
+        kind: Kind::Choice(&[(0, "Snapsht"), (1, "Preset"), (2, "Global")]),
+    },
+    Setting {
         id: 67,
         // [XL]
         name: "Snapsht Mode",
@@ -221,6 +228,13 @@ pub const SETTINGS: &[Setting] = &[
         name: "Ring Polarity",
         group: "Preferences",
         kind: Kind::Choice(&[(0, "Normal"), (1, "Inverted")]),
+    },
+    Setting {
+        id: 71,
+        // [XL]
+        name: "EXP 2 Position",
+        group: "EXP Pedals",
+        kind: Kind::Choice(&[(0, "Snapsht"), (1, "Preset"), (2, "Global")]),
     },
     Setting {
         id: 73,
@@ -506,6 +520,7 @@ pub const MENU_ORDER: &[i64] = &[
     31, 94, 2, 3, 154, 153, 158, 156, // Ins/Outs
     81, 73, 65, 95, 96, 68, 69, 27, 103, 127, 136, // Preferences
     17, 19, 18, 67, 20, 117, 129, 130, 131, // Footswitches
+    66, 71, // EXP Pedals
     9, 11, 14, 16, // MIDI/Tempo
 ];
 
@@ -572,11 +587,6 @@ pub fn is_writable(id: i64) -> bool {
 /// menu on the pedal. It leads the list because the panel gives it its own tab, and because every
 /// id in it sorts before the rest anyway; it is here so that [`group_rank`] can place it and so
 /// `every_group_is_declared` keeps covering it.
-///
-/// `EXP Pedals` holds nothing yet. They are declared because the pedal shows both
-/// sections populated, so the ids are there to be found — an empty group is a standing note that
-/// this is where the next `settings-diff` pass should look, and it costs nothing: the panel renders
-/// only groups that have rows.
 pub const GROUPS: &[&str] = &[
     "Global EQ",
     "Ins/Outs",

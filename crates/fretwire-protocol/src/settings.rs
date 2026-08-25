@@ -125,6 +125,34 @@ pub const SETTINGS: &[Setting] = &[
         },
     },
     Setting {
+        id: 17,
+        // [XL]
+        name: "Stomp Select",
+        group: "Footswitches",
+        kind: Kind::Choice(&[(0, "Off"), (1, "Touch"), (2, "Press"), (3, "Both")]),
+    },
+    Setting {
+        id: 18,
+        // [XL]
+        name: "Preset Mode",
+        group: "Footswitches",
+        kind: Kind::Choice(&[(0, "Moment"), (1, "Latch")]),
+    },
+    Setting {
+        id: 19,
+        // [XL]
+        name: "Stomp Mode",
+        group: "Footswitches",
+        kind: Kind::Choice(&[(0, "4 Swtch"), (1, "6 Swtch")]),
+    },
+    Setting {
+        id: 20,
+        // [XL]
+        name: "Up/Down Switches",
+        group: "Footswitches",
+        kind: Kind::Choice(&[(0, "Banks"), (1, "Preset"), (2, "Snapsht")]),
+    },
+    Setting {
         id: 27,
         // **These labels are the XL's, and they are wrong on a plain Stomp.** The flat form spells
         // out the range, so it differs with the preset count: an HX Stomp shows `000-125` and
@@ -172,6 +200,13 @@ pub const SETTINGS: &[Setting] = &[
             on: "Transpr",
             off: "Authentc",
         },
+    },
+    Setting {
+        id: 67,
+        // [XL]
+        name: "Snapsht Mode",
+        group: "Footswitches",
+        kind: Kind::Choice(&[(0, "Moment"), (1, "Latch"), (2, "Toggle")]),
     },
     Setting {
         id: 68,
@@ -239,6 +274,13 @@ pub const SETTINGS: &[Setting] = &[
         kind: Kind::Choice(&[(0, "Reload"), (1, "Toggle")]),
     },
     Setting {
+        id: 117,
+        // [XL]
+        name: "Swap Up/Down",
+        group: "Footswitches",
+        kind: Kind::Choice(&[(0, "Off"), (1, "On")]),
+    },
+    Setting {
         id: 127,
         // **Called "Guitar In-Z" here from 2026-08-22 to 2026-08-23, which is not a name this
         // pedal has ever shown.** The pedal said *Auto In-Z*; the write-up supplied a Helix
@@ -259,6 +301,52 @@ pub const SETTINGS: &[Setting] = &[
         name: "Auto In-Z",
         group: "Preferences",
         kind: Kind::Choice(&[(0, "First"), (1, "Enabled")]),
+    },
+    Setting {
+        id: 129,
+        // [XL]
+        name: "TAP Function",
+        group: "Footswitches",
+        kind: Kind::Flag {
+            on: "AllBypas",
+            off: "TAP/Tunr",
+        },
+    },
+    Setting {
+        id: 130,
+        // [XL]
+        name: "FS7 Function",
+        group: "Footswitches",
+        kind: Kind::Choice(&[
+            (0, "TAP/Tunr"),
+            (1, "Stomp 7"),
+            (2, "Bank Up"),
+            (3, "Bank Dn"),
+            (4, "PresetUp"),
+            (5, "PresetDn"),
+            (6, "SnpshtUp"),
+            (7, "SnpshtDn"),
+            (8, "AllBypas"),
+            (9, "TogglEXP"),
+        ]),
+    },
+    Setting {
+        id: 131,
+        // [XL]
+        name: "FS8 Function",
+        group: "Footswitches",
+        kind: Kind::Choice(&[
+            (0, "TAP/Tunr"),
+            (1, "Stomp 8"),
+            (2, "Bank Up"),
+            (3, "Bank Dn"),
+            (4, "PresetUp"),
+            (5, "PresetDn"),
+            (6, "SnpshtUp"),
+            (7, "SnpshtDn"),
+            (8, "AllBypas"),
+            (9, "TogglEXP"),
+        ]),
     },
     Setting {
         id: 136,
@@ -418,6 +506,7 @@ pub const SETTINGS: &[Setting] = &[
 pub const MENU_ORDER: &[i64] = &[
     31, 94, 2, 3, 154, 153, 158, 156, // Ins/Outs
     81, 73, 65, 95, 96, 68, 69, 27, 103, 127, 136, // Preferences
+    17, 19, 18, 67, 20, 117, 129, 130, 131, // Footswitches
     9, 11, 14, 16, // MIDI/Tempo
 ];
 
@@ -485,7 +574,7 @@ pub fn is_writable(id: i64) -> bool {
 /// id in it sorts before the rest anyway; it is here so that [`group_rank`] can place it and so
 /// `every_group_is_declared` keeps covering it.
 ///
-/// `Footswitches` and `EXP Pedals` hold nothing yet. They are declared because the pedal shows both
+/// `EXP Pedals` holds nothing yet. They are declared because the pedal shows both
 /// sections populated, so the ids are there to be found — an empty group is a standing note that
 /// this is where the next `settings-diff` pass should look, and it costs nothing: the panel renders
 /// only groups that have rows.
@@ -624,7 +713,9 @@ mod tests {
     #[test]
     fn groups_rank_in_the_pedals_menu_order() {
         assert!(group_rank("Ins/Outs") < group_rank("Preferences"));
-        assert!(group_rank("Preferences") < group_rank("MIDI/Tempo"));
+        assert!(group_rank("Preferences") < group_rank("Footswitches"));
+        assert!(group_rank("Footswitches") < group_rank("EXP Pedals"));
+        assert!(group_rank("EXP Pedals") < group_rank("MIDI/Tempo"));
         assert!(group_rank("MIDI/Tempo") < group_rank("Displays"));
         // Not a group at all — the raw tier, which must land after every named section.
         assert_eq!(group_rank("Unidentified"), GROUPS.len());

@@ -77,7 +77,7 @@ pub const SETTINGS: &[Setting] = &[
     },
     Setting {
         id: 9,
-        name: "MIDI base channel",
+        name: "MIDI Base Channel",
         group: "MIDI/Tempo",
         // Zero-based on the wire: the pedal's channel 4 reads back as 3. Presented one-based, since
         // that is what the pedal's screen and every other MIDI device call it.
@@ -101,8 +101,9 @@ pub const SETTINGS: &[Setting] = &[
         ]),
     },
     Setting {
-        id: 11,
-        name: "MIDI over USB",
+        id: 10,
+        // [XL]
+        name: "MIDI Thru",
         group: "MIDI/Tempo",
         kind: Kind::Flag {
             on: "On",
@@ -110,14 +111,37 @@ pub const SETTINGS: &[Setting] = &[
         },
     },
     Setting {
-        id: 14,
-        name: "Tempo select",
+        id: 11,
+        name: "USB MIDI",
         group: "MIDI/Tempo",
-        kind: Kind::Choice(&[(0, "Per snapshot"), (1, "Per preset"), (2, "Global")]),
+        kind: Kind::Flag {
+            on: "On",
+            off: "Off",
+        },
+    },
+    Setting {
+        id: 12,
+        // [XL]
+        name: "MIDI PC Rx",
+        group: "MIDI/Tempo",
+        kind: Kind::Choice(&[(0, "Off"), (1, "MIDI"), (2, "USB"), (3, "MIDI+USB")]),
+    },
+    Setting {
+        id: 13,
+        // [XL]
+        name: "Rx MIDI Clock",
+        group: "MIDI/Tempo",
+        kind: Kind::Choice(&[(0, "Off"), (1, "MIDI"), (2, "USB"), (3, "Auto")]),
+    },
+    Setting {
+        id: 14,
+        name: "Tempo Select",
+        group: "MIDI/Tempo",
+        kind: Kind::Choice(&[(0, "Snapsht"), (1, "Preset"), (2, "Global")]),
     },
     Setting {
         id: 16,
-        name: "Tempo",
+        name: "BPM",
         group: "MIDI/Tempo",
         kind: Kind::Number {
             unit: "BPM",
@@ -243,6 +267,20 @@ pub const SETTINGS: &[Setting] = &[
         kind: Kind::Choice(&[(0, "Recall"), (1, "Discard")]),
     },
     Setting {
+        id: 76,
+        // [XL]
+        name: "Tx MIDI Clock",
+        group: "MIDI/Tempo",
+        kind: Kind::Choice(&[(0, "Off"), (1, "MIDI"), (2, "USB"), (3, "MIDI+USB")]),
+    },
+    Setting {
+        id: 77,
+        // [XL]
+        name: "MIDI PC Tx",
+        group: "MIDI/Tempo",
+        kind: Kind::Choice(&[(0, "Off"), (1, "MIDI"), (2, "USB"), (3, "MIDI+USB")]),
+    },
+    Setting {
         id: 81,
         name: "Bypass Type",
         group: "Preferences",
@@ -361,6 +399,13 @@ pub const SETTINGS: &[Setting] = &[
             (8, "AllBypas"),
             (9, "TogglEXP"),
         ]),
+    },
+    Setting {
+        id: 135,
+        // [XL]
+        name: "Snapshot CC Send",
+        group: "MIDI/Tempo",
+        kind: Kind::Choice(&[(0, "Off"), (1, "On")]),
     },
     Setting {
         id: 136,
@@ -521,7 +566,7 @@ pub const MENU_ORDER: &[i64] = &[
     81, 73, 65, 95, 96, 68, 69, 27, 103, 127, 136, // Preferences
     17, 19, 18, 67, 20, 117, 129, 130, 131, // Footswitches
     66, 71, // EXP Pedals
-    9, 11, 14, 16, // MIDI/Tempo
+    9, 10, 13, 76, 14, 16, 11, 12, 77, // MIDI/Tempo
 ];
 
 /// Where `id` sits in the pedal's menus — `MENU_ORDER.len()` for an id nobody has placed.

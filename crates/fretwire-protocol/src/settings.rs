@@ -177,6 +177,26 @@ pub const SETTINGS: &[Setting] = &[
         kind: Kind::Choice(&[(0, "Banks"), (1, "Preset"), (2, "Snapsht")]),
     },
     Setting {
+        id: 25,
+        // [XL]
+        name: "LED Rings",
+        group: "Displays",
+        kind: Kind::Flag {
+            on: "Dim/Brt",
+            off: "Off/Brt",
+        },
+    },
+    Setting {
+        id: 26,
+        // [XL]
+        name: "Tap LED",
+        group: "Displays",
+        kind: Kind::Flag {
+            on: "On",
+            off: "Off",
+        },
+    },
+    Setting {
         id: 27,
         // **These labels are the XL's, and they are wrong on a plain Stomp.** The flat form spells
         // out the range, so it differs with the preset count: an HX Stomp shows `000-125` and
@@ -567,6 +587,7 @@ pub const MENU_ORDER: &[i64] = &[
     17, 19, 18, 67, 20, 117, 129, 130, 131, // Footswitches
     66, 71, // EXP Pedals
     9, 10, 13, 76, 14, 16, 11, 12, 77, // MIDI/Tempo
+    25, 26, // Displays
 ];
 
 /// Where `id` sits in the pedal's menus — `MENU_ORDER.len()` for an id nobody has placed.

@@ -26,7 +26,9 @@ ok(
   JSON.stringify(Object.keys(named[0]).sort()) === JSON.stringify(DTO_KEYS),
   `mock rows carry the DTO's keys, got ${Object.keys(named[0]).sort()}`,
 );
-ok(named.length === 22, `22 settings in the catalog, got ${named.length}`);
+// Bump this when the table grows. It went stale at 9dc105b and stayed that way, because CI builds
+// the UI but never runs these — see `package.json`'s `test` script.
+ok(named.length === 34, `34 settings in the catalog, got ${named.length}`);
 ok(named.every((s) => s.writable), "every identified setting is writable");
 ok(named.every((s) => s.group !== "Unidentified"), "no identified setting lands in the raw group");
 
@@ -75,9 +77,11 @@ ok(byId(named, 199).off === 19.9, "the low cut carries its off sentinel");
 ok(byId(named, 200).off === 20100, "the high cut carries its off sentinel");
 ok(byId(named, 16).off === null, "a setting with no off sentinel says null");
 
-// An observed-but-unexplained choice must stay legal, or the table has to invent labels.
-ok(byId(named, 127).options.length === 0, "Guitar In-Z has values but no names");
-ok(byId(named, 127).writable, "…and is still writable, because the id itself is identified");
+// Auto In-Z: the labels were read off the pedal on 2026-08-24, closing a gap this id carried while
+// its two values were known and its menu text was not. An empty option list is still legal — that
+// is asserted of the shape in `settings.rs`, not of an id, so it survives ids being explained.
+ok(byId(named, 127).options.length === 2, "Auto In-Z carries both menu labels");
+ok(byId(named, 127).writable, "…and is writable, because the id itself is identified");
 
 // --- factory defaults ---
 // The panel's reset buttons key off these, so "no observed default" must be null rather than 0 —

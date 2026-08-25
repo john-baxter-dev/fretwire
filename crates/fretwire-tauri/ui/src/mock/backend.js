@@ -749,18 +749,32 @@ const SETTINGS = new Map([
   [14, { v: 1, name: "Tempo select", group: "Tempo", kind: "choice",
          options: [[0, "Per snapshot"], [1, "Per preset"], [2, "Global"]] }],
   [16, { v: 120, name: "Tempo", group: "Tempo", kind: "number", unit: "BPM" }],
-  [27, { v: false, name: "Preset numbering", group: "Displays", kind: "flag",
-         labels: ["000-127", "01A-32D"] }],
+  [27, { v: false, name: "Preset Number", group: "Preferences", kind: "flag",
+         labels: ["000-128", "01A-32D"] }],
   [31, { v: false, name: "Input Level", group: "Ins/Outs", kind: "flag",
          labels: ["Line", "Instrument"] }],
-  [73, { v: 0, name: "Snapshot edits", group: "Preferences", kind: "choice",
+  [65, { v: false, name: "Tempo Pitch", group: "Preferences", kind: "flag",
+         labels: ["Transpr", "Authentc"] }],
+  [68, { v: 0, name: "Tip Polarity", group: "Preferences", kind: "choice",
+         options: [[0, "Normal"], [1, "Inverted"]] }],
+  [69, { v: 0, name: "Ring Polarity", group: "Preferences", kind: "choice",
+         options: [[0, "Normal"], [1, "Inverted"]] }],
+  [73, { v: 0, name: "Snapshot Edits", group: "Preferences", kind: "choice",
          options: [[0, "Recall"], [1, "Discard"]] }],
-  [81, { v: false, name: "Bypass type", group: "Preferences", kind: "flag",
-         labels: ["DSP bypass", "Analog bypass"] }],
+  [81, { v: false, name: "Bypass Type", group: "Preferences", kind: "flag",
+         labels: ["DSP", "Analog"] }],
   [94, { v: true, name: "Output Level", group: "Ins/Outs", kind: "flag",
          labels: ["Line", "Instrument"] }],
-  // Observed values with no recorded menu entries — an empty option list must stay legal.
-  [127, { v: 0, name: "Auto In-Z", group: "Preferences", kind: "choice", options: [] }],
+  [95, { v: false, name: "EXP/FS Tip", group: "Preferences", kind: "flag",
+         labels: ["FS7", "EXP 1"] }],
+  [96, { v: false, name: "EXP/FS Ring", group: "Preferences", kind: "flag",
+         labels: ["FS8", "EXP 2"] }],
+  [103, { v: 0, name: "Snapshot Reselect", group: "Preferences", kind: "choice",
+          options: [[0, "Reload"], [1, "Toggle"]] }],
+  [127, { v: 0, name: "Auto In-Z", group: "Preferences", kind: "choice",
+          options: [[0, "First"], [1, "Enabled"]] }],
+  [136, { v: 0, name: "Link Dual Cabs", group: "Preferences", kind: "choice",
+          options: [[0, "Off"], [1, "On"]] }],
   [153, { v: 0, name: "USB In 1/2 Trim", group: "Ins/Outs", kind: "number", unit: "dB" }],
   [154, { v: false, name: "Return Type", group: "Ins/Outs", kind: "flag",
           labels: ["Aux In", "Return"] }],
@@ -785,7 +799,12 @@ const RAW_IDS = [12, 128, 210, 226];
 
 // The pedal's own menu order, for the ids somebody has placed — mirrors
 // `fretwire_protocol::settings::MENU_ORDER`. Anything absent sorts after all of it, by id.
-const MENU_ORDER = [31, 94, 2, 3, 154, 153, 158, 156];
+const MENU_ORDER = [
+  31, 94, 2, 3, 154, 153, 158, 156, // Ins/Outs
+  81, 73, 65, 95, 96, 68, 69, 27, 103, 127, 136, // Preferences
+  9, 11, // MIDI
+  14, 16, // Tempo
+];
 const menuRank = (id) => {
   const i = MENU_ORDER.indexOf(id);
   return i === -1 ? MENU_ORDER.length : i;

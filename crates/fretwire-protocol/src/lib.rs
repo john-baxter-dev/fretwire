@@ -125,10 +125,10 @@ pub struct Device {
     /// live unit and re-reading left both streams we take byte-identical: the bank-0 browse listing
     /// (3267 bytes, same md5) and the loaded preset's stream (2388 bytes, same md5, same slot). So
     /// it cannot be detected from a listing or a preset — it lives in the globals, which op 24 reads
-    /// and op 25 writes (see `docs/protocol.md`). That namespace is decoded but not *mapped*: 166
-    /// ids answer on a Stomp and only a handful are named, so which one carries this is still
-    /// unknown. Until it is, the GUI carries a manual override (`ui/src/lib/numbering.svelte.js`)
-    /// and this renders the banked form by default, because that is the form the device ships in.
+    /// and op 25 writes (see `docs/protocol.md`). **It is setting id 27** [2026-08-22] — `true` for
+    /// the flat form, `false` for the banked one. So the pedal supplies the default and the GUI's
+    /// override (`ui/src/lib/numbering.svelte.js`) only overrules it once the user sets one; this
+    /// still renders the banked form where no device has been read, that being how the pedal ships.
     pub presets_per_bank: Option<usize>,
     /// How much of the above is confirmed from real traffic.
     pub support: Support,

@@ -873,10 +873,10 @@ mod setting_tests {
     fn an_identified_flag_carries_its_menu_labels() {
         let dto = SettingDto::new(27, &Value::Boolean(true));
         assert_eq!(dto.kind, "flag");
-        assert_eq!(dto.name, "Preset numbering");
+        assert_eq!(dto.name, "Preset Number");
         assert_eq!(
             dto.labels,
-            Some(["000-127".to_string(), "01A-32D".to_string()])
+            Some(["000-128".to_string(), "01A-32D".to_string()])
         );
         assert_eq!(dto.value, serde_json::Value::Bool(true));
         assert!(dto.writable);

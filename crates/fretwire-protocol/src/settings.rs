@@ -3,9 +3,9 @@
 //! Settings are a flat numbered space read with op 24 and written with op 25 (see
 //! `docs/protocol.md`). Nothing here is documented by Line 6; every entry was read off a physical
 //! pedal by changing one thing on its own menus and diffing two dumps — an HX Stomp for most of
-//! them, an HX Stomp XL for the five marked `[XL]` below.
+//! them, an HX Stomp XL for those marked `[XL]` below.
 //!
-//! **166 of ids 0..=600 answer on an HX Stomp. 28 are identified; 27 of them are here.** The odd
+//! **166 of ids 0..=600 answer on an HX Stomp. 35 are identified; 34 of them are here.** The odd
 //! one out is id 28, the current preset index — device state rather than a preference, written
 //! properly by `Session::goto_preset`, and deliberately not offered as a settings row.
 //!
@@ -126,6 +126,17 @@ pub const SETTINGS: &[Setting] = &[
     },
     Setting {
         id: 27,
+        // **These labels are the XL's, and they are wrong on a plain Stomp.** The flat form spells
+        // out the range, so it differs with the preset count: an HX Stomp shows `000-125` and
+        // `01A-42C` (126 presets, 42 banks of three), an XL `01A-32D` (128, 32 banks of four).
+        // `Setting` has no notion of the device, so one of the two is always misreported here —
+        // see `Device::presets_per_bank`, which already carries the per-device counts these are
+        // derived from. [Stomp: owner, 2026-08-24. XL: owner, 2026-08-23]
+        //
+        // `000-128` is transcribed as the XL's menu draws it [sic]. It is off by one — 128 presets
+        // starting at 000 end at 127 — and the Stomp's own `000-125` is the correct max index for
+        // its 126, so the pedal firmware gets this right elsewhere. Reported as a misreading;
+        // unconfirmed either way, which is why the pedal's own text stands.
         name: "Preset Number",
         group: "Preferences",
         kind: Kind::Flag {
@@ -144,7 +155,8 @@ pub const SETTINGS: &[Setting] = &[
     },
     Setting {
         id: 65,
-        // [XL]
+        // [XL] `Authentc` is the pedal's own spelling, kept [sic] — almost certainly "Authentic"
+        // truncated to the width of the screen.
         name: "Tempo Pitch",
         group: "Preferences",
         kind: Kind::Flag {
@@ -229,8 +241,12 @@ pub const SETTINGS: &[Setting] = &[
         // seen them, and then carried an invented name for a day. The rule this module states
         // applies to the `name` field too.
         //
-        // The values are still unnamed — 0 and 1 were observed with the menu entry not recorded
-        // either side, so which one is `First` is not recoverable after the fact.
+        // **Read off an HX Stomp, 2026-08-24**: the menu showed *First* at 0 and *Enabled* at 1,
+        // each recorded beside its value. The label text came from an XL owner [2026-08-23]; this
+        // is the reading that says which way round they go. Until then 0 and 1 had been seen with
+        // the menu text not noted either side, so the mapping was not recoverable from that dump
+        // and the labels stayed empty rather than being guessed — which is the rule working, not a
+        // gap in it.
         name: "Auto In-Z",
         group: "Preferences",
         kind: Kind::Choice(&[(0, "First"), (1, "Enabled")]),
@@ -568,9 +584,23 @@ mod tests {
 
     /// A choice with no entries is how "observed, never explained" is recorded — it must stay
     /// legal, because the alternative is inventing labels.
+    ///
+    /// Deliberately not pinned to an id. It used to assert this of id 127, which was the table's
+    /// only unexplained choice until that id's values were read off the pedal [2026-08-24] — at
+    /// which point the test failed for the one reason it should never fail: the table got *better*.
+    /// The invariant is about the shape, so it is stated about the shape, and the next id to arrive
+    /// unexplained inherits it for free.
     #[test]
     fn a_choice_may_be_empty() {
-        let inz = by_id(127).unwrap();
-        assert!(matches!(inz.kind, Kind::Choice(&[])));
+        const UNEXPLAINED: Setting = Setting {
+            id: -1,
+            name: "observed, never explained",
+            group: "Preferences",
+            kind: Kind::Choice(&[]),
+        };
+        let Kind::Choice(options) = UNEXPLAINED.kind else {
+            panic!("an empty choice must stay a choice, not decay to another kind");
+        };
+        assert!(options.is_empty());
     }
 }

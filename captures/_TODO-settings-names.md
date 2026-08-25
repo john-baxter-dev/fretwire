@@ -189,6 +189,39 @@ actually keeps it. The section exists on the hardware, so whatever it holds is u
 1 = Enabled
 ```
 
+**Are the `Kind::Flag` entries really bools on the wire?** Raised by the #11 contributor, who notes
+he may have copy-pasted the `Kind` from a neighbouring entry rather than reading it. `setting-get`
+prints what the device holds, and the two are distinguishable: a bool prints as `true`/`false`, an
+int as `0`/`1`.
+
+```
+cargo run -p fretwire-cli -- setting-get 2     # Send/Return L
+cargo run -p fretwire-cli -- setting-get 3     # Send/Return R
+cargo run -p fretwire-cli -- setting-get 31    # Input Level
+cargo run -p fretwire-cli -- setting-get 94    # Output Level
+cargo run -p fretwire-cli -- setting-get 154   # Return Type
+```
+
+```
+2   =
+3   =
+31  =
+94  =
+154 =
+```
+
+**Writes are safe either way** — `set_setting_num` reads the current value and matches the type
+against what the device actually holds, so it never consults `Kind` and a wrong one cannot cause a
+refusal. And the panel's flag control tests truthiness, so an int `0`/`1` renders correctly too.
+
+**The failure that matters is a third state.** A setting with *three* options declared as a `Flag`
+offers two in the dropdown and renders the third as if it were the second. `154` Return Type is the
+one to watch — cycle it on the pedal and count the options:
+
+```
+154 option count:
+```
+
 **`3` — does Send/Return R answer on a plain Stomp?** `setting-get 3`. A refusal is a real result,
 not a failure: it would make the id XL-only, and the row simply won't appear on a Stomp.
 

@@ -3460,6 +3460,15 @@ compute anything", it is **say which tier a claim is in**. A derived label, labe
 fine and gets upgraded for free the moment someone looks. An invented one is not, and never gets
 caught — which is exactly what happened to `Guitar In-Z` and nearly happened to Auto In-Z.
 
-Still open: the XL's `000-128` remains transcribed [sic] and is probably a misreading of `000-127`,
-since the Stomp's `000-125` is the correct max index for its 126 presets. Only the XL's owner can
-settle it. Nothing depends on it — the derived label is what a connected XL now shows either way.
+**Settled, and not the way it was called** [2026-08-24]. The XL's `000-128` was assumed to be a
+misreading, on the reasoning that the Stomp's `000-125` proved the firmware gets this right. The
+owner checked: the XL's menu really does draw `000-128`, and scrolling that unit's presets stops at
+127. Line 6 got it right on one unit and wrong on the other, so it is a **firmware string bug**, and
+the inference from the Stomp was simply wrong.
+
+That leaves one open decision. `preset_numbering_labels` derives `000-127` for an XL, which is
+truthful and **one character off from what the pedal's screen says**. This area's stated rule is that
+a label's job is to match the hardware — and the precedent is `Authentc`, kept [sic] rather than
+corrected to `Authentic` for exactly that reason. By that rule the XL should read `000-128`, bug and
+all. Nothing has been changed yet: it is a real trade-off between matching the panel and not shipping
+a wrong range, and it wants a decision rather than a default.

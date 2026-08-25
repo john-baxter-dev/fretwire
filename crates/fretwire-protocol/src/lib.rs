@@ -329,9 +329,13 @@ impl Device {
     /// [`Self::presets_per_bank`] states: a label that confidently disagrees with the panel is worse
     /// than the generic one. That is the Floor and the LT today — 128 slots each, bank size unknown.
     ///
-    /// **Every string this produces has been read off a screen** — Stomp `000-125` and `01A-42C`
-    /// [2026-08-24], XL `01A-32D` [2026-08-21] and `000-127` [reported as `000-128` and believed
-    /// misread; see the note on setting 27]. The Stomp's banked form is the one worth naming: it was
+    /// **Every string this produces has been read off a screen, with one deliberate exception** —
+    /// Stomp `000-125` and `01A-42C` [2026-08-24], XL `01A-32D` [2026-08-21]. The exception is the
+    /// XL's flat form: its menu draws `000-128`, which is a **firmware bug** — that unit's presets
+    /// stop at 127 [owner, 2026-08-24] — so this derives the truthful `000-127` and the editor
+    /// disagrees with the pedal's screen by one character. See the note on setting 27.
+    ///
+    /// The Stomp's banked form is the one worth naming: it was
     /// *derived here first* and confirmed on the pedal afterwards, so the arithmetic has been
     /// checked against hardware rather than merely trusted. That is the reason to keep deriving it
     /// for a device whose counts are known, and the reason to keep returning `None` for one whose

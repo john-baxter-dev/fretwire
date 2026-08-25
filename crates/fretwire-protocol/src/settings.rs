@@ -135,10 +135,11 @@ pub const SETTINGS: &[Setting] = &[
         // These are what a device with no measured bank size gets — today the Floor and the LT.
         // [Stomp: owner, 2026-08-24. XL: owner, 2026-08-23]
         //
-        // `000-128` is transcribed as the XL's menu draws it [sic]. It is off by one — 128 presets
-        // starting at 000 end at 127 — and the Stomp's own `000-125` is the correct max index for
-        // its 126, so the pedal firmware gets this right elsewhere. Reported as a misreading;
-        // unconfirmed either way, which is why the pedal's own text stands.
+        // `000-128` is **the XL's own string, and it is a firmware bug** [confirmed by the owner,
+        // 2026-08-24]: the menu draws `000-128`, and scrolling that unit's presets stops at 127.
+        // So it is off by one on screen only. The Stomp's `000-125` is the correct max index for
+        // its 126, so Line 6 got this right on one unit and wrong on the other — it was worth
+        // asking, and the answer was not the expected one.
         name: "Preset Number",
         group: "Preferences",
         kind: Kind::Flag {

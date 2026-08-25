@@ -1,8 +1,12 @@
 # Settings names — every label in the table needs reading off a menu
 
-**Goal:** confirm, at the pedal, that each of the 27 names in `fretwire_protocol::settings` is what
-the pedal's Global Settings screens actually say — and capture the menu order for the five groups
-`MENU_ORDER` doesn't cover yet. One walk through the menus does all of it.
+**Goal:** confirm, at the pedal, that each of the 34 names in `fretwire_protocol::settings` is what
+the pedal's Global Settings screens actually say. One walk through the menus does all of it.
+
+> **Updated 2026-08-24.** Three of the four open questions at the bottom are answered, the section
+> headings have been read off the hardware, and the tables below now match the table as it stands.
+> Finding *new* ids is a different loop and lives in **`_TODO-settings-discovery.md`** — that one is
+> the higher-value use of pedal time now, since two whole sections have no entries at all.
 
 ## Why this exists
 
@@ -79,61 +83,70 @@ once, and `—` is a name nobody has quoted from anything.
 
 </details>
 
-### Preferences (3)
+### Preferences (11)
+
+Section membership and order confirmed on a Stomp [2026-08-24]; the wording below is the XL's except
+where noted, so the names still want a Stomp's screen against them.
 
 | id | fretwire says | read off | what the pedal shows | actual section |
 |---|---|---|---|---|
-| `73` | Snapshot edits | — | | |
-| `81` | Bypass type | — | | |
-| `127` | Auto In-Z | [XL + owner] | | |
+| `81` | Bypass Type | [XL name] | | |
+| `73` | Snapshot Edits | [XL name] | | |
+| `65` | Tempo Pitch | [XL] | | |
+| `95` | EXP/FS Tip | [XL] | | |
+| `96` | EXP/FS Ring | [XL] | | |
+| `68` | Tip Polarity | [XL] | | |
+| `69` | Ring Polarity | [XL] | | |
+| `27` | Preset Number | [XL name] | | |
+| `103` | Snapshot Reselect | [XL] | | |
+| `127` | Auto In-Z | **done** | Auto In-Z | Preferences |
+| `136` | Link Dual Cabs | [XL] | | |
 
 <details><summary>value labels for Preferences</summary>
 
-- `73` Snapshot edits: choice — `0` Recall, `1` Discard
-- `81` Bypass type: flag — true `DSP bypass`, false `Analog bypass`
-- `127` Auto In-Z: choice — **values unnamed**
+- `81` Bypass Type: flag — true `DSP`, false `Analog`
+- `73` Snapshot Edits: choice — `0` Recall, `1` Discard
+- `65` Tempo Pitch: flag — true `Transpr`, false `Authentc` [sic — screen-width truncation]
+- `95` EXP/FS Tip: flag — true `FS7`, false `EXP 1`
+- `96` EXP/FS Ring: flag — true `FS8`, false `EXP 2`
+- `68` Tip Polarity: choice — `0` Normal, `1` Inverted
+- `69` Ring Polarity: choice — `0` Normal, `1` Inverted
+- `27` Preset Number: flag — **device-dependent**, derived per unit from the preset count. A Stomp
+  draws `000-125`/`01A-42C`, an XL `000-127`/`01A-32D`. Both Stomp forms read off the pedal
+  [2026-08-24]. See `Device::preset_numbering_labels`.
+- `103` Snapshot Reselect: choice — `0` Reload, `1` Toggle
+- `127` Auto In-Z: choice — `0` First, `1` Enabled ✅ **read off a Stomp, 2026-08-24**
+- `136` Link Dual Cabs: choice — `0` Off, `1` On
 
 </details>
 
-### MIDI (2)
+### MIDI/Tempo (4)
+
+**One section on the pedal, not two** — confirmed on a Stomp and an XL [2026-08-24]. These were
+separate groups here until then.
 
 | id | fretwire says | read off | what the pedal shows | actual section |
 |---|---|---|---|---|
 | `9` | MIDI base channel | — | | |
 | `11` | MIDI over USB | — | | |
-
-<details><summary>value labels for MIDI</summary>
-
-- `9` MIDI base channel: choice — `0`..`15`, shown one-based
-- `11` MIDI over USB: flag — true `On`, false `Off`
-
-</details>
-
-### Tempo (2)
-
-| id | fretwire says | read off | what the pedal shows | actual section |
-|---|---|---|---|---|
 | `14` | Tempo select | — | | |
 | `16` | Tempo | — | | |
 
-<details><summary>value labels for Tempo</summary>
+<details><summary>value labels for MIDI/Tempo</summary>
+
+- `9` MIDI base channel: choice — `0`..`15`, shown one-based
+- `11` MIDI over USB: flag — true `On`, false `Off`
 
 - `14` Tempo select: choice — `0` Per snapshot, `1` Per preset, `2` Global
 - `16` Tempo: number — BPM
 
 </details>
 
-### Displays (1)
+### Displays (0)
 
-| id | fretwire says | read off | what the pedal shows | actual section |
-|---|---|---|---|---|
-| `27` | Preset numbering | — | | |
-
-<details><summary>value labels for Displays</summary>
-
-- `27` Preset numbering: flag — true `000-127`, false `01A-32D`
-
-</details>
+**Empty.** Id `27` was its only member and moved to Preferences on 2026-08-24, where the pedal
+actually keeps it. The section exists on the hardware, so whatever it holds is unidentified — see
+`_TODO-settings-discovery.md`, which covers the other two empty sections the same way.
 
 ### Global EQ (11)
 
@@ -169,12 +182,11 @@ once, and `—` is a name nobody has quoted from anything.
 
 ## Open questions
 
-**`127` — which value is `First`?** Set Auto In-Z to `First`, `setting-get 127`, switch it to
-`Enabled`, read it again. Two integers and `Kind::Choice(&[])` can finally be filled in.
+**`127` — which value is `First`?** ✅ **Answered 2026-08-24, on a Stomp.**
 
 ```
-0 =
-1 =
+0 = First
+1 = Enabled
 ```
 
 **`3` — does Send/Return R answer on a plain Stomp?** `setting-get 3`. A refusal is a real result,
@@ -191,12 +203,16 @@ unrecorded. `setting-get 153` prints what the device holds.
 answer:
 ```
 
-**Are `MIDI` and `Tempo` separate pages?** `GROUPS` claims six sections — Global EQ, Ins/Outs,
-Tempo, MIDI, Preferences, Displays — and those headings were never checked against the pedal either.
+**Are `MIDI` and `Tempo` separate pages?** ✅ **Answered 2026-08-24 — no, one section.** And the
+section list `GROUPS` claimed was wrong in three ways. The pedal has six, in this order, confirmed on
+a Stomp and an XL independently:
 
 ```
-answer:
+Ins/Outs · Preferences · Footswitches · EXP Pedals · MIDI/Tempo · Displays
 ```
+
+`Footswitches` and `EXP Pedals` did not exist here at all, and `Global EQ` is **not** one of these
+sections — it is a separate top-level menu on the pedal.
 
 **Anything in the menus with no row here?** A setting on the screen that never appears in the panel
 is an unmapped id, and a dump-change-dump on the spot names it. 138 of the 166 answering ids are
@@ -208,11 +224,11 @@ answer:
 
 ## Menu order, section by section
 
-`MENU_ORDER` currently covers **Ins/Outs only**, from the XL. One entry per line in screen order,
-**including entries fretwire has no id for** — a gap in the list is itself a finding, and it is what
-tells us an id is missing rather than merely unnamed.
+`MENU_ORDER` now covers **Ins/Outs and Preferences**, both from the XL. One entry per line in screen
+order, **including entries fretwire has no id for** — a gap in the list is itself a finding, and it
+is what tells us an id is missing rather than merely unnamed.
 
-Ins/Outs is prefilled with the XL's order as a candidate: correct it if a Stomp differs.
+Both are prefilled with the XL's order as a candidate: correct them if a Stomp differs.
 
 ```
 Ins/Outs
@@ -228,24 +244,38 @@ Ins/Outs
 
 ```
 Preferences
-(127 Auto In-Z is the tenth item on an XL; 73 and 81 are unplaced)
+ 1. Bypass Type         (81)
+ 2. Snapshot Edits      (73)
+ 3. Tempo Pitch         (65)
+ 4. EXP/FS Tip          (95)
+ 5. EXP/FS Ring         (96)
+ 6. Tip Polarity        (68)
+ 7. Ring Polarity       (69)
+ 8. Preset Number       (27)
+ 9. Snapshot Reselect   (103)
+10. Auto In-Z           (127)
+11. Link Dual Cabs      (136)
 ```
 
 ```
-MIDI
+Footswitches            ← no ids at all; see _TODO-settings-discovery.md
 ```
 
 ```
-Tempo
+EXP Pedals              ← no ids at all; see _TODO-settings-discovery.md
 ```
 
 ```
-Displays
+MIDI/Tempo
+(9 MIDI base channel, 11 MIDI over USB, 14 Tempo select, 16 Tempo — order unread)
 ```
 
 ```
-Global EQ
+Displays                ← no ids left; 27 moved to Preferences
 ```
+
+Global EQ is a **separate top-level menu**, not a Global Settings section, so it has no place in this
+list — its eleven ids sort ahead of everything by number and the panel gives them their own tab.
 
 ## What happens with the answers
 
@@ -255,8 +285,9 @@ Global EQ
 - Each completed section becomes ids appended to `MENU_ORDER`, which is all the panel needs to match
   the pedal group by group. `menu_rank` already puts anything unplaced last, so a partial answer is
   useful on its own.
-- `127`'s two integers turn `Kind::Choice(&[])` into a named pair, and `a_choice_may_be_empty` needs
-  a different id to point at — `docs/protocol.md` notes that empty is deliberate and must stay legal.
+- ~~`127`'s two integers~~ ✅ done. The test that guarded the empty-choice case no longer points at
+  an id at all: it states the invariant about the *shape*, so the next unexplained setting inherits
+  it without anyone remembering to re-anchor it.
 - Anything found on screen with no id is a new sweep target.
 
 Delete this file once it's answered, the way the other `_TODO-` sheets go.

@@ -3270,3 +3270,57 @@ suspect on the same grounds. `156` was already corrected by its owner (*Volume C
 table open would settle the rest. And `127`'s two values are still unnamed — `0` and `1` were seen
 with the menu entry unrecorded either side, so which one is `First` isn't recoverable after the
 fact.
+
+## Forty-seventh round (2026-08-23): **the Pi request was not a Pi request**
+
+No code this round. A Helix Floor owner on Reddit asked whether there were Raspberry Pi builds, and
+the roadmap already had an answer ready for that question — Phase 8 has carried an arm64 CLI entry
+and an arm64 GUI entry (*"wait for someone to ask"*) for a month. Someone asked, so the GUI entry
+was due to flip.
+
+It shouldn't. Read past the question to the setup: a **Pi 5 inserted between path 1 and 2** of the
+Floor running NAM captures under PiPedal, every machine in the house headless, and the editor
+wanted *"on that same machine that I can access from my laptop on the same network"*. An arm64
+`.deb` of the Tauri app opens a WebKitGTK window on a box with no display. Building exactly what
+was named would have shipped an artifact that cannot run, on the strength of a request that looked
+like it had been anticipated.
+
+The survey is **`docs/serve-mode.md`**; the task list is the new **Phase 10** in `ROADMAP.md`.
+
+### The seam was already there, twice
+`ui/src/lib/ipc.js` is one file that all of the UI imports `invoke`/`listen` from, and it already
+picks between **two** backends at runtime — Tauri when `__TAURI_INTERNALS__` is present, the
+in-memory mock when it isn't. It was written so the editor could run in a browser with no hardware
+and no Rust toolchain. That dev convenience is the same shape a network transport needs, and it
+means the UI half of serve mode is an insertion at one file rather than a rewrite.
+
+The backend measured smaller than expected too. 61 commands in `commands.rs`, but 55 take
+`State<'_, AppState>` (mechanically `&AppState`) and only **2** touch `AppHandle` — for three event
+names total: `device-pushes`, `device-lost`, `backup-progress`. The commands were already written
+as thin wrappers over `Session` doing their blocking USB work on `spawn_blocking`, which is what a
+server would have needed anyway.
+
+### Two things that would have bitten in deployment
+**`TAG+="uaccess"` grants nothing over SSH.** The udev rule hands access to the locally-*seated*
+user via logind. A headless Pi has no local session, so the daemon gets `EACCES` — and nothing in
+that error says "you are not sitting at this machine". Serve mode needs a `GROUP=` variant. Worth
+noting `install-udev` embeds `packaging/70-hxstomp.rules` at build time and a test asserts the
+`uaccess` string, so this is three places, not one.
+
+**PiPedal wants the same device.** It should be fine — the audio interface is not the vendor
+control interface, and `fretwire-usb` already falls back to `detach_and_claim_interface` when
+something holds it. But that fallback has never been exercised against `snd-usb-audio` on a live
+audio path, and detaching the wrong interface mid-session is not a failure to discover in front of
+a user. It needs hardware, not reasoning.
+
+### What was actually verified
+Only the cheap half. `cargo check` passes unmodified for both `aarch64-unknown-linux-musl` and
+`armv7-unknown-linux-musleabihf` — `nusb` is pure Rust over usbfs with no `target_arch` gating
+outside a wasm branch, and nothing in our crates is architecture-specific. That is a check, not a
+link, and no fretwire binary has ever run on ARM hardware.
+
+### Also worth saying to them
+The **Helix Floor is already supported** (PID `0x4248`, handshake and edit path verified
+byte-identical) — the gap is headless access, not their device. But they called second-DSP routing
+critical, and that is the standing Phase 9 caveat: reads and per-block edits are DSP-agnostic,
+while grid planning is still DSP-0 only and the routing view still assumes one DSP × 2 rows.

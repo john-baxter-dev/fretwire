@@ -479,9 +479,14 @@ start capture → do the single thing → stop:
       preset switching / backup / restore with no screen is the real use case; Asahi Linux on Apple
       Silicon is a smaller second one. **Caveat:** untested — no arm64 hardware here, so label the
       asset as such in the release notes until someone confirms it runs.
-- [ ] arm64 for the **GUI** — not planned. Feasible now that public repos get free `ubuntu-24.04-arm`
-      runners (native build, no cross-compiling WebKitGTK), but it doubles the bundle matrix for a
-      thin slice of users. Wait for someone to ask.
+      **Asked for 2026-08-23** (Pi 5 alongside PiPedal). `cargo check` for both
+      `aarch64-unknown-linux-musl` and `armv7-unknown-linux-musleabihf` passes unmodified — see
+      `docs/serve-mode.md`. Still never linked or run on ARM hardware.
+- [ ] arm64 for the **GUI** — still not planned, and the request that would have triggered it turned
+      out to be for something else. Feasible (public repos get free `ubuntu-24.04-arm` runners, so
+      it's a native build with no cross-compiled WebKitGTK), but the person who asked runs
+      **headless** — an arm64 bundle of a windowed app does not serve them. What they want is
+      **Phase 10**. Revisit only if someone with a Pi *desktop* asks.
 - [ ] Other architectures — **deliberately not doing**: i686 (dead on the desktop), armv7 / 32-bit Pi
       (won't run the editor usefully), RISC-V (no users). Untestable binaries are a support burden.
 
@@ -613,6 +618,49 @@ real session.
       unaffected until it's rewritten.
 - [ ] `.hxb` import/restore — **independently useful, needs no device and no new captures**. Would
       give the Stomp backup-file interop too. Format is documented well enough to build against.
+
+## Phase 10 — Headless / serve mode
+Opened 2026-08-23 by a Helix Floor owner running a Pi 5 with PiPedal, who asked for a Raspberry Pi
+build and described wanting something else: the editor served over the network from a machine with
+no screen. Survey and full breakdown: **`docs/serve-mode.md`**.
+
+The pieces are further along than the size suggests — `ui/src/lib/ipc.js` is already a single
+transport seam with two implementations behind it (Tauri, and the browser mock), the UI already
+runs in a plain remote browser via `npm run dev`, and of 61 commands only 2 touch `AppHandle`,
+for 3 event names total.
+
+- [ ] Lift `commands.rs` + `dto.rs` out of `fretwire-tauri` into a transport-neutral crate;
+      `fretwire-tauri` keeps 61 one-line `#[tauri::command]` wrappers. Mechanical, but it is the
+      bulk of the diff. `spawn_heartbeat` needs an event sink in place of its `AppHandle`.
+- [ ] `fretwire-serve`: static `dist/` + `POST /invoke/<command>` + a WebSocket for
+      `device-pushes` / `device-lost` / `backup-progress`. Separate crate, out of `default-members`
+      like `fretwire-tauri`, so a built frontend never becomes a prerequisite for `cargo build`.
+      Embed `dist/` → one static binary to copy onto a Pi.
+- [ ] **The file picker.** `pickPath()` opens a native dialog; over a network the paths that matter
+      are the *server's*. First-run import, backup/restore and IR export all need it. Wants a small
+      server-side directory browser — the only piece here that is design rather than plumbing.
+- [ ] **Auth, before it binds anywhere but loopback.** Default `127.0.0.1`, explicit flag to go
+      wider, check the `Origin` header (DNS rebinding reaches a loopback server from any page the
+      browser visits), token for the non-loopback case. This is write access to someone's rig.
+- [ ] **A `GROUP=` udev rule.** `TAG+="uaccess"` grants the locally-*seated* user; a Pi reached over
+      SSH has no local session, so a daemon gets `EACCES` with no hint why. `install-udev` embeds
+      the `packaging/` copy at build time and asserts on `uaccess` in a test.
+- [ ] **Verify PiPedal coexistence on hardware.** Different USB interface from the audio one, and
+      `fretwire-usb` already falls back to `detach_and_claim_interface`, so it *should* be fine —
+      but detaching an interface out from under a live audio path is not a friendly failure, and
+      this has never been tested here.
+- [ ] Only then: the arm64 CLI/serve artifacts in Phase 8. Serve mode is what makes them useful.
+- [ ] **MCP server — a third consumer of the same lift.** Asked for independently on 2026-08-23,
+      the same day as serve mode, which is the strongest argument for doing the lift at all. The
+      requester's guess that the CLI is a poor fit is correct and measurable: ~60 live subcommands
+      each call `Session::connect()`, so it's one handshake and teardown per invocation with no
+      cursor or edit buffer carried across; a long-lived MCP process fits `Session` + the heartbeat
+      better. **Offline-first, and after the lift.** Most of the value (explain / generate /
+      tone-match / batch-rename / diff a preset) needs no pedal — it runs on backup JSON plus the
+      catalog, all of which is already implemented offline. Don't translate 61 GUI-shaped commands
+      into 61 tools. Read-only by default; edit buffer before persistent save; **firmware/DFU never
+      in the tool surface** (`docs/safety.md`). Available today with no code: `fretwire backup` +
+      point an agent at the JSON. See `docs/serve-mode.md`.
 
 ## Safety
 See **`docs/safety.md`**. TL;DR: captures + offline work are zero-risk; live control is low-risk

@@ -147,8 +147,10 @@ pub struct Device {
 /// being copied from a sibling: the LT reports the Floor's `P21` and still does not inherit its
 /// `preset_device_id`, and the XL's own `P36` says nothing about its DSP or snapshot counts.
 ///
-/// The **HX Effects** is [`Support::Untested`]: a contributor sent its `lsusb` line, so the editor
-/// can find one and warn, and every other field is empty because nobody has plugged one in.
+/// The **HX Effects** reached [`Support::Reported`] the same way, by outcome alone: its `lsusb`
+/// line arrived first and made it findable, and an owner has since said it works. That report is
+/// the whole of the evidence — no capture, no session, no panel readings — so every other field is
+/// still empty.
 pub const DEVICES: &[Device] = &[
     Device {
         pid: PID_HX_STOMP,
@@ -280,7 +282,11 @@ pub const DEVICES: &[Device] = &[
         setlists: None,
         setlist_size: None,
         presets_per_bank: None,
-        support: Support::Untested,
+        // An owner says it works. Unlike the XL there are no panel readings behind that — nothing
+        // was read off a screen, nothing was pasted back — so it fills in none of the fields above.
+        // It is still `Reported` rather than `Untested`: "a user has this working" is real
+        // information about the protocol, confirmed by outcome. [2026-08-24 owner report]
+        support: Support::Reported,
     },
 ];
 

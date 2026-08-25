@@ -554,13 +554,15 @@ real session.
       **Still open on the LT:** its `preset_device_id` (never on the wire; the Floor's came from a
       `.hxb`, and we have no LT backup), how its screen banks presets, and **every write path** —
       no edit has ever been sent to one, which is why it is not `Verified`.
-- [x] **HX Effects — PID `0x4245`, `Untested` (2026-08-22, issue #10).** A contributor ran
-      `lsusb` and sent the line: `ID 0e41:4245 Line6, Inc. HX Effects`. That is the whole of the
-      evidence, so it is the table's first `Untested` entry — `detect` finds one, the udev rule
-      covers it, opening it warns, and every other field is `None`. It is the family member least
-      like the rest (effects only, no amps or cabs), so nothing is inherited from the Stomp.
-      **Still open:** everything else. One `pull` from an owner would settle its model code and
-      preset geometry.
+- [x] **HX Effects — PID `0x4245`, `Untested` (2026-08-22, issue #10), then `Reported`
+      (2026-08-24).** A contributor ran `lsusb` and sent the line:
+      `ID 0e41:4245 Line6, Inc. HX Effects`, which made it findable and nothing more — the table's
+      first `Untested` entry. An owner has since reported it working, which moves it to `Reported`
+      by outcome: `detect` finds one, the udev rule covers it, opening it still warns, and every
+      other field is `None`. It is the family member least like the rest (effects only, no amps or
+      cabs), so nothing is inherited from the Stomp.
+      **Still open:** everything else — the report carries no capture and no panel readings. One
+      `pull` from an owner would settle its model code and preset geometry.
 - [x] **Global settings — op 24 reads, op 25 writes, 27 ids named (2026-08-22, and eight Ins/Outs
       ids from an HX Stomp XL owner on 2026-08-23).** The namespace is
       flat and numbered; a 601-id sweep costs 1.4 s, so `settings-dump` / `settings-diff` maps it

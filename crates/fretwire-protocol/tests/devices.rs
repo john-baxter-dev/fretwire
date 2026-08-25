@@ -114,14 +114,15 @@ fn the_stomp_xl_claims_nothing_it_hasnt_shown_us() {
     );
 }
 
-/// The HX Effects is in the table on the strength of one `lsusb` line (issue #10) — enough to find
-/// one and warn about it, and not enough to say anything else. Nothing is inherited from the Stomp:
-/// it is an effects-only unit, so a copied model code or snapshot count would be a guess about a
-/// different data class.
+/// The HX Effects is in the table on one `lsusb` line (issue #10) and one owner's word that it
+/// works — enough to find one, open it and warn, and not enough to say anything else. A report
+/// with no capture behind it moves `support` and nothing else: nothing is inherited from the
+/// Stomp, because it is an effects-only unit, so a copied model code or snapshot count would be a
+/// guess about a different data class.
 #[test]
-fn the_hx_effects_carries_nothing_but_its_usb_id() {
+fn the_hx_effects_carries_no_geometry_it_has_not_been_shown() {
     let fx = Device::by_pid(PID_HX_EFFECTS).unwrap();
-    assert_eq!(fx.support, Support::Untested);
+    assert_eq!(fx.support, Support::Reported);
     assert!(fx.support.caveat().is_some());
     assert!(fx.model_code.is_none());
     assert!(fx.preset_device_id.is_none());

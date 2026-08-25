@@ -61,7 +61,7 @@ jobs:
           -p fretwire-usb -p fretwire-core -p fretwire-cli
 
   gui:
-    name: clippy (GUI)
+    name: build & test (GUI)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -92,5 +92,17 @@ jobs:
           npm ci
           npm run build
 
+      # The mock backend mirrors `settings::SETTINGS` and the DTO shape by hand, so it goes stale
+      # silently. These are plain node, no runner, and they caught nothing between 9dc105b and
+      # 2026-08-24 because nothing ran them.
+      - name: Test the frontend contract
+        working-directory: crates/fretwire-tauri/ui
+        run: npm test
+
       - name: Clippy check
         run: cargo clippy --locked --all-targets -p fretwire-tauri -- -D warnings
+
+      # fretwire-tauri is out of `default-members`, so the root job's `cargo test` never builds it
+      # and its DTO tests went unrun. They need dist/, which the frontend build above provides.
+      - name: Test
+        run: cargo test --locked --verbose -p fretwire-tauri

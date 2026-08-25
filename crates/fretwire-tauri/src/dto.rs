@@ -902,14 +902,14 @@ mod setting_tests {
         assert_eq!(dto.name, "Preset Number");
         assert_eq!(
             dto.labels,
-            Some(["000-128".to_string(), "01A-32D".to_string()])
+            Some(["000-127".to_string(), "01A-32D".to_string()])
         );
         assert_eq!(dto.value, serde_json::Value::Bool(true));
         assert!(dto.writable);
     }
 
     /// One id, one table entry, two pedals that draw it differently. The table can only hold one
-    /// pair, so the connected device gets the last word — otherwise a Stomp owner reads `000-128`
+    /// pair, so the connected device gets the last word — otherwise a Stomp owner reads `000-127`
     /// off a panel whose own screen says `000-125`.
     #[test]
     fn preset_numbering_is_labelled_for_the_pedal_thats_plugged_in() {

@@ -135,15 +135,21 @@ pub const SETTINGS: &[Setting] = &[
         // These are what a device with no measured bank size gets — today the Floor and the LT.
         // [Stomp: owner, 2026-08-24. XL: owner, 2026-08-23]
         //
-        // `000-128` is **the XL's own string, and it is a firmware bug** [confirmed by the owner,
-        // 2026-08-24]: the menu draws `000-128`, and scrolling that unit's presets stops at 127.
-        // So it is off by one on screen only. The Stomp's `000-125` is the correct max index for
-        // its 126, so Line 6 got this right on one unit and wrong on the other — it was worth
-        // asking, and the answer was not the expected one.
+        // **The XL's screen says `000-128` and we deliberately do not repeat it.** That is a
+        // firmware bug [confirmed by the owner, 2026-08-24]: the menu draws `000-128` while
+        // scrolling that unit's presets stops at 127. The Stomp's `000-125` is the correct max
+        // index for its 126, so Line 6 got this right on one unit and wrong on the other.
+        //
+        // This is the one place the "match what the pedal shows" rule is knowingly broken, and it is
+        // not the same case as `Authentc` — that is the pedal's own spelling of a real word, while
+        // this is a range that is simply wrong. Repeating it would mean the editor telling an XL
+        // owner they have a preset 128, which they do not. `preset_numbering_labels` derives
+        // `000-127` for an XL and the panel shows that.
         name: "Preset Number",
         group: "Preferences",
         kind: Kind::Flag {
-            on: "000-128",
+            // 128 slots is what both fall-back devices hold, so this pair is right for them.
+            on: "000-127",
             off: "01A-32D",
         },
     },
@@ -545,7 +551,7 @@ mod tests {
         assert_eq!(
             s.kind,
             Kind::Flag {
-                on: "000-128",
+                on: "000-127",
                 off: "01A-32D"
             }
         );

@@ -3466,9 +3466,16 @@ owner checked: the XL's menu really does draw `000-128`, and scrolling that unit
 127. Line 6 got it right on one unit and wrong on the other, so it is a **firmware string bug**, and
 the inference from the Stomp was simply wrong.
 
-That leaves one open decision. `preset_numbering_labels` derives `000-127` for an XL, which is
-truthful and **one character off from what the pedal's screen says**. This area's stated rule is that
-a label's job is to match the hardware — and the precedent is `Authentc`, kept [sic] rather than
-corrected to `Authentic` for exactly that reason. By that rule the XL should read `000-128`, bug and
-all. Nothing has been changed yet: it is a real trade-off between matching the panel and not shipping
-a wrong range, and it wants a decision rather than a default.
+**Decided: the editor shows the correct range, not the pedal's.** An XL reads `000-127` here while
+its own screen says `000-128`. That knowingly breaks this area's "match what the pedal shows" rule,
+which is worth stating plainly rather than leaving as a quiet exception.
+
+The `Authentc` precedent looked like it pointed the other way and does not: `Authentc` is the pedal's
+own spelling of a real word, and repeating it costs nothing. `000-128` is a **count that is wrong** —
+repeating it means the editor telling an XL owner they have a preset 128, which they do not. The rule
+exists so a label never contradicts the hardware in front of the user; it was never meant to make the
+editor repeat a firmware bug back at them.
+
+The buggy string is now gone from the tree entirely. `SETTINGS` carries `000-127` as the fallback,
+which is also correct for the two devices that actually reach it — the Floor and the LT both hold 128
+slots, so only their *banked* form is unknown.

@@ -769,7 +769,7 @@ const SETTINGS = new Map([
          options: [[0, "Per snapshot"], [1, "Per preset"], [2, "Global"]] }],
   [16, { v: 120, name: "Tempo", group: "MIDI/Tempo", kind: "number", unit: "BPM" }],
   [27, { v: false, name: "Preset Number", group: "Preferences", kind: "flag",
-         labels: ["000-128", "01A-32D"] }],
+         labels: ["000-127", "01A-32D"] }],
   [31, { v: false, name: "Input Level", group: "Ins/Outs", kind: "flag",
          labels: ["Line", "Instrument"] }],
   [65, { v: false, name: "Tempo Pitch", group: "Preferences", kind: "flag",

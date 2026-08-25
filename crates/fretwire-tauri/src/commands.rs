@@ -1296,10 +1296,17 @@ pub async fn settings_read(state: State<'_, AppState>, all: bool) -> R<Vec<Setti
             .map(|(id, v)| SettingDto::new(*id, v))
             .collect();
         // The panel renders each group in the order the rows arrive, so this is where the pedal's
-        // own menu order gets applied. `settings::SETTINGS` stays in id order for the sake of
-        // reading it; an id nobody has placed in a menu keeps its numeric position, after the
-        // placed ones.
-        rows.sort_by_key(|r| (settings::menu_rank(r.id), r.id));
+        // own menu order gets applied — sections first, then position within the section.
+        // `settings::SETTINGS` stays in id order for the sake of reading it; an id nobody has
+        // placed in a menu keeps its numeric position, after the placed ones, and an unidentified
+        // one lands after every named section.
+        rows.sort_by_key(|r| {
+            (
+                settings::group_rank(&r.group),
+                settings::menu_rank(r.id),
+                r.id,
+            )
+        });
         Ok(rows)
     })
     .await

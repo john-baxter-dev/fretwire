@@ -21,9 +21,10 @@
     onWrite,
   } = $props();
 
-  // Declared order first, then anything else alphabetically, with the unidentified pile last so it
-  // never pushes the named settings down the page.
-  const ORDER = ["Global EQ", "Ins/Outs", "Tempo", "MIDI", "Preferences", "Displays"];
+  // Section order is the backend's to decide: rows arrive sorted by
+  // `(group_rank, menu_rank, id)`, so building the map in arrival order reproduces the pedal's own
+  // menu. This used to keep its own copy of the list, which silently disagreed with
+  // `settings::GROUPS` — a group order that renders is worth more than one that only compiles.
 
   // The EQ has its own tab, so it must not also appear as a table of eleven numbers below.
   let tab = $state("eq");
@@ -36,14 +37,8 @@
       if (!by.has(s.group)) by.set(s.group, []);
       by.get(s.group).push(s);
     }
-    const rank = (g) => {
-      if (g === "Unidentified") return ORDER.length + 1;
-      const i = ORDER.indexOf(g);
-      return i === -1 ? ORDER.length : i;
-    };
-    return [...by.entries()].sort(
-      ([a], [b]) => rank(a) - rank(b) || a.localeCompare(b),
-    );
+    // A Map iterates in insertion order, and the rows were already in the pedal's order.
+    return [...by.entries()];
   });
 
   const namedCount = $derived(settings.filter((s) => s.writable).length);

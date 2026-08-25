@@ -3324,3 +3324,61 @@ The **Helix Floor is already supported** (PID `0x4248`, handshake and edit path 
 byte-identical) — the gap is headless access, not their device. But they called second-DSP routing
 critical, and that is the standing Phase 9 caveat: reads and per-block edits are DSP-agnostic,
 while grid planning is still DSP-0 only and the routing view still assumes one DSP × 2 rows.
+
+## Forty-eighth round (2026-08-24): **the menus have six sections, and two test suites were never run**
+
+PR #12 landed seven more settings ids off the same XL owner's pedal (65 Tempo Pitch, 68/69 Tip and
+Ring Polarity, 95/96 EXP/FS Tip and Ring, 103 Snapshot Reselect, 136 Link Dual Cabs), renamed four
+to the pedal's own capitalisation, and placed the whole **Preferences** section in `MENU_ORDER`. The
+table is now 34 entries over 35 identified ids.
+
+### Auto In-Z's values, finally [solid]
+Id 127 had carried two observed values and no menu text since 2026-08-22, with a comment saying the
+mapping was not recoverable from that dump. PR #12 supplied labels without saying which value was
+which — so it was read off a Stomp instead: **0 is `First`, 1 is `Enabled`**. The entry now records
+the reading and its date rather than the contributor's label list.
+
+This is the second time this id has been the interesting one, and for the same reason both times:
+the rule that an unobserved thing stays absent only holds if somebody checks that a new claim was
+observed. The first failure invented a *name* (`Guitar In-Z`); this one would have invented an
+*order*.
+
+### The Global Settings menu has six sections, on both devices [solid]
+An XL owner listed them, and a Stomp shows the same six in the same order:
+
+> Ins/Outs · Preferences · Footswitches · EXP Pedals · MIDI/Tempo · Displays
+
+So this is the HX platform's structure, not one unit's. Three things were wrong here:
+**MIDI and Tempo are one section**, not the two groups this table carried; **Footswitches and EXP
+Pedals did not exist** as groups at all; and **Global EQ is not a Global Settings section** — it is a
+separate top-level menu, and listing it alongside the others implied otherwise. All six are declared
+now, `Footswitches` and `EXP Pedals` deliberately empty: the pedal shows both populated, so those
+are the ids the next `settings-diff` pass should go after, and an empty group is a standing note
+saying where to look. The four jack settings (68, 69, 95, 96) really are under Preferences — checked,
+because their names suggest otherwise.
+
+### `GROUPS` did nothing, and the contributor is the one who noticed
+It had no reader but its own test. The panel kept a **second hardcoded copy** of the section order
+in `GlobalsPanel.svelte`, which is what actually rendered — so reordering `GROUPS` compiled, passed,
+and changed nothing on screen. Now `settings_read` sorts by `(group_rank, menu_rank, id)` and the
+panel builds its map in arrival order with no list of its own. One authority, and it is the one the
+hardware was read into.
+
+### Two whole test suites were outside CI [solid]
+Chasing the above turned up two failures that had nothing to do with the PR being reviewed:
+
+- **`fretwire-tauri` is out of `default-members`**, so the root `cargo test` — which is exactly what
+  CI runs — never builds it. `dto.rs` was asserting id 27's pre-rename name.
+- **`npm test` was never invoked by CI**, which builds the UI and stops. `ui/tests/globals-mock.mjs`
+  had been red since **9dc105b**, on a settings count that went stale and stayed stale.
+
+Both now run in the GUI job, which already builds `dist/` and so already has what they need. The
+mock backend mirrors `settings::SETTINGS` by hand and had drifted by seven entries; that is the
+class of bug these tests exist for, and it survived only because nothing ran them.
+
+### Still open
+`Preset Number` (id 27) has **device-specific labels** and `Setting` cannot express that: a Stomp
+shows `000-125` / `01A-42C`, an XL `000-127` / `01A-32D`. One of the two is always misreported. The
+per-device counts already sit in `Device::presets_per_bank`, so the fix has somewhere to live. The
+XL's `000-128` is also transcribed [sic] and probably a misreading — the Stomp's `000-125` is the
+correct max index for its 126 presets, so the firmware gets this right elsewhere.

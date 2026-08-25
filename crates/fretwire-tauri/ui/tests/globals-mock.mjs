@@ -39,6 +39,23 @@ ok(raw.length > 0, "the full sweep includes unidentified ids");
 ok(raw.every((s) => !s.writable), "unidentified ids are never writable");
 ok(raw.every((s) => s.group === "Unidentified"), "unidentified ids are grouped as such");
 
+// --- section order is the backend's job ---
+// The panel builds its group map in arrival order and does no sorting of its own, so rows have to
+// come out grouped and in the pedal's section order. It kept its own copy of that list until
+// 2026-08-24, which disagreed with `settings::GROUPS` and rendered the stale one.
+const sections = [];
+for (const s of all) if (sections.at(-1) !== s.group) sections.push(s.group);
+ok(
+  new Set(sections).size === sections.length,
+  `each section arrives in one contiguous run, got ${sections.join(" → ")}`,
+);
+const EXPECTED = ["Global EQ", "Ins/Outs", "Preferences", "MIDI/Tempo", "Unidentified"];
+ok(
+  JSON.stringify(sections) === JSON.stringify(EXPECTED),
+  `sections arrive in the pedal's order, got ${sections.join(" → ")}`,
+);
+ok(sections.at(-1) === "Unidentified", "the raw tier lands after every named section");
+
 // --- the three value types survive, because a type mismatch is what the device answers -3 to ---
 const byId = (rows, id) => rows.find((s) => s.id === id);
 ok(typeof byId(named, 27).value === "boolean", "a flag reads back as a bool");

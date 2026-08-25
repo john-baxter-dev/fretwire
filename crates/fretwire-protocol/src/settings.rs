@@ -78,7 +78,7 @@ pub const SETTINGS: &[Setting] = &[
     Setting {
         id: 9,
         name: "MIDI base channel",
-        group: "MIDI",
+        group: "MIDI/Tempo",
         // Zero-based on the wire: the pedal's channel 4 reads back as 3. Presented one-based, since
         // that is what the pedal's screen and every other MIDI device call it.
         kind: Kind::Choice(&[
@@ -103,7 +103,7 @@ pub const SETTINGS: &[Setting] = &[
     Setting {
         id: 11,
         name: "MIDI over USB",
-        group: "MIDI",
+        group: "MIDI/Tempo",
         kind: Kind::Flag {
             on: "On",
             off: "Off",
@@ -112,13 +112,13 @@ pub const SETTINGS: &[Setting] = &[
     Setting {
         id: 14,
         name: "Tempo select",
-        group: "Tempo",
+        group: "MIDI/Tempo",
         kind: Kind::Choice(&[(0, "Per snapshot"), (1, "Per preset"), (2, "Global")]),
     },
     Setting {
         id: 16,
         name: "Tempo",
-        group: "Tempo",
+        group: "MIDI/Tempo",
         kind: Kind::Number {
             unit: "BPM",
             off: None,
@@ -408,8 +408,7 @@ pub const SETTINGS: &[Setting] = &[
 pub const MENU_ORDER: &[i64] = &[
     31, 94, 2, 3, 154, 153, 158, 156, // Ins/Outs
     81, 73, 65, 95, 96, 68, 69, 27, 103, 127, 136, // Preferences
-    9, 11, // MIDI
-    14, 16, // Tempo
+    9, 11, 14, 16, // MIDI/Tempo
 ];
 
 /// Where `id` sits in the pedal's menus — `MENU_ORDER.len()` for an id nobody has placed.
@@ -467,15 +466,41 @@ pub fn is_writable(id: i64) -> bool {
     by_id(id).is_some()
 }
 
-/// The order groups should be shown in. Anything not listed sorts last, alphabetically.
+/// The order the pedal lists its **Global Settings** sections in, read off an HX Stomp and an HX
+/// Stomp XL independently — the two agree, so this is the platform's structure rather than one
+/// unit's [2026-08-24].
+///
+/// `Global EQ` is the exception and is **not** one of those sections: it is a separate top-level
+/// menu on the pedal. It leads the list because the panel gives it its own tab, and because every
+/// id in it sorts before the rest anyway; it is here so that [`group_rank`] can place it and so
+/// `every_group_is_declared` keeps covering it.
+///
+/// `Footswitches` and `EXP Pedals` hold nothing yet. They are declared because the pedal shows both
+/// sections populated, so the ids are there to be found — an empty group is a standing note that
+/// this is where the next `settings-diff` pass should look, and it costs nothing: the panel renders
+/// only groups that have rows.
 pub const GROUPS: &[&str] = &[
     "Global EQ",
     "Ins/Outs",
     "Preferences",
-    "Tempo",
-    "MIDI",
+    "Footswitches",
+    "EXP Pedals",
+    "MIDI/Tempo",
     "Displays",
 ];
+
+/// Where `group` sits in the pedal's menus — `GROUPS.len()` for a name nobody has placed, which is
+/// what `"Unidentified"` gets.
+///
+/// Sort rows by `(group_rank(group), menu_rank(id), id)` for the pedal's own layout. This is the
+/// only ordering authority: the panel renders groups in the order its rows arrive rather than
+/// keeping a second copy of this list, because that copy went stale the moment [`GROUPS`] changed.
+pub fn group_rank(group: &str) -> usize {
+    GROUPS
+        .iter()
+        .position(|&g| g == group)
+        .unwrap_or(GROUPS.len())
+}
 
 #[cfg(test)]
 mod tests {
@@ -580,6 +605,29 @@ mod tests {
         assert_eq!(menu_rank(190), MENU_ORDER.len());
         // Not a setting at all, and not a panic either.
         assert_eq!(menu_rank(-1), MENU_ORDER.len());
+    }
+
+    /// The pedal's section order is the one thing the panel must not re-derive, so it has to be
+    /// stated once and be reachable. A group that exists in the table and not in [`GROUPS`] would
+    /// sort last silently; `every_group_is_declared` catches that, and this catches the inverse —
+    /// that the order is the one read off the hardware.
+    #[test]
+    fn groups_rank_in_the_pedals_menu_order() {
+        assert!(group_rank("Ins/Outs") < group_rank("Preferences"));
+        assert!(group_rank("Preferences") < group_rank("MIDI/Tempo"));
+        assert!(group_rank("MIDI/Tempo") < group_rank("Displays"));
+        // Not a group at all — the raw tier, which must land after every named section.
+        assert_eq!(group_rank("Unidentified"), GROUPS.len());
+        assert!(GROUPS.iter().all(|g| group_rank(g) < GROUPS.len()));
+    }
+
+    /// MIDI and Tempo are one section on the pedal, not two. They were two here until 2026-08-24,
+    /// which is why this is pinned rather than left to the group list to imply.
+    #[test]
+    fn midi_and_tempo_are_one_section() {
+        for id in [9, 11, 14, 16] {
+            assert_eq!(by_id(id).unwrap().group, "MIDI/Tempo", "id {id}");
+        }
     }
 
     /// A choice with no entries is how "observed, never explained" is recorded — it must stay

@@ -743,12 +743,12 @@ const SETTINGS = new Map([
         labels: ["Line", "Instrument"] }],
   [3, { v: false, name: "Send/Return R", group: "Ins/Outs", kind: "flag",
         labels: ["Line", "Instrument"] }],
-  [9, { v: 0, name: "MIDI base channel", group: "MIDI", kind: "choice",
+  [9, { v: 0, name: "MIDI base channel", group: "MIDI/Tempo", kind: "choice",
         options: Array.from({ length: 16 }, (_, i) => [i, String(i + 1)]) }],
-  [11, { v: true, name: "MIDI over USB", group: "MIDI", kind: "flag", labels: ["On", "Off"] }],
-  [14, { v: 1, name: "Tempo select", group: "Tempo", kind: "choice",
+  [11, { v: true, name: "MIDI over USB", group: "MIDI/Tempo", kind: "flag", labels: ["On", "Off"] }],
+  [14, { v: 1, name: "Tempo select", group: "MIDI/Tempo", kind: "choice",
          options: [[0, "Per snapshot"], [1, "Per preset"], [2, "Global"]] }],
-  [16, { v: 120, name: "Tempo", group: "Tempo", kind: "number", unit: "BPM" }],
+  [16, { v: 120, name: "Tempo", group: "MIDI/Tempo", kind: "number", unit: "BPM" }],
   [27, { v: false, name: "Preset Number", group: "Preferences", kind: "flag",
          labels: ["000-128", "01A-32D"] }],
   [31, { v: false, name: "Input Level", group: "Ins/Outs", kind: "flag",
@@ -802,13 +802,23 @@ const RAW_IDS = [12, 128, 210, 226];
 const MENU_ORDER = [
   31, 94, 2, 3, 154, 153, 158, 156, // Ins/Outs
   81, 73, 65, 95, 96, 68, 69, 27, 103, 127, 136, // Preferences
-  9, 11, // MIDI
-  14, 16, // Tempo
+  9, 11, 14, 16, // MIDI/Tempo
 ];
 const menuRank = (id) => {
   const i = MENU_ORDER.indexOf(id);
   return i === -1 ? MENU_ORDER.length : i;
 };
+
+// Section order — mirrors `fretwire_protocol::settings::GROUPS`. "Unidentified" is absent on
+// purpose: an unplaced name ranks last, which is where the raw tier belongs.
+const GROUPS = [
+  "Global EQ", "Ins/Outs", "Preferences", "Footswitches", "EXP Pedals", "MIDI/Tempo", "Displays",
+];
+const groupRank = (g) => {
+  const i = GROUPS.indexOf(g);
+  return i === -1 ? GROUPS.length : i;
+};
+const groupOf = (id) => SETTINGS.get(id)?.group ?? "Unidentified";
 
 // The pedal's factory EQ, read off a unit after every Global EQ knob was pushed in. Only the EQ
 // has one — a null default is how "we have never watched this reset" is expressed, and the panel
@@ -837,7 +847,10 @@ const HANDLERS = {
   device_numbering: () => (SETTINGS.get(27).v ? "flat" : "banked"),
   settings_read: ({ all }) => {
     const ids = all ? [...SETTINGS.keys(), ...RAW_IDS] : [...SETTINGS.keys()];
-    ids.sort((a, b) => menuRank(a) - menuRank(b) || a - b);
+    ids.sort(
+      (a, b) =>
+        groupRank(groupOf(a)) - groupRank(groupOf(b)) || menuRank(a) - menuRank(b) || a - b,
+    );
     return ids.map(settingDto);
   },
   settings_write: ({ id, value }) => {

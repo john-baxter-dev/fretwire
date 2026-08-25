@@ -282,10 +282,7 @@ pub const SETTINGS: &[Setting] = &[
         // [XL]
         name: "Return Type",
         group: "Ins/Outs",
-        kind: Kind::Flag {
-            on: "Aux In",
-            off: "Return",
-        },
+        kind: Kind::Choice(&[(0, "Return"), (1, "Aux In")]),
     },
     Setting {
         id: 156,

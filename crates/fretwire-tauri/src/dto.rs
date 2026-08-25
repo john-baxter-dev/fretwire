@@ -764,6 +764,27 @@ pub struct SettingDto {
 }
 
 impl SettingDto {
+    /// Re-label anything the **connected** device spells differently from the static table.
+    ///
+    /// `settings::SETTINGS` is one flat table with no notion of which pedal is plugged in, which is
+    /// right for every setting whose menu text is fixed. Id 27 is the exception: its menu spells out
+    /// the preset range, so a Stomp draws `000-125`/`01A-42C` where an XL draws `000-127`/`01A-32D`.
+    /// Shipping one pair means telling half the users something their own screen contradicts, and
+    /// that is the failure `Device::presets_per_bank` already warns about.
+    ///
+    /// A device whose bank size has never been measured keeps the table's text — there is nothing to
+    /// improve it with, and the generic label beats an invented one.
+    pub fn for_device(mut self, device: &fretwire_core::fretwire_protocol::Device) -> Self {
+        // `labels` is `[true, false]`, and id 27 is `true` for the flat form — see
+        // `ui/src/lib/numbering.svelte.js`, which reads the same setting.
+        if self.id == 27
+            && let Some((flat, banked)) = device.preset_numbering_labels()
+        {
+            self.labels = Some([flat, banked]);
+        }
+        self
+    }
+
     /// Project one id and the value the device just gave for it.
     pub fn new(id: i64, value: &fretwire_core::fretwire_data::rmpv::Value) -> Self {
         use fretwire_core::fretwire_protocol::settings::{Kind, by_id};
@@ -880,6 +901,40 @@ mod setting_tests {
         );
         assert_eq!(dto.value, serde_json::Value::Bool(true));
         assert!(dto.writable);
+    }
+
+    /// One id, one table entry, two pedals that draw it differently. The table can only hold one
+    /// pair, so the connected device gets the last word — otherwise a Stomp owner reads `000-128`
+    /// off a panel whose own screen says `000-125`.
+    #[test]
+    fn preset_numbering_is_labelled_for_the_pedal_thats_plugged_in() {
+        use fretwire_core::fretwire_protocol::{
+            Device, PID_HELIX_FLOOR, PID_HX_STOMP, PID_HX_STOMP_XL,
+        };
+        let of = |pid| {
+            SettingDto::new(27, &Value::Boolean(true))
+                .for_device(Device::by_pid(pid).unwrap())
+                .labels
+                .unwrap()
+        };
+        assert_eq!(of(PID_HX_STOMP), ["000-125", "01A-42C"]);
+        assert_eq!(of(PID_HX_STOMP_XL), ["000-127", "01A-32D"]);
+        // The Floor's bank size has never been read off a screen, so there is nothing to substitute
+        // and the table's own text stands rather than a guess.
+        let table = SettingDto::new(27, &Value::Boolean(true)).labels.unwrap();
+        assert_eq!(of(PID_HELIX_FLOOR), table);
+    }
+
+    /// Only id 27 is device-dependent so far. If that changes, it changes deliberately.
+    #[test]
+    fn no_other_setting_is_relabelled_by_the_device() {
+        use fretwire_core::fretwire_protocol::{Device, PID_HX_STOMP, settings};
+        let stomp = Device::by_pid(PID_HX_STOMP).unwrap();
+        for s in settings::SETTINGS.iter().filter(|s| s.id != 27) {
+            let plain = SettingDto::new(s.id, &Value::Boolean(true));
+            let sent = SettingDto::new(s.id, &Value::Boolean(true)).for_device(stomp);
+            assert_eq!(plain.labels, sent.labels, "id {}", s.id);
+        }
     }
 
     /// The point of the raw tier: an id that answers is shown, and is not writable.

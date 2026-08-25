@@ -286,3 +286,40 @@ fn the_lt_shares_the_floors_data_class_without_inheriting_its_device_id() {
         Some(PID_HELIX_FLOOR)
     );
 }
+
+/// Setting 27's menu text spells out the pedal's preset range, so it differs per device and
+/// `settings::SETTINGS` — one flat table — cannot hold both. These derive from counts that were
+/// each read off a screen, which is the point: one set of facts, not two.
+#[test]
+fn preset_numbering_labels_follow_each_units_own_counts() {
+    let stomp = Device::by_pid(PID_HX_STOMP).unwrap();
+    let xl = Device::by_pid(PID_HX_STOMP_XL).unwrap();
+
+    // 126 presets, 42 banks of three. Both forms read off the pedal [2026-08-24] — the banked one
+    // after this function had already computed it, which is what makes it a check and not a guess.
+    assert_eq!(
+        stomp.preset_numbering_labels(),
+        Some(("000-125".into(), "01A-42C".into()))
+    );
+    // 128 presets, 32 banks of four. `01A`-`32D` is the owner's own reading [2026-08-21].
+    assert_eq!(
+        xl.preset_numbering_labels(),
+        Some(("000-127".into(), "01A-32D".into()))
+    );
+    // The two must not agree, or there was no reason to derive them.
+    assert_ne!(
+        stomp.preset_numbering_labels(),
+        xl.preset_numbering_labels()
+    );
+}
+
+/// The same rule `presets_per_bank` states: an unmeasured bank size produces no label at all, not a
+/// plausible one. The Floor and the LT both hold 128 slots and neither has had its screen read, and
+/// 128 divides by 4 and by 8 with no evidence either way.
+#[test]
+fn a_device_with_no_measured_bank_size_offers_no_labels() {
+    for pid in [PID_HELIX_FLOOR, PID_HELIX_LT, PID_HX_EFFECTS] {
+        let d = Device::by_pid(pid).unwrap();
+        assert_eq!(d.preset_numbering_labels(), None, "{}", d.name);
+    }
+}

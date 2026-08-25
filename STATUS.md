@@ -3382,3 +3382,44 @@ shows `000-125` / `01A-42C`, an XL `000-127` / `01A-32D`. One of the two is alwa
 per-device counts already sit in `Device::presets_per_bank`, so the fix has somewhere to live. The
 XL's `000-128` is also transcribed [sic] and probably a misreading — the Stomp's `000-125` is the
 correct max index for its 126 presets, so the firmware gets this right elsewhere.
+
+## Forty-ninth round (2026-08-24): **one setting whose label belongs to the pedal, not the table**
+
+`settings::SETTINGS` is a flat table: one id, one name, one pair of menu labels. That is right for
+every setting whose menu text is fixed, and **id 27 is not one of them**. `Preset Number` spells out
+the pedal's preset range, so an HX Stomp draws `000-125` / `01A-42C` and an XL `000-127` / `01A-32D`.
+The table could only hold one pair, and it held the XL's — so a Stomp owner opening Globals read a
+range their own screen contradicted. That is exactly the failure `Device::presets_per_bank` warns
+about in its own doc comment: *a label that confidently disagrees with the panel is worse than an
+honest slot number*.
+
+**The labels are derived, not stored** [`Device::preset_numbering_labels`]. Both counts were already
+measured per device, so the text follows from them — `000-{size-1}`, and `01A-{banks}{letter}` from
+`size / per_bank`. Adding a second set of per-device strings would have been a second set of facts
+to keep in sync, and the first one to drift would have been silent. `SettingDto::for_device`
+substitutes them at projection time, where the connected device is already known.
+
+**A device with no measured bank size gets nothing** — the Floor and the LT, which hold 128 slots
+each with the banking never read off a screen. They keep the table's text rather than a plausible
+guess, the same rule the rest of this area follows. That fallback is pinned from both sides.
+
+### The derivation was checked against hardware, not just trusted [solid]
+This shipped with one string in it that nobody had read: the Stomp's `01A-42C`, computed from 126
+presets in 42 banks of three. It was labelled as derived rather than asserted, and then **confirmed
+on the pedal the same day**. The formula predicted the string before anyone looked, and the pedal
+agreed.
+
+That is a better result than having read it in the first place. Every string this function produces
+is now a reading — Stomp `000-125` and `01A-42C`, XL `000-127` and `01A-32D` — *and* the arithmetic
+that produced them has been checked against a unit whose output it had not seen. So when a Floor or
+LT owner finally reads a bank size off their screen, the labels that fall out of it are trustworthy
+without a second confirmation pass.
+
+The general point, since this is the third time this area has turned on it: the rule is not "never
+compute anything", it is **say which tier a claim is in**. A derived label, labelled as derived, is
+fine and gets upgraded for free the moment someone looks. An invented one is not, and never gets
+caught — which is exactly what happened to `Guitar In-Z` and nearly happened to Auto In-Z.
+
+Still open: the XL's `000-128` remains transcribed [sic] and is probably a misreading of `000-127`,
+since the Stomp's `000-125` is the correct max index for its 126 presets. Only the XL's owner can
+settle it. Nothing depends on it — the derived label is what a connected XL now shows either way.

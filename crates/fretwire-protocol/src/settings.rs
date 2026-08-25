@@ -129,9 +129,11 @@ pub const SETTINGS: &[Setting] = &[
         // **These labels are the XL's, and they are wrong on a plain Stomp.** The flat form spells
         // out the range, so it differs with the preset count: an HX Stomp shows `000-125` and
         // `01A-42C` (126 presets, 42 banks of three), an XL `01A-32D` (128, 32 banks of four).
-        // `Setting` has no notion of the device, so one of the two is always misreported here —
-        // see `Device::presets_per_bank`, which already carries the per-device counts these are
-        // derived from. [Stomp: owner, 2026-08-24. XL: owner, 2026-08-23]
+        // `Setting` has no notion of the device, so what stands here is a **fallback**:
+        // `Device::preset_numbering_labels` derives the right pair from each unit's measured counts
+        // and the DTO substitutes it, so a connected Stomp or XL is labelled from its own screen.
+        // These are what a device with no measured bank size gets — today the Floor and the LT.
+        // [Stomp: owner, 2026-08-24. XL: owner, 2026-08-23]
         //
         // `000-128` is transcribed as the XL's menu draws it [sic]. It is off by one — 128 presets
         // starting at 000 end at 127 — and the Stomp's own `000-125` is the correct max index for

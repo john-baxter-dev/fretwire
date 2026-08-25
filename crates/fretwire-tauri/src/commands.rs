@@ -1293,7 +1293,7 @@ pub async fn settings_read(state: State<'_, AppState>, all: bool) -> R<Vec<Setti
         };
         let mut rows: Vec<SettingDto> = found
             .iter()
-            .map(|(id, v)| SettingDto::new(*id, v))
+            .map(|(id, v)| SettingDto::new(*id, v).for_device(s.device()))
             .collect();
         // The panel renders each group in the order the rows arrive, so this is where the pedal's
         // own menu order gets applied — sections first, then position within the section.
@@ -1333,7 +1333,7 @@ pub async fn settings_write(state: State<'_, AppState>, id: i64, value: f64) -> 
                 "setting {id} accepted the write but reports no value back"
             )))
         })?;
-        Ok(SettingDto::new(id, &after))
+        Ok(SettingDto::new(id, &after).for_device(s.device()))
     })
     .await
 }

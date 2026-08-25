@@ -56,6 +56,22 @@ ok(
 );
 ok(sections.at(-1) === "Unidentified", "the raw tier lands after every named section");
 
+// --- id 27's labels belong to the pedal, not the table ---
+// Its menu spells out the preset range, so a Stomp draws 000-125/01A-42C and an XL 000-127/01A-32D.
+// The mock defaults to a Floor, whose bank size has never been read off a screen — so there is
+// nothing to substitute and the table's own text has to stand rather than a guess. The derivation
+// itself is pinned Rust-side (`dto.rs::setting_tests`, `tests/devices.rs`); device switching runs
+// through `window.fretwireMock`, which node has no window for.
+const numbering = named.find((s) => s.id === 27);
+ok(
+  numbering.labels.length === 2,
+  "preset numbering still carries a label pair with no device to derive one from",
+);
+ok(
+  numbering.labels[1] === "01A-32D",
+  `an unmeasured device keeps the table's text, got ${numbering.labels[1]}`,
+);
+
 // --- the three value types survive, because a type mismatch is what the device answers -3 to ---
 const byId = (rows, id) => rows.find((s) => s.id === id);
 ok(typeof byId(named, 27).value === "boolean", "a flag reads back as a bool");

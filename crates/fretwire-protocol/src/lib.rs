@@ -315,6 +315,41 @@ impl Device {
         self.setlists.unwrap_or(&["Presets"])
     }
 
+    /// The two things setting 27 (`Preset Number`) is called on **this** device's screen, as
+    /// `(flat, banked)` — `("000-125", "01A-42C")` on an HX Stomp, `("000-127", "01A-32D")` on an
+    /// XL.
+    ///
+    /// The setting is one id with one meaning, but its menu spells out the pedal's preset range, so
+    /// the text differs with the preset count and `settings::SETTINGS` — a flat table with no notion
+    /// of the device — cannot hold both. Deriving them here is what keeps that table honest: the
+    /// counts are already measured per device, so the labels follow rather than being a second set
+    /// of facts to keep in sync.
+    ///
+    /// `None` unless both counts are known, which is the same conservative rule
+    /// [`Self::presets_per_bank`] states: a label that confidently disagrees with the panel is worse
+    /// than the generic one. That is the Floor and the LT today — 128 slots each, bank size unknown.
+    ///
+    /// **Every string this produces has been read off a screen** — Stomp `000-125` and `01A-42C`
+    /// [2026-08-24], XL `01A-32D` [2026-08-21] and `000-127` [reported as `000-128` and believed
+    /// misread; see the note on setting 27]. The Stomp's banked form is the one worth naming: it was
+    /// *derived here first* and confirmed on the pedal afterwards, so the arithmetic has been
+    /// checked against hardware rather than merely trusted. That is the reason to keep deriving it
+    /// for a device whose counts are known, and the reason to keep returning `None` for one whose
+    /// counts are not.
+    pub fn preset_numbering_labels(&self) -> Option<(String, String)> {
+        let (size, per_bank) = (self.setlist_size?, self.presets_per_bank?);
+        // A bank size that doesn't divide the list, or runs past `Z`, means one of the two counts is
+        // wrong; say nothing rather than draw a label off it.
+        if per_bank == 0 || per_bank > 26 || size % per_bank != 0 {
+            return None;
+        }
+        let last_letter = (b'A' + per_bank as u8 - 1) as char;
+        Some((
+            format!("000-{}", size - 1),
+            format!("01A-{:02}{last_letter}", size / per_bank),
+        ))
+    }
+
     /// How the pedal's own screen writes preset `slot` — `01A`, `01B`, `01C`, `02A`, … — or `None`
     /// on a device whose banking we have not seen ([`Device::presets_per_bank`]).
     ///

@@ -342,6 +342,7 @@ const DEVICES = {
     setlists: ["Presets"],
     // Three per bank, so the list reads 01A/01B/01C/02A as the pedal's screen does.
     presetsPerBank: 3,
+    setlistSize: 126,
   },
   xl: {
     name: "HX Stomp XL",
@@ -349,6 +350,7 @@ const DEVICES = {
     // Four per bank — 01A/01B/01C/01D/02A, read off a real XL's screen. The one place the mock can
     // exercise the numbering toggle against a device that banks differently from the Stomp.
     presetsPerBank: 4,
+    setlistSize: 128,
     // Reported, not Verified: the UI has to show this, so the mock has to be able to produce it.
     caveat: "reported working, but not verified against a capture",
   },
@@ -358,6 +360,7 @@ const DEVICES = {
     // Unknown for real, and the mock says so too: the list falls back to slot numbers, which is
     // what a Floor shows today. See Device::presets_per_bank.
     presetsPerBank: null,
+    setlistSize: 128,
   },
 };
 
@@ -444,6 +447,14 @@ const presetLabel = (slot) => {
   const per = DEVICES[deviceMode].presetsPerBank;
   if (!per) return null;
   return String(Math.floor(slot / per) + 1).padStart(2, "0") + String.fromCharCode(65 + (slot % per));
+};
+// Device::preset_numbering_labels — setting 27's menu spells out the preset range, so its text is
+// the pedal's, not the table's. Null where the bank size was never measured, and the static labels
+// then stand.
+const presetNumberingLabels = () => {
+  const { presetsPerBank: per, setlistSize: size } = DEVICES[deviceMode];
+  if (!per || !size || size % per !== 0) return null;
+  return [`000-${size - 1}`, `01A-${String(size / per).padStart(2, "0")}${String.fromCharCode(64 + per)}`];
 };
 const bankOf = (b) => banks[b] ?? [];
 let current = bankOf(0)[0];
@@ -836,7 +847,8 @@ function settingDto(id) {
   }
   return {
     id, name: d.name, group: d.group, kind: d.kind, value: d.v,
-    labels: d.labels ?? null, options: d.options ?? [], unit: d.unit ?? "",
+    labels: (id === 27 ? presetNumberingLabels() : null) ?? d.labels ?? null,
+    options: d.options ?? [], unit: d.unit ?? "",
     off: d.off ?? null, default: DEFAULTS.has(id) ? DEFAULTS.get(id) : null, writable: true,
   };
 }

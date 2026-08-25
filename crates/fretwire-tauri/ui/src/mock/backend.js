@@ -351,6 +351,8 @@ const DEVICES = {
     // Three per bank, so the list reads 01A/01B/01C/02A as the pedal's screen does.
     presetsPerBank: 3,
     setlistSize: 126,
+    // Three on the panel, two on the external switch jack. Op 33 refuses a sixth with `-3`.
+    footswitches: 5,
   },
   xl: {
     name: "HX Stomp XL",
@@ -359,6 +361,8 @@ const DEVICES = {
     // exercise the numbering toggle against a device that banks differently from the Stomp.
     presetsPerBank: 4,
     setlistSize: 128,
+    // Eight, per the owner and the 3.80 manual (pp. 50-51). [reported — issue #13]
+    footswitches: 8,
     // Reported, not Verified: the UI has to show this, so the mock has to be able to produce it.
     caveat: "reported working, but not verified against a capture",
   },
@@ -369,6 +373,9 @@ const DEVICES = {
     // what a Floor shows today. See Device::presets_per_bank.
     presetsPerBank: null,
     setlistSize: 128,
+    // Unread. The Floor has eight preset footswitches, but how many positions its layout carries
+    // has never been looked at, so this keeps the Stomp's number rather than inventing one.
+    footswitches: 5,
   },
 };
 
@@ -670,9 +677,10 @@ function toDto(p) {
           (q) => q.index === a.param_index,
         )?.name ?? null,
     })),
-    // Five, like an HX Stomp: three on the panel and two on the external switch jack. The real
-    // backend reads this off the preset's own footswitch layout.
-    footswitch_count: 5,
+    // The real backend reads this off the preset's own footswitch layout, so it is the device's
+    // number without the UI knowing any model. Mirrored per mock device for the same reason — issue
+    // #13 was the bypass picker capping this at 5, which an XL owner hit and no mock run could.
+    footswitch_count: DEVICES[deviceMode].footswitches,
   };
 }
 

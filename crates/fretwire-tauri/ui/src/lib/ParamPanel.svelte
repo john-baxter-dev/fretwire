@@ -42,6 +42,13 @@
   //
   // Sources: 0 none, 1-2 the expression inputs, 3..=7 the footswitches, 8 MIDI, 9 snapshots.
   // MIDI is left out — it needs a CC number, which is a separate opcode we have not built.
+  //
+  // **The 5 here is the wire's, not the UI's** — key `4` is a ten-entry table and the footswitches
+  // occupy 3..=7, with 8 and 9 already spoken for (`stream.rs`, `Assignment::controller`). On a
+  // Stomp that is the device's own limit: op 33 answers switches 1-5 and refuses 6 with `-3`. How an
+  // XL's eight switches encode here is **unknown** — nobody has read key `4` off one — so this stays
+  // capped rather than guessing at ordinals that may collide with MIDI and snapshots. The bypass
+  // picker below has no such constraint and is deliberately *not* capped; see issue #13.
   const SOURCES = $derived([
     { value: 0, label: "—" },
     { value: 1, label: "EXP1" },
@@ -318,7 +325,12 @@
                 onBypassSwitch(block.slot, Number(e.currentTarget.value), block.footswitch)}
             >
               <option value={0}>&mdash;</option>
-              {#each Array.from({ length: Math.min(footswitchCount, 5) }, (_, i) => i + 1) as n}
+              <!-- Not capped: `footswitchCount` is the preset's own layout length, so it is already
+                   this device's number — 5 on a Stomp, 8 on an XL. Capping it at 5 here was issue
+                   #13, where an XL showed FS6 in the chain and could not pick it. Unlike the
+                   controller SOURCES above, ops 56/57 take a plain switch index with no table to
+                   overrun. -->
+              {#each Array.from({ length: footswitchCount }, (_, i) => i + 1) as n}
                 <option value={n}>{n}</option>
               {/each}
             </select>

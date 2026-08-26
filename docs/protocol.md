@@ -198,7 +198,7 @@ the other doesn't simply refuses on the other, and `scan_settings` reads a refus
 | 94 | output level | `bool` | `true` line, `false` instrument |
 | 127 | auto In-Z | `int` | `0` and `1` observed, neither named — see below |
 | 153 | USB in 1/2 trim | num, dB | wire type not recorded — **XL** |
-| 154 | return type | `bool` | `true` aux in, `false` return — **XL** |
+| 154 | return type | `int` | `0` return, `1` aux in — **XL** |
 | 156 | volume controls | `int` | `1` phones, `2` main+HP |
 | 158 | phones monitor | `int` | `1` main L/R, `2` send — **XL** |
 | 190 | global EQ low frequency | `f32` Hz | |

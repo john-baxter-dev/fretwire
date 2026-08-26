@@ -279,7 +279,11 @@ pub const SETTINGS: &[Setting] = &[
     },
     Setting {
         id: 154,
-        // [XL]
+        // [XL] Landed as a `Flag` and corrected to a `Choice` when `setting-get 154` printed
+        // `154 = 1  [int]` [XL, 2026-08-25]. The labels did not move: a dump prints the value, so
+        // `0` Return / `1` Aux In is what the original diff showed — only the wire type was
+        // transcribed wrong. Whether a third position exists has not been checked; as a `Choice`
+        // an unlisted value shows as its number rather than as one of these two.
         name: "Return Type",
         group: "Ins/Outs",
         kind: Kind::Choice(&[(0, "Return"), (1, "Aux In")]),

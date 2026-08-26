@@ -77,7 +77,7 @@ once, and `—` is a name nobody has quoted from anything.
 - `31` Input Level: flag — true `Line`, false `Instrument`
 - `94` Output Level: flag — true `Line`, false `Instrument`
 - `153` USB In 1/2 Trim: number — dB
-- `154` Return Type: flag — true `Aux In`, false `Return`
+- `154` Return Type: choice — `0` Return, `1` Aux In
 - `156` Volume Controls: choice — `1` Phones, `2` Main+HP
 - `158` Phones Monitor: choice — `1` Main L/R, `2` Send
 
@@ -194,12 +194,18 @@ he may have copy-pasted the `Kind` from a neighbouring entry rather than reading
 prints what the device holds, and the two are distinguishable: a bool prints as `true`/`false`, an
 int as `0`/`1`.
 
+**One of the five is answered — `154` is an int** [XL, 2026-08-25, PR #14]: `setting-get 154`
+printed `154 = 1  [int]`, so `Return Type` is now `Kind::Choice`. The mapping it carried as a flag
+was never in doubt — the XL owner reached it by diffing dumps, and a dump prints the value, so
+`0` Return / `1` Aux In is what was seen either way. Only the *type* was transcribed wrong.
+
+**The other four are still open**, and the same slip is as likely in each:
+
 ```
 cargo run -p fretwire-cli -- setting-get 2     # Send/Return L
 cargo run -p fretwire-cli -- setting-get 3     # Send/Return R
 cargo run -p fretwire-cli -- setting-get 31    # Input Level
 cargo run -p fretwire-cli -- setting-get 94    # Output Level
-cargo run -p fretwire-cli -- setting-get 154   # Return Type
 ```
 
 ```
@@ -207,7 +213,6 @@ cargo run -p fretwire-cli -- setting-get 154   # Return Type
 3   =
 31  =
 94  =
-154 =
 ```
 
 **Writes are safe either way** — `set_setting_num` reads the current value and matches the type
@@ -215,12 +220,17 @@ against what the device actually holds, so it never consults `Kind` and a wrong 
 refusal. And the panel's flag control tests truthiness, so an int `0`/`1` renders correctly too.
 
 **The failure that matters is a third state.** A setting with *three* options declared as a `Flag`
-offers two in the dropdown and renders the third as if it were the second. `154` Return Type is the
-one to watch — cycle it on the pedal and count the options:
+offers two in the dropdown and renders the third as if it were the second. Moving `154` to `Choice`
+removes that failure for it specifically — an unlisted value displays as the bare number instead of
+being clamped to a neighbour — but nobody has counted the options yet, so whether a third exists is
+still unknown. Cycle it on the pedal and count:
 
 ```
 154 option count:
 ```
+
+The same question rides on the four above: a `Flag` that turns out to be an int is only cosmetic
+until it turns out to have three states.
 
 **`3` — does Send/Return R answer on a plain Stomp?** `setting-get 3`. A refusal is a real result,
 not a failure: it would make the id XL-only, and the row simply won't appear on a Stomp.

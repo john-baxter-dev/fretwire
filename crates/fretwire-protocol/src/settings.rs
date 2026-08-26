@@ -594,10 +594,10 @@ pub const SETTINGS: &[Setting] = &[
 /// default: nobody has placed them, so they keep their numeric position rather than being guessed
 /// into the middle of a menu.
 ///
-/// One *identified* id is absent for exactly that reason: **135**, `Snapshot CC Send`. The pass that
-/// named it placed the rest of its section and not this one. Rows sort by
-/// `(group_rank, menu_rank, id)`, so it draws at the foot of MIDI/Tempo instead of somewhere wrong —
-/// a guessed position would look no different and be worse.
+/// Every identified id outside Global EQ has a place here. **135** `Snapshot CC Send` was the last
+/// one without, and is the tenth row of MIDI/Tempo — the same row the unplaced default had been
+/// sorting it to, so nothing moved on screen and the position is now read rather than fallen back
+/// on. `only_the_listed_ids_are_unplaced` holds the set at empty.
 pub const MENU_ORDER: &[i64] = &[
     31, 94, 2, 3, 154, 153, 158, 156, // Ins/Outs
     81, 73, 65, 95, 96, 68, 69, 27, 103, 127, 136, // Preferences
@@ -789,10 +789,12 @@ mod tests {
 
     /// The counterpart to `menu_order_places_real_ids_once`: an identified id outside the Global EQ
     /// tab should have a place in the pedal's menus, and the ones that don't are named here rather
-    /// than left to be noticed. Id 135 arrived without its position — see [`MENU_ORDER`].
+    /// than left to be noticed. The list is empty — id 135 was the last entry and was placed by
+    /// PR #17 — so the next id that arrives without a position fails here instead of sorting last
+    /// unremarked. Adding one to `UNPLACED` is how you say "known to be unread", not a way past it.
     #[test]
     fn only_the_listed_ids_are_unplaced() {
-        const UNPLACED: &[i64] = &[135];
+        const UNPLACED: &[i64] = &[];
         let missing: Vec<i64> = SETTINGS
             .iter()
             .filter(|s| s.group != "Global EQ" && menu_rank(s.id) == MENU_ORDER.len())

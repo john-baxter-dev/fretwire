@@ -3754,3 +3754,32 @@ switches, and a bypass on an expression pedal rendering as no assignment at all.
 the least likely to be running master. Nothing on master looks half-shipped: serve mode, the only
 work in progress, is a document with no code. Not cut tonight; the assessment is here so it does not
 have to be re-derived.
+
+## Fifty-fifth round (2026-08-25): **the last unplaced id, and the test that noticed**
+
+`MENU_ORDER` is complete. Robert Tsai read `135` `Snapshot CC Send` off the XL as **row 10 of
+MIDI/Tempo** (PR #17) — the one thing the fifty-third round left for him rather than for me, and
+the last identified id outside Global EQ without a menu position.
+
+**The diff changes nothing on screen, and that is the point.** Rows sort by
+`(group_rank, menu_rank, id)` and an unplaced id ranks past the end, so `135` was already drawing at
+the foot of MIDI/Tempo — exactly where row 10 puts it. What changed is the standing of that
+position: it was the fallback and is now a reading. A guessed position would have looked identical
+too, which is why the fallback was left in place rather than filled in by eye.
+
+**`only_the_listed_ids_are_unplaced` failed, correctly.** It was added in the fifty-third round to
+catch the *next* id arriving without a position; what it caught first was the answer arriving for
+this one, because it asserts the unplaced set **equals** `&[135]` rather than merely contains it. An
+allowed-list that fails when the list shrinks is the version worth having — the loose form would
+have let the sheet, the mock and three paragraphs of prose sit stale and green. The set is `&[]`
+now, and the paragraph on `MENU_ORDER` explaining why one id was absent is gone with it.
+
+Mirrored into `ui/src/mock/backend.js`, which keeps its own copy of the order for `npm run dev`.
+`_TODO-settings-names.md` is down to **two open questions**, neither of them Robert's: whether any
+of the 19 XL-sourced ids refuse on a Stomp, which needs my pedal, and whether `95`/`96`/`68`/`69`
+really live under Preferences.
+
+**Two bits of drift in that sheet, found while editing it.** `### MIDI/Tempo (9)` had ten rows under
+it — `135` was added to the table in the fifty-third round and the heading count was not. And the
+menu-order preamble still said `MENU_ORDER` covers "Ins/Outs and Preferences", written when it did;
+it covers all six sections now, every one from the XL.

@@ -895,7 +895,7 @@ const MENU_ORDER = [
   81, 73, 65, 95, 96, 68, 69, 27, 103, 127, 136, // Preferences
   17, 19, 18, 67, 20, 117, 129, 130, 131, // Footswitches
   66, 71, // EXP Pedals
-  9, 10, 13, 76, 14, 16, 11, 12, 77, // MIDI/Tempo — 135 is identified but unplaced, as in Rust
+  9, 10, 13, 76, 14, 16, 11, 12, 77, 135, // MIDI/Tempo
   25, 26, // Displays
 ];
 const menuRank = (id) => {

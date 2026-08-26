@@ -171,7 +171,7 @@ all: an id the Stomp lacks refuses, and `scan_settings` reads a refusal as absen
 
 </details>
 
-### MIDI/Tempo (9)
+### MIDI/Tempo (10)
 
 **One section on the pedal, not two** — confirmed on a Stomp and an XL [2026-08-24]. These were
 separate groups here until then.
@@ -208,9 +208,9 @@ Stomp, so where the two units disagree it is the XL's wording that is in the tab
 
 </details>
 
-> **`135` has no place in `MENU_ORDER`.** Every other id in this section was placed; this one came
-> without its row number, so it draws at the foot of MIDI/Tempo rather than where the pedal puts it.
-> One line of the menu, and it is fixed — `only_the_listed_ids_are_unplaced` names it.
+> ~~**`135` has no place in `MENU_ORDER`.**~~ ✅ answered by PR #17: it is row 10, the last of
+> MIDI/Tempo. That is where the unplaced default had been drawing it, so the panel looks the same
+> and the row is now read instead of assumed. `only_the_listed_ids_are_unplaced` holds at empty.
 
 ### Displays (2)
 
@@ -348,11 +348,11 @@ answer:
 
 ## Menu order, section by section
 
-`MENU_ORDER` now covers **Ins/Outs and Preferences**, both from the XL. One entry per line in screen
-order, **including entries fretwire has no id for** — a gap in the list is itself a finding, and it
-is what tells us an id is missing rather than merely unnamed.
+`MENU_ORDER` now covers **all six sections**, every one of them from the XL. One entry per line in
+screen order, **including entries fretwire has no id for** — a gap in the list is itself a finding,
+and it is what tells us an id is missing rather than merely unnamed.
 
-Both are prefilled with the XL's order as a candidate: correct them if a Stomp differs.
+All six are prefilled with the XL's order as a candidate: correct them if a Stomp differs.
 
 ```
 Ins/Outs
@@ -402,16 +402,16 @@ EXP Pedals              ← read off an XL, 2026-08-25
 
 ```
 MIDI/Tempo              ← read off an XL, 2026-08-25
-1. MIDI Base Channel    (9)
-2. MIDI Thru            (10)
-3. Rx MIDI Clock        (13)
-4. Tx MIDI Clock        (76)
-5. Tempo Select         (14)
-6. BPM                  (16)
-7. USB MIDI             (11)
-8. MIDI PC Rx           (12)
-9. MIDI PC Tx           (77)
-?. Snapshot CC Send     (135)   ← position unread; unplaced in MENU_ORDER
+ 1. MIDI Base Channel    (9)
+ 2. MIDI Thru            (10)
+ 3. Rx MIDI Clock        (13)
+ 4. Tx MIDI Clock        (76)
+ 5. Tempo Select         (14)
+ 6. BPM                  (16)
+ 7. USB MIDI             (11)
+ 8. MIDI PC Rx           (12)
+ 9. MIDI PC Tx           (77)
+10. Snapshot CC Send     (135)
 ```
 
 ```
@@ -460,10 +460,10 @@ question, and it is the likeliest place for that confirmation to have been wrong
 answer:
 ```
 
-**Where does `135` sit in the MIDI/Tempo menu?** One row number, and `MENU_ORDER` is complete.
+~~**Where does `135` sit in the MIDI/Tempo menu?**~~ ✅ answered.
 
 ```
-answer:
+answer: row 10, last in the section — PR #17, off an XL.
 ```
 
 Delete this file once it's answered, the way the other `_TODO-` sheets go.

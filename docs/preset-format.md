@@ -105,10 +105,12 @@ split topologies and all 106 parameter values agree.
 | named parameters | `11 → 4`, in that symbol's parameter order |
 | `@path`, `@position` | slot index = `@path × 10 + @position + 1` |
 | `@enabled` | content key `10` |
-| `@cab` | `24 → 26`, with `24 → 23` true |
 | `@mic`, `@trails` | one value appended past the symbol's parameters |
 | `@type` | content key `9` (table above) |
 | `global.@topologyN` | DSP group key `21` |
+| `footswitch.dspN.blockM` | key `3 → 8`, transposed: `@fs_index` − 1 is the array position |
+| `@fs_label` / `@fs_ledcolor` / `@fs_enabled` | `11 → 5` (NUL-terminated) / `11 → 6` / `11 → 7` |
+| `@fs_customlabel` / `@fs_momentary` | `14` (NUL-terminated, `13` says whether there is one) / `12` |
 | `snapshotN.@name` / `@tempo` / `@valid` | snapshot keys `4` (NUL-terminated) / `5` / `0` |
 | `snapshotN.@pedalstate` / `@ledcolor` / `@custom_name` | snapshot keys `11` / `12` / `14` |
 | `snapshotN.blocks.dspN.<name>` | snapshot key `3[wire slot][1]` |
@@ -126,6 +128,20 @@ node's own `@enabled`.** Both nodes of a bracket that spans two DSPs report `@en
 both, while the device has DSP1's join and DSP2's split *inactive* (`20 → 18` false, column 0) —
 because the split opens on DSP1 (`SAB`) and the join closes on DSP2 (`ABJ`). The node's `@enabled`
 is its own bypass and lands on the holder's key `10`.
+
+**An amp+cab block's `@cab` is a sibling reference, not a model.** `@cab: "cab0"` names another
+entry of the same `dspN` object, which holds the cab's own `@model`, `@mic` and parameters. The
+pair is one block on the wire, with the cab at `24 → 26` and its parameters in bank `12`. Which
+**symbol** that index names is the open question: the Stomp dump we hold stores a `HD2_CabMicIr_…`
+where the `tone` names a plain `HD2_Cab…`, and the two families differ in spelling and in case
+(`Cab4X12CaliV30` against `CabMicIr_4x12CaliV30`). `fretwire_data::tone` refuses amp+cab blocks
+until one dump of one settles it — a wrong cab on someone's amp is the most audible thing this
+conversion could get wrong.
+
+**A footswitch binding stays in the layout when `@fs_enabled` is false**, carrying `11 → 7` false —
+that is a block assigned to a switch and not currently answering to it, not an unbound switch. One
+switch can hold several bindings, as an array, ordered with the `@fs_primary` one first and each
+entry's position recorded at `10`. [solid — the oracle preset has both cases]
 
 **Path B's input and output nodes live inside the structural slots**: the split slot's key `14` is
 the tone's `inputB` and the mixer slot's key `16` is `outputB`, the same shape as slot 0 (`inputA`)
@@ -237,7 +253,11 @@ A `type 6` block content is `Map{5}`:
   count and `2` is how many values are stored, and they differ by exactly one on the blocks that
   append a trailing extra — a cab's **mic** and a delay/reverb's **trails** switch. So a cab reads
   `{2: 6, 3: 5}` and a Simple Delay `{2: 7, 3: 6}`. [solid — 2026-08-25, 24 distinct symbols]
-- `12` = a second (empty in every fixture) param bank.
+- `12` = the **paired model's** param vector, same `{2, 3, 4}` shape — a cab's mic/cut parameters
+  on an amp+cab block, and empty on everything else. The one paired block we hold a dump of stores
+  `HD2_CabMicIr_1x12USDeluxe` with `{2: 7, 3: 7}`: `Mic` is its **first** parameter (not a value
+  appended after the last, the way a standalone cab's is) and the symbol's trailing `IrData` is not
+  stored, 7 of 8. [solid — 2026-08-25]
 - `9` = the **block class**, a small fixed number per kind of block, equal to the `@type` an `.hlx`
   / `.hxb` `tone` block carries — not to the catalog category, which is far finer-grained:
 

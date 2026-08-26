@@ -236,28 +236,63 @@ fn snapshots_come_across() {
     }
 }
 
-/// The donor's footswitch bindings and controller assignments are **cleared**, not kept.
+/// The footswitch layout comes across — bindings, custom labels and LED ring colours.
 ///
-/// Both tables address blocks by slot number, and every slot has just been rewritten. "Sultans"
-/// binds five switches; keeping them would leave the restored preset toggling blocks it never put
-/// there — a wrong binding, not a missing one.
+/// Every **bypass** binding must match the device's own, position for position. The two
+/// interesting entries are the switch carrying two blocks (Volume Pedal and Weeper both on FS13,
+/// ordered primary-first with `10` recording the order) and the two whose `@fs_enabled` is false —
+/// bound but not currently answering, which the array still holds.
+///
+/// The one position that legitimately differs is FS8, which the device fills with a **parameter
+/// controller** (`11 → 0` = 2, the split's `Route To`). That is a row of key `4` as well as of
+/// this table, and the conversion writes neither, so writing it here alone would leave the two
+/// disagreeing.
 #[test]
-fn stale_slot_bindings_are_cleared() {
+fn the_footswitch_layout_comes_across() {
+    let Some((converted, oracle)) = converted_and_oracle() else {
+        return;
+    };
+    let layout = |ps: &PresetStream| match map_get(&ps.preset, 3).and_then(|m| map_get(m, 8)) {
+        Some(Value::Array(a)) => a.clone(),
+        _ => Vec::new(),
+    };
+    let (got, want) = (layout(&converted), layout(&oracle));
+    assert_eq!(got.len(), want.len(), "the array keeps the device's width");
+
+    let is_controller = |switch: &Value| match switch {
+        Value::Array(entries) => entries.iter().any(|e| {
+            map_get(e, 11)
+                .and_then(|n| map_get(n, 0))
+                .and_then(Value::as_i64)
+                == Some(2)
+        }),
+        _ => false,
+    };
+    let mut bound = 0;
+    for (i, (got, want)) in got.iter().zip(&want).enumerate() {
+        if is_controller(want) {
+            continue;
+        }
+        assert_eq!(got, want, "FS{}", i + 1);
+        if !matches!(want, Value::Nil) {
+            bound += 1;
+        }
+    }
+    assert_eq!(bound, 8, "eight switches carry a bypass binding");
+}
+
+/// The donor's controller assignments are **cleared**, not kept: key `4` addresses blocks by slot
+/// and by parameter index, and every slot has just been rewritten, so a surviving row would sweep
+/// a parameter of whatever now sits there.
+#[test]
+fn stale_controller_assignments_are_cleared() {
     let Some((converted, _)) = converted_and_oracle() else {
         return;
     };
-    let layout = map_get(&converted.preset, 3).and_then(|m| map_get(m, 8));
-    let Some(Value::Array(switches)) = layout else {
-        panic!("no footswitch layout");
-    };
-    assert!(!switches.is_empty(), "the array itself must survive");
-    assert!(
-        switches.iter().all(|s| matches!(s, Value::Nil)),
-        "a donor binding survived: {switches:?}"
-    );
     let Some(Value::Array(controllers)) = map_get(&converted.preset, 4) else {
         panic!("no assignment table");
     };
+    assert!(!controllers.is_empty(), "the array itself must survive");
     assert!(controllers.iter().all(|c| matches!(c, Value::Nil)));
 }
 
@@ -278,7 +313,12 @@ fn the_report_names_what_it_did_not_carry() {
         .tone;
     let report = apply_tone(&mut donor, tone.as_object().unwrap(), &syms).unwrap();
     let said = report.not_carried.join("\n");
-    for expected in ["snapshot", "footswitch", "irUuidTable", "input and output"] {
+    for expected in [
+        "snapshot",
+        "controller assignments",
+        "irUuidTable",
+        "input and output",
+    ] {
         assert!(
             said.contains(expected),
             "no mention of {expected} in:\n{said}"

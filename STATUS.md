@@ -3547,12 +3547,47 @@ Everything else is reported rather than silently dropped — `Conversion::not_ca
 snapshots' controller state, the tone's own footswitch bindings (labels and LED colours), the IR
 table, the Variax block and the four input/output nodes, one line each.
 
+### Footswitches, labels and ring colours came across too
+Key `3 → 8` is a transpose of the tone's `footswitch.dspN.blockM`: the tone keys a binding by the
+block it is on and names the switch inside it (`@fs_index`), the wire keys it by switch. All eight
+of the oracle preset's bypass bindings match the device's own byte for byte, including the two
+awkward cases — one switch carrying **two** blocks (ordered primary-first, with `10` recording the
+order) and two bindings whose `@fs_enabled` is false. That last is worth stating: a disabled
+binding is still in the array, with `11 → 7` false. It is a block assigned to a switch and not
+currently answering to it, and dropping those would quietly unbind blocks their owner had put there.
+
+Custom labels and LED ring colours ride along, since they are just `14` and `11 → 6` on the same
+entry. That is not a route to *setting* a colour on a live pedal — the write op for that is still
+the open item ops 58-62 — but it does mean a restored preset keeps the ones it came with.
+
 ### Reachable, and deliberately not yet live
 `fretwire hxb-convert <backup.hxb> --donor <stream.bin> --out <export.json>` writes the existing
-export format, so `backup-show` inspects it and `restore` could put it on a pedal. **No live
-write has been tried**, and the tone's own footswitch bindings not being carried is the reason to
-wait: restoring a preset whose switches come back empty is a poor trade for its owner. Carrying
-key `3` from the tone is the next piece, and the same oracle checks it.
+export format, so `backup-show` inspects it and `restore` could put it on a pedal. **No live write
+has been tried.**
+
+### Running it over a whole setlist found the one real gap
+Converting one preset proves the mapping; converting 128 finds what the mapping does not cover.
+Bank 0 of the backup gives 39 converted and 89 refused, in two groups, and the second was a bug in
+this work rather than a missing capture.
+
+**`@cab` is a sibling reference, not a model.** An Amp+Cab block carries `@cab: "cab0"`, which
+names another entry of the same `dspN` object holding the cab's own `@model`, `@mic` and
+parameters. This had been read as a symbol name, which no lookup could resolve. The pair is one
+block on the wire — cab index at `24 → 26`, its parameters in bank `12`, which is what that
+"second, usually empty param bank" has been all along.
+
+What is *not* settled is which symbol the index names, and it is a genuine unknown rather than an
+oversight: the one paired block we hold a dump of (a Stomp's US Princess) stores
+`HD2_CabMicIr_1x12USDeluxe`, a different symbol family from the plain `HD2_Cab…` the tone names,
+with a different parameter list — `Mic` first rather than appended last, and the trailing `IrData`
+not stored, 7 of 8. The two families differ in spelling *and* in case (`Cab4X12CaliV30` against
+`CabMicIr_4x12CaliV30`). So amp+cab blocks are refused. Guessing here puts a real but **wrong cab**
+on someone's amp, which is the most audible thing this could get wrong and the least likely to be
+blamed on a restore. **One wire dump of a preset containing an amp+cab block, from a unit whose
+backup we also hold, settles it** — and it is the single highest-value capture on this thread,
+worth about a fifth of a factory setlist.
+
+The other group is the `@type` 4 / 5 / 8 class refusals working as designed.
 
 `PresetStream::to_stream()` is new — the inverse of `parse`, because a preset that was *built*
 rather than read still has to be storable and re-inspectable before anything sends it.

@@ -633,23 +633,26 @@ real session.
       `fretwire_data::tone` turns a `tone` object — what an `.hxb` slot and an `.hlx` file both
       carry — into the wire preset, and `fretwire hxb-convert` writes an export file the existing
       `backup-show`/`restore` path already reads. Blocks, split topology and snapshots all come
-      across; checked against one preset held in both forms (a Floor backup and a wire dump of the
-      same slot off the same unit), where all 15 blocks, 106 parameter values and 320
-      snapshot-matrix cells match the device's own bytes. This gives `.hlx` **import** too — the
+      across, and so do the footswitch bindings with their custom labels and LED ring colours;
+      checked against one preset held in both forms (a Floor backup and a wire dump of the same
+      slot off the same unit), where all 15 blocks, 106 parameter values, 320 snapshot-matrix cells
+      and all 8 bypass bindings match the device's own bytes. This gives `.hlx` **import** too — the
       format is the same tree — which is the more useful half, since `.hlx` is what people share.
       **Not yet sent to a pedal.** What is left, in order:
-      - **Carry the tone's footswitch layout (key `3`)**, so a restored preset comes back with its
-        switches bound. Currently the donor's is *cleared* (a stale binding addresses blocks by
-        slot and every slot has changed), which is safe but leaves the switches empty — a poor
-        trade for the preset's owner, and the reason not to wire the live path yet. The same
-        oracle checks it. The tone also carries per-switch **custom labels and LED colours**
-        (`footswitch.dspN.blockM.@fs_customlabel` / `@fs_ledcolor`), which is read-side evidence
-        for the open colour item above — it does not give the write op, but it does pin the model.
+      - **One capture unblocks the biggest gap: a wire dump of a preset containing an Amp+Cab
+        block, off a unit whose `.hxb` we also hold.** Amp+cab blocks are refused today because the
+        tone names the paired cab with a plain `HD2_Cab…` symbol while the one dump we have stores
+        a `HD2_CabMicIr_…` one, with a different parameter list, and nothing pins the two together.
+        This is ~26 of the 128 presets in bank 0 of the sample backup, and amp+cab is how most
+        people build a preset. Everything else about the pairing is already known (cab index at
+        `24 → 26`, its parameters in bank `12`).
       - **Controller assignments (key `4`)** and the snapshot controller values (`2`) that index
-        off them.
-      - **Four block classes and one topology have no wire evidence** and are refused rather than
-        guessed: tone `@type` 4 (dual cab), 5 (IR), 6 (looper), 8 (synth), and topology `AB`.
-        About 8% of the sample backup's blocks. Each needs one dump of a preset containing that
+        off them. Currently the donor's table is *cleared* — a stale row addresses blocks by slot
+        and every slot has changed — so a restored preset arrives with no expression/controller
+        assignments.
+      - **Three more block classes and one topology have no wire evidence** and are refused rather
+        than guessed: tone `@type` 4 (dual cab), 5 (IR), 8 (synth), and topology `AB`. Type 6
+        (looper) is a different slot kind again. Each needs one dump of a preset containing that
         kind of block — cheap, and the refusal message names what to capture.
       - The four **input/output nodes** store a ragged prefix of their symbol's parameter list and
         the rule is unknown; they keep the target's values.

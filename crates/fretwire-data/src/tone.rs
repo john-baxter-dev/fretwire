@@ -22,9 +22,10 @@
 //! | named parameters | `11 → 4`, ordered by that symbol's `Helix.sym` parameter list |
 //! | `@path`, `@position` | slot index = `@path × 10 + @position + 1` |
 //! | `@enabled` | content key `10` |
-//! | `@cab` | paired cab index (`24 → 26`), with `24 → 23` = true |
 //! | `@mic`, `@trails` | one extra value appended past the symbol's parameters |
 //! | `@type` | content key `9`, the block class |
+//! | `footswitch.dspN.blockM` | preset key `3 → 8`, with its labels and LED colours |
+//! | `snapshotN` | preset key `10`, including the per-slot bypass matrix |
 //!
 //! The two counts beside the value vector say exactly this: `11 → 3` is the **symbol's** parameter
 //! count and `11 → 2` the number of values **stored**, and they differ precisely on the blocks that
@@ -38,6 +39,11 @@
 //! undecoded), key `2`, the device-info stamp at key `7`, and the input/output nodes, whose stored
 //! parameter vector is a ragged prefix of its symbol's list that two samples cannot pin down.
 //!
+//! The **controller-assignment table** (key `4`) is the exception in the other direction: it is
+//! *cleared* rather than kept, because it addresses blocks by slot and every slot has just been
+//! rewritten. Writing it from the `tone` is the main piece still missing, and the snapshots'
+//! controller state (`10 → 10[n] → 2`) indexes off its order, so the two go together.
+//!
 //! That is the conservative direction for the same reason the rest of this crate takes it: a blob
 //! is written to flash, and a field we guessed wrong is not visible until a musician's preset
 //! sounds different. [`Conversion::not_carried`] names every such omission rather than leaving the
@@ -45,6 +51,28 @@
 //!
 //! For the same reason a block whose class we have never seen on the wire is a **refusal**, not a
 //! guess — see [`block_class`].
+//!
+//! # `@cab`: an amp+cab block is refused, and this is what is missing
+//!
+//! An **Amp+Cab** block (`@type` 3) carries `@cab: "cab0"`, which names a *sibling entry of the
+//! same `dspN` object* — not a model. That entry holds the cab: its own `@model`, `@mic` and
+//! parameters. On the wire the pair is one block, with the cab's index at `24 → 26`, `24 → 23`
+//! true, and the cab's parameters in the **second** bank at `12 → 4`. All of that is established.
+//!
+//! What is not is which symbol the cab's index points at. The one paired block we hold a dump of
+//! (an HX Stomp's US Princess) stores `HD2_CabMicIr_1x12USDeluxe` — a **different symbol family**
+//! from the plain `HD2_Cab…` the `tone` names for a standalone cab, with a different parameter
+//! list: `Mic` is its first parameter rather than a value appended after the last, and the
+//! trailing `IrData` is not stored (7 of the symbol's 8). The Floor backup's amp+cab blocks name
+//! plain `HD2_Cab…` models in their `@cab` sibling, so tone and wire are naming the cab
+//! differently and the correspondence between the two families — which differ in spelling *and*
+//! in case (`Cab4X12CaliV30` against `CabMicIr_4x12CaliV30`) — has never been checked against a
+//! device.
+//!
+//! Guessing it would put a real but **wrong cab** on someone's amp, which is about the most
+//! audible thing this conversion could get wrong and the least likely to be blamed on a restore.
+//! One wire dump of a preset with an amp+cab block, from a unit whose backup we also hold, settles
+//! it. It costs about a fifth of a factory setlist until then.
 
 use serde_json::{Map as JsonMap, Value as Json};
 
@@ -101,6 +129,8 @@ pub struct Conversion {
     pub blocks: usize,
     /// Snapshots written.
     pub snapshots: usize,
+    /// Footswitch bindings written.
+    pub footswitches: usize,
     /// Parts of the `tone` tree this does not yet write, one human-readable line each.
     pub not_carried: Vec<String>,
 }
@@ -122,6 +152,9 @@ pub struct Conversion {
 ///
 /// [solid — 2026-08-25; the 17/33 split is pinned from both sides, in that `class == 33` and
 /// `24 → 26 != -1` and `24 → 23 == true` coincide on every amp in every fixture we hold]
+///
+/// Knowing `@type` 3's class does not make one convertible: it is refused a step later, on its
+/// `@cab`, whose target symbol is the open question. See this module's notes on `@cab`.
 pub fn block_class(tone_type: i64) -> Option<i64> {
     match tone_type {
         0 => Some(1),
@@ -232,42 +265,204 @@ pub fn apply_tone(
     }
 
     apply_snapshots(donor, tone, &mut out);
-    clear_bindings(donor, &mut out);
+    apply_footswitches(donor, tone, &mut out);
+    clear_controllers(donor, &mut out);
     note_omissions(tone, &mut out);
     Ok(out)
 }
 
-/// Empty the footswitch layout (key `3 → 8`) and the controller-assignment table (key `4`).
+/// Preset key `3 → 8` — the **footswitch layout**, with its custom labels and LED colours.
 ///
-/// These are the two tables that address blocks by **slot number**, and the conversion has just
+/// The array has one position per switch (FS*n* is position *n* − 1) and each position holds the
+/// bindings on that switch, so a switch with two blocks on it is a two-element array. The `tone`
+/// keys the same thing by block, at `footswitch.dspN.blockM`, and names the switch inside the entry
+/// as `@fs_index` — so this is a transpose, then a slot lookup through the same `@path`/`@position`
+/// mapping the blocks use.
+///
+/// | tone | wire |
+/// |---|---|
+/// | `@fs_index` | the array position, minus one |
+/// | `@fs_primary` | first on the switch; `10` is the entry's position there |
+/// | `@fs_label` | `11 → 5`, NUL-terminated |
+/// | `@fs_ledcolor` | `11 → 6`, `0xRRGGBB` |
+/// | `@fs_enabled` | `11 → 7` |
+/// | the block's slot | `11 → 8`, the wire slot |
+/// | `@fs_momentary` | `12` |
+/// | `@fs_customlabel` | `14`, NUL-terminated, with `13` saying whether there is one |
+///
+/// [solid — 2026-08-25, all ten bindings of the oracle preset, including the one switch carrying
+/// two blocks and the two whose `@fs_enabled` is false]
+///
+/// **`@fs_enabled` is not "is it bound".** A binding with it false is still in the array, with
+/// `11 → 7` false — it is a block assigned to a switch that is not currently answering to it. The
+/// oracle has two, and dropping them would quietly unbind blocks their owner had put there.
+///
+/// This writes only **bypass** bindings (`11 → 0` = 1). A parameter controller is a type-2 entry
+/// here *and* a row in key `4`, and this does not write key `4` — see [`clear_controllers`] — so
+/// writing it in one table and not the other would leave the two disagreeing.
+fn apply_footswitches(
+    donor: &mut PresetStream,
+    tone: &JsonMap<String, Json>,
+    out: &mut Conversion,
+) {
+    let placement = block_placement(tone);
+    let slot_of = |dsp: usize, name: &str| {
+        placement
+            .iter()
+            .find(|((d, n), _)| *d == dsp && n == name)
+            .map(|(_, slot)| *slot)
+    };
+
+    // Collect (switch, position-on-switch, entry) before touching the donor: the tone is keyed by
+    // block and the wire by switch, so everything has to be in hand to order a switch's entries.
+    let mut bindings: Vec<(usize, bool, Value)> = Vec::new();
+    let mut unplaceable = 0usize;
+    for dsp in 0..DSP_GROUP_KEYS.len() {
+        let Some(switches) = tone
+            .get("footswitch")
+            .and_then(|f| f.get(format!("dsp{dsp}")))
+            .and_then(Json::as_object)
+        else {
+            continue;
+        };
+        for (name, binding) in switches {
+            let (Some(index), Some(slot)) = (
+                binding.get("@fs_index").and_then(Json::as_i64),
+                slot_of(dsp, name),
+            ) else {
+                unplaceable += 1;
+                continue;
+            };
+            let primary = binding.get("@fs_primary").and_then(Json::as_bool) == Some(true);
+            bindings.push((index as usize, primary, footswitch_entry(binding, slot)));
+        }
+    }
+
+    let Some(layout) = map_get_mut(&mut donor.preset, 3) else {
+        return;
+    };
+    let Some(Value::Array(switches)) = map_get_mut(layout, 8) else {
+        return;
+    };
+    let width = switches.len();
+    switches.fill(Value::Nil);
+
+    let mut off_device = 0usize;
+    let mut written = 0usize;
+    for switch in 1..=width {
+        // Primary first — it is the one the pedal's screen names, and `10` records the order.
+        let mut on_switch: Vec<&(usize, bool, Value)> =
+            bindings.iter().filter(|(i, ..)| *i == switch).collect();
+        on_switch.sort_by_key(|(_, primary, _)| !*primary);
+        if on_switch.is_empty() {
+            continue;
+        }
+        switches[switch - 1] = Value::Array(
+            on_switch
+                .iter()
+                .enumerate()
+                .map(|(position, (_, _, entry))| {
+                    let mut entry = entry.clone();
+                    set_map_key(&mut entry, 10, Value::from(position as i64));
+                    entry
+                })
+                .collect(),
+        );
+        written += on_switch.len();
+    }
+    off_device += bindings
+        .iter()
+        .filter(|(i, ..)| *i > width || *i == 0)
+        .count();
+
+    out.footswitches = written;
+    if off_device > 0 {
+        out.not_carried.push(format!(
+            "{off_device} footswitch binding(s): the preset puts them on switches the target \
+             device does not have (it has {width})"
+        ));
+    }
+    if unplaceable > 0 {
+        out.not_carried.push(format!(
+            "{unplaceable} footswitch binding(s): on something other than a block, so there is no \
+             slot to point them at"
+        ));
+    }
+}
+
+/// One binding, in the device's own key order.
+///
+/// `15` and `16` are `false`/`0` on every entry of every fixture and nothing here varies them.
+fn footswitch_entry(binding: &Json, slot: usize) -> Value {
+    let text = |key: &str| {
+        binding
+            .get(key)
+            .and_then(Json::as_str)
+            .map(|s| format!("{s}\0"))
+    };
+    let custom = text("@fs_customlabel");
+    Value::Map(vec![
+        (Value::from(10), Value::from(0)), // position on the switch, set by the caller
+        (
+            Value::from(11),
+            Value::Map(vec![
+                (Value::from(0), Value::from(1)), // a bypass binding, not a parameter controller
+                (
+                    Value::from(5),
+                    Value::from(text("@fs_label").unwrap_or_else(|| "\0".into())),
+                ),
+                (
+                    Value::from(6),
+                    Value::from(
+                        binding
+                            .get("@fs_ledcolor")
+                            .and_then(Json::as_i64)
+                            .unwrap_or(0),
+                    ),
+                ),
+                (
+                    Value::from(7),
+                    Value::from(binding.get("@fs_enabled").and_then(Json::as_bool) != Some(false)),
+                ),
+                (Value::from(8), Value::from(slot as i64)),
+            ]),
+        ),
+        (
+            Value::from(12),
+            Value::from(binding.get("@fs_momentary").and_then(Json::as_bool) == Some(true)),
+        ),
+        (
+            Value::from(14),
+            Value::from(custom.clone().unwrap_or_else(|| "\0".into())),
+        ),
+        (Value::from(13), Value::from(custom.is_some())),
+        (Value::from(16), Value::from(0)),
+        (Value::from(15), Value::from(false)),
+    ])
+}
+
+/// Empty the controller-assignment table (key `4`).
+///
+/// It addresses blocks by **slot number** and by parameter index, and the conversion has just
 /// replaced every block in every slot. Leaving the donor's would not be a harmless omission like
-/// the undecoded preset settings: each entry would go on pointing at a slot that now holds a
-/// different model, so the target's FS2 would toggle a block the preset never put there, and a
-/// controller would sweep some unrelated parameter. A restored preset that silently rewires
-/// someone's footswitches is worse than one that arrives with none on them.
+/// the undecoded preset settings: each row would go on sweeping a parameter of whatever now sits
+/// in that slot. Empty is a real device state — key `4` is entirely nil on a preset whose only
+/// assignment is a bypass [solid — the `assign_bypass_on_fs1` fixture] — and a stale row is not.
 ///
-/// Both are valid empty: `3 → 8` is all-nil on a preset driven by snapshots rather than switches,
-/// and key `4` is entirely nil on a preset whose only assignment is a bypass. [solid — the
-/// `assign_bypass_on_fs1` fixture]
-fn clear_bindings(donor: &mut PresetStream, out: &mut Conversion) {
-    let mut cleared = false;
-    if let Some(layout) = map_get_mut(&mut donor.preset, 3)
-        && let Some(Value::Array(switches)) = map_get_mut(layout, 8)
-    {
-        cleared |= switches.iter().any(|s| !matches!(s, Value::Nil));
-        switches.fill(Value::Nil);
-    }
-    if let Some(Value::Array(controllers)) = map_get_mut(&mut donor.preset, 4) {
-        cleared |= controllers.iter().any(|c| !matches!(c, Value::Nil));
-        controllers.fill(Value::Nil);
-    }
-    if cleared {
+/// Writing it from the `tone` is the remaining piece: the rows have to be built before the
+/// snapshots' key `2`, which indexes off this table's order, can be written either.
+fn clear_controllers(donor: &mut PresetStream, out: &mut Conversion) {
+    let Some(Value::Array(controllers)) = map_get_mut(&mut donor.preset, 4) else {
+        return;
+    };
+    if controllers.iter().any(|c| !matches!(c, Value::Nil)) {
         out.not_carried.push(
-            "the target preset's own footswitch bindings and controller assignments: cleared \
-             rather than kept, because they address blocks by slot and every slot has changed"
+            "the target preset's own controller assignments: cleared rather than kept, because \
+             they address blocks by slot and every slot has changed"
                 .into(),
         );
     }
+    controllers.fill(Value::Nil);
 }
 
 /// Preset key `10` — the snapshots.
@@ -454,13 +649,13 @@ fn encode_block(block: &Json, syms: &DeviceSymbols) -> Result<Value> {
         values.push(json_to_msgpack(trails));
     }
 
-    let paired = match block.get("@cab").and_then(Json::as_str) {
-        Some(cab) => syms
-            .index_of(cab)
-            .ok_or_else(|| Error::Stream(format!("paired cab {cab:?} is not in Helix.sym")))?
-            as i64,
-        None => -1,
-    };
+    if let Some(cab) = block.get("@cab").and_then(Json::as_str) {
+        return Err(Error::Stream(format!(
+            "{model} is an amp+cab block (its {cab:?} sibling holds the cab) and the paired cab's \
+             encoding is not settled — see `tone`'s notes on `@cab`"
+        )));
+    }
+    let paired = -1;
 
     let content = Value::Map(vec![
         (
@@ -695,10 +890,6 @@ fn note_omissions(tone: &JsonMap<String, Json>, out: &mut Conversion) {
         );
     }
     for (key, what) in [
-        (
-            "footswitch",
-            "footswitch bindings, custom labels and LED colours",
-        ),
         (
             "global",
             "preset tempo, input impedance/pad and the focused block",

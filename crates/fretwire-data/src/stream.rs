@@ -999,6 +999,12 @@ pub struct Assignment {
     /// 10, two XL streams at 8 and 13. See `fretwire_protocol::edit::source` for the arithmetic,
     /// and [`PresetStream::controller_table_len`] to read a preset's own.
     ///
+    /// **Ordinals 1 and 2 are EXP1 and EXP2** [solid — owner report, issue #13, 2026-08-25]: two
+    /// bypasses assigned to the two expression inputs came back at ordinals 1 and 2, each naming
+    /// the block that had been put on that pedal. The far end of the footswitch run is observed
+    /// too — the same preset's FS8 parameter landed at ordinal **10**, which is what the formula
+    /// computes for an eight-switch device.
+    ///
     /// MIDI and snapshots sit in the two entries above the run. On a Stomp that is 8 and 9, and 9
     /// was accepted and filed at index 9 here; above five switches it is arithmetic nobody has read
     /// back [hypothesis]. **The device does not range-check the ordinal** — one past the end is
@@ -1154,8 +1160,16 @@ impl PresetStream {
     /// **Only parameter controllers live here.** Assigning a block's *bypass* to a footswitch does
     /// not touch this table at all — that goes to `3 → 8`, the footswitch layout, as a node of type
     /// `1` (see [`Self::footswitch_layout`]). [solid — assigning a Simple Delay's bypass to FS1 on a
-    /// Stomp leaves key `4` entirely `nil`.] `tonepush` shows a bypass *inside* key 4, but its
-    /// example is a wah's auto-engage on an expression pedal, which is a different feature. A populated entry is an array of `{0: place-in-table, 1: def}`,
+    /// Stomp leaves key `4` entirely `nil`.]
+    ///
+    /// **A bypass on an *expression pedal* does live here**, though — the destination is chosen by
+    /// the source, not by what is driven. An XL owner put two blocks' bypasses on EXP1 and EXP2 and
+    /// both came back as ordinary entries with a target slot and **no key `6`**, which is the same
+    /// test that already tells a bypass entry from a parameter one. `tonepush`'s wah auto-engage
+    /// example is this, not a separate feature as this doc used to claim.
+    /// [solid — owner report, issue #13, 2026-08-25]
+    ///
+    /// A populated entry is an array of `{0: place-in-table, 1: def}`,
     /// one per assignment on that source, and the def is
     /// `{0: source, 1: value-type, 2: min, 3: max, 5: slot, 6: {28: path, 29: param}, …}`.
     ///

@@ -64,6 +64,21 @@
     ...(footswitchCount > 0 ? [{ value: 4 + footswitchCount, label: "Snapshots" }] : []),
   ]);
 
+  // A bypass this block has on an **expression pedal**, or undefined.
+  //
+  // Bypass has two destinations, chosen by the source: a footswitch writes the footswitch layout
+  // and arrives as `block.footswitch` (the picker above), while an expression pedal writes key `4`
+  // and arrives here, as an entry with a target slot and **no parameter**. `assignmentFor` matches
+  // on `param_index`, so before this existed such an entry matched no row and no badge and the
+  // block simply looked unassigned — an XL owner's preset with two bypasses on EXP1/EXP2 rendered
+  // as if it had none [issue #13, 2026-08-25].
+  //
+  // Read-only: which opcode writes one is unread — ops 56/57 take a plain switch index and nothing
+  // we hold shows one accepting an expression input — so it is shown, not offered.
+  const bypassOnPedal = $derived(
+    assignments.find((a) => a.target_slot === block?.slot && a.param_index === null),
+  );
+
   // The assignment driving one parameter of the selected block, or undefined.
   function assignmentFor(paired, index) {
     return assignments.find(
@@ -342,6 +357,13 @@
         {:else if block.footswitch > 0}
           <span class="fs" title="This block's bypass is on footswitch {block.footswitch}."
             >FS{block.footswitch}</span
+          >
+        {/if}
+        {#if bypassOnPedal}
+          <span
+            class="fs"
+            title="This block's bypass is on {bypassOnPedal.source_name}. Assigned on the pedal — fretwire can read this binding but not write one."
+            >{bypassOnPedal.source_name}</span
           >
         {/if}
       </div>

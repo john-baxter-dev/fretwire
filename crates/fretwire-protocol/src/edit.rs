@@ -947,9 +947,15 @@ pub const SOURCE_FS1: i64 = 3;
 /// **`length == footswitch_count + 5` on every capture we hold** — six Stomp streams at 5 and 10,
 /// two XL streams at 8 and 13 [solid]. The footswitch run is solid at both ends: FS1 = 3 on a
 /// Stomp, and an XL's FS6 was diffed straight into index 8, which is the slot a Stomp calls MIDI.
-/// That is the observation that killed the constant.
+/// That is the observation that killed the constant. A second XL preset then put a parameter under
+/// **FS8** and it came back at ordinal **10**, which is what this computes — the far end of the run
+/// confirmed rather than extrapolated [solid — issue #13, 2026-08-25].
 ///
-/// **The two ordinals above the run are inference, not observation** [hypothesis]. They are where
+/// **1 and 2 are EXP1 and EXP2** [solid — same report]. Two bypasses assigned to the two expression
+/// inputs filed themselves at ordinals 1 and 2, each naming the block that had been put on that
+/// pedal, so the labels are no longer `tonepush`'s word alone.
+///
+/// **MIDI and snapshots are inference, not observation** [hypothesis]. They are where
 /// the arithmetic puts them, and on a Stomp that arithmetic agrees with what we saw — ordinal 9 was
 /// accepted and filed at index 9. Nobody has read either off an XL. `tonepush` names 8 as MIDI, but
 /// that is its Stomp-shaped reading of the same table, so it is not independent evidence here.
@@ -987,9 +993,9 @@ pub mod source {
     /// Anything outside the table does the same.
     pub fn name(ordinal: i64, footswitch_count: usize) -> String {
         match ordinal {
-            // `tonepush`'s names. 1 and 2 do file themselves at their own index, but nothing we
-            // have proves *which* control each is — the footswitch run starting at 3 simply leaves
-            // them as the two expression inputs.
+            // Verified on an XL, 2026-08-25: a bypass put on EXP1 filed itself at ordinal 1 and
+            // named that block, EXP2 likewise at 2. These were `tonepush`'s names, held on the
+            // reasoning that the footswitch run starting at 3 left them over; now they are read.
             1 => "EXP1".into(),
             2 => "EXP2".into(),
             _ if footswitch_count == 0 => format!("Controller {ordinal}"),

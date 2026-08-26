@@ -343,11 +343,20 @@ of a `Map{7}` node:
   because every capture came off a Stomp. On a Stomp the numbers are unchanged; above five switches
   everything above the run moves.
 
-  **The two ordinals above the run are still inference.** On a Stomp, ordinal 9 was accepted and
-  filed at index 9, and `tonepush` names 1/2 EXP1/EXP2, 8 MIDI and 9 Snapshots — consistent with
-  everything here, but **which physical control ordinal 1 is remains [unverified]** for want of an
-  expression pedal, and nobody has read MIDI or snapshots off an XL at all. [hypothesis above five
-  switches]
+  **Ordinals 1 and 2 are EXP1 and EXP2** — read off an XL 2026-08-25, retiring a `[unverified]` that
+  stood for want of an expression pedal. The owner put one block's bypass on EXP1 and another's on
+  EXP2 and read the table back: ordinal 1 targets the block he assigned to EXP1, ordinal 2 the one
+  he assigned to EXP2. The slots are what make it a check rather than a restatement of the label —
+  a swap would have shown the other block. [solid — owner report, issue #13]
+
+  **The far end of the footswitch run is observed too.** The same preset put a parameter under
+  **FS8**, which came back as ordinal **10** — exactly `SOURCE_FS1 + 8 - 1` on an eight-switch
+  device, and a second independent confirmation of the length formula after FS6 → 8.
+  [solid — owner report, issue #13]
+
+  **MIDI and snapshots are still inference.** On a Stomp, ordinal 9 was accepted and filed at index
+  9, and `tonepush` names 8 MIDI and 9 Snapshots. Nobody has read either off an XL, where the
+  arithmetic puts them at 11 and 12. [hypothesis above five switches]
 
   **One past the end is silently ignored** — ordinal 10 on a Stomp was accepted and did nothing —
   and **the device does not range-check this**, so a caller must. `Session::assign_param` bounds it
@@ -367,9 +376,19 @@ of a `Map{7}` node:
   when you assign something, and the same field correlates with the op-4 nil-slot puzzle
   (`docs/protocol.md`).
   [solid — assigning a Simple Delay's bypass to FS1 leaves key `4` entirely `nil`;
-  `captures/assign_bypass_on_fs1.msgpack.bin`.] `tonepush` shows a bypass *inside* key 4, but its
-  example is a wah auto-engaging off an expression pedal — a different feature, and probably the only
-  way a bypass reaches this table.
+  `captures/assign_bypass_on_fs1.msgpack.bin`.]
+
+  **A bypass on an *expression pedal* does reach key 4** — the "probably" above resolved on
+  2026-08-25. An XL owner put one block's bypass on EXP1 and another's on EXP2, and both landed here
+  as ordinary key-4 entries carrying a target slot (`5`) and **no parameter reference** (`6`), which
+  is the same test that already separates a bypass entry from a parameter one. So the destination is
+  chosen by the *source*, not by what is being driven: a bypass goes to `3 → 8` when a footswitch
+  drives it and to key `4` when an expression pedal does. `tonepush`'s wah auto-engage example is
+  this, not a different feature. [solid — owner report, issue #13]
+
+  **Which opcode writes that is still unread.** Ops 56/57 take a plain switch index and nothing we
+  hold shows one accepting an expression input; the assignment above was made on the pedal's own
+  panel, so it settles the *document* and not the request that produces it.
 - **Key `1` is not parameter-vs-bypass** [solid as a refutation]. `tonepush` documents it as
   "4 a parameter, 0 a bypass"; every assignment we have captured is a parameter and two of the three
   carry `0`. To tell the two apart, test for the presence of key `6` (the parameter reference).

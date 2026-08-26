@@ -67,5 +67,25 @@ await throws(
   "one past the end is refused rather than silently dropped",
 );
 
+// --- a bypass on an expression pedal ---
+//
+// Two destinations, chosen by the source: a footswitch writes the footswitch layout and arrives as
+// `block.footswitch`, an expression pedal writes key `4` and arrives as an assignment with a target
+// slot and **no parameter**. The param rows match on `param_index`, so these matched nothing and
+// drew nothing — an XL owner's preset with bypasses on EXP1 and EXP2 rendered as if it had none.
+//
+// This pins the data path only. The badge itself is markup and there is no component harness here,
+// so `ParamPanel`'s `bypassOnPedal` is checked by eye.
+const presets = await mock.invoke("list_presets", { bank: 1 });
+const wah = presets.find((p) => p.name === "The Blue Agave");
+ok(wah !== undefined, "the mock ships a preset carrying one");
+
+const loaded = await mock.invoke("goto_preset", { bank: 1, preset: wah.index });
+const pedalBypass = loaded.assignments.filter((a) => a.param_index === null);
+ok(pedalBypass.length === 1, `one bypass-on-pedal entry, got ${pedalBypass.length}`);
+ok(pedalBypass[0]?.source_name === "EXP1", `named EXP1, got ${pedalBypass[0]?.source_name}`);
+ok(pedalBypass[0]?.target_slot === 1, "pointing at the wah");
+ok(pedalBypass[0]?.param_name === null, "and naming no parameter, because it drives none");
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

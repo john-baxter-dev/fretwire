@@ -291,12 +291,12 @@ function makePreset(name, index, slots, opts = {}) {
   };
 }
 
-function serialPreset(name, index, defs, snapshot_names = []) {
+function serialPreset(name, index, defs, snapshot_names = [], assignments = []) {
   const slots = {};
   defs.forEach((d, i) => {
     slots[i + 1] = makeBlock(d.sym, d);
   });
-  return makePreset(name, index, slots, { snapshot_names });
+  return { ...makePreset(name, index, slots, { snapshot_names }), assignments };
 }
 
 function dualAmpPreset() {
@@ -417,7 +417,15 @@ function floorSetlists() {
     ])),
     // Factory 2
     bank(serialPreset("Bumble Acoustic", 0, [{ sym: "comp_deluxe" }, { sym: "eq_graphic" }]),
-      serialPreset("The Blue Agave", 0, [{ sym: "wah_teardrop" }, { sym: "amp_jazz", cab: "cab_112" }])),
+      // The wah carries a **bypass on an expression pedal**: a key-`4` entry with a target slot and
+      // no parameter. That is the other destination a bypass has, chosen by the source rather than
+      // by what is driven (`docs/preset-format.md`). Seeded because the UI hid these entirely until
+      // 2026-08-25 — the param rows match on `param_index`, so an XL owner's preset with two of them
+      // drew no badge at all (issue #13). A wah auto-engaging off a pedal is the case `tonepush`
+      // documents, so this is where it belongs, and this bank is one the default mock mode reaches.
+      // Read-only: which opcode writes one is unread, so nothing here offers it.
+      serialPreset("The Blue Agave", 0, [{ sym: "wah_teardrop" }, { sym: "amp_jazz", cab: "cab_112" }],
+        [], [{ source: 1, target_slot: 1, param_index: null, paired: false, min: null, max: null }])),
     // User 1 — where the tester's "Sludge" lives.
     bank(serialPreset("Sludge", 0, [
       { sym: "gate" }, { sym: "drive_minotaur" }, { sym: "amp_placater", cab: "cab_412", label: "Amp" },

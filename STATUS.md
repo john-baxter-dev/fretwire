@@ -3641,3 +3641,37 @@ On a Stomp that is 8 and 9, and ordinal 9 was observed accepted and filed at ind
 switches it is arithmetic nobody has read back, so `edit::source::midi`/`snapshots` are tagged
 `[hypothesis]` there. `tonepush` naming 8 as MIDI is not independent evidence — it is the same
 Stomp-shaped reading that caused this.
+
+## Fifty-second round (2026-08-25): **two ordinals confirmed, and a bypass we were hiding**
+
+A second XL preset from Robert Tsai, this time as our own `show-preset` output rather than a file:
+Stupor OD's bypass on **EXP1**, Scream 808's on **EXP2**, Teemah!'s on **FS7**, and Dhyana Drive's
+`Tone` under **FS8**.
+
+**FS8 came back as ordinal 10**, which is what `edit::source::footswitch(8, 8)` computes. The length
+formula's far end is now observed rather than extrapolated — FS6 → 8 settled one end of the run
+yesterday, this settles the other.
+
+**Ordinals 1 and 2 are EXP1 and EXP2** [solid], retiring an `[unverified]` that stood for want of an
+expression pedal. The check is the *slots*, not the labels: ordinal 1 named the block he put on EXP1
+and ordinal 2 the one he put on EXP2, so a swap would have shown the other block. Until now those
+names were `tonepush`'s, held on the reasoning that a footswitch run starting at 3 left them over.
+
+**A bypass on an expression pedal lives in key `4`.** `preset-format.md` said `tonepush`'s wah
+auto-engage example was "a different feature, and probably the only way a bypass reaches this table."
+Half right: it is exactly this, and it is not a different feature. The destination is chosen by the
+**source**, not by what is driven — a footswitch writes `3 → 8`, an expression pedal writes key `4`,
+as an entry with a target slot and no key `6`. Which is the same test that already separates a bypass
+entry from a parameter one.
+
+**And that is a gap we were rendering as nothing.** `ParamPanel` matches assignments to parameter
+rows on `param_index`, and a bypass entry has none — so it matched no row, and the block header only
+badges the footswitch layout. Robert's preset, opened in fretwire, would have shown two blocks with
+no assignment at all. There is now a read-only badge next to the FS one, and a mock preset carrying
+one so the case exists without hardware. Read-only on purpose: ops 56/57 take a plain switch index,
+nothing we hold shows one accepting an expression input, and he made this on the pedal — so we have
+the document, not the request that produces it.
+
+**Still open:** MIDI and snapshots on an XL (arithmetic says 11 and 12, nobody has read either), and
+the opcode for writing a bypass to an expression pedal. No fixture for this one either — it arrived
+as pasted CLI output, so nothing here is pinned by a test the way `xl_assign_param_fs6` pins FS6.

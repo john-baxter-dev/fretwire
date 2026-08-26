@@ -496,6 +496,18 @@ guessing has already cost a power cycle): see section B of `captures/_RUNBOOK-hx
       **Asked for 2026-08-23** (Pi 5 alongside PiPedal). `cargo check` for both
       `aarch64-unknown-linux-musl` and `armv7-unknown-linux-musleabihf` passes unmodified — see
       `docs/serve-mode.md`. Still never linked or run on ARM hardware.
+      **Blocked on the udev rule, and that blocker is not serve mode's** [2026-08-25]. It is written
+      down inside `docs/serve-mode.md` because that is where it was found, but it bites this item
+      identically and this item could ship first: `packaging/70-hxstomp.rules` grants access with
+      `TAG+="uaccess"`, a **seat** mechanism — systemd-logind grants the locally-seated user, and a
+      Pi reached over SSH has no local session, so it grants nothing and the CLI gets `EACCES` with
+      no hint as to why. Shipping an arm64 asset without a `GROUP=`-based variant hands the person
+      who asked a binary that fails at the first USB open. Three places, not one: the rules file,
+      `install-udev` (which `include_str!`s it), and the test asserting
+      `UDEV_RULE.contains(r#"TAG+="uaccess""#)`. **Do this before, or with, the matrix entry.**
+      Sequencing note: line below orders the arm64 artifacts after serve mode, on the grounds that
+      serve mode is what makes them useful. True of the *GUI*; not of the CLI. Headless preset
+      switching, backup and restore need no browser and no lift — this entry's own **Why** says so.
 - [ ] arm64 for the **GUI** — still not planned, and the request that would have triggered it turned
       out to be for something else. Feasible (public repos get free `ubuntu-24.04-arm` runners, so
       it's a native build with no cross-compiled WebKitGTK), but the person who asked runs

@@ -3713,3 +3713,44 @@ answered and moved to `_TODO-settings-names.md`: whether any of the 19 refuse on
 are `FS7`/`FS8 Function` and a Stomp has three switches, so at least those two ought to — but ought
 is not observed), whether `95`/`96`/`68`/`69` really live under Preferences now that EXP Pedals
 exists, and `135`'s row number.
+
+## Fifty-fourth round (2026-08-25): **drift swept, and a blocker filed under the wrong feature**
+
+Housekeeping after PR #16, plus one finding that was hiding in a survey document.
+
+**The udev rule blocks the arm64 CLI, not just serve mode.** `docs/serve-mode.md` recorded, under
+"deployment facts specific to this setup", that `packaging/70-hxstomp.rules` grants access with
+`TAG+="uaccess"` — a **seat** mechanism. systemd-logind grants the locally-seated user, and a Pi
+reached over SSH has no local session, so the tag grants nothing and the process gets `EACCES` with
+no hint as to why. Filed there because that is where it was found, and it reads like a serve-mode
+prerequisite. It isn't: it breaks the **arm64 CLI** (ROADMAP Phase 8, ~10 lines of `release.yml`
+matrix, both targets already `cargo check` clean) exactly as hard, and that item needs none of the
+lift serve mode needs. Shipping an arm64 asset without a `GROUP=`-based variant hands the person who
+asked for it a binary that fails at its first USB open. Now written on the Phase 8 item itself,
+with the three places it touches — the rules file, `install-udev` which `include_str!`s it, and the
+test asserting `UDEV_RULE.contains(r#"TAG+="uaccess""#)`. Not built tonight, deliberately.
+
+While there: the roadmap orders the arm64 artifacts *after* serve mode, "serve mode is what makes
+them useful". That holds for the GUI and not for the CLI — headless preset switching, backup and
+restore need no browser, which is what the Phase 8 entry's own **Why** says. Noted rather than
+resequenced.
+
+**The XL's description was two rounds stale in two places.** The udev rule still called it
+"untested; we have no capture from one", and the `DEVICES` doc still described it as known through
+"what they can run, read off the panel and paste back". We have held two preset streams off one
+since the fifty-first round, and they are what settled its DSP and snapshot counts. Both corrected
+to say what is actually missing, which is narrower and more useful: no *edit* builder has been
+reconciled against an XL byte-for-byte, and that is what `Verified` means here.
+
+**`CLAUDE.md` said 219 tests.** It is 300.
+
+**On cutting 0.4.0.** 44 commits since `v0.3.0`, against 24 for that release, and the condition for
+cutting it — more of the settings namespace mapped — is met at 53 named ids from 23. The stronger
+arguments are elsewhere, though: `hxb-convert` is a capability `v0.3.0` explicitly said did not
+exist ("`show-backup` could read one and nothing could restore from it"), and three of the fixes
+since are invisible on an HX Stomp and hit XL, Floor and LT owners only — the source bound that
+refused FS6–FS8 before the command reached the pedal, ordinal 8 reading back as "MIDI" above five
+switches, and a bypass on an expression pedal rendering as no assignment at all. Those owners are
+the least likely to be running master. Nothing on master looks half-shipped: serve mode, the only
+work in progress, is a document with no code. Not cut tonight; the assessment is here so it does not
+have to be re-derived.

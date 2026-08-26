@@ -142,10 +142,12 @@ pub struct Device {
 /// Two are [`Support::Reported`], for different reasons, which is the point of the tier being
 /// evidential rather than a ranking: the **Helix LT** was surveyed on real hardware (reads and
 /// browses reconcile; no edit has been sent to one), while the **HX Stomp XL** is known through its
-/// owner — what they can run, read off the panel and paste back. Neither has a capture reconciled
-/// against our builders, and in both cases every field we did not observe stays `None` rather than
-/// being copied from a sibling: the LT reports the Floor's `P21` and still does not inherit its
-/// `preset_device_id`, and the XL's own `P36` says nothing about its DSP or snapshot counts.
+/// owner — what they can run, read off the panel, and two preset streams they captured, which our
+/// reader reconciles. Neither has an *edit* reconciled against our builders byte-for-byte, which is
+/// what `Verified` means here, and in both cases every field we did not observe stays `None` rather
+/// than being copied from a sibling: the LT reports the Floor's `P21` and still does not inherit its
+/// `preset_device_id`, and the XL's own `P36` said nothing about its DSP or snapshot counts — those
+/// two came from the captures, not from the code.
 ///
 /// The **HX Effects** reached [`Support::Reported`] the same way, by outcome alone: its `lsusb`
 /// line arrived first and made it findable, and an owner has since said it works. That report is

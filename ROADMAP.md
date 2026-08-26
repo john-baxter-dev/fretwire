@@ -41,16 +41,22 @@ libusb C dependency, clean on Linux; falls back fine for dev on Windows. Workspa
       - send/save a preset to the device
 - [ ] Store each as `captures/NN-<action>.pcapng` + a `.md` describing the exact action.
 
-**Still wanted (2026-08-21), for footswitch/controller assign** — each is one action in HX Edit,
-start capture → do the single thing → stop:
-- `assign_block_to_fs1.pcapng` — a preset with an unbound block; bind that block's bypass to FS1.
-- `unassign_block_from_fs1.pcapng` — the reverse of the above, same preset.
-- `move_block_fs1_to_fs2.pcapng` — a bound block moved between switches (separates "bind" from
-  "reorder the layout").
-- `assign_param_to_exp1.pcapng` — assign one parameter (e.g. a Wah position) to EXP1.
-- `assign_same_param_to_fs4.pcapng` — the *same* parameter, same preset, to a footswitch instead.
-  The pair is what makes the controller-number space readable by diff; a Helix Floor is the useful
-  device here.
+**Mostly answered without the captures (2026-08-22).** This list asked for five footswitch and
+controller assign captures. Four were settled by construction instead — op **56** assigns and
+unassigns a block's bypass to a switch, op **37** assigns a parameter to a source ordinal, both
+byte-exact and verified live, and the CLI has `assign-bypass` / `unassign-bypass` / `assign-param`.
+Worth remembering next time a list like this reads as capture-blocked.
+
+What is left of it:
+- `assign_param_to_exp1.pcapng` — one parameter assigned to **EXP1**. Source ordinals 3..=7 are the
+  footswitches; 1 and 2 are believed to be the two expression inputs and that is **[unverified]**
+  for want of an expression pedal to try it with. This is the only one of the five still worth a
+  capture, and it needs a pedal plugged in more than it needs Windows.
+- A layout **reorder** (a bound block moved between switches) is separate from binding and has no
+  op of its own yet; whether the device treats it as unassign-plus-assign is unchecked.
+
+**Still wanted for the footswitch ring colour / custom label write** (ops 58-62, the one area where
+guessing has already cost a power cycle): see section B of `captures/_RUNBOOK-hx-edit-session.md`.
 
 ## Phase 2 — Protocol decode  (in progress)
 - [x] Identify endpoints — **interrupt EP 0x01 OUT / 0x81 IN**, 16-byte base frames, addr 8.
@@ -270,7 +276,7 @@ start capture → do the single thing → stop:
       level/pan) decoded [solid — io fixtures + input-gate capture: plain op-30 on the node slot];
       io.models meta bundled; IN/OUT glyphs in the grid open the param panel. **Global** settings
       (Input Z/impedance, pad, output level switches) still need a capture round — see
-      `captures/_TODO-global-settings.md`.
+      `docs/protocol.md`.
 - [x] **2026-07-08 editor round** (mock verified; cab paths live-verified 2026-07-09): segmented
       floats (cab mic Angle → 0°/45° buttons, `ParamMeta::stops` from `HelixControls.json` scale),
       **Change cab** on amp+cab combos ([solid]: same-model op-40 swap keeps amp params, new cab

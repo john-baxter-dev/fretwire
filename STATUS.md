@@ -77,7 +77,7 @@ edit-history timeline with A/B compare** (blob snapshots restored via the op-21 
 node's slot [solid, input-gate capture]; io.models meta now bundled), category-colored blocks,
 wheel-nudge sliders, click-empty-cell add (`add_block_at`, guarded), in-app dialogs/toasts, Save As
 with a full setlist slot picker. Global settings (Input Z/impedance, pad, output levels) are **not
-decoded** — see `captures/_TODO-global-settings.md`. The **user IR store** is decoded and
+decoded** — see `docs/protocol.md`. The **user IR store** is decoded and
 implemented as of 2026-08-22 (round thirty-four).
 
 **Preset backup/restore (2026-07-07, offline+mock verified; live pass pending):** the proven op-21
@@ -222,7 +222,7 @@ labels from `HelixControls.json[displayType].format` and send the chosen index a
 `Session::set_param_enum` — generic for any discrete enum. *Dropdown pending live test.*
 
 **IR management — transaction shape PARTIALLY DECODED** (2026-06-28, `captures/import_ir`+`export_ir`,
-notes in `captures/_TODO-ir.md`): PRIMARY channel, session op 255/254; **upload = op 9** (slot, u32
+notes in `docs/protocol.md`): PRIMARY channel, session op 255/254; **upload = op 9** (slot, u32
 checksum, 32B name, 8192-byte = 2048×f32 blob, format flags) + op 13 commit; **export = op 12/11**,
 paged. Before implementing the flash write: reassemble the blob, confirm the checksum algorithm,
 decode the format flags (needs more captures).
@@ -2795,7 +2795,9 @@ state, one IR in slot 0.
 
 `tonepush`'s `PROTOCOL.md` named the missing half of the globals area: **op 24 `{118: id}` reads a
 setting**, answering with the value at key `119`. That was the one thing
-`captures/_TODO-global-settings.md` said made the whole area capture-blocked.
+the global-settings capture sheet said made the whole area capture-blocked. (That sheet has since
+been retired — the decoded protocol lives in `docs/protocol.md` and the remaining pedal-side work in
+`captures/_TODO-settings-names.md` and `_TODO-settings-discovery.md`.)
 
 **We had been calling it since the first handshake.** Op 24 sits in `edit.rs` as `OP_READ_PREP`, a
 "read-sequence prepare step", because the connect capture sends `{118: 128}` and we only ever

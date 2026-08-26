@@ -25,6 +25,43 @@ General rules, same as always:
 
 ---
 
+## Checklist
+
+Tick as you go. Sections below have the detail and the reasoning; this is the thing to have open.
+
+**In HX Edit (Windows)**
+
+- [ ] **Take the whole-device `.hxb` backup.** ⭐⭐ — §A
+- [ ] Write down the preset slot number holding an **Amp+Cab** block ⭐ — §A
+- [ ] …and one holding a **Cab › Dual**, an **IR** block, a **Looper**, a **synth** block — §A
+- [ ] `fs_colour_set.pcapng` — one switch's ring colour, note the colour's exact name ⭐ — §B
+- [ ] `fs_colour_set_second.pcapng` — a different colour, same switch ⭐ — §B
+- [ ] `fs_label_set.pcapng` — custom name on that switch, note the exact text — §B
+- [ ] `fs_label_clear.pcapng` — clear it again — §B
+- [ ] `node_move_split_right_one.pcapng` / `_back` — drag the split a column, and back — §C
+- [ ] `node_move_mixer_left_one.pcapng` / `_back` — same for the mixer — §C
+- [ ] `variant_delay_mono_to_stereo.pcapng` / `_stereo_to_mono` — note where the control is — §D
+- [ ] `variant_mod_mono_to_stereo.pcapng` — same on a modulation block — §D
+- [ ] `dualcab_create.pcapng`, `dualcab_pan_left.pcapng`, `dualcab_swap_second.pcapng` — §E
+- [ ] Photo: the **footswitch colour picker open**, showing its option list — §B
+- [ ] Photo: the **mono/stereo control**, wherever HX Edit puts it — §D
+- [ ] Photo: the **DSP meter** on a busy preset — settles whose number we display
+
+**Back on Linux** — these pair with the backup and are where its value is realised
+
+- [ ] `fretwire goto <slot>` + `fretwire dump-raw ampcab.bin` for the Amp+Cab slot ⭐ — §A
+- [ ] …and one dump each for the dual-cab, IR, looper and synth slots — §A
+- [ ] `fs_before.bin` / `fs_after.bin` around the colour change — §B
+- [ ] `variant_before.bin` / `variant_after.bin` around the first variant change — §D
+
+**Per capture, every time:** one action, 1–2 s around it, stop, and fill in a copy of
+`_TEMPLATE.md`. An unlabelled capture is close to worthless.
+
+**Skip:** §F (needs a two-DSP unit — a Stomp has no Path 2) and §G (obsolete; that work moved to a
+Linux `settings-dump` → change one menu item → `settings-dump` → `settings-diff` loop).
+
+---
+
 ## A. The `.hxb` backup, and the Linux dumps that pair with it ⭐⭐ cheapest, highest value
 
 **Unblocks:** every remaining refusal in the `tone` → wire conversion, which is what stands between
@@ -193,7 +230,7 @@ on 2026-08-22: the **read is op 24**, it had been sitting in the connect capture
 
 So the whole area is now a **Linux** job with no Windows box in it — `settings-dump`, change one
 thing on the pedal's own menus, `settings-dump` again, `settings-diff`. See
-`_TODO-global-settings.md` and `_TODO-settings-discovery.md`, the latter of which is the largest
+`_TODO-settings-discovery.md`, which is the largest
 block of unknowns left anywhere (~131 unidentified ids, two whole menus) and needs no capture at all.
 
 ## H. A block with two or more values past its symbol list — *only if you happen to hit one*

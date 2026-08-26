@@ -222,6 +222,12 @@ enum Command {
         #[arg(default_value = "end")]
         pos: String,
     },
+    /// Empty the loaded preset: delete every block and reset every snapshot name.
+    ///
+    /// Edit-buffer only — reload the preset to undo, `save` to keep. Assignments and footswitch
+    /// bindings go with the blocks that owned them; the preset's tempo and input/output settings
+    /// are left alone.
+    ClearPreset,
     /// Move a block into the common (pre-split) section, just before the split.
     BeforeSplit { src_slot: i64 },
     /// Move the split (⋔) or mixer (⋉) node to a signal-flow column. Goes through the **op-21
@@ -851,6 +857,12 @@ fn main() -> Result<()> {
             let mut s = fretwire_core::Session::connect()?;
             let preset = s.delete_block(slot)?;
             println!("deleted slot {slot}:");
+            print_preset(&preset);
+        }
+        Command::ClearPreset => {
+            let mut s = fretwire_core::Session::connect()?;
+            let preset = s.clear_preset()?;
+            println!("cleared the edit buffer (not saved):");
             print_preset(&preset);
         }
         Command::MoveToRow {

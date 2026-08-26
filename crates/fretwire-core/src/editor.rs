@@ -474,6 +474,15 @@ impl EditorPreset {
     }
 }
 
+/// The name the device gives a snapshot nobody has renamed — `SNAPSHOT 1`, `SNAPSHOT 2`, … The
+/// index is 0-based, as `EditorPreset::snapshot_names` reports it; the name is 1-based.
+///
+/// [solid — read off two never-touched preset slots on an HX Stomp, 2026-08-26. The count is the
+/// preset's own (`snapshot_names().len()`), three on a Stomp — this only names them.]
+pub fn default_snapshot_name(index: usize) -> String {
+    format!("SNAPSHOT {}", index + 1)
+}
+
 /// The four split-node types the HX Stomp offers, as `(Helix.sym index, canonical symbol, label)`,
 /// in the device's menu order. Selecting one is a `swap_model` on the split node's slot (op 40); each
 /// type has its own params. Types A/B, Crossover and Dynamic come from `cycle_through_split_types`
@@ -1881,6 +1890,15 @@ mod tests {
     fn dev_catalog() -> Catalog {
         Catalog::from_data_dir(&crate::data_dir())
             .expect("load reference data (run `fretwire import-data`)")
+    }
+
+    /// Snapshot names are 1-based on the pedal's screen and 0-based in the preset — the off-by-one
+    /// that would rename snapshot 1 to `SNAPSHOT 0` and leave `clear_preset` renaming a snapshot
+    /// that was already right. The strings are the ones an untouched HX Stomp preset carries.
+    #[test]
+    fn default_snapshot_names_are_one_based() {
+        let names: Vec<String> = (0..3).map(default_snapshot_name).collect();
+        assert_eq!(names, ["SNAPSHOT 1", "SNAPSHOT 2", "SNAPSHOT 3"]);
     }
 
     /// The case that sent the tester chasing a delay he thought was broken: stored `1.3728` is a

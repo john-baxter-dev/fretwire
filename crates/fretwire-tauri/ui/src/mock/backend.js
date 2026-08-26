@@ -582,6 +582,7 @@ const EDIT_LABELS = {
   add_block: (a) => `Add ${modelName(a.modelIndex)}`,
   add_block_at: (a) => `Add ${modelName(a.modelIndex)}`,
   delete_block: (a) => `Delete ${slotName(a.slot)}`,
+  clear_preset: () => "Clear preset",
   place_block: (a) => `Move ${slotName(a.srcSlot)}`,
   insert_block: (a) => `Move ${slotName(a.srcSlot)} ${a.before ? "before" : "after"} ${slotName(a.dstSlot)}`,
   reorder_block: (a) => `Move ${slotName(a.srcSlot)}`,
@@ -1173,6 +1174,16 @@ const HANDLERS = {
   },
   delete_block: ({ slot }) => {
     if (current.slots[slot]?.kind === "effect") delete current.slots[slot];
+    return toDto(current);
+  },
+  // Empty the preset: every block goes, and every snapshot name returns to the device's default
+  // (`SNAPSHOT 1`…). Assignments live on the blocks here as they do on the pedal, so they leave
+  // with them.
+  clear_preset: () => {
+    for (const slot of Object.keys(current.slots)) {
+      if (current.slots[slot]?.kind === "effect") delete current.slots[slot];
+    }
+    current.snapshot_names = current.snapshot_names.map((_, i) => `SNAPSHOT ${i + 1}`);
     return toDto(current);
   },
   place_block: ({ srcSlot, dstSlot }) => {

@@ -2047,6 +2047,58 @@ impl Session {
         self.read_preset()
     }
 
+    /// Wipe the loaded preset back to empty: every block deleted, every snapshot name back to the
+    /// device's default. **Edit buffer only** — the stored preset is untouched until a
+    /// `save_preset`, so an accidental clear costs a preset reload.
+    ///
+    /// Built from the **surgical** ops (op 78 + op 28 per block, op 89 per snapshot) rather than an
+    /// op-21 write of a blank document, and it turns out nothing else is needed. Both measured on
+    /// an HX Stomp, 2026-08-26:
+    ///
+    /// * Deleting a block takes its assignments with it — the key-`4` parameter controller entry
+    ///   *and* the key `3 → 8` footswitch binding both read back `nil` afterwards — so there is
+    ///   nothing left for an explicit unassign pass to do.
+    /// * A split preset **collapses to serial on its own** when its last row-B block goes, so the
+    ///   split/mixer nodes need no handling either.
+    ///
+    /// Snapshot names are the one thing that survives an empty chain — per-preset text no block
+    /// owns — so they are renamed back explicitly.
+    ///
+    /// What this deliberately does **not** touch: the preset's tempo, its input/output node
+    /// settings (gate, level, pan) and the rest of key `5`. Two factory-blank slots read off the
+    /// same pedal disagree on those, so there is no single "cleared" value to restore them to.
+    ///
+    /// One read at the end rather than one per delete. Returns the emptied preset.
+    pub fn clear_preset(&mut self) -> crate::Result<EditorPreset> {
+        use fretwire_data::stream::{PresetStream, slot_kind};
+        let raw = self.read_preset_raw()?;
+        let ps = PresetStream::parse(&raw)?;
+
+        let occupied: Vec<i64> = ps
+            .blocks()
+            .iter()
+            .filter(|b| matches!(b.kind, slot_kind::EFFECT | slot_kind::LOOPER))
+            .map(|b| b.wire_slot())
+            .collect();
+        tracing::info!(blocks = occupied.len(), "clearing the preset");
+        for slot in occupied {
+            let t1 = self.bump_txn();
+            self.send_edit(edit::begin_structural(slot, t1))?;
+            let t2 = self.bump_txn();
+            self.send_edit(edit::delete_block(slot, t2))?;
+        }
+
+        let (_, names) = ps.snapshots();
+        for (index, name) in names.iter().enumerate() {
+            let default = crate::editor::default_snapshot_name(index);
+            if *name != default {
+                self.rename_snapshot(index as i64, &default)?;
+            }
+        }
+
+        self.read_preset()
+    }
+
     /// Reorder a block within the serial chain: move the block at `src_slot` so it lands at order
     /// position `gap` among the serial blocks (`gap` = how many blocks precede the drop point;
     /// `0` = front, `n` = end), shifting the others to make room. Since op 43 only relocates a block

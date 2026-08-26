@@ -543,6 +543,45 @@ Moot for identity now that the `24 → 25` index resolves it exactly.
 (For reference, the test blocks' true table indices are Bucket Brigade 264, 70s Chorus 422,
 Harmonic Tremolo 441, Dynamic Hall 640 — reached by name, not by any preset field.)
 
+## What an empty preset looks like  [solid — HX Stomp, 2026-08-26]
+
+Read off two never-used slots with `read-slot` (op 4, non-destructive — the pedal stays where it
+is), and diffed against a populated one. An empty preset is 2254 bytes and reads:
+
+| Path | Empty |
+| --- | --- |
+| `0 → 22[n] → 19` / `→ 20` | kind `8`, content `nil`, for all 20 slots |
+| `4` | `Array[10]`, every entry `nil` — no controller assignments |
+| `3 → 8` | `Array[5]`, every entry `nil` — no footswitch bindings |
+| `10 → 10[i] → 4` | `SNAPSHOT 1`, `SNAPSHOT 2`, `SNAPSHOT 3` (a Stomp has three) |
+| `10 → 10[i] → 0` | `false` — the snapshot "in use" flag |
+| `0 → 21` | serial |
+
+**There is no canonical blank blob.** Two untouched slots off the same pedal are not byte-identical:
+they disagree on the input node's param `[2]` (`0 → 22[0] → 20 → 7 → 4`), the output node's param
+`[5]` (`0 → 22[19] → …`), and key-`5` flags `49`/`56`. They also carry the build stamp of whatever
+firmware last wrote them (`7 → 37`), which is *not* the running firmware. So "clear a preset" cannot
+mean "write a known-empty document" — it means "remove what the user put in", which is what
+`Session::clear_preset` does.
+
+### What a block takes with it when deleted  [solid — HX Stomp, 2026-08-26]
+
+Op 28 (delete block, preceded by the op-78 structural marker) is not just a slot wipe:
+
+- A **parameter assignment** on the deleted block — key `4[ordinal]`, made here with op 37 source 1
+  (EXP1) — reads back `nil` afterwards. No op-37-source-0 pass is needed to clean up.
+- Its **footswitch bypass binding** — key `3 → 8[switch]` — goes too, as
+  [`Session::delete_block`] already documented.
+- A **split preset collapses to serial on its own** once the last row-B block is deleted (`0 → 21`
+  clears, and the kind-2/kind-3 nodes with it). Nothing has to move the split or mixer node home.
+
+What survives an emptied chain, and therefore has to be reset by name if you want it gone:
+
+- **Snapshot names** (`10 → 10[i] → 4`) — per-preset text no block owns. Op 89 renames them.
+- The preset **tempo** (`5 → 16`), the **footswitch page** (`3 → 7`), and the **focused slot**
+  (`6 → 98`). `clear_preset` leaves all three alone: the first two are per-preset settings with no
+  agreed-on blank value (see above), and the third is UI state.
+
 ## Status
 - [x] Reassembly → envelope → blob → magic/header/preset map (parser + tests in `fretwire-data`).
 - [x] Typed model: `PresetStream::{device_model, firmware, blocks, effect_blocks, loaded_blocks,
@@ -556,6 +595,8 @@ Harmonic Tremolo 441, Dynamic Hall 640 — reached by name, not by any preset fi
 - [x] Name + param-count collision analysis (`tools/analyze-name-collisions.js`): 150/164 colliding
       names resolvable without category — a fallback design for paths where the `Helix.sym` index
       isn't available (the index supersedes it in code).
+- [x] **Empty-preset shape and what a delete takes with it** — see the section above; the basis for
+      `Session::clear_preset`.
 - [ ] Decode path key `11 → 6` → `category` (UI grouping only — no longer needed for identity).
       Computed value, not a binary table; needs the serializer decoded or a device
       preset with amp/preamp blocks to sample more values.

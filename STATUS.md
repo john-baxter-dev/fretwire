@@ -49,6 +49,21 @@ list carrying a `Mic` and a `Distance`, so the paired cab on an amp+cab and a st
 both get it, and the legacy cab family degrades to just mic-and-distance. Mic silhouettes are
 generated from `ui/src/lib/icons/mics.js` — no artwork, same rule as the model icons.
 
+**Clear preset (2026-08-26).** `Session::clear_preset` empties the loaded preset — every block
+deleted, every snapshot name back to `SNAPSHOT n`. In the GUI it is under the preset list's ⋯ menu
+(behind a confirm); on the CLI it is `fretwire clear-preset`. **Delete/Backspace now deletes the
+selected block**, opening the same confirm the trash button does.
+
+It is built from the **surgical** ops (op 78 + op 28 per block, op 89 per snapshot), not an op-21
+write of a blank document, and two hardware checks are why that is enough (HX Stomp, 2026-08-26,
+written up in `docs/preset-format.md`): deleting a block already takes its key-`4` parameter
+assignment *and* its key `3 → 8` footswitch binding with it, and a split preset collapses to serial
+on its own when its last row-B block goes. Only snapshot names survive an emptied chain, so only
+those are reset by name. A third finding settled the scope: two never-used preset slots read off the
+same pedal are **not** byte-identical — they disagree on the input/output node params and some key-5
+flags — so there is no canonical blank to write, and the preset's tempo and I/O settings are left
+alone. Edit-buffer only, one undo entry.
+
 **Fixed: a cab push landed on the amp (2026-08-22, issue #11).** Status pushes carry key `26` — the
 same main/paired sub-model selector the edit ops take — and the decoder dropped it, so a change to a
 paired cab arrived as a change to the block's own model. On an amp+cab that aliases the cab's

@@ -531,6 +531,16 @@ pub async fn delete_block(state: State<'_, AppState>, slot: i64) -> R<PresetDto>
     .await
 }
 
+/// Empty the loaded preset: delete every block and reset every snapshot name to the device's
+/// default. Assignments and footswitch bindings go with the blocks that owned them, and a split
+/// collapses to serial on its own — both verified on hardware, see `Session::clear_preset`.
+///
+/// One history entry, and edit-buffer only: an accidental clear is one Ctrl+Z, or a preset reload.
+#[tauri::command]
+pub async fn clear_preset(state: State<'_, AppState>) -> R<PresetDto> {
+    returning_edit(&state, |_| "Clear preset".to_string(), |s| s.clear_preset()).await
+}
+
 /// Reorder a block within the serial chain to order position `gap` (serial presets only).
 #[tauri::command]
 pub async fn reorder_block(state: State<'_, AppState>, src_slot: i64, gap: usize) -> R<PresetDto> {

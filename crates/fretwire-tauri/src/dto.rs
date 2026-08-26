@@ -382,8 +382,9 @@ pub struct PresetDto {
 /// presents them in different places — see `docs/protocol.md`.
 #[derive(Debug, Clone, Serialize)]
 pub struct AssignmentDto {
-    /// Source ordinal, as `assign_param` takes it: 1-2 expression pedals, 3..=7 footswitches,
-    /// 8 MIDI, 9 snapshots.
+    /// Source ordinal, as `assign_param` takes it: 1-2 expression pedals, then one per footswitch
+    /// from 3, then MIDI, then snapshots. Where the run ends is the device's — see
+    /// `fretwire_protocol::edit::source`.
     pub source: i64,
     /// How to name the source in the UI (`"FS1"`, `"EXP1"`, `"Snapshots"`).
     pub source_name: String,
@@ -399,17 +400,13 @@ pub struct AssignmentDto {
     pub max: Option<f64>,
 }
 
-/// Name a source ordinal for display. Footswitches are the proven run (FS1 = 3); the rest are
-/// `tonepush`'s names, which fit but are unverified here — see `fretwire_data::stream::Assignment`.
-pub fn source_name(ordinal: i64) -> String {
-    match ordinal {
-        n @ 3..=7 => format!("FS{}", n - 2),
-        1 => "EXP1".into(),
-        2 => "EXP2".into(),
-        8 => "MIDI".into(),
-        9 => "Snapshots".into(),
-        n => format!("Controller {n}"),
-    }
+/// Name a source ordinal for display, for a device with `footswitch_count` switches.
+///
+/// The count is not optional decoration: ordinal `8` is MIDI on a Stomp and **FS6** on an XL, and
+/// naming it without one showed an XL owner's front-panel assignment as "Driven by MIDI" (issue
+/// #13). See `fretwire_protocol::edit::source`, which owns the arithmetic.
+pub fn source_name(ordinal: i64, footswitch_count: usize) -> String {
+    fretwire_core::fretwire_protocol::edit::source::name(ordinal, footswitch_count)
 }
 
 /// A travel end as a number. The wire keeps these in the parameter's own type — `false`/`true` for
@@ -481,7 +478,7 @@ impl From<&EditorPreset> for PresetDto {
                 .iter()
                 .map(|a| AssignmentDto {
                     source: a.controller,
-                    source_name: source_name(a.controller),
+                    source_name: source_name(a.controller, p.footswitch_count),
                     target_slot: a.target_slot,
                     param_index: a.param_index,
                     paired: a.paired(),

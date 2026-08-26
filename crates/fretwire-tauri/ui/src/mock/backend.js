@@ -684,10 +684,24 @@ function toDto(p) {
   };
 }
 
-// Mirrors `dto::source_name`. 3..=7 are the footswitches; the rest are tonepush's names.
-function sourceName(n) {
-  if (n >= 3 && n <= 7) return `FS${n - 2}`;
-  return { 1: "EXP1", 2: "EXP2", 8: "MIDI", 9: "Snapshots" }[n] ?? `Controller ${n}`;
+// Mirrors `fretwire_protocol::edit::source`. The ordinal space is the device's size, not a
+// constant: 0 none, 1/2 the expression inputs, one per footswitch from 3, then MIDI, then
+// snapshots — so the table is `footswitches + 5` and ordinal 8 is MIDI on a Stomp but FS6 on an XL.
+// [solid — six Stomp captures at 5/10, two XL at 8/13; issue #13]
+// Exported for `tests/sources-mock.mjs`: the XL is only reachable through `fretwireMock.device`,
+// which needs a `window`, so the arithmetic is checked directly rather than not at all.
+export const sourceTableLen = (fs) => fs + 5;
+export const sourceMidi = (fs) => 3 + fs;
+export const sourceSnapshots = (fs) => 4 + fs;
+
+export function sourceName(n, fs = DEVICES[deviceMode].footswitches) {
+  if (n === 1) return "EXP1";
+  if (n === 2) return "EXP2";
+  if (fs === 0) return `Controller ${n}`;
+  if (n >= 3 && n < sourceMidi(fs)) return `FS${n - 2}`;
+  if (n === sourceMidi(fs)) return "MIDI";
+  if (n === sourceSnapshots(fs)) return "Snapshots";
+  return `Controller ${n}`;
 }
 
 // Find a mutable param on the current preset by (slot, paired, index).
@@ -980,6 +994,15 @@ const HANDLERS = {
     return toDto(current);
   },
   assign_param: ({ slot, paramIndex, source, paired }) => {
+    // The device does not range-check this — an ordinal past the end of the table is accepted and
+    // silently does nothing — so `Session::assign_param` refuses it, and so does the mock. The
+    // bound is the device's own: 9 on a Stomp, 12 on an XL.
+    const last = sourceTableLen(DEVICES[deviceMode].footswitches) - 1;
+    if (source < 0 || source > last) {
+      throw new Error(
+        `controller ${source} does not exist — this device's sources run 0 (none) to ${last}`,
+      );
+    }
     current.assignments ??= [];
     const same = (a) =>
       a.target_slot === slot && a.param_index === paramIndex && a.paired === !!paired;

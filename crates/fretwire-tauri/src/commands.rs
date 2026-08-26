@@ -690,9 +690,10 @@ pub async fn unassign_bypass(state: State<'_, AppState>, slot: i64, switch: i64)
 
 /// Put a parameter under controller `source`, or remove it with source 0.
 ///
-/// **The device does not range-check `source`** — ordinal 10 was accepted and silently did nothing,
-/// because the controller table is ten long. Bounded here so a UI bug cannot make an assignment
-/// that appears to work and isn't there.
+/// **The device does not range-check `source`** — an ordinal past the end of the controller table
+/// is accepted and silently does nothing. `Session::assign_param` bounds it against the loaded
+/// preset's own table, which is ten entries on a Stomp and thirteen on an XL; it used to be bounded
+/// here at a flat 9, which refused an XL's FS6 through FS8 (issue #13).
 #[tauri::command]
 pub async fn assign_param(
     state: State<'_, AppState>,
@@ -701,11 +702,6 @@ pub async fn assign_param(
     source: i64,
     paired: bool,
 ) -> R<PresetDto> {
-    if !(0..=9).contains(&source) {
-        return Err(format!(
-            "controller {source} does not exist — sources run 0 (none) to 9"
-        ));
-    }
     mutate_edit(
         &state,
         move |s| {
@@ -713,7 +709,10 @@ pub async fn assign_param(
             if source == 0 {
                 format!("Unassign {p}")
             } else {
-                format!("{} \u{2192} {p}", crate::dto::source_name(source))
+                format!(
+                    "{} \u{2192} {p}",
+                    crate::dto::source_name(source, s.footswitch_count())
+                )
             }
         },
         move |s| s.assign_param(slot, paired, param_index, source),

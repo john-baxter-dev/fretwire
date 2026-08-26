@@ -1358,6 +1358,18 @@ impl Session {
             .map(|ps| ps.to_blob())
     }
 
+    /// How many footswitch positions the loaded preset's layout has — the device's own number, and
+    /// what sizes the controller ordinal space (see [`fretwire_protocol::edit::source`]).
+    ///
+    /// `0` when nothing is cached, which callers must read as "unknown", not as "none": it is the
+    /// state before the first preset read, not a device with no switches.
+    pub fn footswitch_count(&self) -> usize {
+        self.last_raw
+            .as_ref()
+            .and_then(|raw| self.catalog.load_preset(raw).ok())
+            .map_or(0, |p| p.footswitch_count)
+    }
+
     /// Human name for the block at `slot` — the user label if set, else the model name — resolved
     /// from the cached pre-edit preset. Falls back to `"slot N"` when nothing is cached (or the
     /// slot is empty/structural). For history-entry labels.
@@ -2274,8 +2286,14 @@ impl Session {
     /// Put parameter `param_index` of the block in `slot` under controller `source` (op 37).
     ///
     /// `source` is the ordinal the preset's controller table is indexed by — 0 none, 1-2 the
-    /// expression pedals, 3..=7 the footswitches ([`fretwire_protocol::edit::SOURCE_FS1`] is FS1),
-    /// 8 MIDI, 9 snapshots. Passing 0 removes the assignment.
+    /// expression pedals, then one per footswitch from [`fretwire_protocol::edit::SOURCE_FS1`],
+    /// then MIDI, then snapshots. Passing 0 removes the assignment. The run's length is the
+    /// device's: 3..=7 on a Stomp, 3..=10 on an XL. See [`fretwire_protocol::edit::source`].
+    ///
+    /// **Rejected here rather than by the device**, which does not range-check this: an ordinal
+    /// past the end of the table is accepted and silently does nothing, so an unbounded caller
+    /// makes an assignment that looks like it worked. The bound comes from the loaded preset's own
+    /// footswitch count, so it widens on an XL without anything here knowing about models.
     ///
     /// Read it back with `PresetStream::assignments`, which decodes the same table.
     /// [solid — verified live on an HX Stomp 2026-08-22]
@@ -2286,6 +2304,15 @@ impl Session {
         param_index: i64,
         source: i64,
     ) -> crate::Result<()> {
+        let switches = self.footswitch_count();
+        let last = edit::source::table_len(switches) as i64 - 1;
+        // With no preset cached there is no device to size against; 0 (remove) is still meaningful,
+        // and anything else would be bounded against a number we do not have.
+        if source < 0 || (switches > 0 && source > last) {
+            return Err(crate::Error::Invalid(format!(
+                "controller {source} does not exist — this device's sources run 0 (none) to {last}"
+            )));
+        }
         let txn = self.bump_txn();
         self.send_edit(edit::assign_param(slot, paired, param_index, source, txn))?;
         Ok(())

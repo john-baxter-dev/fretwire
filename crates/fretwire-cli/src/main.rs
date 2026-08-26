@@ -1949,7 +1949,7 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
             };
             println!(
                 "  {} -> {}{}{}",
-                source_name(a.controller),
+                source_name(a.controller, preset.footswitch_count),
                 slot,
                 param,
                 travel
@@ -1958,26 +1958,15 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
     }
 }
 
-/// Name the physical control an assignment's source ordinal refers to.
+/// Name the physical control an assignment's source ordinal refers to, for a device with
+/// `footswitch_count` switches.
 ///
-/// FS1 = 3 and FS2 = 4 are [solid] — each was assigned on a Stomp and the document diffed. The rest
-/// are inferred from that run being consecutive and from `tonepush`'s notes putting EXP1 at 1, so
-/// anything unproven prints as a bare ordinal rather than a guess with a confident label on it.
-fn source_name(ordinal: i64) -> String {
-    match ordinal {
-        // Footswitches are the run we have proven, both by diffing a front-panel assignment and by
-        // writing one: FS1 = 3, and the device answers switches 1-5 and refuses 6.
-        n @ 3..=7 => format!("FS{}", n - 2),
-        // These three names are `tonepush`'s. Ordinals 1, 2 and 9 do file themselves at their own
-        // index here, but nothing on a Stomp proves *which* control 1 and 2 are — 3..=7 being the
-        // footswitches simply leaves the two expression inputs. Named rather than numbered because
-        // a bare "controller 1" tells a reader less, and the caveat lives in `docs/preset-format.md`.
-        1 => "EXP1".into(),
-        2 => "EXP2".into(),
-        8 => "MIDI".into(),
-        9 => "Snapshots".into(),
-        n => format!("controller {n}"),
-    }
+/// The count decides the answer: ordinal `8` is MIDI on a Stomp and FS6 on an XL. FS1 = 3 is
+/// [solid] on both. The names for 1, 2 and MIDI are `tonepush`'s, inferred from the footswitch run
+/// leaving them, so anything unproven prints as a bare ordinal rather than a confident label — the
+/// caveat lives in `docs/preset-format.md`.
+fn source_name(ordinal: i64, footswitch_count: usize) -> String {
+    fretwire_core::fretwire_protocol::edit::source::name(ordinal, footswitch_count)
 }
 
 /// A parameter as a human reads it, with the raw value kept alongside because that is what

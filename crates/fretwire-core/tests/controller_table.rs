@@ -1,7 +1,7 @@
 //! The key-`4` controller table is **device-sized**, not a fixed ten.
 //!
 //! It was read as ten entries with footswitches at 3..=7, MIDI at 8 and snapshots at 9. That is an
-//! HX Stomp's shape, mistaken for the format's, and it held for a year because every capture we
+//! HX Stomp's shape, mistaken for the format's, and it went unchallenged because every capture we
 //! had came off a Stomp. An HX Stomp XL owner assigned a Stupor OD's `Drive` to FS6 from the front
 //! panel and sent the before/after streams (issue #13, 2026-08-25): the table is **13** entries and
 //! FS6 files itself at ordinal **8** — the index we called MIDI.

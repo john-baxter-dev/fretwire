@@ -3597,8 +3597,8 @@ rather than read still has to be storable and re-inspectable before anything sen
 ## Fifty-first round (2026-08-25): **the controller table is the device's size, not a constant**
 
 Preset key `4` was documented as `Array[10]`: footswitches at ordinals 3..=7, MIDI at 8, snapshots
-at 9. That is an HX Stomp's shape, and it survived a year because every capture we had came off an
-HX Stomp.
+at 9. That is an HX Stomp's shape, and nothing challenged it because every capture we had came off
+an HX Stomp.
 
 Robert Tsai (issue #13) assigned a Stupor OD's `Drive` to **FS6** from an HX Stomp XL's front panel
 and sent the before/after streams — the **first captures anyone has taken off an XL**. The table is

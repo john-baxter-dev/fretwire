@@ -1523,7 +1523,7 @@ pub fn map_get(v: &Value, key: i64) -> Option<&Value> {
 }
 
 /// Mutable [`map_get`].
-fn map_get_mut(v: &mut Value, key: i64) -> Option<&mut Value> {
+pub(crate) fn map_get_mut(v: &mut Value, key: i64) -> Option<&mut Value> {
     match v {
         Value::Map(m) => m
             .iter_mut()
@@ -1534,7 +1534,7 @@ fn map_get_mut(v: &mut Value, key: i64) -> Option<&mut Value> {
 }
 
 /// Set integer-keyed `key` of a map `Value` to `val`, inserting it if absent. No-op on non-maps.
-fn set_map_key(v: &mut Value, key: i64, val: Value) {
+pub(crate) fn set_map_key(v: &mut Value, key: i64, val: Value) {
     if let Value::Map(m) = v {
         match m.iter_mut().find(|(k, _)| k.as_i64() == Some(key)) {
             Some(e) => e.1 = val,

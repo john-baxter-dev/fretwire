@@ -12,6 +12,7 @@ pub mod models;
 pub mod preset;
 pub mod stream;
 pub mod symbols;
+pub mod tone;
 
 /// The MessagePack value type. Already part of this crate's public surface (`stream::map_get` and
 /// friends take and return it), so re-export it rather than making every caller depend on the exact

@@ -158,7 +158,7 @@ cargo run -p fretwire-cli -- detect       # HX Stomp: present
 cargo run -p fretwire-cli -- pull         # read the loaded preset (non-destructive)
 ```
 
-The rule covers the HX Stomp (`0x4246`), the Helix Floor (`0x4248`), the Helix LT (`0x424a`), the HX Stomp XL (`0x4253`) and the HX Effects (`0x4245`).
+The rule covers the HX Stomp (`0x4246`), the Helix Floor (`0x4248`), the Helix LT (`0x424a`), the HX Stomp XL (`0x4253`), the HX Effects (`0x4245`) and the POD Go (`0x4247`).
 
 ## Devices
 
@@ -169,6 +169,7 @@ The rule covers the HX Stomp (`0x4246`), the Helix Floor (`0x4248`), the Helix L
 | Helix LT    | `0x424a` | **reads verified, edits untested** — surveyed on real hardware ([`docs/helix-lt.md`](docs/helix-lt.md)): handshake, preset read, setlists and preset browse all reconcile. No edit has been sent to one |
 | HX Stomp XL | `0x4253` | **reported working** — an owner runs it, reads `01A`-`32D` (32 banks of 4) off its screen, and its handshake identifies it as `P36`. We hold no capture from one, so its DSP and snapshot counts and setlist count stay unknown rather than assumed |
 | HX Effects  | `0x4245` | **reported working** — an owner runs it and reports it works; that report is the whole of what we hold. Its `lsusb` line arrived first (issue #10), so `detect` finds one and the udev rule covers it. No capture and no logged session, and it is effects-only, so none of its preset geometry is assumed from a Stomp |
+| POD Go      | `0x4247` | **protocol reconciled, never driven** — a capture of POD Go Edit's startup decodes with no parser change ([`docs/pod-go.md`](docs/pod-go.md)), and it identifies as `P34`. It indexes its own symbol table, so it needs POD Go Edit's reference data imported, not HX Edit's. No byte has been sent to one (issue #15) |
 | Helix Rack  | — | **not recognised yet** — we don't know its PID, so `fretwire detect` won't see one |
 
 An unverified device logs a caveat when opened, and is only picked after a verified one. Nothing in

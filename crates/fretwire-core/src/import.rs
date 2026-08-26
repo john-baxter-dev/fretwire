@@ -1,4 +1,4 @@
-//! Importing Line 6's reference data from the user's **own** HX Edit installation.
+//! Importing Line 6's reference data from the user's **own** HX Edit / POD Go Edit installation.
 //!
 //! We ship none of this data; it goes Line6 → user → tool (the emulator "bring your own BIOS"
 //! pattern). This module owns the mechanics so both front ends can offer it: `fretwire import-data`
@@ -16,10 +16,96 @@ use std::path::{Path, PathBuf};
 
 /// The one file the catalog can't work without — its presence is what marks a data dir as usable
 /// (see [`crate::editor::Catalog::load`], which gates on the same file).
+///
+/// This is the **HX family's** spelling. A POD Go install names the same file `PodGo.sym`; use
+/// [`DataFamily::detect`] rather than this constant when either family may be in play.
 pub const REQUIRED: &str = "Helix.sym";
 
-/// Files that must be present for model names and parameter ordering to resolve.
-const ESSENTIAL: [&str; 2] = [REQUIRED, "HelixModelDefs.bin"];
+/// One device family's reference-data filenames.
+///
+/// Line 6 ships the same four formats under different names per editor, so the loader and the
+/// importer both resolve through this table instead of hard-coding HX Edit's spelling. The
+/// `.models` files are named identically in both — which is exactly why a non-HX family imports
+/// into its own [`subdir`](DataFamily::subdir) rather than on top of an existing HX install.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DataFamily {
+    /// Human name, for messages.
+    pub label: &'static str,
+    /// Subdirectory of [`crate::data_dir`] this family's files live in. Empty for the HX family,
+    /// which keeps the flat layout every existing install already has.
+    pub subdir: &'static str,
+    /// Per-model parameter ordering — the file a block's model reference indexes.
+    pub symbols: &'static str,
+    /// The model table carrying display names and categories.
+    pub model_defs: &'static str,
+    /// Parameter ranges and control metadata.
+    pub controls: &'static str,
+    /// Category catalog.
+    pub catalog_json: &'static str,
+}
+
+/// HX Edit's names, serving the HX Stomp / Helix / HX Effects family.
+pub const HX: DataFamily = DataFamily {
+    label: "HX Edit",
+    subdir: "",
+    symbols: REQUIRED,
+    model_defs: "HelixModelDefs.bin",
+    controls: "HelixControls.json",
+    catalog_json: "HX_ModelCatalog.json",
+};
+
+/// POD Go Edit's names. Same formats, different spellings — and a symbol table of its own, which
+/// is the whole reason the POD Go needs a separate import. [2026-08-25, issue #15]
+pub const POD_GO: DataFamily = DataFamily {
+    label: "POD Go Edit",
+    subdir: "pod-go",
+    symbols: "PodGo.sym",
+    model_defs: "PodGoModelDefs.bin",
+    controls: "PGControls.json",
+    catalog_json: "PGModelCatalog.json",
+};
+
+/// Every family we can import, most specific first — [`DataFamily::detect`] scans in this order,
+/// so the HX family (whose subdir is the data dir itself) is tried last.
+pub const FAMILIES: &[DataFamily] = &[POD_GO, HX];
+
+impl DataFamily {
+    /// The family whose reference data sits in `dir`, by which symbol table is present.
+    pub fn detect(dir: &Path) -> Option<DataFamily> {
+        FAMILIES
+            .iter()
+            .copied()
+            .find(|f| dir.join(f.symbols).is_file())
+    }
+
+    /// The family serving a device's model code (preset key `7 -> 36`). Unknown codes get the HX
+    /// family, which is the right default: it is what every device but the POD Go uses.
+    pub fn for_model_code(code: &str) -> DataFamily {
+        if code == "P34" { POD_GO } else { HX }
+    }
+
+    /// Where this family's files live under `data_dir`.
+    pub fn dir_under(&self, data_dir: &Path) -> PathBuf {
+        if self.subdir.is_empty() {
+            data_dir.to_path_buf()
+        } else {
+            data_dir.join(self.subdir)
+        }
+    }
+
+    /// Files that must be present for model names and parameter ordering to resolve.
+    fn essential(&self) -> [&'static str; 2] {
+        [self.symbols, self.model_defs]
+    }
+
+    /// Whether `name` is one of this family's four named files.
+    fn owns(&self, name: &str) -> bool {
+        name == self.symbols
+            || name == self.model_defs
+            || name == self.controls
+            || name == self.catalog_json
+    }
+}
 
 /// What [`import_from`] copied.
 #[derive(Debug, Clone)]
@@ -51,21 +137,28 @@ pub fn data_status() -> DataStatus {
 
 /// [`data_status`] against an explicit directory.
 pub fn data_status_in(dir: PathBuf) -> DataStatus {
-    let files = std::fs::read_dir(&dir)
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter(|e| {
-                    e.file_name()
-                        .to_str()
-                        .map(is_reference_file)
-                        .unwrap_or(false)
-                })
-                .count()
-        })
-        .unwrap_or(0);
+    let count = |d: &Path| {
+        std::fs::read_dir(d)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|e| {
+                        e.file_name()
+                            .to_str()
+                            .map(is_reference_file)
+                            .unwrap_or(false)
+                    })
+                    .count()
+            })
+            .unwrap_or(0)
+    };
+    // Each family keeps its own directory, so a status is the sum over all of them.
+    let files: usize = FAMILIES.iter().map(|f| count(&f.dir_under(&dir))).sum();
+    let present = FAMILIES
+        .iter()
+        .any(|f| f.dir_under(&dir).join(f.symbols).is_file());
     DataStatus {
-        present: dir.join(REQUIRED).is_file(),
+        present,
         dir,
         files,
     }
@@ -140,6 +233,17 @@ pub fn import_into(source: &Path, dest: PathBuf) -> crate::Result<ImportSummary>
         }));
     }
 
+    // Which editor's data this is, by the symbol table it carries. Everything but the HX family
+    // lands in its own subdirectory: the `.models` files are named identically across families, so
+    // a flat copy would quietly overwrite an existing HX install with POD Go data.
+    let family = FAMILIES
+        .iter()
+        .copied()
+        .find(|f| by_name.contains_key(f.symbols))
+        .unwrap_or(HX);
+    let dest = family.dir_under(&dest);
+    std::fs::create_dir_all(&dest).map_err(|e| err(format!("{}: {e}", dest.display())))?;
+
     let mut copied = 0usize;
     for (name, src) in &by_name {
         std::fs::copy(src, dest.join(name))
@@ -148,7 +252,8 @@ pub fn import_into(source: &Path, dest: PathBuf) -> crate::Result<ImportSummary>
     }
     cleanup();
 
-    let missing = ESSENTIAL
+    let missing = family
+        .essential()
         .iter()
         .filter(|n| !dest.join(n).exists())
         .map(|n| n.to_string())
@@ -164,16 +269,15 @@ pub fn import_into(source: &Path, dest: PathBuf) -> crate::Result<ImportSummary>
 /// templates (not the hundreds of factory presets an installer may also carry).
 pub fn is_reference_file(name: &str) -> bool {
     name.ends_with(".models")
+        || FAMILIES.iter().any(|f| f.owns(name))
         || matches!(
             name,
-            "Helix.sym"
-                | "HelixModelDefs.bin"
-                | "HelixControls.json"
-                | "HX_ModelCatalog.json"
-                | "HX_ModelCatalog.bin"
+            "HX_ModelCatalog.bin"
+                | "PGModelCatalog.bin"
                 | "default_preset.hlx"
                 | "default_preset_hxs.hlx"
                 | "default_preset_hfx.hlx"
+                | "default_preset_p34.hlx"
                 | "empty_preset.hlx"
         )
 }
@@ -267,6 +371,47 @@ mod tests {
         assert_eq!(status.files, 2);
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn pod_go_data_lands_in_its_own_subdir() {
+        // The `.models` filenames are shared with HX Edit, so importing POD Go data on top of an
+        // HX install would silently replace it. It gets its own directory instead.
+        let tmp = std::env::temp_dir().join(format!("fretwire-podgo-test-{}", std::process::id()));
+        let src = tmp.join("res");
+        let dest = tmp.join("data");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        // An existing HX install we must not disturb.
+        std::fs::write(dest.join("amp.models"), b"hx").unwrap();
+        std::fs::write(src.join("PodGo.sym"), b"[]").unwrap();
+        std::fs::write(src.join("PodGoModelDefs.bin"), b"\x90").unwrap();
+        std::fs::write(src.join("amp.models"), b"podgo").unwrap();
+
+        let summary = import_into(&src, dest.clone()).unwrap();
+        assert_eq!(summary.dest, dest.join("pod-go"));
+        assert_eq!(summary.copied, 3);
+        assert!(summary.missing.is_empty());
+        assert_eq!(std::fs::read(dest.join("amp.models")).unwrap(), b"hx");
+        assert_eq!(
+            std::fs::read(dest.join("pod-go/amp.models")).unwrap(),
+            b"podgo"
+        );
+
+        // A status over the data dir sees both families.
+        let status = data_status_in(dest);
+        assert!(status.present);
+        assert_eq!(status.files, 4);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn families_are_told_apart_by_their_symbol_table() {
+        assert_eq!(DataFamily::for_model_code("P34"), POD_GO);
+        assert_eq!(DataFamily::for_model_code("P33"), HX);
+        // An unknown code is not a POD Go, and the HX family is the right default for the rest.
+        assert_eq!(DataFamily::for_model_code("P99"), HX);
     }
 
     #[test]

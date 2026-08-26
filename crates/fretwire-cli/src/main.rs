@@ -1535,8 +1535,19 @@ fn diff_values(a: &rmpv::Value, b: &rmpv::Value, path: String, out: &mut Vec<Str
 /// Decode a reassembled device preset stream (from a file) and print it as a block/param tree.
 fn show_preset(path: &str) -> Result<()> {
     use fretwire_core::editor::Catalog;
+    use fretwire_data::stream::PresetStream;
     let stream = std::fs::read(path)?;
-    let preset = Catalog::load()?.load_preset(&stream)?;
+    // The stream stamps the device it came off (key `7 -> 36`), so an offline decode can pick the
+    // right reference data by itself. It matters: a POD Go preset decoded against the HX symbol
+    // table resolves every block to some other model, with names and DSP figures to match.
+    let catalog = match PresetStream::parse(&stream)
+        .ok()
+        .and_then(|s| s.device_model())
+    {
+        Some(code) => Catalog::load_for_model(&code)?,
+        None => Catalog::load()?,
+    };
+    let preset = catalog.load_preset(&stream)?;
     print_preset(&preset);
     print_snapshot_diagnosis(&stream);
     Ok(())

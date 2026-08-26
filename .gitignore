@@ -29,6 +29,7 @@ __pycache__/
 # Raw USB capture recordings — reference only, not needed to build/test
 /captures/*.pcapng
 /captures/**/*.pcapng
+/captures/*.zip
 /from_redditor
 
 # Contributor-supplied captures and device backups. These contain other people's personal

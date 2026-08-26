@@ -67,9 +67,25 @@ impl ModelDefs {
 
     /// Numeric id of the model whose `symbolicID` equals `sym`. `symbolicID`s are unique across
     /// the table (681/681), so this is the canonical reverse lookup — used to turn a device
-    /// block's `Helix.sym` symbol (with the `Mono`/`Stereo` suffix stripped) into a display
-    /// name + category, independent of the signal path.
+    /// block's symbol into a display name + category, independent of the signal path.
+    ///
+    /// **The two vendors disagree on whether the `Mono`/`Stereo` suffix belongs here**, so the
+    /// caller cannot know which form to ask for. `HelixModelDefs.bin` strips it
+    /// (`HD2_DistScream808`) while `PodGoModelDefs.bin` keeps it (`HD2_DistScream808Mono`), and
+    /// each file's own symbol table uses the suffixed form. So we try the symbol as given first,
+    /// then its stripped base. Trying both is strictly better on *both* devices — matching
+    /// 748/833 Helix symbols against 740 for stripping alone, and 537/627 POD Go symbols against
+    /// 372. [2026-08-25, issue #15]
     pub fn id_by_symbolic_id(&self, sym: &str) -> Option<usize> {
+        self.find_exact(sym).or_else(|| {
+            let base = sym
+                .strip_suffix("Mono")
+                .or_else(|| sym.strip_suffix("Stereo"))?;
+            self.find_exact(base)
+        })
+    }
+
+    fn find_exact(&self, sym: &str) -> Option<usize> {
         (0..self.len()).find(|&i| self.symbolic_id(i) == Some(sym))
     }
 
@@ -133,5 +149,49 @@ impl ModelDefs {
             [one] => Ok(*one),
             _ => Err(candidates),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A one-entry table keyed by `symbolic_id`. Line 6 NUL-terminates its strings and the parser
+    /// trims them, so the fixture does the same.
+    fn defs_keyed_by(symbolic_id: &str) -> ModelDefs {
+        let entry = Value::Map(vec![
+            (
+                Value::from("symbolicID\0"),
+                Value::from(format!("{symbolic_id}\0")),
+            ),
+            (Value::from("name\0"), Value::from("Scream 808\0")),
+        ]);
+        let mut buf = Vec::new();
+        rmpv::encode::write_value(&mut buf, &Value::Array(vec![entry])).unwrap();
+        ModelDefs::parse(&buf).unwrap()
+    }
+
+    #[test]
+    fn a_suffix_keeping_table_matches_the_symbol_as_given() {
+        // POD Go Edit's spelling — `PodGoModelDefs.bin` keys on the suffixed symbol, exactly as
+        // `PodGo.sym` spells it.
+        let defs = defs_keyed_by("HD2_DistScream808Mono");
+        assert_eq!(defs.id_by_symbolic_id("HD2_DistScream808Mono"), Some(0));
+    }
+
+    #[test]
+    fn a_suffix_stripping_table_still_matches_a_suffixed_symbol() {
+        // HX Edit's spelling — `HelixModelDefs.bin` drops the suffix that `Helix.sym` carries, so
+        // the lookup has to fall back to the base.
+        let defs = defs_keyed_by("HD2_DistScream808");
+        assert_eq!(defs.id_by_symbolic_id("HD2_DistScream808Stereo"), Some(0));
+        assert_eq!(defs.id_by_symbolic_id("HD2_DistScream808"), Some(0));
+    }
+
+    #[test]
+    fn the_fallback_does_not_match_a_different_model() {
+        // Trying two spellings must not turn a miss into a wrong hit.
+        let defs = defs_keyed_by("HD2_DistScream808");
+        assert_eq!(defs.id_by_symbolic_id("HD2_DistMinotaurMono"), None);
     }
 }

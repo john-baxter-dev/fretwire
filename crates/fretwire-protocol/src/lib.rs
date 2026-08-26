@@ -43,6 +43,17 @@ pub const PID_HELIX_LT: u16 = 0x424A;
 /// HX Effects is the family member least like the others (it runs the HX effects but no amp or cab
 /// models, and its preset layout is its own), so nothing below is filled in from a sibling.
 pub const PID_HX_EFFECTS: u16 = 0x4245;
+/// USB Product ID for the POD Go, from a contributor's capture of POD Go Edit's startup
+/// (2026-08-25, issue #15): `ID 0e41:4247`.
+///
+/// The control protocol is the HX family's, verified against that capture: the frame codec, the
+/// three channels and their ids, and the session handshake are byte-identical, the MessagePack
+/// envelope and op numbers match (76 meters, 22 preset read, 24 settings, 33 read-switch), and the
+/// paged preset stream reassembles into the same `l6-helix` structure. What differs is **data, not
+/// protocol** — the POD Go has its own symbol table (`PodGo.sym`, 627 entries against the Helix's
+/// 833), so a block's model reference (`24 -> 25`) means something else on this device.
+/// See `docs/pod-go.md`.
+pub const PID_POD_GO: u16 = 0x4247;
 /// Interface number of the vendor-specific control channel.
 pub const CONTROL_INTERFACE: u8 = 0x00;
 /// Bulk OUT endpoint (host → device).
@@ -287,6 +298,44 @@ pub const DEVICES: &[Device] = &[
         // It is still `Reported` rather than `Untested`: "a user has this working" is real
         // information about the protocol, confirmed by outcome. [2026-08-24 owner report]
         support: Support::Reported,
+    },
+    Device {
+        pid: PID_POD_GO,
+        name: "POD Go",
+        // `P34`, from two independent paths in one capture — the handshake identity reply returns
+        // "P34Main" on the primary channel, and the preset the device then streamed carries
+        // `7 -> 36` = "P34\0". The same two-source standard the XL's `P36` was accepted on.
+        // [solid — 2026-08-25, issue #15 capture]
+        model_code: Some("P34"),
+        // Not the `0x02500000` the identity reply carries beside the model code — that is the
+        // field matching preset key `35` (the Stomp's reads `0x03800000`), not this one. The
+        // Stomp's and Floor's `preset_device_id` came from `.hxb` backup headers, and we have no
+        // backup from a POD Go.
+        preset_device_id: None,
+        // One. The streamed preset populates group key `0` only — key `1` is nil — and every block
+        // sits in slots 1..10, inside the first group's stride. This is the same reasoning that put
+        // the LT on two, run the other way. [solid — 2026-08-25 capture]
+        dsps: Some(1),
+        // Four, against the Stomp's three: the preset's snapshot table holds exactly four entries,
+        // named SNAPSHOT 1..4. Read out of the preset itself, not from the footswitch count.
+        // [solid — 2026-08-25 capture]
+        snapshots: Some(4),
+        // More than one — POD Go Edit's startup asks for preset info with `107` (bank) = 1, which
+        // the Stomp's single flat list would never do — but the capture never names them or shows
+        // how many there are, so listing any would be invention.
+        setlists: None,
+        setlist_size: None,
+        // Unknown: nobody has read a POD Go's screen. Left `None` so presets are numbered by slot
+        // rather than mislabelled, as on the Floor.
+        presets_per_bank: None,
+        // A capture from a real unit has been reconciled against our decoders — the frame codec,
+        // the channel ids, the handshake and the paged preset stream all parse unchanged, and the
+        // op numbers match. That is strictly more than the tier's "only the USB IDs are known", but
+        // it is not `Verified` either: no byte has ever been *sent* to a POD Go, none of the `edit`
+        // builders has been reconciled against one, and the read path only resolves once the
+        // device's own `PodGo.sym` is imported. Reads are the confident half; writes are untried.
+        // [2026-08-25, issue #15]
+        support: Support::Untested,
     },
 ];
 

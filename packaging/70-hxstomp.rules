@@ -22,3 +22,6 @@ SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="4253", MODE="0660", 
 # HX Effects — reported working by an owner; we have no capture from one (issue #10). Same family,
 # so the rule is here, but fretwire will warn when it opens it.
 SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="4245", MODE="0660", TAG+="uaccess"
+# POD Go — the protocol is reconciled against a capture (issue #15), but nothing has been sent to
+# one and it needs its own reference data. Same family, so the rule is here; fretwire will warn.
+SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="4247", MODE="0660", TAG+="uaccess"

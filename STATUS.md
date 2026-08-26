@@ -3479,3 +3479,43 @@ editor repeat a firmware bug back at them.
 The buggy string is now gone from the tree entirely. `SETTINGS` carries `000-127` as the fallback,
 which is also correct for the two devices that actually reach it — the Floor and the LT both hold 128
 slots, so only their *banked* form is unknown.
+
+## Fiftieth round (2026-08-25): **the POD Go is the same protocol and a different data set** (issue #15)
+
+A contributor asked whether the POD Go could be supported and attached a capture of POD Go Edit's
+startup. The answer is yes, and the split is unusually clean: **nothing in the protocol changes;
+everything in the reference data does.**
+
+Every decoder we have parsed the capture unmodified — frame codec, the three channels and their ids,
+the handshake, the MessagePack envelope, the op numbers (it even queries the same setting ids 14 and
+73 at startup), and the paged preset stream, which `extract-preset-stream.py` reassembled into a
+valid `l6-helix` blob. Identity is **`P34`**, from the handshake's `"P34Main"` and the streamed
+preset's `7 → 36` — the same two-source standard the XL's `P36` was accepted on. PID `0x4247`.
+
+What is different is the **symbol table**. A block's model is an index into the device's own
+`.sym`, and the POD Go's has 627 entries where the Helix's has 833 — with no computable
+correspondence (three models sit exactly +8, but Simple EQ is 473 against 132 and Fassel 239 against
+269, breaking it in both directions). Decoded against `Helix.sym`, that capture's preset came out as
+ten wrong models and a 120.6% DSP load. The preset embeds its own model names in the footswitch
+section, which is what gave the ground truth to prove it — see `docs/pod-go.md` for the table.
+
+POD Go Edit ships a one-to-one analogue of HX Edit's `res/` (`PodGo.sym`, `PodGoModelDefs.bin`,
+`PGControls.json`, `PGModelCatalog.json`, the same `.models` names). Imported, the same preset
+decodes to 33.7% DSP with every block resolving to the name the preset itself carries.
+
+**Landed:** the device entry + udev rule, `import::DataFamily` (families resolve filenames, and a
+non-HX import lands in its own subdirectory because the `.models` names collide),
+`Catalog::load_for_model`, and `show-preset` picking its family from the stream's own model code.
+
+**One real bug fell out of this, affecting the HX too.** The two vendors disagree on whether a
+`symbolicID` carries the `Mono`/`Stereo` suffix — HX Edit strips it, POD Go Edit keeps it — while
+*both* symbol tables use the suffixed form. `ModelDefs::id_by_symbolic_id` now tries the symbol as
+given, then its stripped base, which resolves **748/833** Helix symbols against 740 before. The POD
+Go went 372 → 537.
+
+**Not done, and not close to done: writes.** No byte has ever been sent to a POD Go. The capture is
+read traffic from someone else's editor, so the `edit` builders are unreconciled, the footswitch
+mapping is the Stomp's rule applied blind (it reports `FS9` on a four-switch pedal), and the fixed
+chain means add/move/delete need their own work. The entry is `Support::Untested` for that reason —
+though that tier's "only the USB IDs are known" now undersells this the same way it undersold the LT
+in August, which is what led to `Reported` being added then.

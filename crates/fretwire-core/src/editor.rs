@@ -637,11 +637,24 @@ impl Catalog {
     /// embedded copy (only if the `bundled-data` feature is on). A release build without either
     /// returns an error pointing the user at the import step.
     pub fn load() -> crate::Result<Catalog> {
-        let dir = crate::data_dir();
-        // `Helix.sym` is the one file we can't do without, so its presence gates the data dir.
-        if dir.join("Helix.sym").is_file() {
+        Catalog::load_family(crate::import::HX)
+    }
+
+    /// [`Catalog::load`] for the device family serving `model_code` (a preset's key `7 -> 36`, or
+    /// the handshake's identity string). The POD Go indexes its own symbol table, so decoding one
+    /// of its presets against the HX data resolves every block to the wrong model — this is how a
+    /// caller that knows which device it is talking to asks for the right table.
+    pub fn load_for_model(model_code: &str) -> crate::Result<Catalog> {
+        Catalog::load_family(crate::import::DataFamily::for_model_code(model_code))
+    }
+
+    fn load_family(family: crate::import::DataFamily) -> crate::Result<Catalog> {
+        let dir = family.dir_under(&crate::data_dir());
+        // The symbol table is the one file we can't do without, so its presence gates the data dir.
+        if dir.join(family.symbols).is_file() {
             return Catalog::from_data_dir(&dir);
         }
+        let dir = crate::data_dir();
         #[cfg(feature = "bundled-data")]
         {
             return Catalog::bundled();
@@ -659,6 +672,9 @@ impl Catalog {
     /// [`crate::data_dir`]). `HelixModelDefs.bin` and `Helix.sym` are required; the rest degrade
     /// gracefully if absent (params lose ranges/labels but still edit by index).
     pub fn from_data_dir(dir: &Path) -> crate::Result<Catalog> {
+        // Which editor's files these are — POD Go Edit ships the same four formats under its own
+        // names. Falls back to the HX spelling so the error below names the file people expect.
+        let family = crate::import::DataFamily::detect(dir).unwrap_or(crate::import::HX);
         let require = |name: &str| -> crate::Result<Vec<u8>> {
             std::fs::read(dir.join(name)).map_err(|e| {
                 crate::Error::MissingData(format!(
@@ -669,10 +685,10 @@ impl Catalog {
             })
         };
         let raw = RawData {
-            model_defs: require("HelixModelDefs.bin")?,
-            symbols: require("Helix.sym")?,
-            controls: std::fs::read(dir.join("HelixControls.json")).unwrap_or_default(),
-            catalog_json: std::fs::read(dir.join("HX_ModelCatalog.json")).unwrap_or_default(),
+            model_defs: require(family.model_defs)?,
+            symbols: require(family.symbols)?,
+            controls: std::fs::read(dir.join(family.controls)).unwrap_or_default(),
+            catalog_json: std::fs::read(dir.join(family.catalog_json)).unwrap_or_default(),
             models: MODEL_FILES
                 .iter()
                 .filter_map(|&n| std::fs::read(dir.join(n)).ok().map(|b| (n.to_string(), b)))
@@ -1051,7 +1067,7 @@ impl Catalog {
             }
             None => (None, None),
         };
-        let (model_name, category) = self.resolve_name(symbolic_id.as_deref());
+        let (model_name, category) = self.resolve_name(sym.map(|(s, _)| s));
         let meta = symbolic_id.as_deref().and_then(|s| self.param_meta.get(s));
         let params = name_params(&b.params, sym.map(|(_, p)| p), meta, category);
 
@@ -1061,7 +1077,7 @@ impl Catalog {
             .and_then(|i| self.symbols.by_index(i as usize));
         let paired_variant = paired_sym.and_then(|(s, _)| split_variant(s).1);
         let paired_symbolic = paired_sym.map(|(s, _)| split_variant(s).0.to_string());
-        let (paired_model_name, paired_category) = self.resolve_name(paired_symbolic.as_deref());
+        let (paired_model_name, paired_category) = self.resolve_name(paired_sym.map(|(s, _)| s));
 
         // DSP load (% of budget): the block's own model, plus its paired cab/IR if fused. Controller
         // nodes aren't DSP blocks, so they cost nothing.
@@ -1120,12 +1136,17 @@ impl Catalog {
 
     /// Resolve a `symbolicID` to its display name + category via the model table, falling back to
     /// the symbol itself (then `"<unknown>"`) when the table has no matching entry.
+    ///
+    /// Pass the **full** device symbol, `Mono`/`Stereo` suffix and all: the two vendors disagree on
+    /// which form their model table is keyed by, so only the suffixed symbol can be matched against
+    /// either (see [`ModelDefs::id_by_symbolic_id`]). The display fallback still uses the base, to
+    /// match the `symbolic_id` the block carries.
     fn resolve_name(&self, symbolic_id: Option<&str>) -> (String, Option<i64>) {
         let id = symbolic_id.and_then(|s| self.models.id_by_symbolic_id(s));
         let name = id
             .and_then(|id| self.models.name(id))
             .map(str::to_string)
-            .or_else(|| symbolic_id.map(str::to_string))
+            .or_else(|| symbolic_id.map(|s| split_variant(s).0.to_string()))
             .unwrap_or_else(|| "<unknown>".to_string());
         (
             name,

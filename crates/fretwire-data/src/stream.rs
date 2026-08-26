@@ -1005,17 +1005,30 @@ pub struct Assignment {
     /// too — the same preset's FS8 parameter landed at ordinal **10**, which is what the formula
     /// computes for an eight-switch device.
     ///
-    /// MIDI and snapshots sit in the two entries above the run. On a Stomp that is 8 and 9, and 9
-    /// was accepted and filed at index 9 here; above five switches it is arithmetic nobody has read
-    /// back [hypothesis]. **The device does not range-check the ordinal** — one past the end is
-    /// silently ignored — so a caller must.
+    /// **MIDI and snapshots sit in the two entries above the run**, and on an XL that is **11 and
+    /// 12** [solid — owner report, issue #13, 2026-08-25, `xl_assign_midi_and_snapshots`]. One
+    /// preset carrying a parameter under a MIDI CC and another under Snapshots put them at those
+    /// two indices of a 13-long table, which is what the arithmetic computes and what this had been
+    /// asserting without evidence. On a Stomp the pair is 8 and 9; 9 was accepted by op 37 and
+    /// filed at index 9, and neither has been read off that panel.
+    ///
+    /// **The device does not range-check the ordinal** — one past the end is silently ignored — so
+    /// a caller must.
     pub controller: i64,
     /// Inner key `1`. **Not** parameter-vs-bypass: all three assignments captured here are
     /// parameters, and two of them carry `0`. [solid as a refutation — `tonepush` documents this key
     /// as "4 a parameter, 0 a bypass"; `Time` and `Mix` are parameters with key `1` = 0.]
     ///
-    /// What it *is* reads as the target's **value type** — `0` on both continuous parameters,
-    /// `4` on the boolean `OD Switch`. [hypothesis — three samples, no counter-example.]
+    /// **Under a MIDI source it is the CC number** [solid — issue #13, 2026-08-25]. An owner put a
+    /// Teemah's `Gain` under `CC5` and the entry at ordinal 11 carries `1 => 5`; the Snapshots entry
+    /// in the same preset drives an equally continuous `Drive` and carries `0`. Same value type,
+    /// different key — so whatever this field means, it is **read against the source**, which is
+    /// what `fretwire_protocol::edit::K_ASSIGN_CC` (key `71`) already says of the op-37 request that
+    /// writes one: decide by the source, never by the value.
+    ///
+    /// Off a MIDI source it still reads as the target's **value type** — `0` on the continuous
+    /// parameters, `4` on the boolean `OD Switch`. [hypothesis — four samples now, no
+    /// counter-example among them.]
     ///
     /// To tell a parameter entry from a bypass entry, test for key `6` (the parameter reference)
     /// rather than this key.

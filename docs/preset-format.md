@@ -307,7 +307,9 @@ of a `Map{7}` node:
   source ordinal**:
   one position per physical control, `nil` where that control drives nothing. A populated entry is an
   `Array` of `{0:<place in table>, 1: Map}` — **one item per assignment on that source**, so a control
-  driving two things has two items. The inner map is
+  driving two things has two items (observed: EXP1 with two, `captures/xl_exp_bypass.msgpack.bin`).
+  A target slot **need not still hold a block** — the same capture has an EXP1 entry aimed at an
+  empty slot 1, so a consumer must treat the slot lookup as fallible. The inner map is
   `{0:<source>, 1:<value type>, 2:<min>, 3:<max>, 5:<target slot>, 6:{28:<path>, 29:<param idx>, 41}, …}`.
 - **The parameter index is `6 → 29`; `6 → 28` is the model path.** This is the reverse of the op-37
   *request* that creates an assignment, where 28 carries the index — and reading the request's shape
@@ -329,8 +331,8 @@ of a `Map{7}` node:
   | snapshots | 9 | 12 |
   | `Array` length | 10 | 13 |
 
-  **`length == footswitches + 5` on all eight streams we hold** — six Stomp captures at 5 and 10,
-  two XL captures at 8 and 13. [solid]
+  **`length == footswitches + 5` on all ten streams we hold** — six Stomp captures at 5 and 10,
+  four XL captures at 8 and 13. [solid]
 
   **FS1 = 3 on both**, established by diffing a front-panel assignment and again by writing one with
   op 37. The run's far end is now observed too: an XL owner assigned a Stupor OD's `Drive` to FS6
@@ -354,9 +356,15 @@ of a `Map{7}` node:
   device, and a second independent confirmation of the length formula after FS6 → 8.
   [solid — owner report, issue #13]
 
-  **MIDI and snapshots are still inference.** On a Stomp, ordinal 9 was accepted and filed at index
-  9, and `tonepush` names 8 MIDI and 9 Snapshots. Nobody has read either off an XL, where the
-  arithmetic puts them at 11 and 12. [hypothesis above five switches]
+  **MIDI is 11 and snapshots is 12 on an XL** — the last two entries of this table to be read rather
+  than computed. One preset put a Teemah's `Gain` under a MIDI CC and a Stupor OD's `Drive` under
+  Snapshots; they came back at indices 11 and 12 of a 13-long table, with inner key `0` echoing the
+  ordinal in each. So the eight-switch shape is observed end to end and the formula describes two
+  pedals rather than fitting one. On a **Stomp** the pair is 8 and 9 — ordinal 9 was accepted by op
+  37 and filed at index 9, and `tonepush` names both — but neither has been read off that panel, so
+  it is the XL that carries this. [solid on an XL — owner report, issue #13, 2026-08-25,
+  `captures/xl_assign_midi_and_snapshots.msgpack.bin`, pinned by
+  `fretwire-core/tests/controller_table.rs`]
 
   **One past the end is silently ignored** — ordinal 10 on a Stomp was accepted and did nothing —
   and **the device does not range-check this**, so a caller must. `Session::assign_param` bounds it
@@ -392,9 +400,16 @@ of a `Map{7}` node:
 - **Key `1` is not parameter-vs-bypass** [solid as a refutation]. `tonepush` documents it as
   "4 a parameter, 0 a bypass"; every assignment we have captured is a parameter and two of the three
   carry `0`. To tell the two apart, test for the presence of key `6` (the parameter reference).
-  What key `1` *is* reads as the target's **value type** — `0` on both continuous parameters
-  (`Time`, `Mix`), `4` on the boolean one (`OD Switch`). [hypothesis — three samples, no
-  counter-example.]
+
+  **Under a MIDI source, key `1` is the CC number** [solid — issue #13, 2026-08-25]. A `Gain` put
+  under `CC5` gives `1: 5` at ordinal 11, while the Snapshots entry in the same preset drives an
+  equally continuous `Drive` and gives `1: 0`. Same value type, different key — so this field is
+  read **against the source**, which is what `K_ASSIGN_CC` (key `71`) already says of the op-37
+  request that writes one.
+
+  Off a MIDI source it still reads as the target's **value type** — `0` on the continuous
+  parameters (`Time`, `Mix`, `Drive`), `4` on the boolean one (`OD Switch`). [hypothesis — four
+  samples, no counter-example among them.]
 - Worked example: the Dual-Amp preset's entry `[7]` is controller 7 → slot 15 **param 9**, the
   Grammatico GSG's `OD Switch`, swept `false`→`true`. (Previously recorded here as "param 0, an amp
   drive switch" — the description was right, the index was the bug above.)

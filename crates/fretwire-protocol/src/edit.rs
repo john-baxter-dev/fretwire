@@ -945,7 +945,7 @@ pub const SOURCE_FS1: i64 = 3;
 /// | table length | 10 | 13 |
 ///
 /// **`length == footswitch_count + 5` on every capture we hold** — six Stomp streams at 5 and 10,
-/// two XL streams at 8 and 13 [solid]. The footswitch run is solid at both ends: FS1 = 3 on a
+/// four XL streams at 8 and 13 [solid]. The footswitch run is solid at both ends: FS1 = 3 on a
 /// Stomp, and an XL's FS6 was diffed straight into index 8, which is the slot a Stomp calls MIDI.
 /// That is the observation that killed the constant. A second XL preset then put a parameter under
 /// **FS8** and it came back at ordinal **10**, which is what this computes — the far end of the run
@@ -955,10 +955,15 @@ pub const SOURCE_FS1: i64 = 3;
 /// inputs filed themselves at ordinals 1 and 2, each naming the block that had been put on that
 /// pedal, so the labels are no longer `tonepush`'s word alone.
 ///
-/// **MIDI and snapshots are inference, not observation** [hypothesis]. They are where
-/// the arithmetic puts them, and on a Stomp that arithmetic agrees with what we saw — ordinal 9 was
-/// accepted and filed at index 9. Nobody has read either off an XL. `tonepush` names 8 as MIDI, but
-/// that is its Stomp-shaped reading of the same table, so it is not independent evidence here.
+/// **MIDI is 11 and snapshots is 12 on an XL** [solid — issue #13, 2026-08-25,
+/// `captures/xl_assign_midi_and_snapshots.msgpack.bin`]. Both were arithmetic until an owner put one
+/// parameter under a MIDI CC and another under Snapshots on the same preset: the entries landed at
+/// indices 11 and 12 of a 13-long table, and inner key `0` echoes the ordinal, so each is confirmed
+/// by its position and by its own contents. That is the last of this table read off a device rather
+/// than computed: the eight-switch shape is now observed end to end, so the formula is a description
+/// of two pedals and not a fit to one. On a **Stomp** the top two remain `tonepush`'s naming plus an
+/// op-37 write that was accepted at index 9 — the arithmetic agrees, but nobody has read 8 or 9 off
+/// that panel, and it is the XL that carries the weight here.
 pub mod source {
     /// Number of entries in the key-`4` controller table.
     pub fn table_len(footswitch_count: usize) -> usize {
@@ -972,12 +977,14 @@ pub mod source {
             .then(|| super::SOURCE_FS1 + n as i64 - 1)
     }
 
-    /// Ordinal of the MIDI source. [hypothesis above a Stomp's five switches]
+    /// Ordinal of the MIDI source. [solid on an XL — read back at 11; on a Stomp, 8 is `tonepush`'s
+    /// naming of the same slot and has not been read off the panel]
     pub fn midi(footswitch_count: usize) -> i64 {
         super::SOURCE_FS1 + footswitch_count as i64
     }
 
-    /// Ordinal of the snapshots source. [hypothesis above a Stomp's five switches]
+    /// Ordinal of the snapshots source. [solid on an XL — read back at 12; on a Stomp, 9 was
+    /// accepted by op 37 and filed at index 9, which is a write rather than a front-panel read]
     pub fn snapshots(footswitch_count: usize) -> i64 {
         midi(footswitch_count) + 1
     }
@@ -1002,6 +1009,7 @@ pub mod source {
             n if (super::SOURCE_FS1..midi(footswitch_count)).contains(&n) => {
                 format!("FS{}", n - super::SOURCE_FS1 + 1)
             }
+            // Both read off an XL at 11 and 12 on 2026-08-25, which is where this puts them.
             n if n == midi(footswitch_count) => "MIDI".into(),
             n if n == snapshots(footswitch_count) => "Snapshots".into(),
             n => format!("Controller {n}"),

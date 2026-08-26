@@ -3783,3 +3783,55 @@ really live under Preferences.
 it — `135` was added to the table in the fifty-third round and the heading count was not. And the
 menu-order preamble still said `MENU_ORDER` covers "Ins/Outs and Preferences", written when it did;
 it covers all six sections now, every one from the XL.
+
+## Fifty-sixth round (2026-08-26): **the top of the controller table, read at last**
+
+Robert Tsai sent two more XL presets on issue #13, and between them they close the key-`4` source
+table. `captures/` gains `xl_exp_bypass.msgpack.bin` and `xl_assign_midi_and_snapshots.msgpack.bin`,
+which takes the fixture set to **six Stomp streams and four XL streams**.
+
+**MIDI is 11 and snapshots is 12.** These were the last two entries of the table still computed
+rather than read. One preset put a Teemah's `Gain` under `CC5` and a Stupor OD's `Drive` under
+Snapshots, and they came back at indices **11** and **12** of a 13-long table — where
+`edit::source::midi`/`snapshots` said they would be, with inner key `0` echoing the ordinal in each,
+so each entry is confirmed by its position *and* by its own contents. Both functions were tagged
+`[hypothesis]` above a Stomp's five switches since the fifty-first round; they are `[solid]` now,
+and the eight-switch shape is observed end to end.
+
+The Stomp keeps its asterisk, and the tags say so: on five switches the pair is 8 and 9, ordinal 9
+was accepted by op 37 and filed at index 9, and `tonepush` names both — but nobody has read either
+off that panel. The arithmetic agrees; the evidence is the XL's.
+
+**Key `1` is the MIDI CC number, when the source is MIDI.** It had been read as the target's value
+type — `0` on continuous parameters, `4` on a boolean — on three samples with no counter-example.
+This preset is the counter-example: the MIDI entry carries `1: 5` for `CC5`, while the Snapshots
+entry in the same preset drives an equally continuous parameter and carries `0`. Same value type,
+different key. So the field is read **against the source**, which is exactly what `K_ASSIGN_CC`
+(key `71`) has said all along about the op-37 request that writes one — the read side just hadn't
+met a MIDI assignment yet. The value-type reading survives off a MIDI source and stays
+`[hypothesis]` there.
+
+**Two structural facts the second capture volunteered.** A key-`4` slot holds an *array*, and this
+one has EXP1 driving two blocks — the shape was documented, but nothing had exercised it. And one of
+those two entries points at **slot 1, which holds no block**: this preset's blocks start at slot 2.
+Robert rebuilt the preset by hand from his own description, so the likeliest story is an assignment
+left behind by a block that moved, and the honest statement is that the document contains one and a
+consumer must not assume the slot lookup succeeds. `AssignmentDto` already resolves through
+`find(|b| b.slot == slot)?`, so an orphan renders as a row with no parameter name rather than a
+panic — checked, not assumed. Both facts are now pinned by
+`a_source_may_hold_several_entries_and_one_may_be_orphaned`.
+
+**The fixture is not the preset the last round was written against.** Robert recreated it from his
+textual description rather than re-dumping the original, and it differs: four key-`4` entries where
+the pasted output had three, plus the orphan. Everything the fifty-second round concluded still
+holds and is now pinned rather than resting on pasted text — but the file is a re-creation, and the
+round that cites it should not imply otherwise.
+
+Three tests added to `fretwire-core/tests/controller_table.rs` (**300 → 303**): the 11/12 reading,
+the bypass-source split — EXP1/EXP2 in key `4` and FS7 in the footswitch layout, in one preset, so
+the rule is visible in a single document — and the multi-entry/orphan case.
+
+**Still open on #13:** the opcode that writes a bypass to an expression pedal. Ops 56/57 take a
+plain switch index and nothing we hold shows one accepting an expression input, so the badge stays
+read-only. Both of these assignments were made on the pedal's own panel, which settles the document
+and not the request that produces it.

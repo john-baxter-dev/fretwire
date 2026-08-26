@@ -87,6 +87,32 @@ enum Command {
         #[arg(long)]
         presets: bool,
     },
+    /// Convert presets out of an HX Edit `.hxb` backup into a fretwire export file. **Offline.**
+    ///
+    /// A `.hxb` holds its presets as host-side `tone` JSON, not as the blob the device exchanges,
+    /// which is why `show-backup` could read one and nothing could restore from it. This does that
+    /// conversion, and writes an export file the rest of the tooling already understands —
+    /// inspect it with `backup-show`, put it on a pedal with `restore`.
+    ///
+    /// **A donor is required and must come from the target device.** Conversion writes what the
+    /// `tone` determines onto a preset the device itself wrote, so the parts nobody has decoded
+    /// keep bytes that unit is known to accept. Take one with `dump-raw`. Whatever the conversion
+    /// could not carry is listed on stderr, per preset.
+    HxbConvert {
+        backup: String,
+        /// A preset read off the target device (`fretwire dump-raw <file>`).
+        #[arg(long)]
+        donor: String,
+        /// Where to write the export file.
+        #[arg(long)]
+        out: String,
+        /// Setlist to convert. Omit for every setlist in the backup.
+        #[arg(long)]
+        bank: Option<i64>,
+        /// A single slot within `--bank`, instead of all of them.
+        #[arg(long, requires = "bank")]
+        index: Option<i64>,
+    },
     /// List what an export file contains (setlists, slots + names), to pick a restore.
     BackupShow { backup: String },
     /// Import Line 6's reference data from your own HX Edit install.
@@ -643,6 +669,107 @@ fn main() -> Result<()> {
                     }
                 }
             }
+        }
+        Command::HxbConvert {
+            backup: path,
+            donor,
+            out,
+            bank,
+            index,
+        } => {
+            let hxb = fretwire_data::hxb::Hxb::parse(&std::fs::read(&path)?)?;
+            let donor_raw = std::fs::read(&donor)?;
+            let donor_stream = fretwire_data::stream::PresetStream::parse(&donor_raw)?;
+
+            // The two id spaces meet here and nowhere else: a `.hxb` names its device numerically,
+            // a preset stream by model code. Overlaying across devices produces a blob that parses
+            // and means something else, so refuse rather than write it.
+            let backup_device = fretwire_usb::DEVICES
+                .iter()
+                .find(|d| d.preset_device_id == Some(hxb.device_id));
+            let donor_device = donor_stream
+                .device_model()
+                .and_then(|c| fretwire_usb::Device::by_model_code(&c));
+            if let (Some(b), Some(d)) = (backup_device, donor_device)
+                && b.name != d.name
+            {
+                anyhow::bail!(
+                    "the backup is from a {} and the donor preset from a {} — slot geometry and \
+                     model indices are per-device, so this would not mean the same thing",
+                    b.name,
+                    d.name
+                );
+            }
+
+            let catalog = fretwire_core::Catalog::load()?;
+            let syms = &catalog.symbols;
+
+            let setlists = hxb.setlists();
+            let mut presets = Vec::new();
+            let mut skipped = 0usize;
+            for setlist in &setlists {
+                if bank.is_some_and(|b| b != setlist.bank as i64) {
+                    continue;
+                }
+                for preset in setlist.presets.iter().flatten() {
+                    if index.is_some_and(|i| i != preset.index as i64) {
+                        continue;
+                    }
+                    let Some(tone) = preset.tone.as_object() else {
+                        continue;
+                    };
+                    let mut target = donor_stream.clone();
+                    match fretwire_data::tone::apply_tone(&mut target, tone, syms) {
+                        Ok(report) => {
+                            eprintln!(
+                                "[{}/{:>3}] {:<20} {} blocks, {} snapshots",
+                                setlist.bank,
+                                preset.index,
+                                preset.name,
+                                report.blocks,
+                                report.snapshots
+                            );
+                            for line in &report.not_carried {
+                                eprintln!("            not carried: {line}");
+                            }
+                            presets.push(fretwire_core::backup::BackupPreset {
+                                bank: setlist.bank as i64,
+                                index: preset.index as i64,
+                                name: preset.name.clone(),
+                                raw: target.to_stream(0),
+                            });
+                        }
+                        Err(e) => {
+                            skipped += 1;
+                            eprintln!(
+                                "[{}/{:>3}] {:<20} SKIPPED — {e}",
+                                setlist.bank, preset.index, preset.name
+                            );
+                        }
+                    }
+                }
+            }
+
+            let export = fretwire_core::backup::Backup {
+                device: backup_device
+                    .map(|d| d.name)
+                    .unwrap_or("unknown")
+                    .to_string(),
+                setlists: setlists
+                    .iter()
+                    .map(|s| (s.bank as i64, s.name.clone()))
+                    .collect(),
+                presets,
+            };
+            std::fs::write(&out, export.to_json())?;
+            println!(
+                "wrote {out}: {} preset(s){}",
+                export.presets.len(),
+                match skipped {
+                    0 => String::new(),
+                    n => format!(", {n} skipped"),
+                }
+            );
         }
         Command::DumpList { bank, out: path } => {
             let mut s = fretwire_core::Session::connect()?;

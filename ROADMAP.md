@@ -629,8 +629,30 @@ real session.
       backend is ready — `PresetDto.dsps[]` carries each DSP's grid/nodes/load, and every cell and
       block is tagged with its `dsp`; the flat fields mirror `dsps[0]` so the current UI is
       unaffected until it's rewritten.
-- [ ] `.hxb` import/restore — **independently useful, needs no device and no new captures**. Would
-      give the Stomp backup-file interop too. Format is documented well enough to build against.
+- [~] `.hxb` import/restore. **The conversion is built and measured** (2026-08-25):
+      `fretwire_data::tone` turns a `tone` object — what an `.hxb` slot and an `.hlx` file both
+      carry — into the wire preset, and `fretwire hxb-convert` writes an export file the existing
+      `backup-show`/`restore` path already reads. Blocks, split topology and snapshots all come
+      across; checked against one preset held in both forms (a Floor backup and a wire dump of the
+      same slot off the same unit), where all 15 blocks, 106 parameter values and 320
+      snapshot-matrix cells match the device's own bytes. This gives `.hlx` **import** too — the
+      format is the same tree — which is the more useful half, since `.hlx` is what people share.
+      **Not yet sent to a pedal.** What is left, in order:
+      - **Carry the tone's footswitch layout (key `3`)**, so a restored preset comes back with its
+        switches bound. Currently the donor's is *cleared* (a stale binding addresses blocks by
+        slot and every slot has changed), which is safe but leaves the switches empty — a poor
+        trade for the preset's owner, and the reason not to wire the live path yet. The same
+        oracle checks it. The tone also carries per-switch **custom labels and LED colours**
+        (`footswitch.dspN.blockM.@fs_customlabel` / `@fs_ledcolor`), which is read-side evidence
+        for the open colour item above — it does not give the write op, but it does pin the model.
+      - **Controller assignments (key `4`)** and the snapshot controller values (`2`) that index
+        off them.
+      - **Four block classes and one topology have no wire evidence** and are refused rather than
+        guessed: tone `@type` 4 (dual cab), 5 (IR), 6 (looper), 8 (synth), and topology `AB`.
+        About 8% of the sample backup's blocks. Each needs one dump of a preset containing that
+        kind of block — cheap, and the refusal message names what to capture.
+      - The four **input/output nodes** store a ragged prefix of their symbol's parameter list and
+        the rule is unknown; they keep the target's values.
 
 ## Phase 10 — Headless / serve mode
 Opened 2026-08-23 by a Helix Floor owner running a Pi 5 with PiPedal, who asked for a Raspberry Pi

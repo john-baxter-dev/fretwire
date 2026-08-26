@@ -11,6 +11,10 @@ use rmpv::Value;
 
 /// Envelope map key whose value holds the nested preset blob (observed `104`).
 const ENVELOPE_PRESET_KEY: i64 = 104;
+/// Envelope map key carrying the request's transaction counter (observed `102`).
+const ENVELOPE_COUNTER_KEY: i64 = 102;
+/// Envelope map key carrying the reply status — `0` on every document the device serves.
+const ENVELOPE_STATUS_KEY: i64 = 103;
 /// Expected magic string at the head of the nested blob.
 pub const PRESET_MAGIC: &str = "l6-helix";
 
@@ -232,6 +236,38 @@ impl PresetStream {
     ///
     /// [solid — 2026-07-31: a mixer drag froze a Floor twice, mid-write, with the stale table
     /// pointing 216 bytes past the end of the blob we were sending]
+    /// Re-wrap into a **reassembled read-stream** — the form [`Self::parse`] accepts, and the form
+    /// `fretwire_core::backup` stores.
+    ///
+    /// The inverse of parsing, and the piece a preset built rather than read needs: a converted
+    /// preset has to be storable and re-inspectable before anything sends it, and every offline
+    /// tool in the workspace takes a stream, not a bare blob.
+    ///
+    /// The envelope is `{102: counter, 103: 0, 104: blob}` behind the 8-byte `marker:u16,
+    /// type:u16, len:u32(LE)` prefix. Nothing here reaches the device — an op-21 write sends the
+    /// blob alone, under key `110` — so the prefix only has to be what our own reader expects.
+    /// `type`'s high byte is volatile even between two reads of an unchanged preset, so it is
+    /// written as zero rather than pretending to a value.
+    pub fn to_stream(&self, counter: u32) -> Vec<u8> {
+        let envelope = Value::Map(vec![
+            (Value::from(ENVELOPE_COUNTER_KEY), Value::from(counter)),
+            (Value::from(ENVELOPE_STATUS_KEY), Value::from(0)),
+            (
+                Value::from(ENVELOPE_PRESET_KEY),
+                Value::Binary(self.to_blob()),
+            ),
+        ]);
+        let mut body = Vec::new();
+        rmpv::encode::write_value(&mut body, &envelope)
+            .expect("msgpack encode to Vec is infallible");
+        let mut out = Vec::with_capacity(STREAM_PREFIX + body.len());
+        out.extend_from_slice(&0u16.to_le_bytes()); // marker
+        out.extend_from_slice(&0u16.to_le_bytes()); // type — volatile on read, so zero on write
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.extend_from_slice(&body);
+        out
+    }
+
     pub fn to_blob(&self) -> Vec<u8> {
         let mut out = Vec::new();
         // magic, re-NUL-terminated → fixstr (e.g. "l6-helix\0" = 0xa9 …)

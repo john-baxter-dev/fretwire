@@ -88,6 +88,51 @@ array is always one shorter than the model's param list:
 
 The bool in each array (`bypass` / `B Polarity`) pins the alignment, so the mapping is not guesswork.
 
+## The host side: `tone` JSON ↔ this format  [solid — 2026-08-25]
+
+An `.hlx` preset file and every slot of an `.hxb` backup carry the same preset as a **`tone`
+object** — named models, named parameters, `@path`/`@position` instead of slot numbers. That is
+the format HX Edit saves and shares, so converting it to this one is what a restore or an `.hlx`
+import needs. `fretwire_data::tone` does it; the reconciliation is below and in that module.
+
+The check is a preset held in **both** forms — a contributor's Floor backup and a wire dump of the
+same slot off the same unit — so this is measured, not inferred. All 15 blocks, both DSPs, both
+split topologies and all 106 parameter values agree.
+
+| tone | wire |
+|---|---|
+| `@model` + `@stereo` | the device symbol's index in `Helix.sym` (`24 → 25`) |
+| named parameters | `11 → 4`, in that symbol's parameter order |
+| `@path`, `@position` | slot index = `@path × 10 + @position + 1` |
+| `@enabled` | content key `10` |
+| `@cab` | `24 → 26`, with `24 → 23` true |
+| `@mic`, `@trails` | one value appended past the symbol's parameters |
+| `@type` | content key `9` (table above) |
+| `global.@topologyN` | DSP group key `21` |
+| `snapshotN.@name` / `@tempo` / `@valid` | snapshot keys `4` (NUL-terminated) / `5` / `0` |
+| `snapshotN.@pedalstate` / `@ledcolor` / `@custom_name` | snapshot keys `11` / `12` / `14` |
+| `snapshotN.blocks.dspN.<name>` | snapshot key `3[wire slot][1]` |
+
+Two things here are counter-intuitive enough to be worth stating on their own.
+
+**`@stereo` is written only when the model has both variants.** 153 of the 680 symbols do; the rest
+are `Stereo`-only (36, including every reverb), `Mono`-only (12) or unsuffixed (479, the amps and
+cabs). So an absent `@stereo` means *the variant that exists*, not "Mono" — reading it as Mono
+makes `HD2_ReverbHall` unresolvable, and reading it as a default would pick a symbol with a
+different parameter order.
+
+**Whether a split or mixer is a real branch point comes from the topology string, not from the
+node's own `@enabled`.** Both nodes of a bracket that spans two DSPs report `@enabled: true` on
+both, while the device has DSP1's join and DSP2's split *inactive* (`20 → 18` false, column 0) —
+because the split opens on DSP1 (`SAB`) and the join closes on DSP2 (`ABJ`). The node's `@enabled`
+is its own bypass and lands on the holder's key `10`.
+
+**Path B's input and output nodes live inside the structural slots**: the split slot's key `14` is
+the tone's `inputB` and the mixer slot's key `16` is `outputB`, the same shape as slot 0 (`inputA`)
+and slot 9 (`outputA`). All four store a **ragged prefix** of their symbol's parameter list — DSP1's
+input keeps 3 of 8, DSP2's keeps none — and the rule behind the prefix length is not known, which is
+why `tone` leaves those four alone.
+
 ## Preset map (integer keys)
 | key | value | meaning (inferred) |
 |----:|-------|--------------------|
@@ -183,10 +228,30 @@ A `type 6` block content is `Map{5}`:
 - `10` = **`enabled` bool** (`true` = block active, `false` = bypassed). **[solid — verified live
   2026-06-23]** by toggling a block and diffing the stream (`fretwire diff-stream`). The block bypass
   state lives **here**, not in the `24` metadata. (An earlier draft wrongly read `24 → 23`.)
-- `24` = `{25: model/DSP id, 26: secondary id, …}` (metadata).
-- `11` = `{2: count, 3: count, 4: [values]}` — **the ordered param vector** (msgpack `float32`
-  for knobs, `int`/`bool` for enums/switches), in `.models` param order.
-- `12` = a second (usually empty) param bank; `9` = flag.
+- `24` = `{23: has-paired-cab, 25: model index, 26: paired index}` (metadata). **`23` is the
+  pairing flag**, not a bypass: it is `true` on exactly the blocks whose `26` is not `-1`, on every
+  amp in every fixture held. [solid — 2026-08-25]
+- `11` = `{2: stored, 3: from-symbol, 4: [values]}` — **the ordered param vector** (msgpack
+  `float32` for knobs, `int`/`bool` for enums/switches), in `Helix.sym` device order.
+  **The two counts are different numbers and say so:** `3` is the model symbol's own parameter
+  count and `2` is how many values are stored, and they differ by exactly one on the blocks that
+  append a trailing extra — a cab's **mic** and a delay/reverb's **trails** switch. So a cab reads
+  `{2: 6, 3: 5}` and a Simple Delay `{2: 7, 3: 6}`. [solid — 2026-08-25, 24 distinct symbols]
+- `12` = a second (empty in every fixture) param bank.
+- `9` = the **block class**, a small fixed number per kind of block, equal to the `@type` an `.hlx`
+  / `.hxb` `tone` block carries — not to the catalog category, which is far finer-grained:
+
+  | `9` | tone `@type` | what |
+  |---:|---:|---|
+  | 1 | 0 | any ordinary effect — EQ, comp, dist, mod, wah, vol/pan |
+  | 8 | 7 | delay and reverb, i.e. exactly the trails-capable blocks |
+  | 15 | 2 | a cab on its own |
+  | 17 | 1 | an amp on its own (`26` = −1) |
+  | 33 | 3 | an **amp + cab** pair (`26` = the cab, `23` = true) |
+
+  [solid — 2026-08-25]. `@type` 4 (dual cab), 5 (IR), 6 (looper — a different slot kind entirely)
+  and 8 (synth) all occur in a real backup and in **no** wire dump we hold, so their class is
+  unknown; `fretwire_data::tone` refuses those rather than guessing.
 
 ### Block content for `type 7` (Looper) — a different shape
 A `type 7` slot's content is `Map{4}` and does **not** follow the type-6 layout:

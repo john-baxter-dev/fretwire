@@ -3479,3 +3479,80 @@ editor repeat a firmware bug back at them.
 The buggy string is now gone from the tree entirely. `SETTINGS` carries `000-127` as the fallback,
 which is also correct for the two devices that actually reach it — the Floor and the LT both hold 128
 slots, so only their *banked* form is unknown.
+
+## Fiftieth round (2026-08-25): **a `.hxb` preset can be turned back into a preset**
+
+Reading HX Edit's `.hxb` backup has worked since July. Restoring from one never could, and the
+reason was one sentence in `hxb.rs`: a preset inside a backup is a **`tone` JSON object**, not the
+MessagePack blob the wire carries, and nothing converted between them. `fretwire_data::tone` is
+that conversion, for blocks, split topology and snapshots.
+
+### The oracle was already in the tree
+The thing that made this measurable rather than plausible: we hold one preset in **both** forms.
+A contributor's Floor gave us its `.hxb` on 2026-07-22, and `WinCap5.pcapng` — captured off the
+same unit fifteen hours later — is HX Edit opening `FACTORY 1` slot 45, "Pull Me Under". So the
+same preset exists as host JSON *and* as the device's own bytes, and the conversion can simply be
+diffed against the truth.
+
+Matching them up took no guesswork either: reassemble both streams in that capture, take the model
+set of each, and score it against all 1024 presets in the backup. "Pull Me Under" comes back 14/14
+and the runner-up 8/15. The second stream is "Sultans" (`FACTORY 2` slot 64, 7/8 — one model was
+swapped during the capture, which is what the session was recording), and that one is useful as an
+**unrelated donor**: converting onto a serial 8-block preset and landing on a parallel 15-block one
+means nothing can pass by being left over.
+
+All 15 blocks, both DSPs, both topologies, all 106 parameter values and all 320 snapshot-matrix
+cells come out equal to the device's own preset. `crates/fretwire-data/tests/tone_to_wire.rs`.
+
+### Three things the oracle settled that guessing would have got wrong
+
+**`@stereo` is only written when there is a choice.** 153 of the 680 device symbols have both a
+Mono and a Stereo form; the other 527 have one form or none, and HX Edit omits the flag for them.
+So an absent `@stereo` means *the variant that exists* — every reverb is Stereo-only — and the
+obvious reading ("absent = Mono") makes `HD2_ReverbHall` unresolvable. Worse than unresolvable, in
+the cases where a Mono form does exist: the two variants have different parameter orders, so a
+wrong pick misaligns every value past the first variant-only parameter and nothing errors.
+
+**A node is a branch point per the topology string, not per its own `@enabled`.** Both the split
+and the join of "Pull Me Under" say `@enabled: true` on both DSPs, and the device has DSP1's join
+and DSP2's split *inactive*. The preset's bracket opens on DSP1 and closes on DSP2 —
+`@topology0: "SAB"`, `@topology1: "ABJ"` — and it is those strings that drive `20 → 18` and the
+column at `13`. Reading `@enabled` puts a join point on the DSP where the paths are still running,
+which is a preset whose two signal paths recombine a whole DSP too early. That is inaudible in a
+diff and very audible on a pedal.
+
+**`24 → 23` is the paired-cab flag.** It is `true` on exactly the blocks whose `26` is not `-1`, on
+every amp in every fixture we hold. This doc previously carried a withdrawn reading of `24 → 23` as
+a bypass; this is what it actually is.
+
+Two smaller ones, both now in `docs/preset-format.md`: the two counts beside a param vector are
+**different numbers** (`3` = the symbol's parameter count, `2` = values stored, differing by one
+exactly where a cab appends its mic or a delay its trails switch), and content key `9` is the
+**block class**, equal to the tone's `@type` under a fixed five-entry map.
+
+### What it refuses, and why that is the deliverable
+Block classes for tone `@type` 4 (dual cab), 5 (IR), 6 (looper) and 8 (synth) appear in the backup
+and in **no** wire dump we hold — about 8% of the backup's 2621 blocks. Topology `AB` likewise.
+Both are refusals with a message naming the block, not a nearest-plausible number. The output of
+this conversion goes to **flash**, and a class we invented would surface as a preset that sounds
+wrong months later with nothing to trace it to. Each needs exactly one wire dump of a preset
+containing that kind of block.
+
+The conversion also **clears** the donor's footswitch layout (key `3 → 8`) and controller
+assignment table (key `4`) instead of keeping them. Those two address blocks by **slot number** and
+every slot has just been rewritten, so keeping them leaves the restored preset toggling blocks it
+never put there. An empty layout is a real device state; a stale one is a wrong one.
+
+Everything else is reported rather than silently dropped — `Conversion::not_carried` names the
+snapshots' controller state, the tone's own footswitch bindings (labels and LED colours), the IR
+table, the Variax block and the four input/output nodes, one line each.
+
+### Reachable, and deliberately not yet live
+`fretwire hxb-convert <backup.hxb> --donor <stream.bin> --out <export.json>` writes the existing
+export format, so `backup-show` inspects it and `restore` could put it on a pedal. **No live
+write has been tried**, and the tone's own footswitch bindings not being carried is the reason to
+wait: restoring a preset whose switches come back empty is a poor trade for its owner. Carrying
+key `3` from the tone is the next piece, and the same oracle checks it.
+
+`PresetStream::to_stream()` is new — the inverse of `parse`, because a preset that was *built*
+rather than read still has to be storable and re-inspectable before anything sends it.

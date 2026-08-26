@@ -205,6 +205,62 @@ fn nothing_leaks_from_the_donor() {
     assert_eq!(occupied(&converted), occupied(&oracle));
 }
 
+/// Snapshots come across: name, tempo, appearance, and the per-slot bypass matrix.
+///
+/// The matrix is the part worth pinning. It is indexed by **wire slot** across both DSPs — 40
+/// entries on a Floor, not one array per DSP — while the tone keys it by block name, so every
+/// entry has to be re-indexed through the same `@path`/`@position` mapping the blocks use. Getting
+/// that wrong is silent: the chain looks right and the snapshots all switch to the wrong scene.
+/// All eight snapshots must match, which is 320 cells.
+#[test]
+fn snapshots_come_across() {
+    let Some((converted, oracle)) = converted_and_oracle() else {
+        return;
+    };
+    let snapshots = |ps: &PresetStream| match map_get(&ps.preset, 10).and_then(|m| map_get(m, 10)) {
+        Some(Value::Array(a)) => a.clone(),
+        _ => Vec::new(),
+    };
+    let (got, want) = (snapshots(&converted), snapshots(&oracle));
+    assert_eq!(got.len(), 8, "the Floor holds eight snapshots");
+    assert_eq!(got.len(), want.len());
+    for (i, (got, want)) in got.iter().zip(&want).enumerate() {
+        // Keys 1 and 2 are controller state, keyed off an assignment table this does not write.
+        for key in [0i64, 3, 4, 5, 11, 12, 14] {
+            assert_eq!(
+                map_get(got, key),
+                map_get(want, key),
+                "snapshot {i} key {key}"
+            );
+        }
+    }
+}
+
+/// The donor's footswitch bindings and controller assignments are **cleared**, not kept.
+///
+/// Both tables address blocks by slot number, and every slot has just been rewritten. "Sultans"
+/// binds five switches; keeping them would leave the restored preset toggling blocks it never put
+/// there — a wrong binding, not a missing one.
+#[test]
+fn stale_slot_bindings_are_cleared() {
+    let Some((converted, _)) = converted_and_oracle() else {
+        return;
+    };
+    let layout = map_get(&converted.preset, 3).and_then(|m| map_get(m, 8));
+    let Some(Value::Array(switches)) = layout else {
+        panic!("no footswitch layout");
+    };
+    assert!(!switches.is_empty(), "the array itself must survive");
+    assert!(
+        switches.iter().all(|s| matches!(s, Value::Nil)),
+        "a donor binding survived: {switches:?}"
+    );
+    let Some(Value::Array(controllers)) = map_get(&converted.preset, 4) else {
+        panic!("no assignment table");
+    };
+    assert!(controllers.iter().all(|c| matches!(c, Value::Nil)));
+}
+
 /// A conversion says what it left behind. This preset carries eight snapshots, footswitch
 /// bindings with custom labels and colours, and an IR table — none of which this writes yet, and
 /// all of which a caller has to be able to tell the user about.

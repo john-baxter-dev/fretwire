@@ -48,7 +48,9 @@
 
 use serde_json::{Map as JsonMap, Value as Json};
 
-use crate::stream::{DSP_GROUP_KEYS, PresetStream, map_get, map_get_mut, set_map_key, slot_kind};
+use crate::stream::{
+    DSP_GROUP_KEYS, DSP_SLOT_STRIDE, PresetStream, map_get, map_get_mut, set_map_key, slot_kind,
+};
 use crate::symbols::DeviceSymbols;
 use crate::{Error, Result};
 use rmpv::Value;
@@ -97,6 +99,8 @@ impl Node {
 pub struct Conversion {
     /// Effect blocks written, across all DSPs.
     pub blocks: usize,
+    /// Snapshots written.
+    pub snapshots: usize,
     /// Parts of the `tone` tree this does not yet write, one human-readable line each.
     pub not_carried: Vec<String>,
 }
@@ -227,8 +231,170 @@ pub fn apply_tone(
         apply_topology(donor, group_key, topology, dsp, &mut out);
     }
 
+    apply_snapshots(donor, tone, &mut out);
+    clear_bindings(donor, &mut out);
     note_omissions(tone, &mut out);
     Ok(out)
+}
+
+/// Empty the footswitch layout (key `3 → 8`) and the controller-assignment table (key `4`).
+///
+/// These are the two tables that address blocks by **slot number**, and the conversion has just
+/// replaced every block in every slot. Leaving the donor's would not be a harmless omission like
+/// the undecoded preset settings: each entry would go on pointing at a slot that now holds a
+/// different model, so the target's FS2 would toggle a block the preset never put there, and a
+/// controller would sweep some unrelated parameter. A restored preset that silently rewires
+/// someone's footswitches is worse than one that arrives with none on them.
+///
+/// Both are valid empty: `3 → 8` is all-nil on a preset driven by snapshots rather than switches,
+/// and key `4` is entirely nil on a preset whose only assignment is a bypass. [solid — the
+/// `assign_bypass_on_fs1` fixture]
+fn clear_bindings(donor: &mut PresetStream, out: &mut Conversion) {
+    let mut cleared = false;
+    if let Some(layout) = map_get_mut(&mut donor.preset, 3)
+        && let Some(Value::Array(switches)) = map_get_mut(layout, 8)
+    {
+        cleared |= switches.iter().any(|s| !matches!(s, Value::Nil));
+        switches.fill(Value::Nil);
+    }
+    if let Some(Value::Array(controllers)) = map_get_mut(&mut donor.preset, 4) {
+        cleared |= controllers.iter().any(|c| !matches!(c, Value::Nil));
+        controllers.fill(Value::Nil);
+    }
+    if cleared {
+        out.not_carried.push(
+            "the target preset's own footswitch bindings and controller assignments: cleared \
+             rather than kept, because they address blocks by slot and every slot has changed"
+                .into(),
+        );
+    }
+}
+
+/// Preset key `10` — the snapshots.
+///
+/// A snapshot is mostly a **per-slot bypass matrix** (`3`), one `[_, enabled]` pair per wire slot
+/// across the whole device, plus its name, tempo and appearance. The `tone` keys that matrix by
+/// block *name* (`blocks.dsp0.block3`), so it has to be re-indexed through the same
+/// `@path`/`@position` → slot mapping the blocks themselves use — which is the reason this runs
+/// after them and not beside them.
+///
+/// | tone | snapshot key | evidence |
+/// |---|---:|---|
+/// | `@valid` | `0` | |
+/// | `blocks.dspN.<name>` | `3[wire slot][1]` | all 8 snapshots of the oracle preset |
+/// | `@name` | `4`, NUL-terminated | `"Intro"` → `"Intro\0"` |
+/// | `@tempo` | `5` | |
+/// | `@pedalstate` | `11` | |
+/// | `@ledcolor` | `12` | |
+/// | `@custom_name` | `14` | |
+///
+/// Left as the donor's: `1` and `2`, which hold **controller** state. `2` is one entry per
+/// assignment in preset key `4`, in that table's order, so it cannot be written before the
+/// assignment table is — and this does not write that table. `10 → 8`, the stored active snapshot,
+/// is left alone too: the `tone` says 0 where the same unit's dump says 4, so the pairing is
+/// unconfirmed and the field is already known to be an unreliable reading of the live snapshot.
+fn apply_snapshots(donor: &mut PresetStream, tone: &JsonMap<String, Json>, out: &mut Conversion) {
+    let placement = block_placement(tone);
+    let Some(group) = map_get_mut(&mut donor.preset, 10) else {
+        return;
+    };
+    let Some(Value::Array(list)) = map_get_mut(group, 10) else {
+        return;
+    };
+    let on_device = list.len();
+    let in_tone = (0..)
+        .take_while(|i| tone.contains_key(&format!("snapshot{i}")))
+        .count();
+    if in_tone > on_device {
+        out.not_carried.push(format!(
+            "{} of the preset's {in_tone} snapshots: the target device holds {on_device}",
+            in_tone - on_device
+        ));
+    }
+
+    for (i, snapshot) in list.iter_mut().enumerate().take(in_tone) {
+        let Some(from) = tone.get(&format!("snapshot{i}")) else {
+            continue;
+        };
+        for (tone_key, wire_key) in [
+            ("@valid", 0i64),
+            ("@tempo", 5),
+            ("@pedalstate", 11),
+            ("@ledcolor", 12),
+            ("@custom_name", 14),
+        ] {
+            if let Some(v) = from.get(tone_key) {
+                set_map_key(snapshot, wire_key, json_to_msgpack(v));
+            }
+        }
+        if let Some(name) = from.get("@name").and_then(Json::as_str) {
+            set_map_key(snapshot, 4, Value::from(format!("{name}\0")));
+        }
+        // The matrix keeps whatever length the target device uses — 20 slots per DSP.
+        let width = match map_get(snapshot, 3) {
+            Some(Value::Array(a)) => a.len(),
+            _ => continue,
+        };
+        set_map_key(snapshot, 3, bypass_matrix(from, &placement, width));
+    }
+    out.snapshots = in_tone.min(on_device);
+}
+
+/// Every `tone` block's wire slot, as `(dsp, tone name) → wire slot`.
+///
+/// The structural nodes are in here too: a snapshot can bypass the split, and the `tone` names it
+/// `split` alongside the blocks.
+fn block_placement(tone: &JsonMap<String, Json>) -> Vec<((usize, String), usize)> {
+    let mut out = Vec::new();
+    for dsp in 0..DSP_GROUP_KEYS.len() {
+        let Some(tone_dsp) = tone.get(&format!("dsp{dsp}")).and_then(Json::as_object) else {
+            continue;
+        };
+        for (name, block) in tone_dsp {
+            let index = match name.as_str() {
+                "split" => Some(Node::SPLIT.index),
+                "join" => Some(Node::MIXER.index),
+                n if n.starts_with("block") => slot_index(block),
+                _ => None,
+            };
+            if let Some(index) = index {
+                out.push(((dsp, name.clone()), dsp * DSP_SLOT_STRIDE as usize + index));
+            }
+        }
+    }
+    out
+}
+
+/// One snapshot's per-slot bypass matrix: `[_, enabled]` per wire slot, across every DSP.
+///
+/// Slots the `tone` says nothing about default to **enabled**, which is what the device writes for
+/// an empty slot — except the input, output and mixer slots of each DSP, which are always `false`.
+/// The first element of each pair is `false` throughout on every snapshot of every fixture we hold
+/// and discriminates nothing.
+fn bypass_matrix(snapshot: &Json, placement: &[((usize, String), usize)], width: usize) -> Value {
+    let stride = DSP_SLOT_STRIDE as usize;
+    let mut enabled: Vec<bool> = (0..width)
+        .map(|slot| !matches!(slot % stride, 0 | 9 | 19))
+        .collect();
+    for ((dsp, name), slot) in placement {
+        let Some(state) = snapshot
+            .get("blocks")
+            .and_then(|b| b.get(format!("dsp{dsp}")))
+            .and_then(|d| d.get(name))
+            .and_then(Json::as_bool)
+        else {
+            continue;
+        };
+        if let Some(cell) = enabled.get_mut(*slot) {
+            *cell = state;
+        }
+    }
+    Value::Array(
+        enabled
+            .into_iter()
+            .map(|e| Value::Array(vec![Value::from(false), Value::from(e)]))
+            .collect(),
+    )
 }
 
 /// Empty every draggable slot of one DSP, so a donor block never survives into the result.
@@ -521,14 +687,12 @@ fn apply_topology(
 
 /// One line per part of the `tone` tree this does not write.
 fn note_omissions(tone: &JsonMap<String, Json>, out: &mut Conversion) {
-    let snapshots = (0..8)
-        .filter(|i| tone.contains_key(&format!("snapshot{i}")))
-        .count();
-    if snapshots > 0 {
-        out.not_carried.push(format!(
-            "{snapshots} snapshot(s): names, per-block bypass and controller values were left as \
-             the target preset's"
-        ));
+    if out.snapshots > 0 {
+        out.not_carried.push(
+            "snapshot controller values (keys 1 and 2) and the stored active snapshot: left as the \
+             target preset's"
+                .into(),
+        );
     }
     for (key, what) in [
         (

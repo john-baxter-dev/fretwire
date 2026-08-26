@@ -3675,3 +3675,41 @@ the document, not the request that produces it.
 **Still open:** MIDI and snapshots on an XL (arithmetic says 11 and 12, nobody has read either), and
 the opcode for writing a bypass to an expression pedal. No fixture for this one either — it arrived
 as pasted CLI output, so nothing here is pinned by a test the way `xl_assign_param_fs6` pins FS6.
+
+## Fifty-third round (2026-08-25): **the two empty menus are empty no longer**
+
+Robert Tsai worked `_TODO-settings-discovery.md` on an XL and came back with **19 ids** (PR #16,
+merged): all of Footswitches (`17 19 18 67 20 117 129 130 131`), both of EXP Pedals (`66 71`), five
+more in MIDI/Tempo (`10 12 13 76 77 135`) and the two that make Displays a real section (`25 26`).
+The table goes **34 → 53**. Footswitches and EXP Pedals had been declared and empty since the
+forty-eighth round, with a paragraph in `GROUPS` explaining that the emptiness was a standing note
+rather than a bug; the paragraph is gone and `every_declared_group_has_rows` now keeps it that way.
+
+He also re-read the four MIDI/Tempo names we already had, and **all four were wrong** — casing on
+`9` and `14`, and `11`/`16` are called `USB MIDI` and `BPM`, not `MIDI over USB` and `Tempo`.
+`14`'s value labels changed with them. This is the third time a name in this table turned out to be
+something no pedal shows, and the third time an owner caught it rather than review.
+
+**`Kind::Flag` versus `Kind::Choice` is the wire type, not a style.** The new batch has two-option
+`Choice`es (`117`, `135`) sitting next to `Flag`s (`10`, `25`, `26`, `129`), which reads like an
+oversight and is not — `false`/`true` in a dump is a flag, `0`/`1` is a choice, and the discovery
+sheet said so. Id 154 was declared a `Flag` here until an XL owner read it back as `1 [int]`
+(PR #14), so the distinction now has a note on `Kind` itself, to stop the next reader tidying the
+mixture into consistency. Nothing turns on it for writes: `set_setting_num` reads the current value
+and matches its type, so a mislabel is presentational — a toggle drawn where a dropdown belongs.
+
+**One id came without its menu position.** `135` `Snapshot CC Send` is identified and unplaced, so
+it draws at the foot of MIDI/Tempo rather than somewhere invented — rows sort by
+`(group_rank, menu_rank, id)`. `only_the_listed_ids_are_unplaced` names it, so the next id that
+arrives without a position fails a test instead of quietly sorting last.
+
+**The mock had drifted.** `ui/src/mock/backend.js` keeps its own copy of the table so the panel can
+be exercised in a browser, and it still listed id `12` in the *unidentified* tier — an id PR #16
+names. All 19 are mirrored now, and `globals-mock.mjs` went 34 → 53 with the two new sections in its
+expected order.
+
+**Retired:** `captures/_TODO-settings-discovery.md`, answered. Three things it wanted are not
+answered and moved to `_TODO-settings-names.md`: whether any of the 19 refuse on a Stomp (`130`/`131`
+are `FS7`/`FS8 Function` and a Stomp has three switches, so at least those two ought to — but ought
+is not observed), whether `95`/`96`/`68`/`69` really live under Preferences now that EXP Pedals
+exists, and `135`'s row number.

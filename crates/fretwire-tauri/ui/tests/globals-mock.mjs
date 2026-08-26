@@ -28,7 +28,7 @@ ok(
 );
 // Bump this when the table grows. It went stale at 9dc105b and stayed that way, because CI builds
 // the UI but never runs these — see `package.json`'s `test` script.
-ok(named.length === 34, `34 settings in the catalog, got ${named.length}`);
+ok(named.length === 53, `53 settings in the catalog, got ${named.length}`);
 ok(named.every((s) => s.writable), "every identified setting is writable");
 ok(named.every((s) => s.group !== "Unidentified"), "no identified setting lands in the raw group");
 
@@ -49,7 +49,10 @@ ok(
   new Set(sections).size === sections.length,
   `each section arrives in one contiguous run, got ${sections.join(" → ")}`,
 );
-const EXPECTED = ["Global EQ", "Ins/Outs", "Preferences", "MIDI/Tempo", "Unidentified"];
+const EXPECTED = [
+  "Global EQ", "Ins/Outs", "Preferences", "Footswitches", "EXP Pedals", "MIDI/Tempo", "Displays",
+  "Unidentified",
+];
 ok(
   JSON.stringify(sections) === JSON.stringify(EXPECTED),
   `sections arrive in the pedal's order, got ${sections.join(" → ")}`,

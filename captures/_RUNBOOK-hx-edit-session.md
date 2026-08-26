@@ -229,9 +229,9 @@ on 2026-08-22: the **read is op 24**, it had been sitting in the connect capture
 "prepare step", and settings are a flat numbered namespace. A 601-id sweep takes 1.4 s.
 
 So the whole area is now a **Linux** job with no Windows box in it — `settings-dump`, change one
-thing on the pedal's own menus, `settings-dump` again, `settings-diff`. See
-`_TODO-settings-discovery.md`, which is the largest
-block of unknowns left anywhere (~131 unidentified ids, two whole menus) and needs no capture at all.
+thing on the pedal's own menus, `settings-dump` again, `settings-diff`. That loop found nineteen ids
+in one sitting on 2026-08-25 and closed both of the empty menus; `_TODO-settings-names.md` carries
+what is left of it. Still no capture required.
 
 ## H. A block with two or more values past its symbol list — *only if you happen to hit one*
 

@@ -1,12 +1,15 @@
 # Settings names — every label in the table needs reading off a menu
 
-**Goal:** confirm, at the pedal, that each of the 34 names in `fretwire_protocol::settings` is what
+**Goal:** confirm, at the pedal, that each of the 53 names in `fretwire_protocol::settings` is what
 the pedal's Global Settings screens actually say. One walk through the menus does all of it.
 
-> **Updated 2026-08-24.** Three of the four open questions at the bottom are answered, the section
-> headings have been read off the hardware, and the tables below now match the table as it stands.
-> Finding *new* ids is a different loop and lives in **`_TODO-settings-discovery.md`** — that one is
-> the higher-value use of pedal time now, since two whole sections have no entries at all.
+> **Updated 2026-08-25.** `_TODO-settings-discovery.md` is retired: an XL owner walked Footswitches,
+> EXP Pedals, MIDI/Tempo and Displays with it and came back with **19 new ids** (PR #16), which is
+> everything that sheet asked for bar the two questions folded in at the bottom of this one. The
+> table went 34 → 53 and this file is the live one again.
+>
+> Nineteen of those 53 names have now been read off an **XL** and none off a Stomp, which is the
+> asymmetry this sheet exists to close — see the `[XL]` marks below.
 
 ## Why this exists
 
@@ -120,33 +123,111 @@ where noted, so the names still want a Stomp's screen against them.
 
 </details>
 
-### MIDI/Tempo (4)
+### Footswitches (9)
+
+**All nine off an XL, 2026-08-25.** Two of them — `130` and `131` — name switches a three-switch
+Stomp does not have, so the interesting answer here is not the wording but whether they answer at
+all: an id the Stomp lacks refuses, and `scan_settings` reads a refusal as absence.
+
+| id | fretwire says | read off | what the pedal shows | actual section |
+|---|---|---|---|---|
+| `17` | Stomp Select | [XL] | | |
+| `19` | Stomp Mode | [XL] | | |
+| `18` | Preset Mode | [XL] | | |
+| `67` | Snapsht Mode | [XL] | | |
+| `20` | Up/Down Switches | [XL] | | |
+| `117` | Swap Up/Down | [XL] | | |
+| `129` | TAP Function | [XL] | | |
+| `130` | FS7 Function | [XL] | | |
+| `131` | FS8 Function | [XL] | | |
+
+<details><summary>value labels for Footswitches</summary>
+
+- `17` Stomp Select: choice — `0` Off, `1` Touch, `2` Press, `3` Both
+- `19` Stomp Mode: choice — `0` 4 Swtch, `1` 6 Swtch
+- `18` Preset Mode: choice — `0` Moment, `1` Latch
+- `67` Snapsht Mode: choice — `0` Moment, `1` Latch, `2` Toggle
+- `20` Up/Down Switches: choice — `0` Banks, `1` Preset, `2` Snapsht
+- `117` Swap Up/Down: choice — `0` Off, `1` On
+- `129` TAP Function: flag — true `AllBypas`, false `TAP/Tunr`. **The one to cycle**: `130`/`131`
+  offer ten functions each and two of them are exactly these two strings, so if TAP has more than
+  two settings the flag can't hold them.
+- `130` FS7 Function / `131` FS8 Function: choice — `0` TAP/Tunr, `1` Stomp 7 / `Stomp 8`,
+  `2` Bank Up, `3` Bank Dn, `4` PresetUp, `5` PresetDn, `6` SnpshtUp, `7` SnpshtDn, `8` AllBypas,
+  `9` TogglEXP
+
+</details>
+
+### EXP Pedals (2)
+
+| id | fretwire says | read off | what the pedal shows | actual section |
+|---|---|---|---|---|
+| `66` | EXP 1 Position | [XL] | | |
+| `71` | EXP 2 Position | [XL] | | |
+
+<details><summary>value labels for EXP Pedals</summary>
+
+- `66` EXP 1 Position / `71` EXP 2 Position: choice — `0` Snapsht, `1` Preset, `2` Global
+
+</details>
+
+### MIDI/Tempo (9)
 
 **One section on the pedal, not two** — confirmed on a Stomp and an XL [2026-08-24]. These were
 separate groups here until then.
 
+The four original names were re-read off an XL on 2026-08-25 and **all four were wrong** — casing on
+`9` and `14`, a different name on the other two (`11` is `USB MIDI`, `16` is `BPM`). `14`'s three
+value labels changed with it. They are corrected below; nobody has re-checked any of this on a
+Stomp, so where the two units disagree it is the XL's wording that is in the table.
+
 | id | fretwire says | read off | what the pedal shows | actual section |
 |---|---|---|---|---|
-| `9` | MIDI base channel | — | | |
-| `11` | MIDI over USB | — | | |
-| `14` | Tempo select | — | | |
-| `16` | Tempo | — | | |
+| `9` | MIDI Base Channel | [XL] | | |
+| `10` | MIDI Thru | [XL] | | |
+| `13` | Rx MIDI Clock | [XL] | | |
+| `76` | Tx MIDI Clock | [XL] | | |
+| `14` | Tempo Select | [XL] | | |
+| `16` | BPM | [XL] | | |
+| `11` | USB MIDI | [XL] | | |
+| `12` | MIDI PC Rx | [XL] | | |
+| `77` | MIDI PC Tx | [XL] | | |
+| `135` | Snapshot CC Send | [XL] | | |
 
 <details><summary>value labels for MIDI/Tempo</summary>
 
-- `9` MIDI base channel: choice — `0`..`15`, shown one-based
-- `11` MIDI over USB: flag — true `On`, false `Off`
-
-- `14` Tempo select: choice — `0` Per snapshot, `1` Per preset, `2` Global
-- `16` Tempo: number — BPM
+- `9` MIDI Base Channel: choice — `0`..`15`, shown one-based
+- `10` MIDI Thru: flag — true `On`, false `Off`
+- `13` Rx MIDI Clock: choice — `0` Off, `1` MIDI, `2` USB, `3` Auto
+- `76` Tx MIDI Clock: choice — `0` Off, `1` MIDI, `2` USB, `3` MIDI+USB
+- `14` Tempo Select: choice — `0` Snapsht, `1` Preset, `2` Global
+- `16` BPM: number — BPM
+- `11` USB MIDI: flag — true `On`, false `Off`
+- `12` MIDI PC Rx / `77` MIDI PC Tx: choice — `0` Off, `1` MIDI, `2` USB, `3` MIDI+USB
+- `135` Snapshot CC Send: choice — `0` Off, `1` On
 
 </details>
 
-### Displays (0)
+> **`135` has no place in `MENU_ORDER`.** Every other id in this section was placed; this one came
+> without its row number, so it draws at the foot of MIDI/Tempo rather than where the pedal puts it.
+> One line of the menu, and it is fixed — `only_the_listed_ids_are_unplaced` names it.
 
-**Empty.** Id `27` was its only member and moved to Preferences on 2026-08-24, where the pedal
-actually keeps it. The section exists on the hardware, so whatever it holds is unidentified — see
-`_TODO-settings-discovery.md`, which covers the other two empty sections the same way.
+### Displays (2)
+
+Id `27` was its only member until 2026-08-24, and moved to Preferences where the pedal actually
+keeps it, leaving the section empty. The two ids below arrived from an XL on 2026-08-25.
+
+| id | fretwire says | read off | what the pedal shows | actual section |
+|---|---|---|---|---|
+| `25` | LED Rings | [XL] | | |
+| `26` | Tap LED | [XL] | | |
+
+<details><summary>value labels for Displays</summary>
+
+- `25` LED Rings: flag — true `Dim/Brt`, false `Off/Brt`
+- `26` Tap LED: flag — true `On`, false `Off`
+
+</details>
 
 ### Global EQ (11)
 
@@ -301,20 +382,42 @@ Preferences
 ```
 
 ```
-Footswitches            ← no ids at all; see _TODO-settings-discovery.md
+Footswitches            ← read off an XL, 2026-08-25
+1. Stomp Select         (17)
+2. Stomp Mode           (19)
+3. Preset Mode          (18)
+4. Snapsht Mode         (67)
+5. Up/Down Switches     (20)
+6. Swap Up/Down         (117)
+7. TAP Function         (129)
+8. FS7 Function         (130)
+9. FS8 Function         (131)
 ```
 
 ```
-EXP Pedals              ← no ids at all; see _TODO-settings-discovery.md
+EXP Pedals              ← read off an XL, 2026-08-25
+1. EXP 1 Position       (66)
+2. EXP 2 Position       (71)
 ```
 
 ```
-MIDI/Tempo
-(9 MIDI base channel, 11 MIDI over USB, 14 Tempo select, 16 Tempo — order unread)
+MIDI/Tempo              ← read off an XL, 2026-08-25
+1. MIDI Base Channel    (9)
+2. MIDI Thru            (10)
+3. Rx MIDI Clock        (13)
+4. Tx MIDI Clock        (76)
+5. Tempo Select         (14)
+6. BPM                  (16)
+7. USB MIDI             (11)
+8. MIDI PC Rx           (12)
+9. MIDI PC Tx           (77)
+?. Snapshot CC Send     (135)   ← position unread; unplaced in MENU_ORDER
 ```
 
 ```
-Displays                ← no ids left; 27 moved to Preferences
+Displays                ← read off an XL, 2026-08-25
+1. LED Rings            (25)
+2. Tap LED              (26)
 ```
 
 Global EQ is a **separate top-level menu**, not a Global Settings section, so it has no place in this
@@ -332,5 +435,35 @@ list — its eleven ids sort ahead of everything by number and the panel gives t
   an id at all: it states the invariant about the *shape*, so the next unexplained setting inherits
   it without anyone remembering to re-anchor it.
 - Anything found on screen with no id is a new sweep target.
+
+## Inherited from `_TODO-settings-discovery.md`
+
+That sheet was retired on 2026-08-25 when PR #16 answered it. Three things it asked for came back
+unanswered, and they are pedal-side questions, so they live here now.
+
+**Does anything in these sections refuse on a Stomp?** Nineteen ids exist here entirely on an XL's
+word. `130`/`131` are `FS7 Function`/`FS8 Function` and a Stomp has three switches, so at least
+those two ought to refuse — but "ought to" is not an observation, and a refusal is a real result:
+`scan_settings` reads it as absence rather than as an error, which is what lets one table serve both
+pedals. `settings-dump` on a Stomp answers all nineteen at once.
+
+```
+answer:
+```
+
+**Do `95`/`96`/`68`/`69` really live under Preferences?** `EXP/FS Tip`, `EXP/FS Ring`, `Tip Polarity`
+and `Ring Polarity` — names that sound like they belong under EXP Pedals, which now exists and holds
+only two ids. Confirmed under Preferences on 2026-08-24, so this is a re-check rather than an open
+question, and it is the likeliest place for that confirmation to have been wrong.
+
+```
+answer:
+```
+
+**Where does `135` sit in the MIDI/Tempo menu?** One row number, and `MENU_ORDER` is complete.
+
+```
+answer:
+```
 
 Delete this file once it's answered, the way the other `_TODO-` sheets go.

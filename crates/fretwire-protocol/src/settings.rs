@@ -5,9 +5,13 @@
 //! pedal by changing one thing on its own menus and diffing two dumps — an HX Stomp for most of
 //! them, an HX Stomp XL for those marked `[XL]` below.
 //!
-//! **166 of ids 0..=600 answer on an HX Stomp. 35 are identified; 34 of them are here.** The odd
+//! **166 of ids 0..=600 answer on an HX Stomp. 54 are identified; 53 of them are here.** The odd
 //! one out is id 28, the current preset index — device state rather than a preference, written
 //! properly by `Session::goto_preset`, and deliberately not offered as a settings row.
+//!
+//! Those two numbers are not a coverage fraction of each other. Nineteen of the identified ids came
+//! off an XL and have never been read on a Stomp, and a three-switch pedal has no `FS7 Function` to
+//! report — which of them refuse there is unchecked, and a refusal is absence, not an error.
 //!
 //! That ratio is the normal state of this table, not a gap to be filled in with plausible guesses:
 //! an id whose meaning nobody has observed is simply absent, and the UI shows it as a raw number
@@ -15,6 +19,12 @@
 //! `fretwire settings-diff`.
 
 /// How a setting's value should be presented and edited.
+///
+/// The split between [`Kind::Flag`] and [`Kind::Choice`] is **the type the wire holds**, not a
+/// style preference — `false`/`true` in a dump is a flag, `0`/`1`/`2` is a choice. A two-option
+/// `Choice` sitting beside a `Flag` (117 and 135 against 10, 25, 26 and 129) is therefore a
+/// recorded difference between those ids, not an inconsistency to tidy away. Id 154 was declared a
+/// `Flag` here until an XL owner read it back as `1 [int]`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Kind {
     /// A `bool`. The two labels are what the pedal's own menu calls the states, in `(true, false)`
@@ -45,7 +55,8 @@ pub struct Setting {
 /// Every setting id we have identified.
 ///
 /// **Read off a physical HX Stomp, 2026-08-22**, except those marked `[XL]`, which an HX Stomp
-/// XL owner read off that pedal the same way and contributed [2026-08-23]. Where the two units'
+/// XL owner read off that pedal the same way and contributed — Ins/Outs and Preferences on
+/// [2026-08-23], then all of Footswitches, EXP Pedals and Displays on [2026-08-25]. Where the two units'
 /// menus name a thing differently the XL's wording is used, because it is the one we have in
 /// writing; an id the XL has and the Stomp does not simply refuses on a Stomp, and `scan_settings`
 /// treats a refusal as absence rather than as an error.
@@ -582,6 +593,11 @@ pub const SETTINGS: &[Setting] = &[
 /// Ids absent from here sort after every id present, by id — see [`menu_rank`]. That is the honest
 /// default: nobody has placed them, so they keep their numeric position rather than being guessed
 /// into the middle of a menu.
+///
+/// One *identified* id is absent for exactly that reason: **135**, `Snapshot CC Send`. The pass that
+/// named it placed the rest of its section and not this one. Rows sort by
+/// `(group_rank, menu_rank, id)`, so it draws at the foot of MIDI/Tempo instead of somewhere wrong —
+/// a guessed position would look no different and be worse.
 pub const MENU_ORDER: &[i64] = &[
     31, 94, 2, 3, 154, 153, 158, 156, // Ins/Outs
     81, 73, 65, 95, 96, 68, 69, 27, 103, 127, 136, // Preferences
@@ -768,6 +784,33 @@ mod tests {
             );
             assert!(!seen.contains(&id), "MENU_ORDER places id {id} twice");
             seen.push(id);
+        }
+    }
+
+    /// The counterpart to `menu_order_places_real_ids_once`: an identified id outside the Global EQ
+    /// tab should have a place in the pedal's menus, and the ones that don't are named here rather
+    /// than left to be noticed. Id 135 arrived without its position — see [`MENU_ORDER`].
+    #[test]
+    fn only_the_listed_ids_are_unplaced() {
+        const UNPLACED: &[i64] = &[135];
+        let missing: Vec<i64> = SETTINGS
+            .iter()
+            .filter(|s| s.group != "Global EQ" && menu_rank(s.id) == MENU_ORDER.len())
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(missing, UNPLACED, "an identified id has no menu position");
+    }
+
+    /// Footswitches and EXP Pedals were declared and empty from 2026-08-24 to 2026-08-25, with a
+    /// paragraph in [`GROUPS`] explaining why. That paragraph is gone because they are populated;
+    /// this is what keeps them that way, and says a section arrives with its ids, not ahead of them.
+    #[test]
+    fn every_declared_group_has_rows() {
+        for g in GROUPS {
+            assert!(
+                SETTINGS.iter().any(|s| s.group == *g),
+                "group {g:?} is declared but has no settings"
+            );
         }
     }
 

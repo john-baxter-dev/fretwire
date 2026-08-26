@@ -10,9 +10,10 @@ Device: Line 6 HX Stomp — **VID 0x0E41 / PID 0x4246**.
 > of time — it's ordered so the valuable ones are done first, and it marks the two sections that no
 > longer need a Windows box at all.
 >
-> The other `_TODO-` sheets are pedal-side, not capture-side: `_TODO-settings-names.md` checks the
-> settings table against the pedal's own screens, and `_TODO-settings-discovery.md` hunts the ~131
-> ids that answer and have no name. Neither needs HX Edit.
+> The other `_TODO-` sheet is pedal-side, not capture-side: `_TODO-settings-names.md` checks the
+> settings table against the pedal's own screens. It needs no HX Edit. Its companion,
+> `_TODO-settings-discovery.md`, was retired on 2026-08-25 when an XL owner worked it and came back
+> with nineteen ids; what it still wanted is folded into the bottom of the names sheet.
 
 ## One-time setup
 1. Close HX Edit.

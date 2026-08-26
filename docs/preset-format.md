@@ -157,7 +157,7 @@ why `tone` leaves those four alone.
 | 1 | Map `{21: split, 22: Array[20]}` — or nil | **the second DSP's slot array**, same shape as key `0`. **nil on the HX Stomp** (one DSP), populated on the Helix Floor. [solid — 2026-07-22, Floor captures cross-checked against a `.hxb` backup] |
 | 2 | Map `{0: Array[13], 1: Array[13×Array[7]]}` | snapshot/controller matrices (13 = snapshots? all zero here) |
 | 3 | Map `{7: 0, 8: Array[5]}` | **footswitch / stomp layout** — bound blocks only; see below |
-| 4 | Array[10] (all nil) | **parameter-controller** assignments (separate from `3 → 8`; empty here) |
+| 4 | Array[10] (all nil) | **parameter-controller** assignments (separate from `3 → 8`; empty here). Ten because this is a Stomp — the length is `footswitches + 5`, so an XL holds 13 |
 | 5 | Map{15} `{16: f32, 45..56: …, 30, 134}` | **preset-level settings**. Byte-identical across all three captures (all at defaults), so the fields aren't separable yet; `16` = f32 80 is most likely the preset tempo. [hypothesis] |
 | 6 | Map{2} `{98: <slot>, 26: 0}` | **the focused block** — key `98` is the same slot number the edit commands address, and it differs per capture (5, 7, 12), matching the block last selected. [solid] |
 | 10 | Map{6} `{6,7,8, 9: 20, 10: Array[n], 13: Array[20]}` | **snapshots**: `10` is the snapshot array (3 on a Stomp, 8 on a Floor), `9` = the slot count, `13` = a per-slot array. Each snapshot is `{0: enabled, 1: Array[11], 2: Array[64], 3: Array[20], 4: name, 5: f32 tempo, 12, 14}` — note `3` is **per-slot state**, one entry per block slot. [solid] |
@@ -303,7 +303,8 @@ of a `Map{7}` node:
 - `14` = user label string; `13` = has-label flag (e.g. a `Harmonic Tremolo` renamed `Tremolo`).
 
 ### Controllers / footswitch assignments (`4`), snapshots (`10`/`2`) [solid — corrected 2026-08-21]
-- **`4` = `Array[10]`** — **parameter**-controller assignment table, **indexed by source ordinal**:
+- **`4` = `Array[footswitches + 5]`** — **parameter**-controller assignment table, **indexed by
+  source ordinal**:
   one position per physical control, `nil` where that control drives nothing. A populated entry is an
   `Array` of `{0:<place in table>, 1: Map}` — **one item per assignment on that source**, so a control
   driving two things has two items. The inner map is
@@ -317,16 +318,40 @@ of a `Map{7}` node:
 - **The travel ends are keys `2` and `3`, not `4`/`7`** (which are `0` on every sample held). They are
   in the parameter's own raw units and follow its type: `false`/`true` for a switch, `0`/`1` for a
   0..1 knob, `0`/`8` for a delay time. [solid — three samples]
-- **Source ordinal → physical control:** **footswitches are 3..=7** — FS1 = 3, established by
-  diffing a front-panel assignment and again by writing one with op 37, and the *count* is the
-  device's own: op 33 answers switches 1-5 and refuses 6 with code `-3`, matching the five positions
-  in `3 → 8`. On an HX Stomp three of those are on the panel and two reach the external switch jack.
-  Ordinals **1, 2 and 9** are accepted and file themselves at indices 1, 2 and 9; since 3..=7 are the
-  footswitches, 1 and 2 are the two expression inputs and 9 is the last slot in a ten-long table.
-  `tonepush` names them EXP1/EXP2, MIDI (8) and Snapshots (9) — consistent with everything here, but
-  **which physical control ordinal 1 is remains [unverified]** for want of an expression pedal.
-  Ordinal **10 is silently ignored**: the table is ten long and **the device does not range-check
-  this**, so a caller must. [solid — 2026-08-22]
+- **Source ordinal → physical control — the table is the device's size, not a fixed ten.**
+  [corrected 2026-08-25, issue #13] The layout is: `0` none, `1`/`2` the expression inputs, **one
+  entry per footswitch from 3**, then MIDI, then snapshots. So
+
+  | | HX Stomp (5 switches) | HX Stomp XL (8) |
+  |---|---|---|
+  | footswitches | 3..=7 | 3..=10 |
+  | MIDI | 8 | 11 |
+  | snapshots | 9 | 12 |
+  | `Array` length | 10 | 13 |
+
+  **`length == footswitches + 5` on all eight streams we hold** — six Stomp captures at 5 and 10,
+  two XL captures at 8 and 13. [solid]
+
+  **FS1 = 3 on both**, established by diffing a front-panel assignment and again by writing one with
+  op 37. The run's far end is now observed too: an XL owner assigned a Stupor OD's `Drive` to FS6
+  from the front panel and it filed itself at **ordinal 8** — the index a Stomp calls MIDI.
+  [solid — `captures/xl_assign_param_fs6.msgpack.bin`, pinned by
+  `fretwire-core/tests/controller_table.rs`]
+
+  That observation is what retired the old reading. This table was documented as a flat ten with
+  8 = MIDI and 9 = snapshots, which was an HX Stomp's shape mistaken for the format's, and it held
+  because every capture came off a Stomp. On a Stomp the numbers are unchanged; above five switches
+  everything above the run moves.
+
+  **The two ordinals above the run are still inference.** On a Stomp, ordinal 9 was accepted and
+  filed at index 9, and `tonepush` names 1/2 EXP1/EXP2, 8 MIDI and 9 Snapshots — consistent with
+  everything here, but **which physical control ordinal 1 is remains [unverified]** for want of an
+  expression pedal, and nobody has read MIDI or snapshots off an XL at all. [hypothesis above five
+  switches]
+
+  **One past the end is silently ignored** — ordinal 10 on a Stomp was accepted and did nothing —
+  and **the device does not range-check this**, so a caller must. `Session::assign_param` bounds it
+  against the loaded preset's own count. [solid — 2026-08-22]
 - **`6 → 28` is the sub-model selector, not a path.** `0` is the block's own model and `1` its
   paired cab, exactly like key `26` on the edit ops. It read as a constant `0` for as long as every
   sample was a main-model parameter; assigning a **cab** parameter puts a `1` there. This matters

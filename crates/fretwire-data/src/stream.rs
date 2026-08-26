@@ -986,15 +986,23 @@ pub struct Assignment {
     /// Source ordinal — which physical control drives this. It is the entry's index in the key-`4`
     /// array, and inner key `0` echoes it.
     ///
-    /// **Footswitches are 3..=7** — FS1 = 3, confirmed both by diffing a front-panel assignment and
-    /// by writing one with op 37, and the count is the device's own: op 33 answers switches 1-5 and
-    /// refuses 6 with code `-3`, matching the five positions in the footswitch layout. Ordinals
-    /// **1 and 2** are accepted and file themselves at indices 1 and 2, and 3..=7 being the
-    /// footswitches leaves them as the two expression inputs — `tonepush` names them EXP1/EXP2.
-    /// **8 is MIDI and 9 is snapshots** per the same source; 9 was accepted and filed at index 9
-    /// here. Ordinal 10 is silently ignored — the table is ten long, and **the device does not
-    /// range-check this**, so a caller must. [solid for 1..=9 landing at their own index; the
-    /// *names* for 1, 2 and 8 are `tonepush`'s and unverified for want of an expression pedal.]
+    /// **FS1 is always 3**, and the footswitches run from there — confirmed by diffing a
+    /// front-panel assignment and by writing one with op 37. Ordinals **1 and 2** are accepted and
+    /// file themselves at indices 1 and 2, and the footswitch run starting at 3 leaves them as the
+    /// two expression inputs — `tonepush` names them EXP1/EXP2.
+    ///
+    /// **Where the run ends is the device's, not a constant.** This table was read as ten entries
+    /// with 8 = MIDI and 9 = snapshots, which is a Stomp's shape mistaken for the format's. An
+    /// HX Stomp XL has eight switches, a **13**-entry table, and puts **FS6 at ordinal 8** — the
+    /// index a Stomp calls MIDI [solid — front-panel diff, 2026-08-25, `xl_assign_param_fs6`].
+    /// `length == footswitch_count + 5` on all eight captures we hold: six Stomp streams at 5 and
+    /// 10, two XL streams at 8 and 13. See `fretwire_protocol::edit::source` for the arithmetic,
+    /// and [`PresetStream::controller_table_len`] to read a preset's own.
+    ///
+    /// MIDI and snapshots sit in the two entries above the run. On a Stomp that is 8 and 9, and 9
+    /// was accepted and filed at index 9 here; above five switches it is arithmetic nobody has read
+    /// back [hypothesis]. **The device does not range-check the ordinal** — one past the end is
+    /// silently ignored — so a caller must.
     pub controller: i64,
     /// Inner key `1`. **Not** parameter-vs-bypass: all three assignments captured here are
     /// parameters, and two of them carry `0`. [solid as a refutation — `tonepush` documents this key
@@ -1158,6 +1166,18 @@ impl PresetStream {
     /// [solid for source ordinal, parameter index and travel — each pinned by a live diff on a
     /// Stomp, 2026-08-21. See [`Assignment`] for what each key means and which readings it
     /// replaced.]
+    /// How many entries the preset's key-`4` controller table has — the device's own ordinal space.
+    ///
+    /// Ten on an HX Stomp, thirteen on an HX Stomp XL; it tracks the footswitch count as
+    /// `footswitch_layout().len() + 5`. `None` when key `4` is absent or not an array. Read this
+    /// rather than assuming ten: the top two ordinals (MIDI, snapshots) move with it.
+    pub fn controller_table_len(&self) -> Option<usize> {
+        match self.field(4) {
+            Some(Value::Array(a)) => Some(a.len()),
+            _ => None,
+        }
+    }
+
     pub fn assignments(&self) -> Vec<Assignment> {
         let table = match self.field(4) {
             Some(Value::Array(a)) => a,

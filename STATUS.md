@@ -3593,3 +3593,51 @@ The other group is the `@type` 4 / 5 / 8 class refusals working as designed.
 
 `PresetStream::to_stream()` is new — the inverse of `parse`, because a preset that was *built*
 rather than read still has to be storable and re-inspectable before anything sends it.
+
+## Fifty-first round (2026-08-25): **the controller table is the device's size, not a constant**
+
+Preset key `4` was documented as `Array[10]`: footswitches at ordinals 3..=7, MIDI at 8, snapshots
+at 9. That is an HX Stomp's shape, and it survived a year because every capture we had came off an
+HX Stomp.
+
+Robert Tsai (issue #13) assigned a Stupor OD's `Drive` to **FS6** from an HX Stomp XL's front panel
+and sent the before/after streams — the **first captures anyone has taken off an XL**. The table is
+**13** entries and FS6 files itself at ordinal **8**, the index we called MIDI.
+
+`length == footswitch_count + 5` on all eight streams we hold: six Stomp captures at 5 and 10, two
+XL captures at 8 and 13. So the space is `0` none, `1`/`2` the expression inputs, one entry per
+footswitch from 3, then MIDI, then snapshots — and above five switches, everything above the run
+moves. `fretwire_protocol::edit::source` computes it; `fretwire-core/tests/controller_table.rs`
+pins the arithmetic against both devices' fixtures so the formula and the captures cannot drift.
+
+**Three things were broken on an XL, in ascending order of how wrong they were.**
+
+The one in the issue was cosmetic: the bypass picker capped at FS5, so an owner saw `FS6` in the
+chain and could not select it. Fixed on 2026-08-24 in `c4549b8` — and Robert's first test of that
+fix reported no change, because `crates/fretwire-tauri/dist/` is embedded at compile time, is not in
+git, and **no `beforeBuildCommand` rebuilds it**. A `cargo build` happily serves a stale frontend.
+Worth knowing: it means a contributor can test the wrong code and have nothing tell them.
+
+The second was a refusal. `assign_param` bounded `source` at a flat `0..=9`, so an XL's FS6, FS7 and
+FS8 were rejected by *us* before reaching the pedal. The bound now comes from the loaded preset's
+own footswitch count, via `Session::assign_param`, so it widens on an XL without anything in the
+editor knowing what an XL is. Keeping a bound matters: the device does not range-check this, and an
+ordinal past the end is accepted and silently does nothing.
+
+The third was a lie. `source_name` mapped ordinal 8 to `MIDI` unconditionally, so an assignment an
+XL owner had made *on the pedal's own front panel* read back in fretwire as **"Driven by MIDI"**.
+There were three copies of that function — `dto.rs`, the CLI, and the mock — and all three now
+delegate to the one in `fretwire-protocol`, which takes the footswitch count because without it the
+question has no answer.
+
+**Bonus, from the same two files.** They are the first XL streams we hold, so the device table stops
+guessing on two more fields: key `1` (the second DSP group) is nil and key `10 → 10` holds
+`SNAPSHOT 1..4`, giving the XL **one DSP and four snapshots**. It stays `Support::Reported` — these
+are reads, and `Verified` means a *builder* has been reconciled byte-for-byte, which no XL has ever
+had sent to it.
+
+**What is still inference.** MIDI and snapshots sit in the two entries above the footswitch run.
+On a Stomp that is 8 and 9, and ordinal 9 was observed accepted and filed at index 9. Above five
+switches it is arithmetic nobody has read back, so `edit::source::midi`/`snapshots` are tagged
+`[hypothesis]` there. `tonepush` naming 8 as MIDI is not independent evidence — it is the same
+Stomp-shaped reading that caused this.

@@ -926,9 +926,82 @@ pub const K_ASSIGN_FLAG129: i64 = 129;
 /// Source ordinal for **no controller** — what op 37 takes to remove an assignment.
 pub const SOURCE_NONE: i64 = 0;
 
-/// Source ordinal of **Footswitch 1**. Footswitches run 3..=7, so FS`n` is `SOURCE_FS1 + n - 1`.
-/// [solid — verified on an HX Stomp by front-panel diff, 2026-08-21]
+/// Source ordinal of **Footswitch 1**, on every device. FS`n` is `SOURCE_FS1 + n - 1`.
+/// [solid — verified on an HX Stomp by front-panel diff 2026-08-21, and on an HX Stomp XL by the
+/// same method 2026-08-25, where FS6 landed at ordinal 8.]
 pub const SOURCE_FS1: i64 = 3;
+
+/// Source ordinals above the footswitches, for a device with `footswitch_count` of them.
+///
+/// The ordinal space is **not fixed** — it stretches with the device, and reading it as a constant
+/// ten was wrong. The key-`4` table is laid out `0` none, `1`/`2` the expression inputs, then one
+/// entry per footswitch, then MIDI, then snapshots:
+///
+/// | | HX Stomp (5 switches) | HX Stomp XL (8) |
+/// |---|---|---|
+/// | footswitches | 3..=7 | 3..=10 |
+/// | MIDI | 8 | 11 |
+/// | snapshots | 9 | 12 |
+/// | table length | 10 | 13 |
+///
+/// **`length == footswitch_count + 5` on every capture we hold** — six Stomp streams at 5 and 10,
+/// two XL streams at 8 and 13 [solid]. The footswitch run is solid at both ends: FS1 = 3 on a
+/// Stomp, and an XL's FS6 was diffed straight into index 8, which is the slot a Stomp calls MIDI.
+/// That is the observation that killed the constant.
+///
+/// **The two ordinals above the run are inference, not observation** [hypothesis]. They are where
+/// the arithmetic puts them, and on a Stomp that arithmetic agrees with what we saw — ordinal 9 was
+/// accepted and filed at index 9. Nobody has read either off an XL. `tonepush` names 8 as MIDI, but
+/// that is its Stomp-shaped reading of the same table, so it is not independent evidence here.
+pub mod source {
+    /// Number of entries in the key-`4` controller table.
+    pub fn table_len(footswitch_count: usize) -> usize {
+        footswitch_count + 5
+    }
+
+    /// Ordinal of footswitch `n`, one-based. `None` if the device has no such switch.
+    pub fn footswitch(n: usize, footswitch_count: usize) -> Option<i64> {
+        (1..=footswitch_count)
+            .contains(&n)
+            .then(|| super::SOURCE_FS1 + n as i64 - 1)
+    }
+
+    /// Ordinal of the MIDI source. [hypothesis above a Stomp's five switches]
+    pub fn midi(footswitch_count: usize) -> i64 {
+        super::SOURCE_FS1 + footswitch_count as i64
+    }
+
+    /// Ordinal of the snapshots source. [hypothesis above a Stomp's five switches]
+    pub fn snapshots(footswitch_count: usize) -> i64 {
+        midi(footswitch_count) + 1
+    }
+
+    /// Name the physical control an ordinal refers to, for display.
+    ///
+    /// Needs the device's footswitch count for the same reason the ordinals do: `8` is FS6 on an
+    /// XL and MIDI on a Stomp, and naming it without asking showed an XL owner's front-panel
+    /// assignment as "Driven by MIDI".
+    ///
+    /// A count of `0` means no preset is loaded and therefore no device to size against, so
+    /// everything above the expression inputs prints as a bare ordinal rather than a guess.
+    /// Anything outside the table does the same.
+    pub fn name(ordinal: i64, footswitch_count: usize) -> String {
+        match ordinal {
+            // `tonepush`'s names. 1 and 2 do file themselves at their own index, but nothing we
+            // have proves *which* control each is — the footswitch run starting at 3 simply leaves
+            // them as the two expression inputs.
+            1 => "EXP1".into(),
+            2 => "EXP2".into(),
+            _ if footswitch_count == 0 => format!("Controller {ordinal}"),
+            n if (super::SOURCE_FS1..midi(footswitch_count)).contains(&n) => {
+                format!("FS{}", n - super::SOURCE_FS1 + 1)
+            }
+            n if n == midi(footswitch_count) => "MIDI".into(),
+            n if n == snapshots(footswitch_count) => "Snapshots".into(),
+            n => format!("Controller {n}"),
+        }
+    }
+}
 
 /// Build an **assign-parameter** body (op 37): put parameter `param_index` of the block in `slot`
 /// under controller `source`. `paired` selects the paired cab's namespace. Pass

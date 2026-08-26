@@ -1008,8 +1008,13 @@ filters kind 2 out of its footswitch enrichment, so a block with only a knob on 
 badged as being on FS1 — that filter was written from a fixture and is now proven by construction.
 
 The entry landed at `/4[3]` — **index 3, the FS1 ordinal** our own front-panel diff had established,
-which is a second and independent confirmation of the source-ordinal indexing, and agrees with
-`tonepush`'s full list (0 none, 1-2 expression pedals, 3-7 footswitches, 8 MIDI, 9 snapshots).
+which is a second and independent confirmation of the source-ordinal indexing.
+
+`tonepush`'s full list — 0 none, 1-2 expression pedals, 3-7 footswitches, 8 MIDI, 9 snapshots — is a
+**five-switch device's** version of that space, and taking it as the format's cost us: an HX Stomp
+XL has eight switches, a 13-entry table, and puts **FS6 at ordinal 8**. The run always starts at 3;
+where it ends, and therefore where MIDI and snapshots sit, is `footswitches + 5` long.
+See `docs/preset-format.md` for the table. [corrected 2026-08-25, issue #13]
 
 ### There is no separate "unassign parameter" opcode [solid]
 

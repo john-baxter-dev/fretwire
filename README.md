@@ -102,7 +102,10 @@ npm install
 npm run build          # → ../dist
 ```
 
-Re-run `npm run build` after any frontend change; the Rust side won't pick it up otherwise.
+Re-run `npm run build` after any frontend change; the Rust side won't pick it up otherwise. A
+`cargo build` that skips this silently serves the *previous* UI, which is how a contributor came to
+test a fix that wasn't in the binary (issue #13) — the build script now warns when `ui/src` is newer
+than `dist`, but it can't rebuild it for you.
 
 **3. Run it.**
 
@@ -167,7 +170,7 @@ The rule covers the HX Stomp (`0x4246`), the Helix Floor (`0x4248`), the Helix L
 | HX Stomp    | `0x4246` | **verified** — developed against one; every builder reproduces its own wire bytes |
 | Helix Floor | `0x4248` | **verified** — ~70 logged sessions with a remote tester; two DSPs, eight setlists |
 | Helix LT    | `0x424a` | **reads verified, edits untested** — surveyed on real hardware ([`docs/helix-lt.md`](docs/helix-lt.md)): handshake, preset read, setlists and preset browse all reconcile. No edit has been sent to one |
-| HX Stomp XL | `0x4253` | **reported working** — an owner runs it, reads `01A`-`32D` (32 banks of 4) off its screen, and its handshake identifies it as `P36`. We hold no capture from one, so its DSP and snapshot counts and setlist count stay unknown rather than assumed |
+| HX Stomp XL | `0x4253` | **reported working** — an owner runs it, reads `01A`-`32D` (32 banks of 4) off its screen, and its handshake identifies it as `P36`. Two preset streams off one (issue #13) settle one DSP, four snapshots, eight footswitches and a 13-entry controller table; they are reads, so no edit builder has been checked against an XL and its setlist count is still unknown |
 | HX Effects  | `0x4245` | **reported working** — an owner runs it and reports it works; that report is the whole of what we hold. Its `lsusb` line arrived first (issue #10), so `detect` finds one and the udev rule covers it. No capture and no logged session, and it is effects-only, so none of its preset geometry is assumed from a Stomp |
 | Helix Rack  | — | **not recognised yet** — we don't know its PID, so `fretwire detect` won't see one |
 

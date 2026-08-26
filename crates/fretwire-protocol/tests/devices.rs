@@ -91,27 +91,30 @@ fn verified_devices_are_fully_described() {
 #[test]
 fn the_stomp_xl_claims_nothing_it_hasnt_shown_us() {
     let xl = Device::by_pid(PID_HX_STOMP_XL).unwrap();
-    // Reported, not Verified: an owner has it working, which is real information, but no traffic
-    // from one has been reconciled against our builders.
+    // Still Reported, not Verified — and the reason moved. It used to be "no traffic from one has
+    // been reconciled"; since 2026-08-25 we hold two preset streams off an XL (issue #13). Those
+    // are *reads*: decoded and reconciled, so what they show is now filled in below. `Verified`
+    // means the **builders** have been checked byte-for-byte against the device, and no edit has
+    // ever been sent to an XL.
     assert_eq!(xl.support, Support::Reported);
     assert!(
         xl.support.caveat().is_some(),
         "an unverified device says so"
     );
-    // What an owner can observe, we take: the panel gives us the banking (see
-    // `the_xl_banks_by_four_not_the_stomps_three`) and a pasted log gave us the model code. What
-    // only a reconciled capture can settle stays empty, and that is the point of the middle tier —
-    // knowing the XL answers to `P36` says nothing about its DSP or snapshot counts.
     assert_eq!(xl.model_code, Some("P36"));
+    // Read straight out of those streams: key `1` (the second DSP group) is nil, and key `10 → 10`
+    // holds SNAPSHOT 1..4. See `fretwire-core/tests/controller_table.rs`, which pins the same
+    // fixtures for the controller table's size.
+    assert_eq!(xl.dsps, Some(1));
+    assert_eq!(xl.snapshots, Some(4));
+    assert_eq!(xl.dsp_count(), 1);
+    // What the streams do *not* carry stays empty. This is a `.hxb` backup-header field, and no
+    // backup from an XL has ever been opened — a preset stream is a different document.
     assert!(xl.preset_device_id.is_none());
-    assert!(xl.dsps.is_none());
-    assert!(xl.snapshots.is_none());
-    // …but enumeration still has to do something sane with it.
-    assert_eq!(
-        xl.dsp_count(),
-        1,
-        "unknown DSP count falls back to one group"
-    );
+    // Likewise the setlist arity: one setlist's size was read off the panel, but whether an XL has
+    // several is unobserved, so the names stay absent rather than inheriting the Floor's.
+    assert!(xl.setlists.is_none());
+    assert_eq!(xl.setlist_size, Some(128));
 }
 
 /// The HX Effects is in the table on one `lsusb` line (issue #10) and one owner's word that it

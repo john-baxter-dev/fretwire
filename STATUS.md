@@ -3775,9 +3775,8 @@ have let the sheet, the mock and three paragraphs of prose sit stale and green. 
 now, and the paragraph on `MENU_ORDER` explaining why one id was absent is gone with it.
 
 Mirrored into `ui/src/mock/backend.js`, which keeps its own copy of the order for `npm run dev`.
-`_TODO-settings-names.md` is down to **two open questions**, neither of them Robert's: whether any
-of the 19 XL-sourced ids refuse on a Stomp, which needs my pedal, and whether `95`/`96`/`68`/`69`
-really live under Preferences.
+`_TODO-settings-names.md` is down to **one open question**, and it isn't Robert's: whether any of
+the 19 XL-sourced ids refuse on a Stomp, which needs my pedal.
 
 **Two bits of drift in that sheet, found while editing it.** `### MIDI/Tempo (9)` had ten rows under
 it — `135` was added to the table in the fifty-third round and the heading count was not. And the
@@ -3835,3 +3834,14 @@ the rule is visible in a single document — and the multi-entry/orphan case.
 plain switch index and nothing we hold shows one accepting an expression input, so the badge stays
 read-only. Both of these assignments were made on the pedal's own panel, which settles the document
 and not the request that produces it.
+
+**Two answers off the back of #17, neither of them in the diff.** Robert confirmed `135` is the
+tenth row of the MIDI/Tempo menu on the pedal, not appended from the list in the sheet — which was
+the one thing that separated a reading from a lucky guess, since an unplaced id already sorted to
+that row. And the `95`/`96`/`68`/`69` question is retired: those four really are under
+**Preferences** on the hardware, as the forty-eighth round recorded on 2026-08-24. It should not
+have been carried forward as a "re-check" at all — `EXP/FS Tip`, `EXP/FS Ring`, `Tip Polarity` and
+`Ring Polarity` sound like EXP Pedals and simply aren't there, and re-asking a settled oddity
+because it still reads oddly is how a checked fact gets turned back into an open one.
+`_TODO-settings-names.md` is down to a single question, and it needs my Stomp rather than anyone
+else's pedal.

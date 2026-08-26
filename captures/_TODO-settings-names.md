@@ -451,19 +451,20 @@ pedals. `settings-dump` on a Stomp answers all nineteen at once.
 answer:
 ```
 
-**Do `95`/`96`/`68`/`69` really live under Preferences?** `EXP/FS Tip`, `EXP/FS Ring`, `Tip Polarity`
-and `Ring Polarity` — names that sound like they belong under EXP Pedals, which now exists and holds
-only two ids. Confirmed under Preferences on 2026-08-24, so this is a re-check rather than an open
-question, and it is the likeliest place for that confirmation to have been wrong.
+~~**Do `95`/`96`/`68`/`69` really live under Preferences?**~~ ✅ they do, and this should never have
+been re-asked. `EXP/FS Tip`, `EXP/FS Ring`, `Tip Polarity` and `Ring Polarity` sound like EXP Pedals
+and are not there — the pedal keeps all four under Preferences. It was walked on the hardware on
+2026-08-24 and recorded in the forty-eighth round *because* the names suggest otherwise; carrying it
+forward as a "re-check" turned a settled oddity back into a question.
 
 ```
-answer:
+answer: Preferences, confirmed twice. The names are misleading; the table is right.
 ```
 
 ~~**Where does `135` sit in the MIDI/Tempo menu?**~~ ✅ answered.
 
 ```
-answer: row 10, last in the section — PR #17, off an XL.
+answer: row 10, last in the section — PR #17, off an XL. Confirmed on the pedal 2026-08-26.
 ```
 
 Delete this file once it's answered, the way the other `_TODO-` sheets go.

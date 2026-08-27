@@ -114,8 +114,10 @@ and 537/627 POD Go symbols where stripping alone got 372.
 
 ## What is still unknown
 
-- **Writes.** No byte has ever been sent to a POD Go and none of the `edit` builders has been
-  reconciled against one. The capture is POD Go Edit's startup — read traffic only.
+- **Structural writes.** Parameter, bypass and model-swap are reconciled (below); what is *not* is
+  anything that changes the chain's shape — add, move, delete. A POD Go owner has replaced the
+  fixed, normally non-editable wah slot with a delay block and the device accepted it, which we do
+  not yet understand and should not lean on.
 - **Setlist geometry.** How many setlists, how big, and how the panel numbers presets.
 - **Footswitch layout.** We map a block to a switch by layout position + 1, which is the Stomp's
   rule; it currently reports things like `FS9` on a four-switch pedal, so the POD Go's mapping is

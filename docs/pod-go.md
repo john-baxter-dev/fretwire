@@ -121,13 +121,63 @@ and 537/627 POD Go symbols where stripping alone got 372.
   rule; it currently reports things like `FS9` on a four-switch pedal, so the POD Go's mapping is
   its own and unmeasured.
 - **Fixed topology.** The POD Go's chain has dedicated wah / volume / amp / cab / EQ positions
-  rather than free blocks, so add / move / delete-block semantics need their own work. Bypass and
-  set-param should carry over once the index table is right — but that is an expectation, not a
-  measurement.
+  rather than free blocks, so add / move / delete-block semantics need their own work. `insert_block`
+  now refuses a slot outside the HX row windows instead of panicking on one (the POD Go's ten blocks
+  are one row, so slots 9 and 10 hold blocks where the HX has bounding nodes).
 - **Preset key `12`** (`Array[128]`).
 - `preset_device_id`, which on the Stomp and Floor came from a `.hxb` header we do not have.
 
-### Captures that would settle the rest
+## The write path is the same too  [solid — 2026-08-26 captures]
 
-A param tweak, a bypass toggle, and a block model swap, each on a known slot — the same three that
-pinned the Floor's write path.
+The contributor sent the three captures asked for. Every builder in `fretwire_protocol::edit`, all
+of them written from HX Stomp traffic, reproduces the POD Go's bytes **exactly** and unchanged
+(`crates/fretwire-protocol/tests/pod_go_writes.rs`):
+
+| edit | op | body | builder |
+|---|---|---|---|
+| slot 6 param 0 (Amp → Lead Gain) | 30 | `{98: 6, 29: true, 26: 0, 28: 0, 119: v}` | `set_value` |
+| bypass slot 9 (Reverb, Dynamic Room) | 41 | `{98: 9, 59: false}` | `bypass` |
+| slot 8 Elephant Man → Adriatic Delay | 40 | `{98: 8, 100: {23: false, 25: 75, 26: -1}}` | `swap_model` |
+
+The sharpest evidence is the bypass body, against the HX Stomp's captured one in
+`fretwire-protocol/tests/golden.rs`:
+
+```
+HX Stomp  8366cd03f1 6429 6582 62 07 3bc2
+POD Go    8366cd03f1 6429 6582 62 09 3bc2
+```
+
+One byte apart — the slot number. (The matching transaction counter is coincidence; both captures
+happened to sit at 1009.)
+
+After a model swap POD Go Edit re-reads the block's footswitch (op 33) and then the whole preset
+(ops 23, 22) — the same refresh HX Edit performs, and the same three builders.
+
+## The Mono/Stereo suffix, again — and it cost whole categories  [solid]
+
+The two editors disagree on whether a `symbolicID` keeps its `Mono`/`Stereo` suffix, and the split
+is near-total in both directions:
+
+| | keyed by base | keyed by full suffixed symbol |
+|---|---|---|
+| `HelixModelDefs.bin` | 344 | 8 (the DL4 legacy delays) |
+| `PodGoModelDefs.bin` | **0** | **180** |
+
+The model picker looked models up by the stripped base, so on a POD Go all 180 suffixed models
+disappeared — every Wah and Reverb (both categories are entirely `…Stereo`), plus EQ, Volume/Pan,
+IR, Looper and most of Delay. Six categories gone and Delay down to 10 entries. Looking the symbol
+up **as the table spells it** restores them, and picks up the eight DL4 delays that were quietly
+missing from the *HX* picker too:
+
+| category | POD Go before | after | HX before | after |
+|---|---|---|---|---|
+| Wah | — | 11 | 11 | 11 |
+| Reverb | — | 23 | 25 | 25 |
+| Delay | 10 | 43 | 40 | **48** |
+
+### Captures that would still help
+
+- A `.hxb` backup from a POD Go — the one thing that would fill in `preset_device_id`, the only
+  field keeping the device at `Reported` rather than `Verified`.
+- Anything that names the setlists, or shows how the panel numbers presets.
+- A footswitch assignment, to replace the Stomp's layout rule we currently apply blind.

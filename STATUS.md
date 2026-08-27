@@ -3519,3 +3519,45 @@ mapping is the Stomp's rule applied blind (it reports `FS9` on a four-switch ped
 chain means add/move/delete need their own work. The entry is `Support::Untested` for that reason —
 though that tier's "only the USB IDs are known" now undersells this the same way it undersold the LT
 in August, which is what led to `Reported` being added then.
+
+## Fifty-first round (2026-08-26): **the POD Go's write path is the same, byte for byte** (issue #15)
+
+The contributor sent the three captures asked for — a parameter change, a bypass toggle and a block
+model swap, each on a named slot — and then ran the branch against their pedal.
+
+**Every builder reproduces the POD Go's bytes exactly, unchanged.** `set_value`, `bypass`,
+`swap_model`, and the post-swap refresh (`read_switch`, `read_info`, `stream_start`) — all written
+from HX Stomp traffic, all byte-identical on a POD Go
+(`crates/fretwire-protocol/tests/pod_go_writes.rs`, 4 tests). The bypass body is one byte from the
+Stomp's captured one in `golden.rs`, and that byte is the slot number. There is no POD Go dialect.
+
+**Three things the tester's session turned up, all now fixed:**
+
+1. **The catalog was never auto-selected.** They had to patch `Catalog::load()` by hand to reach
+   their own device's data. `Session::connect` now picks the family from the connected device's PID
+   — `Transport::device().model_code` already knew, nothing needed to be inferred from the
+   handshake.
+
+2. **Six model categories were missing from the picker** — all of Wah and Reverb, plus EQ,
+   Volume/Pan, IR, Looper, and Delay down to 10 entries. This is the Mono/Stereo suffix bug again,
+   in a second place. `HelixModelDefs.bin` keys 344 models by the stripped base and 8 by the full
+   suffixed symbol; `PodGoModelDefs.bin` keys **180 by the full symbol and none by the base**.
+   `categories`/`models_in_category` looked up the base, so every suffixed POD Go model vanished.
+   Looking it up as the table spells it restores all 180 — and picks up the **8 DL4 legacy delays
+   that were silently missing from the HX picker too** (Delay 40 → 48).
+
+3. **`insert_block` panicked** (`dst is an effect block in this row`) and left the pedal needing a
+   power cycle. `row_of` hardcodes the HX's row windows (1..=8 and 11..=18); the POD Go's ten blocks
+   are one row, so a block at slot 9 or 10 sits outside every window and the `expect` fired. Now a
+   refusal, not a panic — for both `expect`s in that function.
+
+**Tier: `Untested` → `Reported`.** It cannot be `Verified`: that tier's invariant test requires
+`preset_device_id`, which has only ever come from a `.hxb` header and nobody has sent a POD Go
+backup. So the gap is one descriptive field, not the protocol — and `Reported`'s doc said "we hold
+no capture, preset or backup from it", which is now false. Reworded: the tier tracks how completely
+we know a device, not how much evidence we have.
+
+**Still open:** the fixed chain's add/move/delete semantics, the footswitch mapping (still the
+Stomp's rule applied blind), setlist geometry, and `preset_device_id`. The tester also replaced the
+POD Go's *mandatory, non-editable* wah with a delay block and the device accepted it — worth
+understanding before anyone leans on it.

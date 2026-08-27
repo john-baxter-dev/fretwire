@@ -247,7 +247,14 @@ impl Session {
         let mut last_err = None;
         for attempt in 1..=ATTEMPTS {
             let transport = Transport::open()?;
-            let catalog = Catalog::load()?;
+            // Which reference data to read the device's presets against. A block's model is an
+            // index into *its own* device symbol table, so a POD Go decoded against HX data comes
+            // out as the wrong model in every slot. The connected device's PID already names its
+            // family, so ask it rather than defaulting to HX. [issue #15]
+            let catalog = match transport.device().model_code {
+                Some(code) => Catalog::load_for_model(code)?,
+                None => Catalog::load()?,
+            };
             let mut s = Session {
                 transport,
                 catalog,
@@ -1778,10 +1785,17 @@ impl Session {
             })
             .map(|b| b.wire_slot() as usize)
             .collect();
-        let dst_pos = occ
-            .iter()
-            .position(|&s| s as i64 == dst_slot)
-            .expect("dst is an effect block in this row");
+        // `row_of` encodes the HX family's fixed windows. A device whose chain lays its blocks out
+        // differently — the POD Go puts all ten in one row, so slots 9/10 hold blocks where the HX
+        // has bounding nodes — lands a real block outside every window, and this used to panic.
+        // Refuse it instead: the destination row is not one whose insert semantics we've measured.
+        // [issue #15]
+        let Some(dst_pos) = occ.iter().position(|&s| s as i64 == dst_slot) else {
+            return Err(fretwire_data::Error::Stream(format!(
+                "slot {dst_slot} is outside this device's known row layout —                  insert is only mapped for the HX chain"
+            ))
+            .into());
+        };
         let pos = if before { dst_pos } else { dst_pos + 1 };
 
         if same_row {
@@ -1792,10 +1806,12 @@ impl Session {
                 .filter(|b| b.kind == slot_kind::EFFECT && (lo..=hi).contains(&b.wire_slot()))
                 .map(|b| b.wire_slot() as usize)
                 .collect();
-            let from_pos = with_src
-                .iter()
-                .position(|&s| s as i64 == src_slot)
-                .expect("src is in this row");
+            let Some(from_pos) = with_src.iter().position(|&s| s as i64 == src_slot) else {
+                return Err(fretwire_data::Error::Stream(format!(
+                    "slot {src_slot} is outside this device's known row layout —                      insert is only mapped for the HX chain"
+                ))
+                .into());
+            };
             let scratch = blocks
                 .iter()
                 .filter(|b| b.kind == slot_kind::EMPTY)

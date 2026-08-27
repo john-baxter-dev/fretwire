@@ -815,8 +815,14 @@ impl Catalog {
             let Some((sym, _)) = self.symbols.by_index(idx) else {
                 continue;
             };
-            let (base, _) = split_variant(sym);
-            if let Some(id) = self.models.id_by_symbolic_id(base)
+            // Look the symbol up **as the table spells it**. The two editors disagree on whether a
+            // `symbolicID` keeps its Mono/Stereo suffix — HX Edit's defs are keyed by the base
+            // (344 of them) and POD Go Edit's by the full suffixed symbol (180, and not one by the
+            // base). `id_by_symbolic_id` falls back from full to base, so the full symbol is the
+            // form that finds an entry in either convention; passing the stripped base silently
+            // dropped every suffixed POD Go model — the missing Wah and Reverb categories — and
+            // eight HX ones (the DL4 legacy delays) besides. [issue #15]
+            if let Some(id) = self.models.id_by_symbolic_id(sym)
                 && let Some(cat) = self.models.category(id)
             {
                 seen.insert(canonical_category(cat));
@@ -864,7 +870,8 @@ impl Catalog {
                 continue;
             };
             let (base, var) = split_variant(sym);
-            let Some(id) = self.models.id_by_symbolic_id(base) else {
+            // The full symbol, not `base` — see the note in `categories`.
+            let Some(id) = self.models.id_by_symbolic_id(sym) else {
                 continue;
             };
             if self.models.category(id).map(canonical_category) != Some(category) {

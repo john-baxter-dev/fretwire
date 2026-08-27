@@ -66,11 +66,15 @@ pub const EP_IN: u8 = 0x81;
 pub enum Support {
     /// Wire traffic from this exact device has been observed and reconciled against our builders.
     Verified,
-    /// Someone has run the editor against one and reported back, but we hold no capture, preset or
-    /// backup from it — so the protocol is confirmed *by outcome* rather than reconciled, and every
-    /// unknown field below is still honestly unknown. Sits between the other two on purpose: "a
-    /// user has this working" is real information, and calling it [`Support::Untested`] understates
-    /// it while calling it [`Support::Verified`] would claim reconciliation we have not done.
+    /// Someone has run the editor against one and reported back, but the device is not yet fully
+    /// described — so some field below is still honestly unknown. Sits between the other two on
+    /// purpose: "a user has this working" is real information, and calling it [`Support::Untested`]
+    /// understates it, while [`Support::Verified`] promises a device we can describe completely.
+    ///
+    /// It does **not** imply we hold no traffic. The POD Go sits here with its reads *and* writes
+    /// reconciled byte-for-byte against captures from a real unit; what it lacks is a
+    /// `preset_device_id`, which only a backup file carries. The tier tracks how completely we know
+    /// the device, not how much evidence we have.
     Reported,
     /// Only the USB IDs are known. The device is in the HX family and very probably speaks the
     /// same protocol, but nothing has been checked against real traffic from one.
@@ -82,7 +86,7 @@ impl Support {
     pub fn caveat(self) -> Option<&'static str> {
         match self {
             Support::Verified => None,
-            Support::Reported => Some("reported working, but not verified against a capture"),
+            Support::Reported => Some("reported working; some device details are still unknown"),
             Support::Untested => Some("untested — its protocol is assumed to match the HX family"),
         }
     }
@@ -328,14 +332,19 @@ pub const DEVICES: &[Device] = &[
         // Unknown: nobody has read a POD Go's screen. Left `None` so presets are numbered by slot
         // rather than mislabelled, as on the Floor.
         presets_per_bank: None,
-        // A capture from a real unit has been reconciled against our decoders — the frame codec,
-        // the channel ids, the handshake and the paged preset stream all parse unchanged, and the
-        // op numbers match. That is strictly more than the tier's "only the USB IDs are known", but
-        // it is not `Verified` either: no byte has ever been *sent* to a POD Go, none of the `edit`
-        // builders has been reconciled against one, and the read path only resolves once the
-        // device's own `PodGo.sym` is imported. Reads are the confident half; writes are untried.
-        // [2026-08-25, issue #15]
-        support: Support::Untested,
+        // Both halves are now reconciled against a real unit. Reads: the frame codec, channel ids,
+        // handshake and paged preset stream all parse unchanged, and the op numbers match. Writes:
+        // the contributor captured a parameter change, a bypass toggle and a block model swap on
+        // named slots, and the `edit` builders — written entirely from HX Stomp traffic — reproduce
+        // all three byte-for-byte (`tests/pod_go_writes.rs`); the bypass body differs from the
+        // Stomp's captured one in exactly one byte, the slot number. They have also driven a POD Go
+        // from the editor in both directions.
+        //
+        // `Reported` rather than `Verified` on one count only: `preset_device_id` is unknown,
+        // because that field has only ever come from a `.hxb` backup header and nobody has sent a
+        // POD Go backup. The remaining gaps are *geometry*, not protocol — the fixed chain's
+        // add/move/delete semantics and the footswitch mapping. [solid — 2026-08-26, issue #15]
+        support: Support::Reported,
     },
 ];
 

@@ -4137,4 +4137,5 @@ by-eye approximation of what the LEDs show; the true RGB values are not readable
 protocol.
 
 Everything ran in the edit buffer — no flash writes; the preset was reloaded afterwards and op 33
-confirms the switch is back to virgin.
+confirms the switch is back to virgin. The user then drove the whole feature from the release GUI
+against the pedal: working, their word for it kinder than that.

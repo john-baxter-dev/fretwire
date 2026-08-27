@@ -51,6 +51,7 @@
     { index: 8, css: "#0a68ff", name: "Blue" },
     { index: 9, css: "#7a1fd0", name: "Violet" },
     { index: 10, css: "#ff4ad8", name: "Pink" },
+    { index: 11, css: "#14171e", name: "Off" },
   ];
 
   // ---- controller assignments ----

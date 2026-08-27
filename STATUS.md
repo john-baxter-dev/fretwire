@@ -4131,7 +4131,8 @@ in `HelixControls.json` is the palette — 0 Auto Color, White, Red, Dark Orange
 Yellow, Green, Turquoise, Blue, Violet, Pink, 11 Off — and its ordinals match the wire values and
 every observed hue, down to the sweep's two ambiguous reads resolving as Light Orange (4) and
 Yellow (5). Ordinal 0 also names the virgin `16: 0`: it is Auto Color, the inherit-from-the-block
-default. Index 11 (Off) is enum-attested but not yet seen on a ring. The GUI's swatch CSS is a
+default. Index 11 (Off) was then confirmed on the ring too — dark on an
+engaged block — so the whole enum is observed, 0 through 11. The GUI's swatch CSS is a
 by-eye approximation of what the LEDs show; the true RGB values are not readable over the
 protocol.
 

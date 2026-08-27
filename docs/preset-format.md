@@ -332,8 +332,8 @@ of a `Map{7}` node:
   is the **`footswitchLED` enum in Line 6's own `HelixControls.json`**, whose ordinals match the
   wire values and the observed ring exactly: **0** Auto Color (what a virgin entry's `16: 0`
   means), **1** White, **2** Red, **3** Dark Orange, **4** Light Orange, **5** Yellow, **6** Green,
-  **7** Turquoise, **8** Blue, **9** Violet, **10** Pink, **11** Off (from the enum;
-  the one value not yet observed on the ring). The ring and scribble repaint immediately on an
+  **7** Turquoise, **8** Blue, **9** Violet, **10** Pink, **11** Off (a dark ring on an
+  engaged block — observed live like the rest). The ring and scribble repaint immediately on an
   op-21 write of these keys — no reload needed. The LEDs' exact RGB values are not readable over
   the protocol.
 

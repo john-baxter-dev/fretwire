@@ -608,7 +608,7 @@ real session.
       panel with the ten palette swatches. The palette was mapped live by sweeping indices 1-10 and
       reading the ring, then matched to Line 6's own `footswitchLED` enum in `HelixControls.json`:
       0 Auto Color, then White, Red, Dark Orange, Light Orange, Yellow, Green, Turquoise, Blue,
-      Violet, Pink, and 11 Off (enum-attested, not yet seen on the ring).
+      Violet, Pink, and 11 Off — all twelve observed live.
       The ring and scribble repaint immediately on the write. `hxb-convert` carries
       `@fs_customlabel` and `@fs_customcolor`.
 

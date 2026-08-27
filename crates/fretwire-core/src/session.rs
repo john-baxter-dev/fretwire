@@ -2129,6 +2129,20 @@ impl Session {
     /// settings (gate, level, pan) and the rest of key `5`. Two factory-blank slots read off the
     /// same pedal disagree on those, so there is no single "cleared" value to restore them to.
     ///
+    /// Discard the edit buffer: reload the current preset as last saved.
+    ///
+    /// **A `goto` to the slot the device is already on is a real reload, not a no-op** [solid —
+    /// live HX Stomp, 2026-08-27: make an edit, re-select the same slot, and the re-read buffer
+    /// is byte-identical to the flash copy]. So this is the pedal's own switch-away-and-back
+    /// gesture without visiting another preset — nothing else ever enters the signal path.
+    pub fn revert_preset(&mut self) -> crate::Result<EditorPreset> {
+        let info = self.read_identity()?.ok_or_else(|| {
+            fretwire_data::Error::Stream("the device did not report a current preset".into())
+        })?;
+        self.goto_preset(info.bank, info.index)?;
+        self.read_preset()
+    }
+
     /// One read at the end rather than one per delete. Returns the emptied preset.
     pub fn clear_preset(&mut self) -> crate::Result<EditorPreset> {
         use fretwire_data::stream::{PresetStream, slot_kind};

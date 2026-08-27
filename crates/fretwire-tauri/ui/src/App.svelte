@@ -97,6 +97,9 @@
   // Clear preset: empty the chain, reset the snapshot names. Edit buffer only and one undo entry,
   // but it throws away a whole preset's work in a click, so it confirms first.
   let clearDlg = $state(false);
+  // Revert: reload the preset as last saved, discarding unsaved edits. Same stakes as Clear —
+  // unsaved work gone in a click — so it confirms too, and it leaves an undo entry behind.
+  let revertDlg = $state(false);
   const deleteName = $derived.by(() => {
     const b = deleteDlg != null ? preset?.blocks.find((b) => b.slot === deleteDlg) : null;
     return b ? (b.user_label ?? b.model_name) : "this block";
@@ -513,6 +516,12 @@
     clearDlg = false;
     selectedSlot = null;
     apply(invoke("clear_preset"));
+  }
+  const onRevertPreset = () => (revertDlg = true);
+  function confirmRevert() {
+    revertDlg = false;
+    selectedSlot = null;
+    apply(invoke("revert_preset"));
   }
   function confirmDelete() {
     const slot = deleteDlg;
@@ -1086,7 +1095,7 @@
 <main>
   {#if preset}
     <div class="workspace">
-      <PresetList {presets} currentIndex={preset.index} dirty={preset.dirty} {setlists} {viewBank} currentBank={presetBank} writeBlocked={foreignSetlist} {onPickSetlist} {onGoto} {onSave} {onSaveAs} {onRename} {onExport} {onRestore} {onCopyPreset} {onPastePreset} {onClearPreset} {presetClip} onNumbering={setNumberingMode} />
+      <PresetList {presets} currentIndex={preset.index} dirty={preset.dirty} {setlists} {viewBank} currentBank={presetBank} writeBlocked={foreignSetlist} {onPickSetlist} {onGoto} {onSave} {onSaveAs} {onRename} {onExport} {onRestore} {onCopyPreset} {onPastePreset} {onClearPreset} {onRevertPreset} {presetClip} onNumbering={setNumberingMode} />
       <div class="content">
         <div class="meta">
           <span>
@@ -1420,6 +1429,25 @@
     oncancel={() => (deleteDlg = null)}
   >
     <p class="dlg-text">Delete <b>{deleteName}</b> from the chain?</p>
+  </Dialog>
+{/if}
+
+{#if revertDlg}
+  <Dialog
+    title="Revert to saved"
+    confirmLabel="Revert"
+    danger
+    onconfirm={confirmRevert}
+    oncancel={() => (revertDlg = false)}
+  >
+    <p class="dlg-text">
+      Discard unsaved changes to <b>{preset?.name ?? "this preset"}</b> and reload it as last
+      saved?
+    </p>
+    <p class="dlg-text dim">
+      This is the pedal's own switch-away-and-back, without leaving the preset. The state you're
+      discarding stays one Undo away until you switch presets.
+    </p>
   </Dialog>
 {/if}
 

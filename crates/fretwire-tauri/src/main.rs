@@ -168,6 +168,7 @@ fn main() {
             commands::unassign_bypass,
             commands::set_switch_label,
             commands::set_switch_color,
+            commands::revert_preset,
             commands::assign_param,
             commands::set_assign_travel,
             commands::set_snapshot,

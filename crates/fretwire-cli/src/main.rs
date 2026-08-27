@@ -228,6 +228,12 @@ enum Command {
     /// bindings go with the blocks that owned them; the preset's tempo and input/output settings
     /// are left alone.
     ClearPreset,
+    /// Discard unsaved edits: reload the current preset as last saved.
+    ///
+    /// A `goto` to the slot the device is already on is a real reload from the pedal's memory —
+    /// the same switch-away-and-back gesture the pedal itself uses to discard edits, minus the
+    /// switch away. Nothing else ever enters the signal path.
+    Revert,
     /// Move a block into the common (pre-split) section, just before the split.
     BeforeSplit { src_slot: i64 },
     /// Move the split (⋔) or mixer (⋉) node to a signal-flow column. Goes through the **op-21
@@ -871,6 +877,12 @@ fn main() -> Result<()> {
             let mut s = fretwire_core::Session::connect()?;
             let preset = s.clear_preset()?;
             println!("cleared the edit buffer (not saved):");
+            print_preset(&preset);
+        }
+        Command::Revert => {
+            let mut s = fretwire_core::Session::connect()?;
+            let preset = s.revert_preset()?;
+            println!("reloaded from the pedal's memory, edits discarded:");
             print_preset(&preset);
         }
         Command::MoveToRow {

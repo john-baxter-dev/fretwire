@@ -541,6 +541,20 @@ pub async fn clear_preset(state: State<'_, AppState>) -> R<PresetDto> {
     returning_edit(&state, |_| "Clear preset".to_string(), |s| s.clear_preset()).await
 }
 
+/// Discard the edit buffer: reload the current preset as last saved (a same-slot `goto` is a real
+/// reload — see `Session::revert_preset`). Deliberately an undoable edit rather than a context
+/// switch: unlike `goto_preset` this keeps the history, so the pre-revert state is one Undo away
+/// — the safety net for the one gesture whose whole job is throwing edits out.
+#[tauri::command]
+pub async fn revert_preset(state: State<'_, AppState>) -> R<PresetDto> {
+    returning_edit(
+        &state,
+        |_| "Revert to saved".to_string(),
+        |s| s.revert_preset(),
+    )
+    .await
+}
+
 /// Reorder a block within the serial chain to order position `gap` (serial presets only).
 #[tauri::command]
 pub async fn reorder_block(state: State<'_, AppState>, src_slot: i64, gap: usize) -> R<PresetDto> {

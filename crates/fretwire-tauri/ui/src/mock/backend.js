@@ -584,6 +584,7 @@ const EDIT_LABELS = {
   add_block_at: (a) => `Add ${modelName(a.modelIndex)}`,
   delete_block: (a) => `Delete ${slotName(a.slot)}`,
   clear_preset: () => "Clear preset",
+  revert_preset: () => "Revert to saved",
   place_block: (a) => `Move ${slotName(a.srcSlot)}`,
   insert_block: (a) => `Move ${slotName(a.srcSlot)} ${a.before ? "before" : "after"} ${slotName(a.dstSlot)}`,
   reorder_block: (a) => `Move ${slotName(a.srcSlot)}`,
@@ -1210,6 +1211,13 @@ const HANDLERS = {
       if (current.slots[slot]?.kind === "effect") delete current.slots[slot];
     }
     current.snapshot_names = current.snapshot_names.map((_, i) => `SNAPSHOT ${i + 1}`);
+    return toDto(current);
+  },
+  // Reload the preset as last saved. The mock's "flash" is the state the preset was seeded with —
+  // history entry 0 — restored as an edit (so it leaves an undo entry), like the real backend.
+  revert_preset: () => {
+    seedHistory();
+    restore(history[0].state);
     return toDto(current);
   },
   place_block: ({ srcSlot, dstSlot }) => {

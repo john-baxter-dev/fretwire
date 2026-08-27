@@ -4139,3 +4139,18 @@ protocol.
 Everything ran in the edit buffer — no flash writes; the preset was reloaded afterwards and op 33
 confirms the switch is back to virgin. The user then drove the whole feature from the release GUI
 against the pedal: working, their word for it kinder than that.
+
+## Sixty-fourth round (2026-08-27): **Revert to saved — the goto that goes nowhere**
+
+A user suggestion, and a good one: discard the edit buffer without the switch-away-and-back dance
+(which puts a different preset into the signal path mid-stream — with an amp on, exactly what you
+don't want). The protocol fact that makes it trivial: **a `goto` to the currently-loaded slot is a
+real reload, not a no-op** [solid — edit, re-select, and the re-read buffer diffs clean against
+the flash copy]. So `Session::revert_preset` is read-identity → same-slot goto → re-read; the CLI
+gets `revert`, and the preset list's ⋯ menu gets "Revert to saved…" above "Clear preset…" — named
+to be its opposite, not its sibling, since one restores the preset and the other empties it.
+
+Two deliberate choices: it confirms first (same stakes as Clear — unsaved work gone in a click),
+and it goes through the undo history rather than the goto path's history reset, so **the state it
+discards stays one Undo away** — a safety net for the one gesture whose whole job is throwing
+edits out. Verified live: two edits, `revert`, and the buffer is byte-identical to flash.

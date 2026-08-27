@@ -639,6 +639,12 @@ the reload cleared the half-written buffer, and nothing reached flash. Whether a
 wedges had this cause is unchecked — those logs would have to be re-read with the goto/read
 distinction in mind before claiming it.
 
+Related and useful on its own: **a `goto` to the slot the device is already on is a real reload,
+not a no-op** [solid — 2026-08-27, live HX Stomp: make an edit, re-select the same slot, and the
+re-read buffer is byte-identical to the flash copy]. That is the whole implementation of
+`Session::revert_preset` (CLI `revert`, the GUI's "Revert to saved") — the pedal's own
+switch-away-and-back gesture to discard edits, minus the switch away.
+
 **Backing off does not rescue it.** [solid] The obvious reading — the device has fallen behind, so
 stop feeding it and it recovers — was shipped as a 120 ms stand-off and failed 3 for 3. Every wedge
 went from one slow credit to total silence on the very next chunk, and not a single credit arrived

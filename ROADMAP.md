@@ -649,22 +649,22 @@ real session.
       slot off the same unit), where all 15 blocks, 106 parameter values, 320 snapshot-matrix cells
       and all 8 bypass bindings match the device's own bytes. This gives `.hlx` **import** too — the
       format is the same tree — which is the more useful half, since `.hlx` is what people share.
+      > **2026-08-26: the block-type gaps are closed.** The amp+cab refusal dissolved on a live
+      > measurement: both cab families are ordinary `Helix.sym` entries and a paired cab stores
+      > whichever the preset uses — there was never a family mapping to find. A swap sweep on the
+      > Stomp measured every missing class (dual cab 16/32, IR 19/21, looper 22, synth 23, plus
+      > the family split 18/33 that refuted the old unconditional 33), the IR block's key-27 UUID
+      > reference fell out of the same dumps, and the looper had a device-written oracle in the
+      > Sultans stream all along. **Every non-empty preset in the sample backup now converts —
+      > 363/363, from 39.** Fixtures: `captures/pairing_sweep.md`; oracle tests:
+      > `fretwire-data/tests/paired_blocks.rs`.
       **Not yet sent to a pedal.** What is left, in order:
-      - **One capture unblocks the biggest gap: a wire dump of a preset containing an Amp+Cab
-        block, off a unit whose `.hxb` we also hold.** Amp+cab blocks are refused today because the
-        tone names the paired cab with a plain `HD2_Cab…` symbol while the one dump we have stores
-        a `HD2_CabMicIr_…` one, with a different parameter list, and nothing pins the two together.
-        This is ~26 of the 128 presets in bank 0 of the sample backup, and amp+cab is how most
-        people build a preset. Everything else about the pairing is already known (cab index at
-        `24 → 26`, its parameters in bank `12`).
       - **Controller assignments (key `4`)** and the snapshot controller values (`2`) that index
         off them. Currently the donor's table is *cleared* — a stale row addresses blocks by slot
         and every slot has changed — so a restored preset arrives with no expression/controller
         assignments.
-      - **Three more block classes and one topology have no wire evidence** and are refused rather
-        than guessed: tone `@type` 4 (dual cab), 5 (IR), 8 (synth), and topology `AB`. Type 6
-        (looper) is a different slot kind again. Each needs one dump of a preset containing that
-        kind of block — cheap, and the refusal message names what to capture.
+      - **Topology `AB`** (a DSP the paths merely pass through, Floor-only) still has no wire
+        evidence and stays a refusal.
       - The four **input/output nodes** store a ragged prefix of their symbol's parameter list and
         the rule is unknown; they keep the target's values.
 

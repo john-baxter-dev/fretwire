@@ -3972,3 +3972,50 @@ README gained a short headless section, `docs/serve-mode.md`'s blocker entry is 
 and ROADMAP Phase 8 / Phase 10 both updated. Serve mode itself (the command-layer lift,
 `fretwire-serve`, auth, the file picker) is untouched — this was the piece of it that also blocked
 shipping the CLI to the person who asked.
+
+## Fifty-ninth round — part two (2026-08-26): **the amp+cab mapping never existed, and the pedal proved it in an afternoon**
+
+The `.hxb` import's biggest refusal — amp+cab blocks, ~a fifth of the sample backup — was waiting
+on "a wire dump of a preset containing an Amp+Cab block, off a unit whose `.hxb` we also hold".
+With the Stomp plugged in it turned out to be waiting on nothing of the sort.
+
+**The supposed cab-family mapping does not exist.** The tone names paired cabs `HD2_Cab…` where
+our one dump stored `HD2_CabMicIr_…`, and round fifty read that as a spelling correspondence to
+recover. It is two families of real models — the pre-3.50 legacy cabs and the 3.50+ IR-based
+ones — **both present in `Helix.sym`** (41 and 92 symbols), both still runnable, and a paired cab
+stores whichever the preset uses. The backup's `HD2_Cab…` siblings are genuinely legacy cabs; the
+US Princess dump paired a new cab because it was built on 3.80. A tone cab resolves like any
+other model. No mapping, no missing capture.
+
+**What the pedal settled instead, in one edit-buffer swap sweep** (`swap 1 <model> [paired]`,
+dump, diff; every state discarded and the preset byte-identical after —
+`captures/pairing_sweep.md`, ten tracked fixtures):
+- **The class byte is per-model, not per-`@type`** — and the old table had a live bug: every
+  fixture amp happened to pair a new cab, so `@type 3 → 33` unconditionally, where an amp +
+  legacy cab is **18**. The measured table: legacy cab 15, dual legacy 16, amp/preamp 17,
+  amp+legacy 18, IR 19, dual IR 21, looper 22, synth 23, then +16 with the new cab engine —
+  CabMicIr standalone 31, dual 32, amp+CabMicIr 33. Every cell its own measurement.
+- **Bank 12 is just the paired model's bank 11**: new cabs list `Mic` first and drop the
+  symbol's trailing `IrData` (7 of 8; 9 of 10 WithPan), legacy cabs append their `@mic` after
+  the symbol's five (`{2:6, 3:5}`).
+- **An IR block has no bank 12 — content key `27` sits in its place**, the referenced IR's UUID
+  NUL-terminated: the tone's `@uuid`, a dual IR's two concatenated, an empty-slot reference the
+  empty string. This answers the roadmap's "how a preset's IR block references a user slot".
+- **The looper never needed new evidence** — the Sultans Floor stream held a device-written
+  looper (slot kind 7, class 22, 4 of the symbol's 10 params — the rest are live transport
+  state) and the same unit's backup holds its tone. Oracle in hand all along.
+
+`fretwire_data::tone` now converts all of it: paired cabs both families, dual cabs (mixed-family
+pairs refused — never observed), IR with the uuid carry, synth, looper via `encode_looper`, and
+parameter-name lookups that survive the tone's spelling drift (`HighCut` vs `High Cut` — 142 vs
+26 in one backup; matched space-stripped, case-folded). `tests/paired_blocks.rs` replays every
+pairing from hand-written tone JSON against the device's own bytes — byte-for-byte on the amp,
+cab, dual-cab and IR shapes, plus the looper against the Sultans slot.
+
+**The whole sample backup now converts: 363 of 363 non-empty presets** (bank 0 was 39/128 the
+day before; the rest mostly fell to the looper). What restore still does not carry: controller
+assignments (key `4`), topology `AB`, the I/O-node prefix rule — see the roadmap.
+
+Also fixed for free: `class_ir_unreferenced` came from op-30 with an **integer** value via
+`probe-edit`, confirming the Index param takes ints on the wire — the typed-write rule holding
+on one more param class.

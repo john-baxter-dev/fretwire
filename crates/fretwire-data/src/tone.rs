@@ -52,27 +52,27 @@
 //! For the same reason a block whose class we have never seen on the wire is a **refusal**, not a
 //! guess — see [`block_class`].
 //!
-//! # `@cab`: an amp+cab block is refused, and this is what is missing
+//! # `@cab`: paired blocks  [solid — measured on an HX Stomp, 2026-08-26]
 //!
-//! An **Amp+Cab** block (`@type` 3) carries `@cab: "cab0"`, which names a *sibling entry of the
-//! same `dspN` object* — not a model. That entry holds the cab: its own `@model`, `@mic` and
-//! parameters. On the wire the pair is one block, with the cab's index at `24 → 26`, `24 → 23`
-//! true, and the cab's parameters in the **second** bank at `12 → 4`. All of that is established.
+//! An **Amp+Cab** block (`@type` 3) and a **dual cab** (`@type` 4) each carry `@cab: "cab0"`,
+//! which names a *sibling entry of the same `dspN` object* — not a model. That entry holds the
+//! second model: its own `@model`, `@mic` and parameters. On the wire the pair is one block, with
+//! the sibling's index at `24 → 26`, `24 → 23` true, and its parameters in the **second** bank at
+//! `12 → 4` — laid out exactly as that model's bank `11` would be (the same symbol order, the same
+//! trailing `@mic` for a legacy cab, the same dropped `IrData` for a new one).
 //!
-//! What is not is which symbol the cab's index points at. The one paired block we hold a dump of
-//! (an HX Stomp's US Princess) stores `HD2_CabMicIr_1x12USDeluxe` — a **different symbol family**
-//! from the plain `HD2_Cab…` the `tone` names for a standalone cab, with a different parameter
-//! list: `Mic` is its first parameter rather than a value appended after the last, and the
-//! trailing `IrData` is not stored (7 of the symbol's 8). The Floor backup's amp+cab blocks name
-//! plain `HD2_Cab…` models in their `@cab` sibling, so tone and wire are naming the cab
-//! differently and the correspondence between the two families — which differ in spelling *and*
-//! in case (`Cab4X12CaliV30` against `CabMicIr_4x12CaliV30`) — has never been checked against a
-//! device.
+//! This section used to be a refusal, on the belief that the tone and the wire named a paired cab
+//! in **different symbol families** (`HD2_Cab…` against `HD2_CabMicIr_…`) with an unknown
+//! correspondence. Pairing every combination on a live HX Stomp dissolved it: **both families are
+//! ordinary `Helix.sym` entries and the wire stores whichever one the preset actually uses.** The
+//! one dump we held (`HD2_CabMicIr_1x12USDeluxe`) was a new-family cab because it was built on
+//! 3.80 firmware; the backup's `HD2_Cab…` siblings are the legacy family, which the device still
+//! runs. There is no mapping — a tone's cab `@model` resolves like any other model.
 //!
-//! Guessing it would put a real but **wrong cab** on someone's amp, which is about the most
-//! audible thing this conversion could get wrong and the least likely to be blamed on a restore.
-//! One wire dump of a preset with an amp+cab block, from a unit whose backup we also hold, settles
-//! it. It costs about a fifth of a factory setlist until then.
+//! What the tone spells inconsistently is the parameter *names*: the same legacy cab stores
+//! `HighCut` in one preset and `High Cut` in another (142 against 26 in one real backup, plus a
+//! `Low Cut` and an `Early Reflections`), tracking whichever HX Edit era wrote it. Lookups
+//! therefore match names with spaces stripped and case folded, not byte-for-byte.
 
 use serde_json::{Map as JsonMap, Value as Json};
 
@@ -135,35 +135,43 @@ pub struct Conversion {
     pub not_carried: Vec<String>,
 }
 
-/// A `tone` block's `@type` → the wire's block-class byte (content key `9`).
+/// A `tone` block's `@type` + its resolved model(s) → the wire's block-class byte (content key `9`).
 ///
-/// Every value here was read off a device-authored preset, paired with the `tone` block it
-/// encodes. The four types with no row are **not** guessed: nothing we hold shows what the device
-/// writes for them, and a wrong class on a preset bound for flash is not a mistake worth making to
-/// save a capture. They need one wire dump each of a preset containing that kind of block.
+/// Every value here was read off a device-authored preset. The class is not a function of `@type`
+/// alone: the device tells the two cab families apart (a `HD2_CabMicIr_…` cab carries IR data, a
+/// legacy `HD2_Cab…` does not), and a dual IR is its own class. So the caller passes the resolved
+/// **device symbol** of the block's model, and of its `@cab` sibling where one exists.
 ///
 /// | `@type` | class | evidence |
 /// |---:|---:|---|
 /// | 0 | 1 | every non-amp, non-cab, non-delay block in all six fixtures |
-/// | 1 | 17 | `AmpJazzRivet120`, `AmpCaliRectifire` — amp with no cab, `24 → 26` = −1 |
-/// | 2 | 15 | `Cab2x12JazzRivet`, `Cab4X12CaliV30` |
-/// | 3 | 33 | `AmpUSPrincess`, `AmpGSG100`, `AmpLine6Litigator` — each paired, `24 → 23` true |
+/// | 1 | 17 | fixtures (amp, `26` = −1); preamp measured identically on the Stomp |
+/// | 2 | 15 legacy / **31** new | 15 from fixtures; both swept live on the Stomp |
+/// | 3 | **18** legacy cab / 33 new | 33 from fixtures — every amp in them pairs a new cab; 18 measured live, refuting the old unconditional 33 |
+/// | 4 | **16** legacy / **32** new | cab paired with cab, measured live both ways |
+/// | 5 | **19** mono / **21** dual | measured live (`ImpulseResponse1024Mono`, `…1024DualStereo`) |
 /// | 7 | 8 | every delay and reverb, and exactly the blocks carrying a trailing `@trails` |
+/// | 8 | **23** | measured live (`Synth3NoteGeneratorMono`) |
 ///
-/// [solid — 2026-08-25; the 17/33 split is pinned from both sides, in that `class == 33` and
-/// `24 → 26 != -1` and `24 → 23 == true` coincide on every amp in every fixture we hold]
+/// [solid — fixtures 2026-08-25; every bolded value swept on a live HX Stomp 2026-08-26 by
+/// swapping slot 1 through the combinations and reading back what the device wrote. The pattern —
+/// 15/16/17/18/19 consecutive, +16 where the new cab engine is involved — is descriptive, not
+/// assumed: each cell is its own measurement.]
 ///
-/// Knowing `@type` 3's class does not make one convertible: it is refused a step later, on its
-/// `@cab`, whose target symbol is the open question. See this module's notes on `@cab`.
-pub fn block_class(tone_type: i64) -> Option<i64> {
+/// `@type` 6 (looper) is a different slot shape entirely (kind 7, class 22) and is built by
+/// [`encode_looper`], not through this table.
+pub fn block_class(tone_type: i64, symbol: &str, paired_symbol: Option<&str>) -> Option<i64> {
+    let new_cab = |s: &str| s.starts_with("HD2_CabMicIr");
     match tone_type {
         0 => Some(1),
         1 => Some(17),
-        2 => Some(15),
-        3 => Some(33),
+        2 => Some(if new_cab(symbol) { 31 } else { 15 }),
+        // An amp+cab with no cab sibling has never been observed; its class is the sibling's call.
+        3 => paired_symbol.map(|cab| if new_cab(cab) { 33 } else { 18 }),
+        4 => Some(if new_cab(symbol) { 32 } else { 16 }),
+        5 => Some(if symbol.contains("Dual") { 21 } else { 19 }),
         7 => Some(8),
-        // 4 (cab + cab), 5 (IR), 6 (looper — a different slot shape entirely, kind 7 not 6) and
-        // 8 (synth) all appear in the backup and in none of our wire dumps.
+        8 => Some(23),
         _ => None,
     }
 }
@@ -236,7 +244,7 @@ pub fn apply_tone(
             let index = slot_index(block).ok_or_else(|| {
                 Error::Stream(format!("{tone_key}.{name}: no usable @path/@position"))
             })?;
-            let encoded = encode_block(block, syms)
+            let encoded = encode_block(block, tone_dsp, syms)
                 .map_err(|e| Error::Stream(format!("{tone_key}.{name}: {e}")))?;
             write_slot(donor, group_key, index, encoded)?;
             out.blocks += 1;
@@ -618,52 +626,99 @@ fn slot_index(block: &Json) -> Option<usize> {
 }
 
 /// Build one `type 6` effect slot from a `tone` block.
-fn encode_block(block: &Json, syms: &DeviceSymbols) -> Result<Value> {
+///
+/// `siblings` is the block's `dspN` object, which is where an `@cab` reference resolves — the
+/// paired cab of an amp+cab (`@type` 3) or the second cab of a dual (`@type` 4) is a sibling
+/// entry of the same map, not a nested object.
+fn encode_block(
+    block: &Json,
+    siblings: &JsonMap<String, Json>,
+    syms: &DeviceSymbols,
+) -> Result<Value> {
     let model = block
         .get("@model")
         .and_then(Json::as_str)
         .ok_or_else(|| Error::Stream("no @model".into()))?;
     let tone_type = block.get("@type").and_then(Json::as_i64).unwrap_or(0);
-    let class = block_class(tone_type).ok_or_else(|| {
+    if tone_type == 6 {
+        return encode_looper(block, model, syms);
+    }
+
+    let (index, symbol, params) = resolve_symbol(model, block, syms)?;
+    let (values, symbol_count) = param_values(block, params);
+
+    // The paired model, where the type carries one. `@cab` on a type this has never been seen on
+    // stays a refusal: the pairing classes were measured per type, not assumed transferable.
+    let cab_ref = block.get("@cab").and_then(Json::as_str);
+    let paired = match (tone_type, cab_ref) {
+        (3 | 4, Some(name)) => {
+            let sibling = siblings.get(name).ok_or_else(|| {
+                Error::Stream(format!(
+                    "{model} names a cab sibling {name:?} that is not in the tone"
+                ))
+            })?;
+            let sib_model = sibling
+                .get("@model")
+                .and_then(Json::as_str)
+                .ok_or_else(|| Error::Stream(format!("cab sibling {name:?} has no @model")))?;
+            let (sib_index, sib_symbol, sib_params) = resolve_symbol(sib_model, sibling, syms)?;
+            // Both live measurements paired like with like, and the backup holds no mixed pair
+            // (0 of 78 duals), so a mixed one is a shape the device has never shown us.
+            if tone_type == 4
+                && sib_symbol.starts_with("HD2_CabMicIr") != symbol.starts_with("HD2_CabMicIr")
+            {
+                return Err(Error::Stream(format!(
+                    "{model} pairs a legacy and a new-family cab ({sib_model}) — no device-written \
+                     preset we hold mixes the families in one block"
+                )));
+            }
+            let (sib_values, sib_symbol_count) = param_values(sibling, sib_params);
+            Some((sib_index, sib_symbol, sib_values, sib_symbol_count, sibling))
+        }
+        (_, Some(name)) => {
+            return Err(Error::Stream(format!(
+                "{model} is a @type {tone_type} block carrying a cab sibling {name:?} — a shape no \
+                 device-written preset we hold contains"
+            )));
+        }
+        (_, None) => None,
+    };
+
+    let class = block_class(
+        tone_type,
+        &symbol,
+        paired.as_ref().map(|(_, s, ..)| s.as_str()),
+    )
+    .ok_or_else(|| {
         Error::Stream(format!(
             "{model} is a @type {tone_type} block and no device-written preset we hold contains \
-             one, so its block class is unknown — converting it would mean guessing"
+                 one, so its block class is unknown — converting it would mean guessing"
         ))
     })?;
 
-    let (index, params) = resolve_symbol(model, block, syms)?;
-    let mut values: Vec<Value> = Vec::with_capacity(params.len() + 1);
-    for name in params {
-        values.push(json_to_msgpack(
-            block.get(name.as_str()).unwrap_or(&Json::Null),
-        ));
-    }
-    let symbol_count = values.len() as i64;
+    // `24 → 23` is the paired-model-active flag; the sibling's own `@enabled` is the only tone
+    // field it can correspond to, and no backup preset has ever carried it false. [hypothesis for
+    // the false case — every observed pair is (present, true)]
+    let (paired_index, paired_active, paired_bank) = match paired {
+        Some((idx, _, vals, sym_count, sibling)) => (
+            idx as i64,
+            sibling
+                .get("@enabled")
+                .and_then(Json::as_bool)
+                .unwrap_or(true),
+            param_bank(vals.len() as i64, sym_count, vals),
+        ),
+        // The second bank is empty on every unpaired block in every fixture.
+        None => (-1, false, param_bank(0, 0, Vec::new())),
+    };
 
-    // The one or two values stored past the symbol's parameter list. A cab appends its mic, and
-    // anything trails-capable appends the switch; no block we hold carries both.
-    if let Some(mic) = block.get("@mic") {
-        values.push(json_to_msgpack(mic));
-    }
-    if let Some(trails) = block.get("@trails") {
-        values.push(json_to_msgpack(trails));
-    }
-
-    if let Some(cab) = block.get("@cab").and_then(Json::as_str) {
-        return Err(Error::Stream(format!(
-            "{model} is an amp+cab block (its {cab:?} sibling holds the cab) and the paired cab's \
-             encoding is not settled — see `tone`'s notes on `@cab`"
-        )));
-    }
-    let paired = -1;
-
-    let content = Value::Map(vec![
+    let mut content = vec![
         (
             Value::from(24),
             Value::Map(vec![
-                (Value::from(23), Value::from(paired >= 0)),
+                (Value::from(23), Value::from(paired_active)),
                 (Value::from(25), Value::from(index as i64)),
-                (Value::from(26), Value::from(paired)),
+                (Value::from(26), Value::from(paired_index)),
             ]),
         ),
         (Value::from(9), Value::from(class)),
@@ -680,13 +735,115 @@ fn encode_block(block: &Json, syms: &DeviceSymbols) -> Result<Value> {
             Value::from(11),
             param_bank(values.len() as i64, symbol_count, values),
         ),
-        // The second bank is empty on every block in every fixture.
-        (Value::from(12), param_bank(0, 0, Vec::new())),
-    ]);
+    ];
+    if tone_type == 5 {
+        // An IR block has no second bank at all; in its place the content carries key 27, the
+        // referenced IR's UUID, NUL-terminated — the tone's `@uuid`, and how the device re-matches
+        // the IR by content when slots have moved. A dual IR concatenates its two UUIDs into the
+        // one string (64 hex chars, measured). A block aimed at an **empty** IR slot stores the
+        // empty string, and a tone with no `@uuid` is that case.
+        // [solid — class_ir_{mono,dual,unreferenced} fixtures, 2026-08-26]
+        let uuid = block.get("@uuid").and_then(Json::as_str).unwrap_or("");
+        content.push((Value::from(27), Value::from(format!("{uuid}\0"))));
+    } else {
+        content.push((Value::from(12), paired_bank));
+    }
     Ok(Value::Map(vec![
         (Value::from(19), Value::from(slot_kind::EFFECT)),
+        (Value::from(20), Value::Map(content)),
+    ]))
+}
+
+/// Build a **Looper** slot (`@type` 6) — a different slot kind (7, not 6) with its own content
+/// shape: model index at key `8`, class at `9` (**22**), enabled at `10`, params at `7 → 4`, in
+/// that key order, with no model-ref map and no second bank.
+///
+/// The device stores only the looper's *preset* parameters — `Playback`, `Overdub`, `lowCut`,
+/// `highCut`, 4 of the symbol's 10; the rest (`Reverse`, `Undo`, `PendingState`, …) are live
+/// transport state. The tone carries exactly the stored set, so the vector is the symbol-ordered
+/// params the tone actually has, not a nil-padded full list.
+///
+/// [solid — the "Sultans" Floor stream holds a device-written looper slot and the same unit's
+/// `.hxb` holds its tone; `tests/paired_blocks.rs` compares the two]
+fn encode_looper(block: &Json, model: &str, syms: &DeviceSymbols) -> Result<Value> {
+    let (index, _, params) = resolve_symbol(model, block, syms)?;
+    let values: Vec<Value> = params
+        .iter()
+        .filter_map(|name| get_param(block, name))
+        .map(json_to_msgpack)
+        .collect();
+    let count = values.len() as i64;
+    let content = Value::Map(vec![
+        (Value::from(8), Value::from(index as i64)),
+        (Value::from(9), Value::from(22)),
+        (
+            Value::from(10),
+            Value::from(
+                block
+                    .get("@enabled")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(true),
+            ),
+        ),
+        (Value::from(7), param_bank(count, count, values)),
+    ]);
+    Ok(Value::Map(vec![
+        (Value::from(19), Value::from(slot_kind::LOOPER)),
         (Value::from(20), content),
     ]))
+}
+
+/// A block's stored value vector, ordered by its symbol's parameter list, plus the count the wire
+/// puts beside it at key `3`.
+///
+/// Two measured rules shape it ([solid — HX Stomp sweep, 2026-08-26]):
+/// - **`IrData` is never stored.** A new-family cab's symbol ends with it and the device writes
+///   the vector without it (7 of 8 on a plain cab, 9 of 10 on a `WithPan`), so key `3` counts the
+///   storable parameters, not the symbol's.
+/// - **Extras append past the symbol's list.** A legacy cab's `@mic` and a delay/reverb's
+///   `@trails` land after the last symbol parameter and are counted by key `2` but not key `3`.
+///
+/// Parameter names are matched with spaces stripped and case folded — the tone spells the same
+/// parameter `HighCut` or `High Cut` depending on which HX Edit era wrote it.
+fn param_values(block: &Json, params: &[String]) -> (Vec<Value>, i64) {
+    let mut values: Vec<Value> = params
+        .iter()
+        .filter(|name| *name != "IrData")
+        .map(|name| json_to_msgpack(get_param(block, name).unwrap_or(&Json::Null)))
+        .collect();
+    let symbol_count = values.len() as i64;
+    if let Some(mic) = block.get("@mic") {
+        values.push(json_to_msgpack(mic));
+    }
+    if let Some(trails) = block.get("@trails") {
+        values.push(json_to_msgpack(trails));
+    }
+    (values, symbol_count)
+}
+
+/// Look a parameter up by its device-symbol name, tolerating the tone's spelling drift.
+///
+/// One real backup stores the same legacy cab's high cut as `HighCut` 142 times and `High Cut` 26,
+/// with a stray `Low Cut` and `Early Reflections` besides — the spelling tracks the HX Edit era
+/// that wrote the preset, while `Helix.sym` spells it without the space. Exact match first, then
+/// space-stripped case-folded.
+fn get_param<'a>(block: &'a Json, name: &str) -> Option<&'a Json> {
+    if let Some(v) = block.get(name) {
+        return Some(v);
+    }
+    let want = fold_param_name(name);
+    block
+        .as_object()?
+        .iter()
+        .find(|(k, _)| !k.starts_with('@') && fold_param_name(k) == want)
+        .map(|(_, v)| v)
+}
+
+fn fold_param_name(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_whitespace())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
 }
 
 /// `{2: stored, 3: from the symbol, 4: [values]}` — the shape both effect blocks and structural
@@ -714,7 +871,7 @@ fn resolve_symbol<'a>(
     model: &str,
     block: &Json,
     syms: &'a DeviceSymbols,
-) -> Result<(usize, &'a [String])> {
+) -> Result<(usize, String, &'a [String])> {
     let asked = match block.get("@stereo").and_then(Json::as_bool) {
         Some(true) => Some("Stereo"),
         Some(false) => Some("Mono"),
@@ -746,7 +903,8 @@ fn resolve_symbol<'a>(
     let index = syms
         .index_of(&symbol)
         .ok_or_else(|| Error::Stream(format!("{symbol:?} is not in Helix.sym")))?;
-    Ok((index, syms.by_index(index).map(|(_, p)| p).unwrap_or(&[])))
+    let params = syms.by_index(index).map(|(_, p)| p).unwrap_or(&[]);
+    Ok((index, symbol, params))
 }
 
 /// Write a built slot into a DSP's slot array.
@@ -794,7 +952,7 @@ fn apply_node(
     let Some(model) = node.get("@model").and_then(Json::as_str) else {
         return;
     };
-    let Ok((sym_index, params)) = resolve_symbol(model, node, syms) else {
+    let Ok((sym_index, _, params)) = resolve_symbol(model, node, syms) else {
         out.not_carried.push(format!(
             "{tone_key}: {model} is not in Helix.sym, left as the target's"
         ));
@@ -945,17 +1103,49 @@ mod tests {
 
     #[test]
     fn only_observed_block_classes_convert() {
-        // Every class here was read off a device-written preset.
-        assert_eq!(block_class(0), Some(1));
-        assert_eq!(block_class(1), Some(17));
-        assert_eq!(block_class(2), Some(15));
-        assert_eq!(block_class(3), Some(33));
-        assert_eq!(block_class(7), Some(8));
-        // These appear in a real backup and in no wire dump we hold. They must stay refusals until
-        // one turns up — a guessed class goes to flash and shows up as a preset that sounds wrong.
-        for unobserved in [4, 5, 6, 8] {
-            assert_eq!(block_class(unobserved), None, "@type {unobserved}");
-        }
+        // Every class here was read off a device-written preset — the fixtures, or the 2026-08-26
+        // live sweep on an HX Stomp (see the fn's own table).
+        let legacy = "HD2_Cab1x12USDeluxe";
+        let micir = "HD2_CabMicIr_1x12USDeluxe";
+        assert_eq!(block_class(0, "HD2_Tremolo", None), Some(1));
+        assert_eq!(block_class(1, "HD2_AmpUSDoubleNrm", None), Some(17));
+        assert_eq!(block_class(2, legacy, None), Some(15));
+        assert_eq!(block_class(2, micir, None), Some(31));
+        assert_eq!(block_class(3, "HD2_AmpUSDoubleNrm", Some(legacy)), Some(18));
+        assert_eq!(block_class(3, "HD2_AmpUSDoubleNrm", Some(micir)), Some(33));
+        // An amp+cab with no cab sibling is a shape we have never seen — refused, not defaulted.
+        assert_eq!(block_class(3, "HD2_AmpUSDoubleNrm", None), None);
+        assert_eq!(block_class(4, legacy, Some(legacy)), Some(16));
+        assert_eq!(block_class(4, micir, Some(micir)), Some(32));
+        assert_eq!(
+            block_class(5, "HD2_ImpulseResponse1024Mono", None),
+            Some(19)
+        );
+        assert_eq!(
+            block_class(5, "HD2_ImpulseResponse1024DualStereo", None),
+            Some(21)
+        );
+        assert_eq!(block_class(7, "HD2_DelaySimpleDelay", None), Some(8));
+        assert_eq!(
+            block_class(8, "HD2_Synth3NoteGeneratorMono", None),
+            Some(23)
+        );
+        // The looper is a different slot shape entirely (kind 7), never built as an effect slot.
+        assert_eq!(block_class(6, "HD2_Looper", None), None, "@type 6");
+    }
+
+    #[test]
+    fn param_lookup_survives_the_tones_spelling_drift() {
+        // One real backup spells the same legacy cab's high cut `HighCut` 142 times and
+        // `High Cut` 26 — the era of the HX Edit that wrote the preset, not the model.
+        let block = serde_json::json!({ "High Cut": 8000.0, "LowCut": 80.0, "@mic": 6 });
+        assert_eq!(
+            get_param(&block, "HighCut"),
+            Some(&serde_json::json!(8000.0))
+        );
+        assert_eq!(get_param(&block, "LowCut"), Some(&serde_json::json!(80.0)));
+        // Meta keys never answer a parameter lookup, whatever they fold to.
+        assert_eq!(get_param(&block, "mic"), None);
     }
 
     #[test]

@@ -131,12 +131,18 @@ is its own bypass and lands on the holder's key `10`.
 
 **An amp+cab block's `@cab` is a sibling reference, not a model.** `@cab: "cab0"` names another
 entry of the same `dspN` object, which holds the cab's own `@model`, `@mic` and parameters. The
-pair is one block on the wire, with the cab at `24 → 26` and its parameters in bank `12`. Which
-**symbol** that index names is the open question: the Stomp dump we hold stores a `HD2_CabMicIr_…`
-where the `tone` names a plain `HD2_Cab…`, and the two families differ in spelling and in case
-(`Cab4X12CaliV30` against `CabMicIr_4x12CaliV30`). `fretwire_data::tone` refuses amp+cab blocks
-until one dump of one settles it — a wrong cab on someone's amp is the most audible thing this
-conversion could get wrong.
+pair is one block on the wire, with the cab at `24 → 26` and its parameters in bank `12`. A dual
+cab (`@type` 4) is the same shape with a cab as the main model. **Which symbol the index names
+stopped being an open question on 2026-08-26**: legacy `HD2_Cab…` and new `HD2_CabMicIr_…` are
+both ordinary `Helix.sym` entries and a paired cab stores whichever family the preset uses — the
+supposed tone↔wire family mismatch was two observations from different presets (a 3.80-built pair
+uses a new cab; the backup's `HD2_Cab…` siblings are genuinely legacy cabs). Measured by pairing
+every combination on a live HX Stomp — `captures/pairing_sweep.md`.
+
+**The tone's parameter-name spelling drifts by HX Edit era.** One backup stores the same legacy
+cab's high cut as `HighCut` 142 times and `High Cut` 26, with a stray `Low Cut` and
+`Early Reflections`. Name lookups in `fretwire_data::tone` match with spaces stripped and case
+folded for this reason.
 
 **A footswitch binding stays in the layout when `@fs_enabled` is false**, carrying `11 → 7` false —
 that is a block assigned to a switch and not currently answering to it, not an unbound switch. One
@@ -253,25 +259,41 @@ A `type 6` block content is `Map{5}`:
   count and `2` is how many values are stored, and they differ by exactly one on the blocks that
   append a trailing extra — a cab's **mic** and a delay/reverb's **trails** switch. So a cab reads
   `{2: 6, 3: 5}` and a Simple Delay `{2: 7, 3: 6}`. [solid — 2026-08-25, 24 distinct symbols]
-- `12` = the **paired model's** param vector, same `{2, 3, 4}` shape — a cab's mic/cut parameters
-  on an amp+cab block, and empty on everything else. The one paired block we hold a dump of stores
-  `HD2_CabMicIr_1x12USDeluxe` with `{2: 7, 3: 7}`: `Mic` is its **first** parameter (not a value
-  appended after the last, the way a standalone cab's is) and the symbol's trailing `IrData` is not
-  stored, 7 of 8. [solid — 2026-08-25]
-- `9` = the **block class**, a small fixed number per kind of block, equal to the `@type` an `.hlx`
-  / `.hxb` `tone` block carries — not to the catalog category, which is far finer-grained:
+- `12` = the **paired model's** param vector, same `{2, 3, 4}` shape — the cab's parameters on an
+  amp+cab or the second cab's on a dual, empty on everything else, laid out exactly as that
+  model's own bank `11` would be. Two family-specific rules, both measured live
+  (`captures/pairing_sweep.md`): a **new** (`HD2_CabMicIr_…`) cab lists `Mic` first and does not
+  store the symbol's trailing `IrData` (7 of 8; 9 of 10 on a `WithPan`), while a **legacy**
+  (`HD2_Cab…`) cab appends its mic after the symbol's five (`{2: 6, 3: 5}`). [solid — 2026-08-26]
+- `27` = on an **IR block only**, in place of bank `12`: the referenced IR's UUID as a
+  NUL-terminated hex string — the tone's `@uuid`, and how the device re-matches an IR by content
+  when slots have moved. A dual IR concatenates its two UUIDs into the one string; an IR block
+  aimed at an empty slot stores `"\0"`. [solid — 2026-08-26, live]
+- `9` = the **block class**, a small fixed number per kind of block. It tracks the tone's `@type`
+  *and* the model family — the device tells the two cab generations apart, and a dual IR is its
+  own class. Every row measured against device-written bytes; the bolded ones by the 2026-08-26
+  live sweep on an HX Stomp (`captures/pairing_sweep.md`):
 
   | `9` | tone `@type` | what |
   |---:|---:|---|
   | 1 | 0 | any ordinary effect — EQ, comp, dist, mod, wah, vol/pan |
   | 8 | 7 | delay and reverb, i.e. exactly the trails-capable blocks |
-  | 15 | 2 | a cab on its own |
-  | 17 | 1 | an amp on its own (`26` = −1) |
-  | 33 | 3 | an **amp + cab** pair (`26` = the cab, `23` = true) |
+  | 15 | 2 | a legacy cab on its own |
+  | **16** | 4 | a dual **legacy** cab (`26` = the second cab) |
+  | 17 | 1 | an amp or preamp on its own (`26` = −1) |
+  | **18** | 3 | an amp + **legacy** cab pair |
+  | **19** | 5 | an IR block (mono) |
+  | **21** | 5 | a **dual** IR block |
+  | **22** | 6 | the looper — a different slot kind (7), model index at key `8` |
+  | **23** | 8 | a synth block |
+  | **31** | 2 | a **new** (`CabMicIr`) cab on its own |
+  | **32** | 4 | a dual **new** cab (two `WithPan` symbols) |
+  | 33 | 3 | an amp + **new** cab pair (`26` = the cab, `23` = true) |
 
-  [solid — 2026-08-25]. `@type` 4 (dual cab), 5 (IR), 6 (looper — a different slot kind entirely)
-  and 8 (synth) all occur in a real backup and in **no** wire dump we hold, so their class is
-  unknown; `fretwire_data::tone` refuses those rather than guessing.
+  The pattern — 15..19 consecutive, +16 where the new cab engine is involved — is descriptive,
+  not assumed: each cell is its own measurement. `fretwire_data::tone` builds all of these now;
+  the only remaining per-block refusal is a mixed-family dual cab, which no device-written preset
+  has ever shown.
 
 ### Block content for `type 7` (Looper) — a different shape
 A `type 7` slot's content is `Map{4}` and does **not** follow the type-6 layout:

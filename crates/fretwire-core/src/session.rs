@@ -3233,6 +3233,12 @@ impl Session {
     ) -> crate::Result<EditorPreset> {
         let ps = fretwire_data::stream::PresetStream::parse(raw)?;
         self.goto_preset(bank, slot)?;
+        // Read the freshly-selected preset before writing over it. Without this the op-21 write
+        // stalls at its first chunk boundary (512 of ~2230 bytes, twice in a row, same offset):
+        // every op-21 write that has ever succeeded ran on an edit buffer a read had opened
+        // (op 76), and a `goto` invalidates that. The read re-opens it; with it in place the same
+        // write completes. [solid — live HX Stomp, 2026-08-26]
+        self.read_preset_raw()?;
         self.write_preset(ps.to_blob())?;
         self.save_preset(bank, slot, name)?;
         self.clear_history();

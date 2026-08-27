@@ -4019,3 +4019,26 @@ assignments (key `4`), topology `AB`, the I/O-node prefix rule — see the roadm
 Also fixed for free: `class_ir_unreferenced` came from op-30 with an **integer** value via
 `probe-edit`, confirming the Index param takes ints on the wire — the typed-write rule holding
 on one more param class.
+
+## Sixtieth round (2026-08-26): **restore verified live, by way of the bug it was hiding**
+
+The oldest [hypothesis] on the board — `Session::restore_preset`, built 2026-07-07 and never once
+run against hardware — got its live test, and the first attempt failed usefully.
+
+**The stall was deterministic, and it was ours.** Restoring a preset to its own slot (bytes
+pre-checked identical to the flash content, so the worst case was bounded) stalled at 512 of 2230
+bytes with credits stopping at 4 — twice running, same offset. `write-roundtrip`, which pushes the
+same-size blob through the same op-21 writer, completed immediately after on the same pedal. The
+difference is one line: restore wrote **straight after `goto`**, and every op-21 write that has
+ever succeeded ran on an edit buffer a *read* had opened (op 76 leads the read sequence). A
+`goto` evidently invalidates that state. `restore_preset` now reads between the goto and the
+write; the identical restore then completed first try, and the op-4 flash read-back matches the
+written document. Written up in `docs/protocol.md` beside the credit-latency findings — unlike
+the July wedges, this stall is benign when guarded: the pedal stayed responsive throughout and
+nothing reached flash on either failed attempt.
+
+Whether any July freeze was actually this — a goto-adjacent write — is deliberately left
+unclaimed; those logs would need re-reading with the distinction in mind.
+
+Side effect worth keeping: the test exported the Stomp's full bank first (as `docs/safety.md`
+asks), and the export now lives at `~/.local/share/fretwire/backups/stomp-presets-2026-08-26.json`.

@@ -623,6 +623,22 @@ implemented for chunk one. And a slow credit on the **final** chunk is normal: 2
 that complete perfectly, because that is the device committing the preset. Only non-final chunks
 count.
 
+#### A write straight after a `goto` stalls deterministically — read first [solid]
+*2026-08-26, live HX Stomp.*
+
+`restore` (goto → op-21 write) stalled at the same place twice running — 512 of 2230 bytes,
+credits stopping at 4 with a 69 ms first credit — while `write-roundtrip` (read → op-21 write of
+the same-size blob) completed immediately after, on the same session pattern. The difference is
+the **read**: every op-21 write that has ever succeeded ran on an edit buffer a read had opened
+(op 76 leads the read sequence), and a `goto` evidently invalidates that state. Inserting a
+`read_preset_raw()` between the goto and the write made the identical restore complete on the
+first try, and the flash read-back matched the written document.
+
+Unlike the wedges above, this stall is benign when guarded: the device stayed fully responsive,
+the reload cleared the half-written buffer, and nothing reached flash. Whether any of the July
+wedges had this cause is unchecked — those logs would have to be re-read with the goto/read
+distinction in mind before claiming it.
+
 **Backing off does not rescue it.** [solid] The obvious reading — the device has fallen behind, so
 stop feeding it and it recovers — was shipped as a 120 ms stand-off and failed 3 for 3. Every wedge
 went from one slow credit to total silence on the very next chunk, and not a single credit arrived

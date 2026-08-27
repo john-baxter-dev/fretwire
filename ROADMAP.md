@@ -379,10 +379,13 @@ guessing has already cost a power cycle): see section B of `captures/_RUNBOOK-hx
       cancelled sweep still writes what it read. (Stores our own format, not `.hlx` — the
       wire↔`.hlx` key mapping isn't needed for round-tripping.)
       **Deliberately not called a backup**: see "Full device backup" below.
-- [~] **Restore / preset write** — BUILT (2026-07-07; bank-aware 2026-08-20; **[hypothesis] until
-      the first live test**): `Session::restore_preset` = goto bank/slot → op-21 edit-buffer write of
-      the stored blob → op-71 save. The op-21 chunked write is live-proven for mutated *current*
-      blobs (node moves); a foreign blob is the same mechanism, unverified. CLI
+- [x] **Restore / preset write** — BUILT (2026-07-07; bank-aware 2026-08-20), **VERIFIED LIVE
+      2026-08-26**: export → `restore` to the same slot on an HX Stomp; the op-4 flash read-back
+      matches the written document. The first attempt found a real, deterministic bug: an op-21
+      write straight after `goto` stalls at its first chunk boundary (same offset twice running)
+      because no read has re-opened the edit buffer after the select — every previously-proven
+      op-21 write had run after a read. `restore_preset` now reads between the goto and the write;
+      see `docs/protocol.md` "A write straight after a `goto` stalls deterministically". CLI
       `restore <file> <index> [slot] [--bank N]`; GUI Restore… with source + target pickers
       (overwrite always visible). Also gives duplicate/copy.
 - [x] **Fast setlist export** (2026-08-21). `export-setlist` used to `goto` each slot and read it

@@ -37,19 +37,20 @@
   } = $props();
 
   // The device's footswitch colour palette, by wire index (layout key `16` / `@fs_customcolor`).
-  // Colours observed live on an HX Stomp ring, 2026-08-27 — the CSS values approximate what the
-  // LED shows; the true RGB the firmware uses is not readable over the protocol.
+  // The names are Line 6's own — the `footswitchLED` control in HelixControls.json, whose enum
+  // ordinals match the wire values (0 = Auto Color, the virgin default; 11 = Off). Confirmed by
+  // sweeping 1-10 on a live HX Stomp ring, 2026-08-27; the CSS approximates what the LED shows.
   const FS_PALETTE = [
     { index: 1, css: "#ffffff", name: "White" },
     { index: 2, css: "#ff1a10", name: "Red" },
-    { index: 3, css: "#ff7a00", name: "Orange" },
-    { index: 4, css: "#ffd500", name: "Yellow" },
-    { index: 5, css: "#e0f269", name: "Pale yellow" },
+    { index: 3, css: "#ff6a00", name: "Dark Orange" },
+    { index: 4, css: "#ffb340", name: "Light Orange" },
+    { index: 5, css: "#ffe64d", name: "Yellow" },
     { index: 6, css: "#06ff00", name: "Green" },
-    { index: 7, css: "#00e5cc", name: "Aqua" },
+    { index: 7, css: "#00e5cc", name: "Turquoise" },
     { index: 8, css: "#0a68ff", name: "Blue" },
-    { index: 9, css: "#7a1fd0", name: "Purple" },
-    { index: 10, css: "#ff4ad8", name: "Magenta" },
+    { index: 9, css: "#7a1fd0", name: "Violet" },
+    { index: 10, css: "#ff4ad8", name: "Pink" },
   ];
 
   // ---- controller assignments ----

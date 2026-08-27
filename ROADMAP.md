@@ -606,7 +606,9 @@ real session.
       op-21 document path since no surgical op is known: `Session::{set_switch_label,
       set_switch_color}`, CLI `switch-label`/`switch-color`, and a ✎ mini-editor on the GUI block
       panel with the ten palette swatches. The palette was mapped live by sweeping indices 1-10 and
-      reading the ring: white, red, orange, yellow, pale yellow, green, aqua, blue, purple, magenta.
+      reading the ring, then matched to Line 6's own `footswitchLED` enum in `HelixControls.json`:
+      0 Auto Color, then White, Red, Dark Orange, Light Orange, Yellow, Green, Turquoise, Blue,
+      Violet, Pink, and 11 Off (enum-attested, not yet seen on the ring).
       The ring and scribble repaint immediately on the write. `hxb-convert` carries
       `@fs_customlabel` and `@fs_customcolor`.
 

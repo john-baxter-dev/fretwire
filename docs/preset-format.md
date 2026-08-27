@@ -328,11 +328,14 @@ of a `Map{7}` node:
   `14` as its `109` and `16` as its top-level `66` exactly when the gate is true [solid — flag-flip
   experiments through the op-21 write path, live HX Stomp, 2026-08-27]. `16`'s value is
   `@fs_customcolor`'s **palette index**, not `0xRRGGBB` [solid — sweeping 1–10 through a live
-  Stomp's ring produced ten distinct hues matching HX Edit's palette, where raw RGB 1–10 would all
-  be near-black]. The palette, as the ring shows it: **1** white, **2** red, **3** orange,
-  **4** yellow, **5** pale yellow, **6** green, **7** aqua, **8** blue, **9** purple,
-  **10** magenta. The ring and scribble repaint immediately on an op-21 write of these keys — no
-  reload needed. The LEDs' exact RGB values are not readable over the protocol.
+  Stomp's ring produced ten distinct hues, where raw RGB 1–10 would all be near-black]. The palette
+  is the **`footswitchLED` enum in Line 6's own `HelixControls.json`**, whose ordinals match the
+  wire values and the observed ring exactly: **0** Auto Color (what a virgin entry's `16: 0`
+  means), **1** White, **2** Red, **3** Dark Orange, **4** Light Orange, **5** Yellow, **6** Green,
+  **7** Turquoise, **8** Blue, **9** Violet, **10** Pink, **11** Off (from the enum;
+  the one value not yet observed on the ring). The ring and scribble repaint immediately on an
+  op-21 write of these keys — no reload needed. The LEDs' exact RGB values are not readable over
+  the protocol.
 
 ### Controllers / footswitch assignments (`4`), snapshots (`10`/`2`) [solid — corrected 2026-08-21]
 - **`4` = `Array[footswitches + 5]`** — **parameter**-controller assignment table, **indexed by

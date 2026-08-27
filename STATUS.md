@@ -4122,12 +4122,18 @@ backend models both (including the bind-first refusal).
 **The palette itself was mapped with the pedal's own ring as the instrument.** A script swept
 `switch-color` 1 through 10 on a bound switch, eight seconds apart, with the label set to
 "Color *n*" each step so the scribble named the index being shown; the user read the colours off
-the hardware: **white, red, orange, yellow, pale yellow, green, aqua, blue, purple, magenta**.
-That upgrades the round-62 `[hypothesis]` to `[solid]` twice over — ten distinct hues means the
-value is a palette index (raw RGB 1-10 would all be near-black), and the sweep itself showed the
-ring and scribble **repaint immediately** on an op-21 write, no reload involved. The GUI's swatch
-CSS is a by-eye approximation of what the LEDs show; the true RGB values are not readable over
-the protocol.
+the hardware. That upgrades the round-62 `[hypothesis]` to `[solid]` twice over — ten distinct
+hues means the value is a palette index (raw RGB 1-10 would all be near-black), and the sweep
+itself showed the ring and scribble **repaint immediately** on an op-21 write, no reload involved.
+
+**The names turned out to be sitting in the shipped data all along**: the `footswitchLED` control
+in `HelixControls.json` is the palette — 0 Auto Color, White, Red, Dark Orange, Light Orange,
+Yellow, Green, Turquoise, Blue, Violet, Pink, 11 Off — and its ordinals match the wire values and
+every observed hue, down to the sweep's two ambiguous reads resolving as Light Orange (4) and
+Yellow (5). Ordinal 0 also names the virgin `16: 0`: it is Auto Color, the inherit-from-the-block
+default. Index 11 (Off) is enum-attested but not yet seen on a ring. The GUI's swatch CSS is a
+by-eye approximation of what the LEDs show; the true RGB values are not readable over the
+protocol.
 
 Everything ran in the edit buffer — no flash writes; the preset was reloaded afterwards and op 33
 confirms the switch is back to virgin.

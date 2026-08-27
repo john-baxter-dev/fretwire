@@ -1114,8 +1114,10 @@ Consequence: **custom footswitch labels and colours are writable today** through
 (op-21) path, and `hxb-convert` carries a tone's `@fs_customlabel` and `@fs_customcolor` into
 `14`/`13` and `16`/`15`. Ops 58-62 remain interesting only as the *incremental* edit route HX Edit
 presumably uses. `16`'s unit is the **palette index**, not RGB [solid — writing 1 through 10 and
-watching the ring gave ten distinct hues matching HX Edit's palette (white, red, orange, yellow,
-pale yellow, green, aqua, blue, purple, magenta), where raw RGB 1–10 would all be near-black].
+watching the ring gave ten distinct hues, where raw RGB 1–10 would all be near-black]. The index
+space is the `footswitchLED` enum in Line 6's own `HelixControls.json` — 0 Auto Color, 1 White,
+2 Red, 3 Dark Orange, 4 Light Orange, 5 Yellow, 6 Green, 7 Turquoise, 8 Blue, 9 Violet, 10 Pink,
+11 Off — whose ordinals match both the wire values and every observed ring colour.
 The same sweep showed the ring and scribble **repaint immediately** on an op-21 write — the custom
 label and colour are fully live-editable, and `Session::{set_switch_label,set_switch_color}` (CLI
 `switch-label` / `switch-color`, and the ✎ editor in the GUI's block panel) do exactly that.

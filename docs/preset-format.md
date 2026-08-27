@@ -111,6 +111,7 @@ split topologies and all 106 parameter values agree.
 | `footswitch.dspN.blockM` | key `3 → 8`, transposed: `@fs_index` − 1 is the array position |
 | `@fs_label` / `@fs_ledcolor` / `@fs_enabled` | `11 → 5` (NUL-terminated) / `11 → 6` / `11 → 7` |
 | `@fs_customlabel` / `@fs_momentary` | `14` (NUL-terminated, `13` says whether there is one) / `12` |
+| `@fs_customcolor` | `16`, a palette index, with `15` saying whether there is one |
 | `snapshotN.@name` / `@tempo` / `@valid` | snapshot keys `4` (NUL-terminated) / `5` / `0` |
 | `snapshotN.@pedalstate` / `@ledcolor` / `@custom_name` | snapshot keys `11` / `12` / `14` |
 | `snapshotN.blocks.dspN.<name>` | snapshot key `3[wire slot][1]` |
@@ -322,7 +323,13 @@ of a `Map{7}` node:
   > **here as well as** in key 4; a bypass appears only here, as type 1. `loaded_blocks` drops type-2
   > entries before enriching a block's `footswitch`, so a block with only a knob on FS1 is not badged
   > as being on FS1.
-- `14` = user label string; `13` = has-label flag (e.g. a `Harmonic Tremolo` renamed `Tremolo`).
+- `14` = custom label string; `13` = has-label flag (e.g. a `Harmonic Tremolo` renamed `Tremolo`).
+  `16` = custom LED colour; `15` = has-colour flag — the same value-plus-gate shape. Op 33 mirrors
+  `14` as its `109` and `16` as its top-level `66` exactly when the gate is true [solid — flag-flip
+  experiments through the op-21 write path, live HX Stomp, 2026-08-27]. `16`'s value is
+  `@fs_customcolor`'s **palette index** (1–10), not `0xRRGGBB` `[hypothesis` — never observed on a
+  wire document, but HX Edit backups report `@fs_ledcolor` as raw RGB and `@fs_customcolor` as a
+  small index, and both come from reading the device`]`. Which index is which colour is unmapped.
 
 ### Controllers / footswitch assignments (`4`), snapshots (`10`/`2`) [solid — corrected 2026-08-21]
 - **`4` = `Array[footswitches + 5]`** — **parameter**-controller assignment table, **indexed by

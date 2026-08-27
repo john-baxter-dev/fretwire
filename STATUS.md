@@ -4078,3 +4078,33 @@ Two protocol facts fell out:
   device-written rows hold and what the conversion writes.
 
 `docs/preset-format.md` updated both ways.
+
+## Sixty-second round (2026-08-27): **the switch label mystery dies, and custom colours fall with it**
+
+The oldest small annoyance — a switch our op 56 binds answers op 33 with `109: nil` where a
+panel-bound one carries the block's name — turned out to guard the whole custom-labels feature.
+Settled by *writing the document* instead of probing opcodes: patch one byte, push it through the
+op-21 path (the deliberate-restore machinery from round 60), ask op 33.
+
+- **Op 33's `109` is layout-entry key `14` gated by `13`, verbatim.** Flipping `13` alone turned
+  `109` from `nil` into the `"\0"` key 14 held; storing `"C"` came back `"C\0"` (the firmware adds
+  the terminator). The pedal **never backfills** the pair — not with time, an op-76 re-read, a
+  snapshot change, or a save plus flash reload, all tried. The panel's bind gesture writes them
+  itself; op 56 writes the virgin pair. Mystery closed: no missing opcode, two missing keys.
+- **Top-level `66` is key `16` gated by `15` — the custom ring colour.** `16: 127` alone changed
+  nothing; with `15: true` op 33 answered `66: 127`. The same value-plus-gate shape as the label,
+  sitting right next to it.
+- The slot was byte-restored from the day's backup after each write and verified with an op-4
+  read-back (the only diff was the reply envelope's transaction counter).
+
+Consequence: **the custom colours/labels feature no longer waits on ops 58-62** — storage is fully
+known and writable through the document. `hxb-convert` already carried `@fs_customlabel`; it now
+carries `@fs_customcolor` too (94 entries in the reference Floor backup were being dropped
+silently). The colour's unit is the tone's own **palette index** (1–10 observed) `[hypothesis]` —
+HX Edit backups report `@fs_ledcolor` as raw RGB but `@fs_customcolor` as the index, and both come
+from reading the device — and which index is which colour is still unmapped. The user's own Stomp
+backup corroborates the label half from a second device: 11 custom-label entries, every one
+`14: "<text>\0", 13: true`.
+
+`docs/protocol.md` (new section replacing the two superseded paragraphs), `docs/preset-format.md`,
+and the roadmap's two footswitch items updated.

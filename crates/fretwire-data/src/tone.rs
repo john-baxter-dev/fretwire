@@ -301,6 +301,7 @@ pub fn apply_tone(
 /// | the block's slot | `11 → 8`, the wire slot |
 /// | `@fs_momentary` | `12` |
 /// | `@fs_customlabel` | `14`, NUL-terminated, with `13` saying whether there is one |
+/// | `@fs_customcolor` | `16`, with `15` saying whether there is one |
 ///
 /// [solid — 2026-08-25, all ten bindings of the oracle preset, including the one switch carrying
 /// two blocks and the two whose `@fs_enabled` is false]
@@ -411,7 +412,12 @@ fn apply_footswitches(
 
 /// One binding, in the device's own key order.
 ///
-/// `15` and `16` are `false`/`0` on every entry of every fixture and nothing here varies them.
+/// `14`/`13` are the custom label and its has-one flag, `16`/`15` the custom colour and its flag —
+/// two value-plus-gate pairs with the same shape. Op 33 mirrors `14` as its `109` and `16` as its
+/// top-level `66` only when the gate is true [solid — flag-flip experiments on a live HX Stomp,
+/// 2026-08-27]. The colour is the tone's `@fs_customcolor` verbatim: a **palette index** (1–10 in
+/// the reference backup), not `0xRRGGBB` — if the wire held RGB, HX Edit's own backups would show
+/// RGB here the way `@fs_ledcolor` does.
 fn footswitch_entry(binding: &Json, slot: usize, param: Option<i64>) -> Value {
     let text = |key: &str| {
         binding
@@ -420,6 +426,7 @@ fn footswitch_entry(binding: &Json, slot: usize, param: Option<i64>) -> Value {
             .map(|s| format!("{s}\0"))
     };
     let custom = text("@fs_customlabel");
+    let custom_color = binding.get("@fs_customcolor").and_then(Json::as_i64);
     // A bypass binding is node type 1; a parameter controller on a switch is type 2 and carries
     // the parameter reference (`9`, same `{28, 29, 41}` shape as key 4's) plus a `2: 0`, in the
     // device's own key order. [solid — the oracle preset's "Route To" switch]
@@ -470,8 +477,11 @@ fn footswitch_entry(binding: &Json, slot: usize, param: Option<i64>) -> Value {
             Value::from(custom.clone().unwrap_or_else(|| "\0".into())),
         ),
         (Value::from(13), Value::from(custom.is_some())),
-        (Value::from(16), Value::from(0)),
-        (Value::from(15), Value::from(false)),
+        (
+            Value::from(16),
+            Value::from(custom_color.unwrap_or_default()),
+        ),
+        (Value::from(15), Value::from(custom_color.is_some())),
     ])
 }
 
@@ -1433,6 +1443,31 @@ mod tests {
         );
         // The looper is a different slot shape entirely (kind 7), never built as an effect slot.
         assert_eq!(block_class(6, "HD2_Looper", None), None, "@type 6");
+    }
+
+    #[test]
+    fn a_custom_color_rides_in_sixteen_behind_its_gate() {
+        // No oracle preset carries one, so this is pinned by shape: the palette index verbatim in
+        // `16` with `15` true, and the virgin `0`/`false` pair when the tone has none.
+        let get = |v: &Value, key: i64| {
+            let Value::Map(pairs) = v.clone() else {
+                panic!("not a map")
+            };
+            pairs
+                .into_iter()
+                .find(|(k, _)| k.as_i64() == Some(key))
+                .map(|(_, v)| v)
+        };
+        let colored = footswitch_entry(
+            &serde_json::json!({ "@fs_customcolor": 6, "@fs_index": 2 }),
+            16,
+            None,
+        );
+        assert_eq!(get(&colored, 16), Some(Value::from(6)));
+        assert_eq!(get(&colored, 15), Some(Value::from(true)));
+        let plain = footswitch_entry(&serde_json::json!({ "@fs_index": 2 }), 16, None);
+        assert_eq!(get(&plain, 16), Some(Value::from(0)));
+        assert_eq!(get(&plain, 15), Some(Value::from(false)));
     }
 
     #[test]

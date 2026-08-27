@@ -1093,27 +1093,40 @@ Binding a block to a switch and re-reading named three of the four unknowns in o
 apart; the earlier "66 is a bitmask" reading in the status-push section is refuted by the same
 finding.
 
-Top-level `66` stayed `nil` throughout, so it is presumably a **per-switch override** that falls
-back to the block's category colour — the write ops (58-62) are where that would be set, and they
-are still untried.
+### Where the label and the override colour live — and why op 56 never fills them [solid — live HX Stomp, 2026-08-27]
 
-**`109` is set by the pedal and not by our op 56** [solid, mechanism unknown]. The switch bound from
-the hardware carried `109: "Simple Delay\0"`; the one `assign-bypass` bound carried `109: nil`,
-with the name present only inside the assignment's own key 69. Whether the pedal fills it in on its
-own schedule or op 56 is genuinely missing a step is not settled — but a switch we bind is not
-byte-identical to one the pedal binds, and that is worth knowing before anything relies on the
-label.
+Op 33's `109` and top-level `66` are not device state: they mirror **two value-plus-gate pairs in
+the preset document's layout entry** — `14` the label string gated by `13`, `16` the colour gated by
+`15`. Proved by writing them: flipping `13` alone (a one-byte patch pushed through the op-21 write
+path) turned `109` from `nil` into the `"\0"` key 14 held; putting `"C"` in `14` came back as
+`109: "C\0"` (the firmware supplies the terminator); `16: 127` surfaced as `66: 127` only once `15`
+was true. The mirroring is verbatim and the gates decide — a stale string behind a false gate is
+invisible, which is the same rule `footswitch_layout` already applied to `14`/`13`.
 
-**All of it is `nil` here because nothing on this preset has been customised**, which is exactly why
-the shape is decodable and the meanings are not. Setting a colour and a label on one switch from the
-pedal's own menu and re-reading would name every one of these keys in a single request — the same
-loop that mapped the settings namespace, and it needs no capture.
+That settles the earlier "`109` is set by the pedal and not by our op 56" puzzle: **the pedal never
+fills the label in on its own** — not with time, not on an op-76 re-read, not on a snapshot change,
+and not across a save and a reload from flash. The panel's bind gesture writes `13: true` +
+`14: <block name>` itself; op 56 writes the virgin `false`/`"\0"` pair. So op 56 is not missing a
+follow-up opcode — the difference between a panel bind and ours is exactly those two document keys,
+and either can be produced deliberately.
+
+Consequence: **custom footswitch labels and colours are writable today** through the document
+(op-21) path, and `hxb-convert` carries a tone's `@fs_customlabel` and `@fs_customcolor` into
+`14`/`13` and `16`/`15`. Ops 58-62 remain interesting only as the *incremental* edit route HX Edit
+presumably uses. One thing is still `[hypothesis]`: `16`'s unit. The tone's `@fs_customcolor` is a
+**palette index** (1–10 across a 460-preset reference backup) while `@fs_ledcolor` is raw
+`0xRRGGBB`, and both are produced by HX Edit reading the device — so the wire value is read as the
+index, but no wire document with a real custom colour has been observed, and the index→colour
+palette itself is unmapped.
 
 ### Not built yet
 
 Ops **58-62** — momentary/latching, custom switch label, LED colour — are documented by `tonepush`
-and untried here. Op **64** sets a *parameter's* MIDI CC, which is a different mechanism from a
-bypass's (that rides op 37 with `95: 5`). None of them are needed for the assignment itself.
+and untried here. Since 2026-08-27 they are also *unnecessary for storage*: the label and colour
+live in the document (see above) and can be written through the op-21 path, so these ops matter
+only as the incremental edit route. Op **64** sets a *parameter's* MIDI CC, which is a different
+mechanism from a bypass's (that rides op 37 with `95: 5`). None of them are needed for the
+assignment itself.
 
 ## The user IR store — reading and writing it [solid — verified live on an HX Stomp 2026-08-22]
 

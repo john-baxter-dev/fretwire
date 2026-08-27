@@ -604,36 +604,31 @@ real session.
       footswitch in the GUI, the way HX Edit does, instead of inheriting the block's category colour
       and name. Wanted — it is one of the few things HX Edit still does that we cannot.
 
-      **Reading is done** (above): op 33 returns the record, `109` is the label, `67` the assignments
-      array, and `67[].66` the colour as `0xRRGGBB`. Top-level `66` stays `nil` while the
-      assignment's own colour is set, so it is very likely the per-switch **override** — the field
-      this feature writes. That read-back is what makes the write tractable: we can tell whether an
-      attempt landed without re-reading the preset.
+      **Storage is fully decoded (2026-08-27), so the feature no longer waits on ops 58-62.** The
+      label is layout-entry key `14` gated by `13`, the colour override key `16` gated by `15`, and
+      op 33 mirrors them as `109` / top-level `66` — proved by writing them through the op-21
+      document path on a live Stomp (`docs/protocol.md`). A read-modify-write of the edit buffer can
+      set either today, and `hxb-convert` now carries `@fs_customlabel` **and** `@fs_customcolor`.
 
-      **Writing is ops 58-62, and probing them is expensive.** They are documented by `tonepush` and
-      untried here. `probe-edit --op 58 --set 102=1 --set 66=255` **wedged an HX Stomp** and cost a
-      power cycle (2026-08-22; `docs/safety.md`). All five ops accept a bare `{102: switch}` and do
-      nothing with it, so acceptance says nothing about whether the body was understood. At current
-      knowledge that is roughly one power cycle per guess.
+      **Ops 58-62 are now only the *incremental* route** (what HX Edit presumably sends per
+      keystroke), and probing them is still expensive: `probe-edit --op 58 --set 102=1 --set 66=255`
+      **wedged an HX Stomp** and cost a power cycle (2026-08-22; `docs/safety.md`). All five accept
+      a bare `{102: switch}` and do nothing, so acceptance proves nothing. **Do not resume by
+      guessing bodies** — get `tonepush`'s op documentation or capture HX Edit setting a colour on
+      Windows first.
 
-      **Do not resume by guessing bodies.** Get `tonepush`'s op documentation first, or capture HX
-      Edit setting a colour on Windows — either turns this from a search into a confirmation. Then:
-      one op, one body, look at the device, and nothing unsaved on the pedal.
+      Open sub-questions: the colour **palette** — `@fs_customcolor` is an index (1–10 observed),
+      and which index is which colour is unmapped (set one in HX Edit, or on a Floor's panel, and
+      look); which of 58-62 is which; whether `65`/`68`/`26`/`120` matter.
 
-      Open sub-questions: which of 58-62 is which; whether `65`/`68`/`26`/`120` matter; and whether
-      the colour is written on the switch record or on the assignment inside it, since both carry a
-      key 66. An HX Stomp cannot set a custom **label** from its own panel, so that half can only be
-      confirmed by writing it — there is no read-only route to it.
-
-      Once it lands, the GUI already has the pieces: the footswitch binding UI exists, and
-      `Catalog::category_color` gives the inherited colour to show as the default a custom one
-      departs from.
-- [ ] **`assign-bypass` leaves the switch label unset where the pedal sets it.** A switch bound from
-      the hardware carries `109: "<block name>\0"`; one bound by our op 56 carries `109: nil`, with
-      the name only inside the assignment. Whether the pedal fills it in on its own schedule or op
-      56 is missing a step is not settled. Low stakes — the pedal still shows a sensible label — but
-      a switch we bind is not byte-identical to one it binds, which matters before anything reads
-      that field.
+      Once the GUI grows the control it already has the pieces: the footswitch binding UI exists,
+      and `Catalog::category_color` gives the inherited colour the custom one departs from.
+- [x] **`assign-bypass` leaves the switch label unset where the pedal sets it — SETTLED
+      (2026-08-27).** Op 33's `109` mirrors the layout entry's key `14` gated by `13`, and the pedal
+      **never** backfills them — not with time, not on re-read, not on a snapshot change, not across
+      a save and flash reload (all tried live). The panel's bind gesture writes `13: true` +
+      `14: <name>` itself; op 56 writes the virgin pair. So op 56 is not missing a follow-up op —
+      the difference is two document keys, writable on purpose. See `docs/protocol.md`.
 
 - [ ] **Session grid/routing planning is still DSP-0 only.** `add_block_at`, `place_block`,
       `insert_block`, `reorder_block` and `set_node_pos` plan slot moves inside one 20-slot array

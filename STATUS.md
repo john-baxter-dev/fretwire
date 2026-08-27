@@ -4042,3 +4042,39 @@ unclaimed; those logs would need re-reading with the distinction in mind.
 
 Side effect worth keeping: the test exported the Stomp's full bank first (as `docs/safety.md`
 asks), and the export now lives at `~/.local/share/fretwire/backups/stomp-presets-2026-08-26.json`.
+
+## Sixty-first round (2026-08-26): **the controller table carries across, and the "extra rows" were a wrong preset**
+
+The last big `.hxb` restore gap — controller assignments — closed without new evidence, because
+the evidence was misread rather than missing. The oracle preset's tone was believed to describe
+only two of its four wire assignments, the other two written off as capture-session artifacts.
+Wrong preset: the backup holds more than one "Pull Me Under", and the earlier scan had matched the
+first by name. `FACTORY 1` slot 45's tone describes **all four** — two expression pedals, a
+footswitch on the split's `Route To`, and the snapshots source on a DSP2 drive — which made the
+whole table writable *and* checkable.
+
+`fretwire_data::tone` now writes, from the tone's `controller` section:
+- **key `4`** — one row per assignment, places handed out ascending by source ordinal (which
+  reproduces the device's own numbering);
+- **each snapshot's key `2`** — the per-controller values, `[fs-enabled, place, value]` rows
+  against those places, sentinel `[false, len, nil]` elsewhere;
+- **the type-2 footswitch-layout row** a switch-sourced assignment also owns — same array as the
+  bypass bindings, `11 → 0 = 2` plus the `{28, 29, 41}` parameter reference, merged through
+  `apply_footswitches` so one binding never exists in one table and not the other.
+
+The oracle test now demands **whole-table equality** on all three — every key-4 ordinal, every
+snapshot's complete key-2 array, every footswitch position — and gets it. The old test's carve-out
+for the type-2 switch died with the gap. Across the sample backup, all 608 controller entries in
+all 363 presets carry; the one source kind skipped is MIDI, whose row carries a CC number no tone
+we hold shows.
+
+Two protocol facts fell out:
+- **The Floor's switch ordinals start at 6** (`switch = ordinal − 5`; Stomp/XL are `− 2`), from
+  the one ordinal↔layout pair the oracle holds (`Route To`: ordinal 13, layout position 7). Three
+  extra leading sources is exactly EXP3 + the two Variax knobs, which only a Floor has —
+  plausible, unconfirmed.
+- **Key `1`'s "target value type" reading is refuted**: the oracle stores `1: 4` on two
+  *continuous* pedal parameters. Off a MIDI source the field is genuinely open; `4` is what most
+  device-written rows hold and what the conversion writes.
+
+`docs/preset-format.md` updated both ways.

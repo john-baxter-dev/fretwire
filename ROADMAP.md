@@ -661,15 +661,22 @@ real session.
       > Sultans stream all along. **Every non-empty preset in the sample backup now converts —
       > 363/363, from 39.** Fixtures: `captures/pairing_sweep.md`; oracle tests:
       > `fretwire-data/tests/paired_blocks.rs`.
-      **Not yet sent to a pedal.** What is left, in order:
-      - **Controller assignments (key `4`)** and the snapshot controller values (`2`) that index
-        off them. Currently the donor's table is *cleared* — a stale row addresses blocks by slot
-        and every slot has changed — so a restored preset arrives with no expression/controller
-        assignments.
+      > **2026-08-26, later: controller assignments carry across too.** The oracle preset turned
+      > out to describe its whole table — the earlier "extra rows from the capture session"
+      > reading was a scan hitting a *different* preset of the same name — so key `4`, each
+      > snapshot's per-controller values (`2`), and the type-2 footswitch-layout row a
+      > switch-sourced assignment also owns are all written now, byte-identical to the device's
+      > own across all four source kinds the oracle holds (EXP ×2, footswitch, snapshots). All
+      > 608 controller entries across the sample backup's 363 presets carry; the one source kind
+      > still skipped is MIDI (its row carries a CC number no tone we hold shows). Bonus decode:
+      > the Floor's switch ordinals run from 6 (`switch = ordinal − 5`), not the Stomp/XL's 3.
+      **A converted preset has still never been sent to a pedal.** What is left:
       - **Topology `AB`** (a DSP the paths merely pass through, Floor-only) still has no wire
         evidence and stays a refusal.
       - The four **input/output nodes** store a ragged prefix of their symbol's parameter list and
         the rule is unknown; they keep the target's values.
+      - **MIDI-sourced controller rows** (the CC number, key `1` under a MIDI source) — needs one
+        tone+wire pair with a MIDI assignment.
 
 ## Phase 10 — Headless / serve mode
 Opened 2026-08-23 by a Helix Floor owner running a Pi 5 with PiPedal, who asked for a Raspberry Pi

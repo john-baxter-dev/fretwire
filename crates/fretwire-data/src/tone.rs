@@ -39,10 +39,12 @@
 //! undecoded), key `2`, the device-info stamp at key `7`, and the input/output nodes, whose stored
 //! parameter vector is a ragged prefix of its symbol's list that two samples cannot pin down.
 //!
-//! The **controller-assignment table** (key `4`) is the exception in the other direction: it is
-//! *cleared* rather than kept, because it addresses blocks by slot and every slot has just been
-//! rewritten. Writing it from the `tone` is the main piece still missing, and the snapshots'
-//! controller state (`10 → 10[n] → 2`) indexes off its order, so the two go together.
+//! The **controller-assignment table** (key `4`) is rebuilt from the `tone`'s `controller`
+//! section — the donor's own rows address blocks by slot and every slot has just been rewritten —
+//! together with the snapshots' per-controller values (`10 → 10[n] → 2`), which index off its
+//! places, and the type-2 footswitch-layout row a switch-sourced assignment also owns. The one
+//! source kind still skipped is MIDI, whose row carries a CC number no `tone` we hold shows —
+//! see [`apply_controllers`].
 //!
 //! That is the conservative direction for the same reason the rest of this crate takes it: a blob
 //! is written to flash, and a field we guessed wrong is not visible until a musician's preset
@@ -131,6 +133,8 @@ pub struct Conversion {
     pub snapshots: usize,
     /// Footswitch bindings written.
     pub footswitches: usize,
+    /// Parameter-controller assignments written (preset key `4`).
+    pub controllers: usize,
     /// Parts of the `tone` tree this does not yet write, one human-readable line each.
     pub not_carried: Vec<String>,
 }
@@ -272,9 +276,9 @@ pub fn apply_tone(
         apply_topology(donor, group_key, topology, dsp, &mut out);
     }
 
-    apply_snapshots(donor, tone, &mut out);
-    apply_footswitches(donor, tone, &mut out);
-    clear_controllers(donor, &mut out);
+    let (placed, controller_switch_rows) = apply_controllers(donor, tone, syms, &mut out);
+    apply_snapshots(donor, tone, &placed, &mut out);
+    apply_footswitches(donor, tone, controller_switch_rows, &mut out);
     note_omissions(tone, &mut out);
     Ok(out)
 }
@@ -311,6 +315,7 @@ pub fn apply_tone(
 fn apply_footswitches(
     donor: &mut PresetStream,
     tone: &JsonMap<String, Json>,
+    controller_rows: Vec<(usize, bool, Value)>,
     out: &mut Conversion,
 ) {
     let placement = block_placement(tone);
@@ -323,7 +328,9 @@ fn apply_footswitches(
 
     // Collect (switch, position-on-switch, entry) before touching the donor: the tone is keyed by
     // block and the wire by switch, so everything has to be in hand to order a switch's entries.
-    let mut bindings: Vec<(usize, bool, Value)> = Vec::new();
+    // A switch-sourced parameter controller is a type-2 row in this same array — those arrive
+    // ready-built from [`apply_controllers`].
+    let mut bindings: Vec<(usize, bool, Value)> = controller_rows;
     let mut unplaceable = 0usize;
     for dsp in 0..DSP_GROUP_KEYS.len() {
         let Some(switches) = tone
@@ -342,7 +349,11 @@ fn apply_footswitches(
                 continue;
             };
             let primary = binding.get("@fs_primary").and_then(Json::as_bool) == Some(true);
-            bindings.push((index as usize, primary, footswitch_entry(binding, slot)));
+            bindings.push((
+                index as usize,
+                primary,
+                footswitch_entry(binding, slot, None),
+            ));
         }
     }
 
@@ -401,7 +412,7 @@ fn apply_footswitches(
 /// One binding, in the device's own key order.
 ///
 /// `15` and `16` are `false`/`0` on every entry of every fixture and nothing here varies them.
-fn footswitch_entry(binding: &Json, slot: usize) -> Value {
+fn footswitch_entry(binding: &Json, slot: usize, param: Option<i64>) -> Value {
     let text = |key: &str| {
         binding
             .get(key)
@@ -409,32 +420,47 @@ fn footswitch_entry(binding: &Json, slot: usize) -> Value {
             .map(|s| format!("{s}\0"))
     };
     let custom = text("@fs_customlabel");
+    // A bypass binding is node type 1; a parameter controller on a switch is type 2 and carries
+    // the parameter reference (`9`, same `{28, 29, 41}` shape as key 4's) plus a `2: 0`, in the
+    // device's own key order. [solid — the oracle preset's "Route To" switch]
+    let mut node = vec![
+        (
+            Value::from(0),
+            Value::from(if param.is_some() { 2 } else { 1 }),
+        ),
+        (
+            Value::from(5),
+            Value::from(text("@fs_label").unwrap_or_else(|| "\0".into())),
+        ),
+        (
+            Value::from(6),
+            Value::from(
+                binding
+                    .get("@fs_ledcolor")
+                    .and_then(Json::as_i64)
+                    .unwrap_or(0),
+            ),
+        ),
+        (
+            Value::from(7),
+            Value::from(binding.get("@fs_enabled").and_then(Json::as_bool) != Some(false)),
+        ),
+        (Value::from(8), Value::from(slot as i64)),
+    ];
+    if let Some(param_index) = param {
+        node.push((Value::from(2), Value::from(0)));
+        node.push((
+            Value::from(9),
+            Value::Map(vec![
+                (Value::from(28), Value::from(0)),
+                (Value::from(29), Value::from(param_index)),
+                (Value::from(41), Value::from(false)),
+            ]),
+        ));
+    }
     Value::Map(vec![
         (Value::from(10), Value::from(0)), // position on the switch, set by the caller
-        (
-            Value::from(11),
-            Value::Map(vec![
-                (Value::from(0), Value::from(1)), // a bypass binding, not a parameter controller
-                (
-                    Value::from(5),
-                    Value::from(text("@fs_label").unwrap_or_else(|| "\0".into())),
-                ),
-                (
-                    Value::from(6),
-                    Value::from(
-                        binding
-                            .get("@fs_ledcolor")
-                            .and_then(Json::as_i64)
-                            .unwrap_or(0),
-                    ),
-                ),
-                (
-                    Value::from(7),
-                    Value::from(binding.get("@fs_enabled").and_then(Json::as_bool) != Some(false)),
-                ),
-                (Value::from(8), Value::from(slot as i64)),
-            ]),
-        ),
+        (Value::from(11), Value::Map(node)),
         (
             Value::from(12),
             Value::from(binding.get("@fs_momentary").and_then(Json::as_bool) == Some(true)),
@@ -459,18 +485,247 @@ fn footswitch_entry(binding: &Json, slot: usize) -> Value {
 ///
 /// Writing it from the `tone` is the remaining piece: the rows have to be built before the
 /// snapshots' key `2`, which indexes off this table's order, can be written either.
-fn clear_controllers(donor: &mut PresetStream, out: &mut Conversion) {
-    let Some(Value::Array(controllers)) = map_get_mut(&mut donor.preset, 4) else {
-        return;
+/// One assignment written into preset key `4`, remembered by its tone address so the snapshots'
+/// per-controller values (snapshot key `2`) can be written against the same places.
+struct PlacedController {
+    place: usize,
+    dsp: usize,
+    target: String,
+    param: String,
+}
+
+/// Preset key `4` — the parameter-controller assignment table, written from the tone's
+/// `controller` section.
+///
+/// The donor's own rows are cleared first whatever happens next: they address blocks by slot and
+/// every slot has just been rewritten, so a kept row is a wrong one.
+///
+/// Row shape per `docs/preset-format.md` (`{0: source, 1: 4, 2: min, 3: max, 5: slot,
+/// 6: {28: model path, 29: param index, 41}, 13: snapshot-disable}`), checked byte-for-byte
+/// against all four rows of the one preset held in both forms — two expression pedals, one
+/// footswitch, one snapshots-sourced. **Key `1` is written as the constant 4**: its semantics are
+/// still an open question (see the docs — held samples disagree between 0 and 4), and 4 is what
+/// every row of the oracle stores.
+///
+/// A **footswitch-sourced** assignment is also a **type-2 row in the footswitch layout**
+/// (`3 → 8`) — the two tables describe one binding and must agree — so this returns those rows
+/// for [`apply_footswitches`] to place alongside the bypass bindings. A **MIDI-sourced** one
+/// additionally carries a CC number nothing in our `tone` samples shows, so it is skipped and
+/// counted rather than half-written.
+///
+/// Places are handed out ascending (ordinal, encounter order), which reproduces the oracle's own
+/// numbering; snapshot key `2` indexes by place, so any self-consistent order is functional.
+fn apply_controllers(
+    donor: &mut PresetStream,
+    tone: &JsonMap<String, Json>,
+    syms: &DeviceSymbols,
+    out: &mut Conversion,
+) -> (Vec<PlacedController>, Vec<(usize, bool, Value)>) {
+    let table_len = match map_get_mut(&mut donor.preset, 4) {
+        Some(Value::Array(rows)) => {
+            if rows.iter().any(|c| !matches!(c, Value::Nil)) {
+                out.not_carried.push(
+                    "the target preset's own controller assignments: cleared, because they \
+                     address blocks by slot and every slot has changed"
+                        .into(),
+                );
+            }
+            rows.fill(Value::Nil);
+            rows.len()
+        }
+        _ => return (Vec::new(), Vec::new()),
     };
-    if controllers.iter().any(|c| !matches!(c, Value::Nil)) {
-        out.not_carried.push(
-            "the target preset's own controller assignments: cleared rather than kept, because \
-             they address blocks by slot and every slot has changed"
-                .into(),
-        );
+    // Source ordinals are sized by the device: 0 none, the expression inputs, one per footswitch,
+    // then MIDI second-last and snapshots last (docs/preset-format.md). Where the footswitch run
+    // starts is a device attribute: ordinal = switch number + 2 on the Stomp and the XL [solid,
+    // both measured], + 5 on the Floor's 20-entry table [solid for the one pair held: the oracle's
+    // "Route To" is ordinal 13 and sits at layout position 7 — plausibly EXP3 and the two Variax
+    // knobs occupying 3..=5, which only a Floor has, but that reading is unconfirmed].
+    let snapshots_ordinal = table_len as i64 - 1;
+    let midi_ordinal = table_len as i64 - 2;
+    let switch_offset = if table_len == 20 { 5 } else { 2 };
+
+    let mut collected: Vec<(i64, PlacedController, Value, Option<(usize, bool)>)> = Vec::new();
+    let mut midi_skipped = 0usize;
+    for dsp in 0..DSP_GROUP_KEYS.len() {
+        let dsp_key = format!("dsp{dsp}");
+        let Some(ctl) = tone
+            .get("controller")
+            .and_then(|c| c.get(&dsp_key))
+            .and_then(Json::as_object)
+        else {
+            continue;
+        };
+        let Some(tone_dsp) = tone.get(&dsp_key).and_then(Json::as_object) else {
+            continue;
+        };
+        for (target, params) in ctl {
+            let Some(params) = params.as_object() else {
+                continue;
+            };
+            for (param, spec) in params {
+                let Some(ordinal) = spec.get("@controller").and_then(Json::as_i64) else {
+                    continue;
+                };
+                if ordinal == midi_ordinal {
+                    midi_skipped += 1;
+                    continue;
+                }
+                if ordinal <= 0 || ordinal > snapshots_ordinal {
+                    out.not_carried.push(format!(
+                        "controller dsp{dsp}.{target}.{param}: source ordinal {ordinal} is \
+                         outside the target device's table — skipped"
+                    ));
+                    continue;
+                }
+                let on_switch = ordinal > switch_offset && ordinal < midi_ordinal;
+                match controller_row(target, param, spec, ordinal, dsp, tone_dsp, syms) {
+                    Ok(row) => {
+                        // The layout half of a switch-sourced binding, at the switch the ordinal
+                        // names. The slot is the row's own (key 5).
+                        let switch = on_switch.then(|| {
+                            let primary =
+                                spec.get("@fs_primary").and_then(Json::as_bool) == Some(true);
+                            ((ordinal - switch_offset) as usize, primary)
+                        });
+                        collected.push((
+                            ordinal,
+                            PlacedController {
+                                place: 0,
+                                dsp,
+                                target: target.clone(),
+                                param: param.clone(),
+                            },
+                            row,
+                            switch,
+                        ));
+                    }
+                    Err(why) => out.not_carried.push(format!(
+                        "controller dsp{dsp}.{target}.{param}: {why} — skipped"
+                    )),
+                }
+            }
+        }
     }
-    controllers.fill(Value::Nil);
+    collected.sort_by_key(|(ordinal, ..)| *ordinal);
+
+    let mut switch_rows: Vec<(usize, bool, Value)> = Vec::new();
+    if let Some(Value::Array(rows)) = map_get_mut(&mut donor.preset, 4) {
+        for (place, (ordinal, pc, row, _)) in collected.iter_mut().enumerate() {
+            pc.place = place;
+            let item = Value::Map(vec![
+                (Value::from(0), Value::from(place as i64)),
+                (Value::from(1), row.clone()),
+            ]);
+            match &mut rows[*ordinal as usize] {
+                Value::Array(list) => list.push(item),
+                slot => *slot = Value::Array(vec![item]),
+            }
+        }
+    }
+    for (_, pc, row, switch) in &collected {
+        let Some((switch, primary)) = switch else {
+            continue;
+        };
+        // Rebuild the layout row from the same tone entry the key-4 row came from.
+        let dsp_key = format!("dsp{}", pc.dsp);
+        let (Some(spec), Some(slot), Some(param_index)) = (
+            tone.get("controller")
+                .and_then(|c| c.get(&dsp_key))
+                .and_then(|d| d.get(&pc.target))
+                .and_then(|t| t.get(&pc.param)),
+            map_get(row, 5).and_then(Value::as_i64),
+            map_get(row, 6)
+                .and_then(|p| map_get(p, 29))
+                .and_then(Value::as_i64),
+        ) else {
+            continue;
+        };
+        switch_rows.push((
+            *switch,
+            *primary,
+            footswitch_entry(spec, slot as usize, Some(param_index)),
+        ));
+    }
+    out.controllers = collected.len();
+    if midi_skipped > 0 {
+        out.not_carried.push(format!(
+            "{midi_skipped} MIDI-sourced controller assignment(s): skipped — a MIDI row also \
+             carries a CC number no tone we hold shows"
+        ));
+    }
+    (
+        collected.into_iter().map(|(_, pc, ..)| pc).collect(),
+        switch_rows,
+    )
+}
+
+/// The inner map of one key-4 row (its key `1`), or why it cannot be built.
+fn controller_row(
+    target: &str,
+    param: &str,
+    spec: &Json,
+    ordinal: i64,
+    dsp: usize,
+    tone_dsp: &JsonMap<String, Json>,
+    syms: &DeviceSymbols,
+) -> std::result::Result<Value, String> {
+    let index = match target {
+        "split" => Node::SPLIT.index,
+        "join" => Node::MIXER.index,
+        "inputA" => 0,
+        "outputA" => 9,
+        t if t.starts_with("block") => tone_dsp
+            .get(t)
+            .and_then(slot_index)
+            .ok_or("its target block has no usable @path/@position")?,
+        _ => {
+            return Err(
+                "a target of this kind has never been seen in a device-written table".into(),
+            );
+        }
+    };
+    let slot = dsp * DSP_SLOT_STRIDE as usize + index;
+    let entry = tone_dsp
+        .get(target)
+        .ok_or("its target is not in the tone")?;
+    let model = entry
+        .get("@model")
+        .and_then(Json::as_str)
+        .ok_or("its target has no @model")?;
+    let (_, _, params) = resolve_symbol(model, entry, syms).map_err(|e| e.to_string())?;
+    let want = fold_param_name(param);
+    let param_index = params
+        .iter()
+        .position(|p| fold_param_name(p) == want)
+        .ok_or_else(|| format!("{param:?} is not a parameter of {model}"))?;
+    Ok(Value::Map(vec![
+        (Value::from(0), Value::from(ordinal)),
+        (Value::from(1), Value::from(4)),
+        (
+            Value::from(2),
+            json_to_msgpack(spec.get("@min").unwrap_or(&Json::Null)),
+        ),
+        (
+            Value::from(3),
+            json_to_msgpack(spec.get("@max").unwrap_or(&Json::Null)),
+        ),
+        (Value::from(4), Value::from(0)),
+        (Value::from(5), Value::from(slot as i64)),
+        (
+            Value::from(6),
+            Value::Map(vec![
+                (Value::from(28), Value::from(0)),
+                (Value::from(29), Value::from(param_index as i64)),
+                (Value::from(41), Value::from(false)),
+            ]),
+        ),
+        (Value::from(7), Value::from(0)),
+        (
+            Value::from(13),
+            json_to_msgpack(spec.get("@snapshot_disable").unwrap_or(&Json::Bool(false))),
+        ),
+    ]))
 }
 
 /// Preset key `10` — the snapshots.
@@ -491,12 +746,21 @@ fn clear_controllers(donor: &mut PresetStream, out: &mut Conversion) {
 /// | `@ledcolor` | `12` | |
 /// | `@custom_name` | `14` | |
 ///
-/// Left as the donor's: `1` and `2`, which hold **controller** state. `2` is one entry per
-/// assignment in preset key `4`, in that table's order, so it cannot be written before the
-/// assignment table is — and this does not write that table. `10 → 8`, the stored active snapshot,
-/// is left alone too: the `tone` says 0 where the same unit's dump says 4, so the pairing is
-/// unconfirmed and the field is already known to be an unreliable reading of the live snapshot.
-fn apply_snapshots(donor: &mut PresetStream, tone: &JsonMap<String, Json>, out: &mut Conversion) {
+/// Key `2` — the per-assignment controller values — is written against the places
+/// [`apply_controllers`] handed out: one `[fs-enabled, place, value]` row per assignment, from
+/// `snapshotN.controllers.dspN.<target>.<param>`, the rest of the array filled with the
+/// `[false, len, nil]` sentinel the device uses for unused rows.
+///
+/// Left as the donor's: `1`, controller state of a shape not yet decoded (`[24, false, [0…]]` per
+/// row in every fixture), and `10 → 8`, the stored active snapshot — the `tone` says 0 where the
+/// same unit's dump says 4, so the pairing is unconfirmed and the field is already known to be an
+/// unreliable reading of the live snapshot.
+fn apply_snapshots(
+    donor: &mut PresetStream,
+    tone: &JsonMap<String, Json>,
+    placed: &[PlacedController],
+    out: &mut Conversion,
+) {
     let placement = block_placement(tone);
     let Some(group) = map_get_mut(&mut donor.preset, 10) else {
         return;
@@ -539,6 +803,41 @@ fn apply_snapshots(donor: &mut PresetStream, tone: &JsonMap<String, Json>, out: 
             _ => continue,
         };
         set_map_key(snapshot, 3, bypass_matrix(from, &placement, width));
+
+        // Key 2 — one row per assignment place; sentinel [false, len, nil] where nothing is.
+        let len2 = match map_get(snapshot, 2) {
+            Some(Value::Array(a)) => a.len(),
+            _ => 0,
+        };
+        if len2 > 0 {
+            let mut rows: Vec<Value> = (0..len2)
+                .map(|_| {
+                    Value::Array(vec![
+                        Value::from(false),
+                        Value::from(len2 as i64),
+                        Value::Nil,
+                    ])
+                })
+                .collect();
+            for pc in placed.iter().filter(|p| p.place < len2) {
+                let spec = from
+                    .get("controllers")
+                    .and_then(|c| c.get(format!("dsp{}", pc.dsp)))
+                    .and_then(|d| d.get(&pc.target))
+                    .and_then(|t| t.get(&pc.param));
+                let fs_enabled = spec
+                    .and_then(|s| s.get("@fs_enabled"))
+                    .and_then(Json::as_bool)
+                    .unwrap_or(false);
+                let value = spec.and_then(|s| s.get("@value"));
+                rows[pc.place] = Value::Array(vec![
+                    Value::from(fs_enabled),
+                    Value::from(pc.place as i64),
+                    value.map(json_to_msgpack).unwrap_or(Value::Nil),
+                ]);
+            }
+            set_map_key(snapshot, 2, Value::Array(rows));
+        }
     }
     out.snapshots = in_tone.min(on_device);
 }
@@ -557,6 +856,8 @@ fn block_placement(tone: &JsonMap<String, Json>) -> Vec<((usize, String), usize)
             let index = match name.as_str() {
                 "split" => Some(Node::SPLIT.index),
                 "join" => Some(Node::MIXER.index),
+                "inputA" => Some(0),
+                "outputA" => Some(9),
                 n if n.starts_with("block") => slot_index(block),
                 _ => None,
             };
@@ -1042,8 +1343,8 @@ fn apply_topology(
 fn note_omissions(tone: &JsonMap<String, Json>, out: &mut Conversion) {
     if out.snapshots > 0 {
         out.not_carried.push(
-            "snapshot controller values (keys 1 and 2) and the stored active snapshot: left as the \
-             target preset's"
+            "snapshot key 1 (controller state of undecoded shape) and the stored active snapshot: \
+             left as the target preset's"
                 .into(),
         );
     }

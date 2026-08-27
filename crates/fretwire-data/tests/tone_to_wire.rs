@@ -259,41 +259,59 @@ fn the_footswitch_layout_comes_across() {
     let (got, want) = (layout(&converted), layout(&oracle));
     assert_eq!(got.len(), want.len(), "the array keeps the device's width");
 
-    let is_controller = |switch: &Value| match switch {
-        Value::Array(entries) => entries.iter().any(|e| {
-            map_get(e, 11)
-                .and_then(|n| map_get(n, 0))
-                .and_then(Value::as_i64)
-                == Some(2)
-        }),
-        _ => false,
-    };
+    // Whole-array: the bypass bindings from the tone's `footswitch` section and the type-2 row
+    // its `controller` section puts on a switch (the split's "Route To") land in the same array,
+    // and every position must be the device's own bytes. (This test used to carve out the type-2
+    // switch; the carve-out died when apply_controllers learned to write it.)
     let mut bound = 0;
     for (i, (got, want)) in got.iter().zip(&want).enumerate() {
-        if is_controller(want) {
-            continue;
-        }
         assert_eq!(got, want, "FS{}", i + 1);
         if !matches!(want, Value::Nil) {
             bound += 1;
         }
     }
-    assert_eq!(bound, 8, "eight switches carry a bypass binding");
+    assert_eq!(
+        bound, 9,
+        "nine switches carry a binding, one of them a controller"
+    );
 }
 
 /// The donor's controller assignments are **cleared**, not kept: key `4` addresses blocks by slot
 /// and by parameter index, and every slot has just been rewritten, so a surviving row would sweep
 /// a parameter of whatever now sits there.
 #[test]
-fn stale_controller_assignments_are_cleared() {
-    let Some((converted, _)) = converted_and_oracle() else {
+fn controller_assignments_come_across() {
+    let Some((converted, oracle)) = converted_and_oracle() else {
         return;
     };
-    let Some(Value::Array(controllers)) = map_get(&converted.preset, 4) else {
-        panic!("no assignment table");
+    let table = |ps: &PresetStream| match map_get(&ps.preset, 4) {
+        Some(Value::Array(a)) => a.clone(),
+        other => panic!("no assignment table: {other:?}"),
     };
-    assert!(!controllers.is_empty(), "the array itself must survive");
-    assert!(controllers.iter().all(|c| matches!(c, Value::Nil)));
+    let (got, want) = (table(&converted), table(&oracle));
+    assert_eq!(got.len(), want.len(), "the array itself must survive");
+
+    // The tone carries four assignments — the wah and volume pedals on EXP1/EXP2, a footswitch
+    // on the split's Route To, and the snapshots source on a DSP2 drive — and every one must
+    // reproduce the device's own row byte for byte, places included.
+    for (ordinal, (row, expect)) in got.iter().zip(&want).enumerate() {
+        assert_eq!(row, expect, "ordinal {ordinal}");
+    }
+
+    // The snapshots' per-controller values (key 2) index by those places, so each snapshot's
+    // whole array must match the device's — the four written rows and the unused-row sentinel
+    // everywhere else.
+    let snapshots = |ps: &PresetStream| match map_get(&ps.preset, 10).and_then(|m| map_get(m, 10)) {
+        Some(Value::Array(a)) => a.clone(),
+        _ => Vec::new(),
+    };
+    for (i, (got, want)) in snapshots(&converted)
+        .iter()
+        .zip(&snapshots(&oracle))
+        .enumerate()
+    {
+        assert_eq!(map_get(got, 2), map_get(want, 2), "snapshot {i} values");
+    }
 }
 
 /// A conversion says what it left behind. This preset carries eight snapshots, footswitch

@@ -362,6 +362,14 @@ of a `Map{7}` node:
   [solid — `captures/xl_assign_param_fs6.msgpack.bin`, pinned by
   `fretwire-core/tests/controller_table.rs`]
 
+  **The Floor's switch run starts at 6, not 3** (2026-08-26). Its table is `Array[20]` and the one
+  ordinal↔layout pair held — the oracle preset's `Route To` at ordinal **13**, sitting at layout
+  position **7** (switch 8) — puts `switch = ordinal − 5` where the Stomp and XL are
+  `ordinal − 2`. Three more leading sources than a Stomp is exactly what a Floor has that a Stomp
+  does not (a third expression pedal plus the two Variax knobs), but that reading of ordinals
+  3..=5 is [hypothesis]; the offset itself is [solid for that one pair] and is what
+  `fretwire_data::tone` uses when writing a 20-entry table.
+
   That observation is what retired the old reading. This table was documented as a flat ten with
   8 = MIDI and 9 = snapshots, which was an HX Stomp's shape mistaken for the format's, and it held
   because every capture came off a Stomp. On a Stomp the numbers are unchanged; above five switches
@@ -429,9 +437,12 @@ of a `Map{7}` node:
   read **against the source**, which is what `K_ASSIGN_CC` (key `71`) already says of the op-37
   request that writes one.
 
-  Off a MIDI source it still reads as the target's **value type** — `0` on the continuous
-  parameters (`Time`, `Mix`, `Drive`), `4` on the boolean one (`OD Switch`). [hypothesis — four
-  samples, no counter-example among them.]
+  Off a MIDI source the "target's **value type**" reading — `0` on the continuous parameters
+  (`Time`, `Mix`, `Drive`), `4` on the boolean one (`OD Switch`) — held for four samples and then
+  **failed on the fifth**: every row of the Floor oracle preset stores `1: 4`, including two
+  continuous wah/volume `Pedal`s (2026-08-26). So off a MIDI source the field's meaning is
+  genuinely open; `4` is what most device-written rows hold, and what `fretwire_data::tone`
+  writes.
 - Worked example: the Dual-Amp preset's entry `[7]` is controller 7 → slot 15 **param 9**, the
   Grammatico GSG's `OD Switch`, swept `false`→`true`. (Previously recorded here as "param 0, an amp
   drive switch" — the description was right, the index was the bug above.)

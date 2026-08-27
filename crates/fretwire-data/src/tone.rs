@@ -555,7 +555,11 @@ fn apply_controllers(
     let midi_ordinal = table_len as i64 - 2;
     let switch_offset = if table_len == 20 { 5 } else { 2 };
 
-    let mut collected: Vec<(i64, PlacedController, Value, Option<(usize, bool)>)> = Vec::new();
+    // One assignment on its way into the tables: source ordinal, tone address, built key-4 inner
+    // row, and — for a switch-sourced one — the (zero-based switch, @fs_primary) its layout row
+    // will need.
+    type Collected = (i64, PlacedController, Value, Option<(usize, bool)>);
+    let mut collected: Vec<Collected> = Vec::new();
     let mut midi_skipped = 0usize;
     for dsp in 0..DSP_GROUP_KEYS.len() {
         let dsp_key = format!("dsp{dsp}");

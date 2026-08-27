@@ -572,9 +572,11 @@ pub struct SplitTypeDto {
 #[derive(Serialize)]
 pub struct DataStatusDto {
     pub present: bool,
+    /// Which device families are imported, by label (`"HX Edit"`, `"POD Go Edit"`).
+    pub families: Vec<String>,
     /// Where the tool looks (`$FRETWIRE_DATA_DIR`, else `~/.local/share/fretwire/data`).
     pub dir: String,
-    /// How many reference files are cached there.
+    /// How many reference files are cached there — a total across families.
     pub files: i64,
 }
 
@@ -582,6 +584,7 @@ impl From<fretwire_core::import::DataStatus> for DataStatusDto {
     fn from(s: fretwire_core::import::DataStatus) -> Self {
         DataStatusDto {
             present: s.present,
+            families: s.families.iter().map(|f| f.to_string()).collect(),
             dir: s.dir.display().to_string(),
             files: s.files as i64,
         }
@@ -591,6 +594,8 @@ impl From<fretwire_core::import::DataStatus> for DataStatusDto {
 /// The outcome of a first-run import.
 #[derive(Serialize)]
 pub struct ImportResultDto {
+    /// Which vendor's data was imported — `"HX Edit"` or `"POD Go Edit"`.
+    pub family: String,
     pub copied: i64,
     pub dest: String,
     /// Essential files the source didn't contain — the import still succeeded, but the catalog
@@ -601,6 +606,7 @@ pub struct ImportResultDto {
 impl From<fretwire_core::import::ImportSummary> for ImportResultDto {
     fn from(s: fretwire_core::import::ImportSummary) -> Self {
         ImportResultDto {
+            family: s.family.to_string(),
             copied: s.copied as i64,
             dest: s.dest.display().to_string(),
             missing: s.missing,

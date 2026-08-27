@@ -663,16 +663,21 @@ impl Catalog {
         if dir.join(family.symbols).is_file() {
             return Catalog::from_data_dir(&dir);
         }
-        let dir = crate::data_dir();
         #[cfg(feature = "bundled-data")]
         {
             return Catalog::bundled();
         }
         #[cfg(not(feature = "bundled-data"))]
         {
+            // Name the family, not just "reference data". Each device family reads its own vendor
+            // files from its own directory, so a POD Go owner who has imported HX Edit has a data
+            // dir full of files and still cannot decode their pedal — telling them there is "no
+            // reference data" and pointing them back at the HX installer is wrong twice over.
             Err(crate::Error::MissingData(format!(
-                "no reference data in {} — run `fretwire import-data <HX-Edit-installer>` first",
-                dir.display()
+                "no {} reference data in {} — run `fretwire import-data <{} installer>` first",
+                family.label,
+                dir.display(),
+                family.label
             )))
         }
     }
@@ -687,9 +692,10 @@ impl Catalog {
         let require = |name: &str| -> crate::Result<Vec<u8>> {
             std::fs::read(dir.join(name)).map_err(|e| {
                 crate::Error::MissingData(format!(
-                    "{} in {} ({e}) — run `fretwire import-data <HX-Edit-installer>`",
+                    "{} in {} ({e}) — run `fretwire import-data <{} installer>`",
                     name,
-                    dir.display()
+                    dir.display(),
+                    family.label
                 ))
             })
         };

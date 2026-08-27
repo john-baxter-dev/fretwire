@@ -1006,6 +1006,9 @@ const HANDLERS = {
 
   data_status: () => ({
     present: dataPresent,
+    // Which vendors' data is held. The mock imports the HX family; a POD Go owner would see
+    // "POD Go Edit" here, and someone with both would see both.
+    families: dataPresent ? ["HX Edit"] : [],
     dir: "~/.local/share/fretwire/data",
     files: dataPresent ? 21 : 0,
   }),
@@ -1013,7 +1016,12 @@ const HANDLERS = {
     await sleep(600); // the real one unpacks an installer — show the spinner
     if (!source || source === "/") throw new Error(`no reference data found in ${source}`);
     dataPresent = true;
-    return { copied: 21, dest: "~/.local/share/fretwire/data", missing: [] };
+    return {
+      family: "HX Edit",
+      copied: 21,
+      dest: "~/.local/share/fretwire/data",
+      missing: [],
+    };
   },
   detect: () => [{ name: DEVICES[deviceMode].name, caveat: DEVICES[deviceMode].caveat ?? null }],
   is_connected: () => connected,

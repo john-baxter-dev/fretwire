@@ -110,6 +110,9 @@ impl DataFamily {
 /// What [`import_from`] copied.
 #[derive(Debug, Clone)]
 pub struct ImportSummary {
+    /// Which vendor's data this was — `"HX Edit"` or `"POD Go Edit"`. The destination directory
+    /// implies it, but only if you know the layout; say it outright.
+    pub family: &'static str,
     /// Number of reference files copied into [`ImportSummary::dest`].
     pub copied: usize,
     /// Where they landed — [`crate::data_dir`].
@@ -122,8 +125,15 @@ pub struct ImportSummary {
 /// Whether the local data dir holds usable reference data, and what's in it.
 #[derive(Debug, Clone)]
 pub struct DataStatus {
-    /// Whether [`REQUIRED`] is present — i.e. whether `Catalog::load()` will succeed.
+    /// Whether **any** family's data is imported — i.e. whether the first-run screen still has a
+    /// job to do. Not the same as "`Catalog::load()` will succeed": that one is specifically the HX
+    /// family, so a POD Go owner who has imported only POD Go Edit is `present` and would still
+    /// fail an HX load. Use [`DataStatus::families`] to ask about a particular device.
     pub present: bool,
+    /// The families actually imported, by label — e.g. `["HX Edit", "POD Go Edit"]`. Empty when
+    /// nothing has been imported. This is the field that answers "what do I have?" once more than
+    /// one device family is in play; [`DataStatus::files`] is a total across all of them.
+    pub families: Vec<&'static str>,
     /// The directory consulted ([`crate::data_dir`]).
     pub dir: PathBuf,
     /// How many reference files are cached there.
@@ -159,6 +169,11 @@ pub fn data_status_in(dir: PathBuf) -> DataStatus {
         .any(|f| f.dir_under(&dir).join(f.symbols).is_file());
     DataStatus {
         present,
+        families: FAMILIES
+            .iter()
+            .filter(|f| f.dir_under(&dir).join(f.symbols).is_file())
+            .map(|f| f.label)
+            .collect(),
         dir,
         files,
     }
@@ -259,6 +274,7 @@ pub fn import_into(source: &Path, dest: PathBuf) -> crate::Result<ImportSummary>
         .map(|n| n.to_string())
         .collect();
     Ok(ImportSummary {
+        family: family.label,
         copied,
         dest,
         missing,

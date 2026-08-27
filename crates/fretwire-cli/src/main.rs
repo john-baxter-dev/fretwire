@@ -1554,8 +1554,9 @@ fn print_udev_manual() {
 fn import_data(source: &str) -> Result<()> {
     let summary = fretwire_core::import::import_from(std::path::Path::new(source))?;
     println!(
-        "imported {} reference file(s) → {}",
+        "imported {} {} reference file(s) → {}",
         summary.copied,
+        summary.family,
         summary.dest.display()
     );
     for name in &summary.missing {
@@ -1563,6 +1564,15 @@ fn import_data(source: &str) -> Result<()> {
     }
     println!("(set $FRETWIRE_DATA_DIR to override that location)");
     println!("the tool now loads model names, DSP loads and param ranges from here at runtime.");
+    // Each device family reads its own vendor's files, so once there is more than one it matters
+    // which you hold — say so, rather than leaving it to be inferred from a subdirectory name.
+    let status = fretwire_core::import::data_status();
+    if status.families.len() > 1 {
+        println!(
+            "reference data now imported for: {}",
+            status.families.join(", ")
+        );
+    }
     Ok(())
 }
 

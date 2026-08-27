@@ -211,6 +211,11 @@ A directory source is an HX Edit install's `res/` folder, or an installer you un
 `~/.local/share/fretwire/data` (`$FRETWIRE_DATA_DIR` overrides), and both front ends load them from
 there at runtime. Builds ship **no** Line 6 data.
 
+**POD Go owners:** import **POD Go Edit** instead — the POD Go numbers its models differently, so
+HX Edit's data would name every block wrongly. The import detects which editor you pointed it at and
+files it separately (POD Go Edit lands in `data/pod-go/`), so if you own both pedals you can import
+both and the tool picks the right one from whichever device you plug in.
+
 ## License
 
 Dual-licensed under either of

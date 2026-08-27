@@ -89,32 +89,41 @@ jobs:
           body_path: docs/release-notes/${{ github.ref_name }}.md
 
   cli:
-    name: static CLI (musl)
-    runs-on: ubuntu-22.04
+    name: static CLI (musl, ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          # arm64 is a native build on GitHub's free arm runner (public repos), so it needs no
+          # cross toolchain — apt's musl-tools provides the right musl-gcc on each. The arm64
+          # binary has never been run on ARM hardware here; say so in the release notes until
+          # someone confirms it (the target use is a headless Raspberry Pi — see ROADMAP Phase 8).
+          - { arch: x86_64, runner: ubuntu-22.04, target: x86_64-unknown-linux-musl }
+          - { arch: aarch64, runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-musl
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
 
-      # `nusb` is pure Rust with no libusb to link, so the CLI builds fully static — one binary that
-      # runs on any x86-64 distro, no matter its glibc.
+      # `nusb` is pure Rust with no libusb to link, so the CLI builds fully static — one binary
+      # per arch that runs on any distro, no matter its glibc.
       - name: Build
         run: |
           sudo apt-get update && sudo apt-get install -y musl-tools
-          cargo build --release --locked --target x86_64-unknown-linux-musl -p fretwire-cli
+          cargo build --release --locked --target ${{ matrix.target }} -p fretwire-cli
 
       - name: Package
         run: |
           mkdir -p dist
-          tar -czf dist/fretwire-cli-x86_64-linux-musl.tar.gz \
-            -C target/x86_64-unknown-linux-musl/release fretwire \
+          tar -czf dist/fretwire-cli-${{ matrix.arch }}-linux-musl.tar.gz \
+            -C target/${{ matrix.target }}/release fretwire \
             -C "$GITHUB_WORKSPACE" packaging/70-hxstomp.rules README.md LICENSE-MIT LICENSE-APACHE
 
       - uses: actions/upload-artifact@v5
         with:
-          name: cli-musl
+          name: cli-musl-${{ matrix.arch }}
           path: dist/*
 
       - name: Attach to the release

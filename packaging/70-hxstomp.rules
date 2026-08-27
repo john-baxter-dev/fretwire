@@ -2,6 +2,15 @@
 # USB control interface. systemd's default uaccess only tags /dev/snd/*, not this
 # raw USB node, so without this rule you get EACCES (and must run as root).
 #
+# Two grants, because they cover different situations:
+#   - TAG+="uaccess": systemd-logind grants the locally-seated user. Desktop sessions only —
+#     it grants nothing over SSH or to a daemon, because those have no seat.
+#   - GROUP="plugdev": covers headless use (a Raspberry Pi reached over SSH). The group exists
+#     by default on Raspberry Pi OS and Debian; elsewhere create it and join it once:
+#       sudo groupadd -f plugdev && sudo usermod -aG plugdev $USER
+#     then log out and back in. On systems without the group, udev logs a warning for the
+#     GROUP assignment and the uaccess grant still applies.
+#
 # Install with `fretwire install-udev`, or copy this file to
 # /etc/udev/rules.d/70-hxstomp.rules and run:
 #   sudo udevadm control --reload && sudo udevadm trigger
@@ -11,18 +20,18 @@
 # idVendor/idProduct must be lower-case hex to match.
 #
 # HX Stomp — verified.
-SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="4246", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="4246", MODE="0660", GROUP="plugdev", TAG+="uaccess"
 # Helix Floor — verified: byte-identical handshake and edit path (see docs/helix-floor.md).
-SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="4248", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="4248", MODE="0660", GROUP="plugdev", TAG+="uaccess"
 # Helix LT — reads verified against a physical unit; no edit has been sent to one.
-SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="424a", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="424a", MODE="0660", GROUP="plugdev", TAG+="uaccess"
 # HX Stomp XL — an owner runs it: two preset streams captured off one reconcile with our reader, and
 # the pedal's own menus supplied 19 of the settings ids. No edit builder has been checked against it
 # byte-for-byte, so fretwire still warns when it opens one.
-SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="4253", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="4253", MODE="0660", GROUP="plugdev", TAG+="uaccess"
 # HX Effects — reported working by an owner; we have no capture from one (issue #10). Same family,
 # so the rule is here, but fretwire will warn when it opens it.
-SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="4245", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="4245", MODE="0660", GROUP="plugdev", TAG+="uaccess"
 # POD Go — the protocol is reconciled against a capture (issue #15), but nothing has been sent to
 # one and it needs its own reference data. Same family, so the rule is here; fretwire will warn.
-SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="4247", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="4247", MODE="0660", GROUP="plugdev", TAG+="uaccess"

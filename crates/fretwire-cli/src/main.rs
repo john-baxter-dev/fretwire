@@ -1461,6 +1461,11 @@ const UDEV_RULE_PATH: &str = "/etc/udev/rules.d/70-hxstomp.rules";
 /// then reload udev so it takes effect on the next replug. Writes directly when run as root;
 /// otherwise re-runs the privileged steps through `sudo`. Falls back to printing manual
 /// instructions if the rule can't be installed automatically.
+///
+/// The rule grants access two ways: `TAG+="uaccess"` for a seated desktop session, and
+/// `GROUP="plugdev"` for headless use (SSH / a daemon has no seat, so uaccess grants nothing
+/// there). The group is created here so the GROUP assignment always resolves; joining it is left
+/// to the user because membership only starts on the next login.
 fn install_udev() -> Result<()> {
     use std::path::Path;
     let target = Path::new(UDEV_RULE_PATH);
@@ -1469,6 +1474,13 @@ fn install_udev() -> Result<()> {
     match std::fs::write(target, UDEV_RULE) {
         Ok(()) => {
             println!("wrote {UDEV_RULE_PATH}");
+            // Idempotent; makes the rule's GROUP="plugdev" resolve even where the distro
+            // doesn't ship the group. Best-effort like the reload.
+            match run_status("groupadd", &["-f", "plugdev"]) {
+                Ok(st) if st.success() => {}
+                Ok(st) => eprintln!("⚠  `groupadd -f plugdev` exited {st}"),
+                Err(e) => eprintln!("⚠  couldn't run `groupadd -f plugdev`: {e}"),
+            }
             reload_udev(run_status);
         }
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -1486,6 +1498,10 @@ fn install_udev() -> Result<()> {
     println!(
         "\n\u{2713} udev rule installed. Unplug and replug your HX Stomp for it to take effect."
     );
+    println!(
+        "\nHeadless / SSH use only (a desktop session is covered as-is): also join the plugdev\n\
+         group — `sudo usermod -aG plugdev $USER` — then log out and back in."
+    );
     Ok(())
 }
 
@@ -1496,7 +1512,7 @@ fn install_udev_via_sudo() -> Result<()> {
     let tmp = std::env::temp_dir().join(format!("70-hxstomp-{}.rules", std::process::id()));
     std::fs::write(&tmp, UDEV_RULE)?;
     let script = format!(
-        "install -m 0644 {tmp} {target} && udevadm control --reload && udevadm trigger",
+        "install -m 0644 {tmp} {target} && groupadd -f plugdev && udevadm control --reload && udevadm trigger",
         tmp = shell_quote(&tmp.to_string_lossy()),
         target = shell_quote(UDEV_RULE_PATH),
     );
@@ -1544,8 +1560,10 @@ fn print_udev_manual() {
     println!("  sudo tee {UDEV_RULE_PATH} > /dev/null <<'EOF'");
     print!("{UDEV_RULE}");
     println!("EOF");
+    println!("  sudo groupadd -f plugdev");
     println!("  sudo udevadm control --reload && sudo udevadm trigger");
     println!("Then unplug and replug your HX Stomp.");
+    println!("Headless / SSH use only: also `sudo usermod -aG plugdev $USER`, then log back in.");
 }
 
 /// Import Line 6's reference data into the local data dir from a **user-supplied** source (an HX
@@ -2144,7 +2162,19 @@ mod tests {
         assert!(UDEV_RULE.contains(r#"ATTR{idVendor}=="0e41""#));
         assert!(UDEV_RULE.contains(r#"ATTR{idProduct}=="4246""#)); // HX Stomp
         assert!(UDEV_RULE.contains(r#"ATTR{idProduct}=="4253""#)); // HX Stomp XL
-        assert!(UDEV_RULE.contains(r#"TAG+="uaccess""#));
+        // Every rule line carries both grants: uaccess for a seated desktop session, and
+        // GROUP="plugdev" for headless use — SSH has no seat, so uaccess alone grants nothing
+        // there (found via the Pi/serve-mode survey, docs/serve-mode.md).
+        for line in UDEV_RULE.lines().filter(|l| l.starts_with("SUBSYSTEM")) {
+            assert!(
+                line.contains(r#"TAG+="uaccess""#),
+                "no uaccess grant: {line}"
+            );
+            assert!(
+                line.contains(r#"GROUP="plugdev""#),
+                "no headless grant: {line}"
+            );
+        }
     }
 
     #[test]

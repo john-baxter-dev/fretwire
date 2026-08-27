@@ -163,6 +163,10 @@ cargo run -p fretwire-cli -- pull         # read the loaded preset (non-destruct
 
 The rule covers the HX Stomp (`0x4246`), the Helix Floor (`0x4248`), the Helix LT (`0x424a`), the HX Stomp XL (`0x4253`), the HX Effects (`0x4245`) and the POD Go (`0x4247`).
 
+**Headless (SSH, a Raspberry Pi, a daemon):** the rule's `uaccess` grant is seat-based, so it only
+covers a local desktop session. The rule also grants the `plugdev` group for exactly this case —
+`install-udev` creates the group; join it with `sudo usermod -aG plugdev $USER` and log back in.
+
 ## Devices
 
 | device | USB PID | status |

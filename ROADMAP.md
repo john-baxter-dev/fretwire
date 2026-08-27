@@ -487,27 +487,20 @@ guessing has already cost a power cycle): see section B of `captures/_RUNBOOK-hx
       Per release afterwards: bump `pkgver`, reset `pkgrel=1`, `updpkgsums`, regenerate `.SRCINFO`.
 - [ ] Flathub — deferred. Needs a broad `--device=all` for USB, can't install a udev rule, and the
       sandbox complicates pointing at an HX Edit installer on the host. Revisit once there are users.
-- [ ] **arm64 for the CLI** (`aarch64-unknown-linux-musl`) — a matrix entry on the existing musl job
-      in `release.yml`, ~10 lines. `fretwire-cli` has no C dependencies (`nusb` is pure Rust), so it
-      cross-compiles to a static binary cleanly. **Why:** a Raspberry Pi wired into a pedalboard doing
-      preset switching / backup / restore with no screen is the real use case; Asahi Linux on Apple
-      Silicon is a smaller second one. **Caveat:** untested — no arm64 hardware here, so label the
-      asset as such in the release notes until someone confirms it runs.
-      **Asked for 2026-08-23** (Pi 5 alongside PiPedal). `cargo check` for both
-      `aarch64-unknown-linux-musl` and `armv7-unknown-linux-musleabihf` passes unmodified — see
-      `docs/serve-mode.md`. Still never linked or run on ARM hardware.
-      **Blocked on the udev rule, and that blocker is not serve mode's** [2026-08-25]. It is written
-      down inside `docs/serve-mode.md` because that is where it was found, but it bites this item
-      identically and this item could ship first: `packaging/70-hxstomp.rules` grants access with
-      `TAG+="uaccess"`, a **seat** mechanism — systemd-logind grants the locally-seated user, and a
-      Pi reached over SSH has no local session, so it grants nothing and the CLI gets `EACCES` with
-      no hint as to why. Shipping an arm64 asset without a `GROUP=`-based variant hands the person
-      who asked a binary that fails at the first USB open. Three places, not one: the rules file,
-      `install-udev` (which `include_str!`s it), and the test asserting
-      `UDEV_RULE.contains(r#"TAG+="uaccess""#)`. **Do this before, or with, the matrix entry.**
-      Sequencing note: line below orders the arm64 artifacts after serve mode, on the grounds that
-      serve mode is what makes them useful. True of the *GUI*; not of the CLI. Headless preset
-      switching, backup and restore need no browser and no lift — this entry's own **Why** says so.
+- [x] **arm64 for the CLI** (`aarch64-unknown-linux-musl`) — DONE (2026-08-26), lands with the next
+      `v*` tag. The `cli` job in `release.yml` is now a matrix; the arm64 leg is a **native** build
+      on GitHub's free `ubuntu-24.04-arm` runner (public repos), so no cross toolchain — apt's
+      `musl-tools` provides the right `musl-gcc` on each arch. Asset:
+      `fretwire-cli-aarch64-linux-musl.tar.gz`. **Why:** a Raspberry Pi wired into a pedalboard
+      doing preset switching / backup / restore with no screen (asked for 2026-08-23, Pi 5 alongside
+      PiPedal); Asahi Linux is a smaller second. **Caveat:** the binary has never been run on ARM
+      hardware here — say so in the release notes until someone confirms it runs.
+      **The udev blocker went with it** (same day): a Pi reached over SSH has no seat, so the rule's
+      `TAG+="uaccess"` granted nothing headless and the CLI got `EACCES` with no hint why. Every
+      rule line now also grants **`GROUP="plugdev"`** (ships on Pi OS/Debian; `install-udev` runs
+      `groupadd -f` elsewhere and prints the `usermod` step), the CLI test asserts both grants per
+      line, and README/serve-mode.md document the headless path. Verified on a plugdev-less box:
+      udev warns and still applies `MODE` + `uaccess`.
 - [ ] arm64 for the **GUI** — still not planned, and the request that would have triggered it turned
       out to be for something else. Feasible (public repos get free `ubuntu-24.04-arm` runners, so
       it's a native build with no cross-compiled WebKitGTK), but the person who asked runs
@@ -698,14 +691,15 @@ for 3 event names total.
 - [ ] **Auth, before it binds anywhere but loopback.** Default `127.0.0.1`, explicit flag to go
       wider, check the `Origin` header (DNS rebinding reaches a loopback server from any page the
       browser visits), token for the non-loopback case. This is write access to someone's rig.
-- [ ] **A `GROUP=` udev rule.** `TAG+="uaccess"` grants the locally-*seated* user; a Pi reached over
-      SSH has no local session, so a daemon gets `EACCES` with no hint why. `install-udev` embeds
-      the `packaging/` copy at build time and asserts on `uaccess` in a test.
+- [x] **A `GROUP=` udev rule** — DONE (2026-08-26), with the arm64 CLI item in Phase 8: every rule
+      line now grants `GROUP="plugdev"` alongside `uaccess`, `install-udev` creates the group and
+      prints the `usermod` step, and the test asserts both grants per line.
 - [ ] **Verify PiPedal coexistence on hardware.** Different USB interface from the audio one, and
       `fretwire-usb` already falls back to `detach_and_claim_interface`, so it *should* be fine —
       but detaching an interface out from under a live audio path is not a friendly failure, and
       this has never been tested here.
-- [ ] Only then: the arm64 CLI/serve artifacts in Phase 8. Serve mode is what makes them useful.
+- [ ] The arm64 **serve** artifact, once the crate exists (the arm64 CLI shipped independently —
+      Phase 8).
 - [ ] **MCP server — a third consumer of the same lift.** Asked for independently on 2026-08-23,
       the same day as serve mode, which is the strongest argument for doing the lift at all. The
       requester's guess that the CLI is a poor fit is correct and measurable: ~60 live subcommands

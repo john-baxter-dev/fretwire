@@ -3942,3 +3942,33 @@ we know a device, not how much evidence we have.
 Stomp's rule applied blind), setlist geometry, and `preset_device_id`. The tester also replaced the
 POD Go's *mandatory, non-editable* wah with a delay block and the device accepted it — worth
 understanding before anyone leans on it.
+
+## Fifty-ninth round (2026-08-26): **the headless udev grant, and the arm64 CLI ships with the next tag**
+
+The Pi 5 request from 2026-08-23 had one prerequisite left that needed no hardware and no lift:
+`packaging/70-hxstomp.rules` granted access with `TAG+="uaccess"` alone, a **seat** mechanism —
+systemd-logind grants the locally-seated user, an SSH session has no seat, so a headless Pi got
+`EACCES` with no hint why. Both halves of that item are now done.
+
+**The rule grants two ways.** Every line carries `GROUP="plugdev"` alongside `uaccess` — the
+OpenOCD pattern: the seat grant covers desktops, the group grant covers SSH and daemons. `plugdev`
+ships on Raspberry Pi OS and Debian (the actual target); elsewhere `install-udev` now runs
+`groupadd -f plugdev` in the same privileged step so the assignment always resolves, and prints
+the `usermod -aG plugdev` line, which stays manual because membership only starts at the next
+login. Checked on this box, which has no `plugdev`: `udevadm verify` shows udev logging
+"Failed to resolve group 'plugdev', ignoring" per line and applying the rest of the rule, so on a
+group-less system the change degrades to a log warning, never a broken rule. The CLI test that
+pinned `uaccess` now asserts **both** grants on every `SUBSYSTEM==` line.
+
+**The arm64 CLI is a native build, not a cross-compile.** The `cli` job in `release.yml` became a
+two-leg matrix; the `aarch64-unknown-linux-musl` leg runs on GitHub's free `ubuntu-24.04-arm`
+runner (public repos get them), where apt's `musl-tools` provides the right `musl-gcc` natively —
+no cross toolchain to maintain. Asset name: `fretwire-cli-aarch64-linux-musl.tar.gz`. The local
+`cargo check --target aarch64-unknown-linux-musl` still passes; the binary itself has **never run
+on ARM hardware**, and the release notes for the next `v*` tag should say so until the requester
+confirms it.
+
+README gained a short headless section, `docs/serve-mode.md`'s blocker entry is marked resolved,
+and ROADMAP Phase 8 / Phase 10 both updated. Serve mode itself (the command-layer lift,
+`fretwire-serve`, auth, the file picker) is untouched — this was the piece of it that also blocked
+shipping the CLI to the person who asked.

@@ -193,20 +193,23 @@ anyone builds a server for it.
 
 ## Two deployment facts specific to this setup
 
-### The udev rule does not work headless — and this is not a serve-mode problem
+### The udev rule does not work headless — RESOLVED 2026-08-26
 
-*(Recorded here because this is where it was found. It blocks the **arm64 CLI** in ROADMAP Phase 8
-just as hard, and that item can ship without any of the lift below, so treat it as a prerequisite of
-both rather than of serve mode.)*
+*(Recorded here because this is where it was found; it blocked the **arm64 CLI** in ROADMAP Phase 8
+just as hard.)*
 
-`packaging/70-hxstomp.rules` grants access with `TAG+="uaccess"`, which is a *seat* mechanism:
-systemd-logind grants the locally-seated user. **A Pi reached over SSH has no local session, so
-`uaccess` grants nothing** and the daemon gets `EACCES`. The failure is silent about its cause and
-a user has no chance of guessing it.
+`packaging/70-hxstomp.rules` granted access with `TAG+="uaccess"` alone, which is a *seat*
+mechanism: systemd-logind grants the locally-seated user. **A Pi reached over SSH has no local
+session, so `uaccess` grants nothing** and the daemon gets `EACCES`. The failure is silent about
+its cause and a user has no chance of guessing it.
 
-Serve mode needs a `GROUP=`-based variant of the rule. `install-udev` in
-`crates/fretwire-cli/src/main.rs` embeds the canonical `packaging/` copy at build time and would
-need the same choice. Note `UDEV_RULE.contains(r#"TAG+="uaccess""#)` is asserted in a test there.
+**Fixed:** every rule line now carries `GROUP="plugdev"` alongside `uaccess` (the OpenOCD pattern —
+seat grant for desktops, group grant for headless). `plugdev` ships on Raspberry Pi OS and Debian;
+`install-udev` runs `groupadd -f plugdev` so the assignment resolves everywhere else, and prints
+the `usermod -aG plugdev` step, which stays manual because membership only starts on the next
+login. Verified on a box *without* the group: udev logs "Failed to resolve group 'plugdev',
+ignoring" per line and still applies `MODE` + `uaccess`, so the degradation is a log warning, not
+a broken rule. The CLI test now asserts both grants on every rule line.
 
 ### PiPedal coexistence should be fine — but confirm it
 

@@ -49,6 +49,21 @@ list carrying a `Mic` and a `Distance`, so the paired cab on an amp+cab and a st
 both get it, and the legacy cab family degrades to just mic-and-distance. Mic silhouettes are
 generated from `ui/src/lib/icons/mics.js` — no artwork, same rule as the model icons.
 
+**Clear preset (2026-08-26).** `Session::clear_preset` empties the loaded preset — every block
+deleted, every snapshot name back to `SNAPSHOT n`. In the GUI it is under the preset list's ⋯ menu
+(behind a confirm); on the CLI it is `fretwire clear-preset`. **Delete/Backspace now deletes the
+selected block**, opening the same confirm the trash button does.
+
+It is built from the **surgical** ops (op 78 + op 28 per block, op 89 per snapshot), not an op-21
+write of a blank document, and two hardware checks are why that is enough (HX Stomp, 2026-08-26,
+written up in `docs/preset-format.md`): deleting a block already takes its key-`4` parameter
+assignment *and* its key `3 → 8` footswitch binding with it, and a split preset collapses to serial
+on its own when its last row-B block goes. Only snapshot names survive an emptied chain, so only
+those are reset by name. A third finding settled the scope: two never-used preset slots read off the
+same pedal are **not** byte-identical — they disagree on the input/output node params and some key-5
+flags — so there is no canonical blank to write, and the preset's tempo and I/O settings are left
+alone. Edit-buffer only, one undo entry.
+
 **Fixed: a cab push landed on the amp (2026-08-22, issue #11).** Status pushes carry key `26` — the
 same main/paired sub-model selector the edit ops take — and the decoder dropped it, so a change to a
 paired cab arrived as a change to the block's own model. On an amp+cab that aliases the cab's
@@ -77,7 +92,7 @@ edit-history timeline with A/B compare** (blob snapshots restored via the op-21 
 node's slot [solid, input-gate capture]; io.models meta now bundled), category-colored blocks,
 wheel-nudge sliders, click-empty-cell add (`add_block_at`, guarded), in-app dialogs/toasts, Save As
 with a full setlist slot picker. Global settings (Input Z/impedance, pad, output levels) are **not
-decoded** — see `captures/_TODO-global-settings.md`. The **user IR store** is decoded and
+decoded** — see `docs/protocol.md`. The **user IR store** is decoded and
 implemented as of 2026-08-22 (round thirty-four).
 
 **Preset backup/restore (2026-07-07, offline+mock verified; live pass pending):** the proven op-21
@@ -222,7 +237,7 @@ labels from `HelixControls.json[displayType].format` and send the chosen index a
 `Session::set_param_enum` — generic for any discrete enum. *Dropdown pending live test.*
 
 **IR management — transaction shape PARTIALLY DECODED** (2026-06-28, `captures/import_ir`+`export_ir`,
-notes in `captures/_TODO-ir.md`): PRIMARY channel, session op 255/254; **upload = op 9** (slot, u32
+notes in `docs/protocol.md`): PRIMARY channel, session op 255/254; **upload = op 9** (slot, u32
 checksum, 32B name, 8192-byte = 2048×f32 blob, format flags) + op 13 commit; **export = op 12/11**,
 paged. Before implementing the flash write: reassemble the blob, confirm the checksum algorithm,
 decode the format flags (needs more captures).
@@ -2795,7 +2810,9 @@ state, one IR in slot 0.
 
 `tonepush`'s `PROTOCOL.md` named the missing half of the globals area: **op 24 `{118: id}` reads a
 setting**, answering with the value at key `119`. That was the one thing
-`captures/_TODO-global-settings.md` said made the whole area capture-blocked.
+the global-settings capture sheet said made the whole area capture-blocked. (That sheet has since
+been retired — the decoded protocol lives in `docs/protocol.md` and the remaining pedal-side work in
+`captures/_TODO-settings-names.md` and `_TODO-settings-discovery.md`.)
 
 **We had been calling it since the first handshake.** Op 24 sits in `edit.rs` as `OP_READ_PREP`, a
 "read-sequence prepare step", because the connect capture sends `{118: 128}` and we only ever
@@ -3480,7 +3497,371 @@ The buggy string is now gone from the tree entirely. `SETTINGS` carries `000-127
 which is also correct for the two devices that actually reach it — the Floor and the LT both hold 128
 slots, so only their *banked* form is unknown.
 
-## Fiftieth round (2026-08-25): **the POD Go is the same protocol and a different data set** (issue #15)
+## Fiftieth round (2026-08-25): **a `.hxb` preset can be turned back into a preset**
+
+Reading HX Edit's `.hxb` backup has worked since July. Restoring from one never could, and the
+reason was one sentence in `hxb.rs`: a preset inside a backup is a **`tone` JSON object**, not the
+MessagePack blob the wire carries, and nothing converted between them. `fretwire_data::tone` is
+that conversion, for blocks, split topology and snapshots.
+
+### The oracle was already in the tree
+The thing that made this measurable rather than plausible: we hold one preset in **both** forms.
+A contributor's Floor gave us its `.hxb` on 2026-07-22, and `WinCap5.pcapng` — captured off the
+same unit fifteen hours later — is HX Edit opening `FACTORY 1` slot 45, "Pull Me Under". So the
+same preset exists as host JSON *and* as the device's own bytes, and the conversion can simply be
+diffed against the truth.
+
+Matching them up took no guesswork either: reassemble both streams in that capture, take the model
+set of each, and score it against all 1024 presets in the backup. "Pull Me Under" comes back 14/14
+and the runner-up 8/15. The second stream is "Sultans" (`FACTORY 2` slot 64, 7/8 — one model was
+swapped during the capture, which is what the session was recording), and that one is useful as an
+**unrelated donor**: converting onto a serial 8-block preset and landing on a parallel 15-block one
+means nothing can pass by being left over.
+
+All 15 blocks, both DSPs, both topologies, all 106 parameter values and all 320 snapshot-matrix
+cells come out equal to the device's own preset. `crates/fretwire-data/tests/tone_to_wire.rs`.
+
+### Three things the oracle settled that guessing would have got wrong
+
+**`@stereo` is only written when there is a choice.** 153 of the 680 device symbols have both a
+Mono and a Stereo form; the other 527 have one form or none, and HX Edit omits the flag for them.
+So an absent `@stereo` means *the variant that exists* — every reverb is Stereo-only — and the
+obvious reading ("absent = Mono") makes `HD2_ReverbHall` unresolvable. Worse than unresolvable, in
+the cases where a Mono form does exist: the two variants have different parameter orders, so a
+wrong pick misaligns every value past the first variant-only parameter and nothing errors.
+
+**A node is a branch point per the topology string, not per its own `@enabled`.** Both the split
+and the join of "Pull Me Under" say `@enabled: true` on both DSPs, and the device has DSP1's join
+and DSP2's split *inactive*. The preset's bracket opens on DSP1 and closes on DSP2 —
+`@topology0: "SAB"`, `@topology1: "ABJ"` — and it is those strings that drive `20 → 18` and the
+column at `13`. Reading `@enabled` puts a join point on the DSP where the paths are still running,
+which is a preset whose two signal paths recombine a whole DSP too early. That is inaudible in a
+diff and very audible on a pedal.
+
+**`24 → 23` is the paired-cab flag.** It is `true` on exactly the blocks whose `26` is not `-1`, on
+every amp in every fixture we hold. This doc previously carried a withdrawn reading of `24 → 23` as
+a bypass; this is what it actually is.
+
+Two smaller ones, both now in `docs/preset-format.md`: the two counts beside a param vector are
+**different numbers** (`3` = the symbol's parameter count, `2` = values stored, differing by one
+exactly where a cab appends its mic or a delay its trails switch), and content key `9` is the
+**block class**, equal to the tone's `@type` under a fixed five-entry map.
+
+### What it refuses, and why that is the deliverable
+Block classes for tone `@type` 4 (dual cab), 5 (IR), 6 (looper) and 8 (synth) appear in the backup
+and in **no** wire dump we hold — about 8% of the backup's 2621 blocks. Topology `AB` likewise.
+Both are refusals with a message naming the block, not a nearest-plausible number. The output of
+this conversion goes to **flash**, and a class we invented would surface as a preset that sounds
+wrong months later with nothing to trace it to. Each needs exactly one wire dump of a preset
+containing that kind of block.
+
+The conversion also **clears** the donor's footswitch layout (key `3 → 8`) and controller
+assignment table (key `4`) instead of keeping them. Those two address blocks by **slot number** and
+every slot has just been rewritten, so keeping them leaves the restored preset toggling blocks it
+never put there. An empty layout is a real device state; a stale one is a wrong one.
+
+Everything else is reported rather than silently dropped — `Conversion::not_carried` names the
+snapshots' controller state, the tone's own footswitch bindings (labels and LED colours), the IR
+table, the Variax block and the four input/output nodes, one line each.
+
+### Footswitches, labels and ring colours came across too
+Key `3 → 8` is a transpose of the tone's `footswitch.dspN.blockM`: the tone keys a binding by the
+block it is on and names the switch inside it (`@fs_index`), the wire keys it by switch. All eight
+of the oracle preset's bypass bindings match the device's own byte for byte, including the two
+awkward cases — one switch carrying **two** blocks (ordered primary-first, with `10` recording the
+order) and two bindings whose `@fs_enabled` is false. That last is worth stating: a disabled
+binding is still in the array, with `11 → 7` false. It is a block assigned to a switch and not
+currently answering to it, and dropping those would quietly unbind blocks their owner had put there.
+
+Custom labels and LED ring colours ride along, since they are just `14` and `11 → 6` on the same
+entry. That is not a route to *setting* a colour on a live pedal — the write op for that is still
+the open item ops 58-62 — but it does mean a restored preset keeps the ones it came with.
+
+### Reachable, and deliberately not yet live
+`fretwire hxb-convert <backup.hxb> --donor <stream.bin> --out <export.json>` writes the existing
+export format, so `backup-show` inspects it and `restore` could put it on a pedal. **No live write
+has been tried.**
+
+### Running it over a whole setlist found the one real gap
+Converting one preset proves the mapping; converting 128 finds what the mapping does not cover.
+Bank 0 of the backup gives 39 converted and 89 refused, in two groups, and the second was a bug in
+this work rather than a missing capture.
+
+**`@cab` is a sibling reference, not a model.** An Amp+Cab block carries `@cab: "cab0"`, which
+names another entry of the same `dspN` object holding the cab's own `@model`, `@mic` and
+parameters. This had been read as a symbol name, which no lookup could resolve. The pair is one
+block on the wire — cab index at `24 → 26`, its parameters in bank `12`, which is what that
+"second, usually empty param bank" has been all along.
+
+What is *not* settled is which symbol the index names, and it is a genuine unknown rather than an
+oversight: the one paired block we hold a dump of (a Stomp's US Princess) stores
+`HD2_CabMicIr_1x12USDeluxe`, a different symbol family from the plain `HD2_Cab…` the tone names,
+with a different parameter list — `Mic` first rather than appended last, and the trailing `IrData`
+not stored, 7 of 8. The two families differ in spelling *and* in case (`Cab4X12CaliV30` against
+`CabMicIr_4x12CaliV30`). So amp+cab blocks are refused. Guessing here puts a real but **wrong cab**
+on someone's amp, which is the most audible thing this could get wrong and the least likely to be
+blamed on a restore. **One wire dump of a preset containing an amp+cab block, from a unit whose
+backup we also hold, settles it** — and it is the single highest-value capture on this thread,
+worth about a fifth of a factory setlist.
+
+The other group is the `@type` 4 / 5 / 8 class refusals working as designed.
+
+`PresetStream::to_stream()` is new — the inverse of `parse`, because a preset that was *built*
+rather than read still has to be storable and re-inspectable before anything sends it.
+
+## Fifty-first round (2026-08-25): **the controller table is the device's size, not a constant**
+
+Preset key `4` was documented as `Array[10]`: footswitches at ordinals 3..=7, MIDI at 8, snapshots
+at 9. That is an HX Stomp's shape, and nothing challenged it because every capture we had came off
+an HX Stomp.
+
+Robert Tsai (issue #13) assigned a Stupor OD's `Drive` to **FS6** from an HX Stomp XL's front panel
+and sent the before/after streams — the **first captures anyone has taken off an XL**. The table is
+**13** entries and FS6 files itself at ordinal **8**, the index we called MIDI.
+
+`length == footswitch_count + 5` on all eight streams we hold: six Stomp captures at 5 and 10, two
+XL captures at 8 and 13. So the space is `0` none, `1`/`2` the expression inputs, one entry per
+footswitch from 3, then MIDI, then snapshots — and above five switches, everything above the run
+moves. `fretwire_protocol::edit::source` computes it; `fretwire-core/tests/controller_table.rs`
+pins the arithmetic against both devices' fixtures so the formula and the captures cannot drift.
+
+**Three things were broken on an XL, in ascending order of how wrong they were.**
+
+The one in the issue was cosmetic: the bypass picker capped at FS5, so an owner saw `FS6` in the
+chain and could not select it. Fixed on 2026-08-24 in `c4549b8` — and Robert's first test of that
+fix reported no change, because `crates/fretwire-tauri/dist/` is embedded at compile time, is not in
+git, and **no `beforeBuildCommand` rebuilds it**. A `cargo build` happily serves a stale frontend.
+Worth knowing: it means a contributor can test the wrong code and have nothing tell them.
+
+The second was a refusal. `assign_param` bounded `source` at a flat `0..=9`, so an XL's FS6, FS7 and
+FS8 were rejected by *us* before reaching the pedal. The bound now comes from the loaded preset's
+own footswitch count, via `Session::assign_param`, so it widens on an XL without anything in the
+editor knowing what an XL is. Keeping a bound matters: the device does not range-check this, and an
+ordinal past the end is accepted and silently does nothing.
+
+The third was a lie. `source_name` mapped ordinal 8 to `MIDI` unconditionally, so an assignment an
+XL owner had made *on the pedal's own front panel* read back in fretwire as **"Driven by MIDI"**.
+There were three copies of that function — `dto.rs`, the CLI, and the mock — and all three now
+delegate to the one in `fretwire-protocol`, which takes the footswitch count because without it the
+question has no answer.
+
+**Bonus, from the same two files.** They are the first XL streams we hold, so the device table stops
+guessing on two more fields: key `1` (the second DSP group) is nil and key `10 → 10` holds
+`SNAPSHOT 1..4`, giving the XL **one DSP and four snapshots**. It stays `Support::Reported` — these
+are reads, and `Verified` means a *builder* has been reconciled byte-for-byte, which no XL has ever
+had sent to it.
+
+**What is still inference.** MIDI and snapshots sit in the two entries above the footswitch run.
+On a Stomp that is 8 and 9, and ordinal 9 was observed accepted and filed at index 9. Above five
+switches it is arithmetic nobody has read back, so `edit::source::midi`/`snapshots` are tagged
+`[hypothesis]` there. `tonepush` naming 8 as MIDI is not independent evidence — it is the same
+Stomp-shaped reading that caused this.
+
+## Fifty-second round (2026-08-25): **two ordinals confirmed, and a bypass we were hiding**
+
+A second XL preset from Robert Tsai, this time as our own `show-preset` output rather than a file:
+Stupor OD's bypass on **EXP1**, Scream 808's on **EXP2**, Teemah!'s on **FS7**, and Dhyana Drive's
+`Tone` under **FS8**.
+
+**FS8 came back as ordinal 10**, which is what `edit::source::footswitch(8, 8)` computes. The length
+formula's far end is now observed rather than extrapolated — FS6 → 8 settled one end of the run
+yesterday, this settles the other.
+
+**Ordinals 1 and 2 are EXP1 and EXP2** [solid], retiring an `[unverified]` that stood for want of an
+expression pedal. The check is the *slots*, not the labels: ordinal 1 named the block he put on EXP1
+and ordinal 2 the one he put on EXP2, so a swap would have shown the other block. Until now those
+names were `tonepush`'s, held on the reasoning that a footswitch run starting at 3 left them over.
+
+**A bypass on an expression pedal lives in key `4`.** `preset-format.md` said `tonepush`'s wah
+auto-engage example was "a different feature, and probably the only way a bypass reaches this table."
+Half right: it is exactly this, and it is not a different feature. The destination is chosen by the
+**source**, not by what is driven — a footswitch writes `3 → 8`, an expression pedal writes key `4`,
+as an entry with a target slot and no key `6`. Which is the same test that already separates a bypass
+entry from a parameter one.
+
+**And that is a gap we were rendering as nothing.** `ParamPanel` matches assignments to parameter
+rows on `param_index`, and a bypass entry has none — so it matched no row, and the block header only
+badges the footswitch layout. Robert's preset, opened in fretwire, would have shown two blocks with
+no assignment at all. There is now a read-only badge next to the FS one, and a mock preset carrying
+one so the case exists without hardware. Read-only on purpose: ops 56/57 take a plain switch index,
+nothing we hold shows one accepting an expression input, and he made this on the pedal — so we have
+the document, not the request that produces it.
+
+**Still open:** MIDI and snapshots on an XL (arithmetic says 11 and 12, nobody has read either), and
+the opcode for writing a bypass to an expression pedal. No fixture for this one either — it arrived
+as pasted CLI output, so nothing here is pinned by a test the way `xl_assign_param_fs6` pins FS6.
+
+## Fifty-third round (2026-08-25): **the two empty menus are empty no longer**
+
+Robert Tsai worked `_TODO-settings-discovery.md` on an XL and came back with **19 ids** (PR #16,
+merged): all of Footswitches (`17 19 18 67 20 117 129 130 131`), both of EXP Pedals (`66 71`), five
+more in MIDI/Tempo (`10 12 13 76 77 135`) and the two that make Displays a real section (`25 26`).
+The table goes **34 → 53**. Footswitches and EXP Pedals had been declared and empty since the
+forty-eighth round, with a paragraph in `GROUPS` explaining that the emptiness was a standing note
+rather than a bug; the paragraph is gone and `every_declared_group_has_rows` now keeps it that way.
+
+He also re-read the four MIDI/Tempo names we already had, and **all four were wrong** — casing on
+`9` and `14`, and `11`/`16` are called `USB MIDI` and `BPM`, not `MIDI over USB` and `Tempo`.
+`14`'s value labels changed with them. This is the third time a name in this table turned out to be
+something no pedal shows, and the third time an owner caught it rather than review.
+
+**`Kind::Flag` versus `Kind::Choice` is the wire type, not a style.** The new batch has two-option
+`Choice`es (`117`, `135`) sitting next to `Flag`s (`10`, `25`, `26`, `129`), which reads like an
+oversight and is not — `false`/`true` in a dump is a flag, `0`/`1` is a choice, and the discovery
+sheet said so. Id 154 was declared a `Flag` here until an XL owner read it back as `1 [int]`
+(PR #14), so the distinction now has a note on `Kind` itself, to stop the next reader tidying the
+mixture into consistency. Nothing turns on it for writes: `set_setting_num` reads the current value
+and matches its type, so a mislabel is presentational — a toggle drawn where a dropdown belongs.
+
+**One id came without its menu position.** `135` `Snapshot CC Send` is identified and unplaced, so
+it draws at the foot of MIDI/Tempo rather than somewhere invented — rows sort by
+`(group_rank, menu_rank, id)`. `only_the_listed_ids_are_unplaced` names it, so the next id that
+arrives without a position fails a test instead of quietly sorting last.
+
+**The mock had drifted.** `ui/src/mock/backend.js` keeps its own copy of the table so the panel can
+be exercised in a browser, and it still listed id `12` in the *unidentified* tier — an id PR #16
+names. All 19 are mirrored now, and `globals-mock.mjs` went 34 → 53 with the two new sections in its
+expected order.
+
+**Retired:** `captures/_TODO-settings-discovery.md`, answered. Three things it wanted are not
+answered and moved to `_TODO-settings-names.md`: whether any of the 19 refuse on a Stomp (`130`/`131`
+are `FS7`/`FS8 Function` and a Stomp has three switches, so at least those two ought to — but ought
+is not observed), whether `95`/`96`/`68`/`69` really live under Preferences now that EXP Pedals
+exists, and `135`'s row number.
+
+## Fifty-fourth round (2026-08-25): **drift swept, and a blocker filed under the wrong feature**
+
+Housekeeping after PR #16, plus one finding that was hiding in a survey document.
+
+**The udev rule blocks the arm64 CLI, not just serve mode.** `docs/serve-mode.md` recorded, under
+"deployment facts specific to this setup", that `packaging/70-hxstomp.rules` grants access with
+`TAG+="uaccess"` — a **seat** mechanism. systemd-logind grants the locally-seated user, and a Pi
+reached over SSH has no local session, so the tag grants nothing and the process gets `EACCES` with
+no hint as to why. Filed there because that is where it was found, and it reads like a serve-mode
+prerequisite. It isn't: it breaks the **arm64 CLI** (ROADMAP Phase 8, ~10 lines of `release.yml`
+matrix, both targets already `cargo check` clean) exactly as hard, and that item needs none of the
+lift serve mode needs. Shipping an arm64 asset without a `GROUP=`-based variant hands the person who
+asked for it a binary that fails at its first USB open. Now written on the Phase 8 item itself,
+with the three places it touches — the rules file, `install-udev` which `include_str!`s it, and the
+test asserting `UDEV_RULE.contains(r#"TAG+="uaccess""#)`. Not built tonight, deliberately.
+
+While there: the roadmap orders the arm64 artifacts *after* serve mode, "serve mode is what makes
+them useful". That holds for the GUI and not for the CLI — headless preset switching, backup and
+restore need no browser, which is what the Phase 8 entry's own **Why** says. Noted rather than
+resequenced.
+
+**The XL's description was two rounds stale in two places.** The udev rule still called it
+"untested; we have no capture from one", and the `DEVICES` doc still described it as known through
+"what they can run, read off the panel and paste back". We have held two preset streams off one
+since the fifty-first round, and they are what settled its DSP and snapshot counts. Both corrected
+to say what is actually missing, which is narrower and more useful: no *edit* builder has been
+reconciled against an XL byte-for-byte, and that is what `Verified` means here.
+
+**`CLAUDE.md` said 219 tests.** It is 300.
+
+**On cutting 0.4.0.** 44 commits since `v0.3.0`, against 24 for that release, and the condition for
+cutting it — more of the settings namespace mapped — is met at 53 named ids from 23. The stronger
+arguments are elsewhere, though: `hxb-convert` is a capability `v0.3.0` explicitly said did not
+exist ("`show-backup` could read one and nothing could restore from it"), and three of the fixes
+since are invisible on an HX Stomp and hit XL, Floor and LT owners only — the source bound that
+refused FS6–FS8 before the command reached the pedal, ordinal 8 reading back as "MIDI" above five
+switches, and a bypass on an expression pedal rendering as no assignment at all. Those owners are
+the least likely to be running master. Nothing on master looks half-shipped: serve mode, the only
+work in progress, is a document with no code. Not cut tonight; the assessment is here so it does not
+have to be re-derived.
+
+## Fifty-fifth round (2026-08-25): **the last unplaced id, and the test that noticed**
+
+`MENU_ORDER` is complete. Robert Tsai read `135` `Snapshot CC Send` off the XL as **row 10 of
+MIDI/Tempo** (PR #17) — the one thing the fifty-third round left for him rather than for me, and
+the last identified id outside Global EQ without a menu position.
+
+**The diff changes nothing on screen, and that is the point.** Rows sort by
+`(group_rank, menu_rank, id)` and an unplaced id ranks past the end, so `135` was already drawing at
+the foot of MIDI/Tempo — exactly where row 10 puts it. What changed is the standing of that
+position: it was the fallback and is now a reading. A guessed position would have looked identical
+too, which is why the fallback was left in place rather than filled in by eye.
+
+**`only_the_listed_ids_are_unplaced` failed, correctly.** It was added in the fifty-third round to
+catch the *next* id arriving without a position; what it caught first was the answer arriving for
+this one, because it asserts the unplaced set **equals** `&[135]` rather than merely contains it. An
+allowed-list that fails when the list shrinks is the version worth having — the loose form would
+have let the sheet, the mock and three paragraphs of prose sit stale and green. The set is `&[]`
+now, and the paragraph on `MENU_ORDER` explaining why one id was absent is gone with it.
+
+Mirrored into `ui/src/mock/backend.js`, which keeps its own copy of the order for `npm run dev`.
+`_TODO-settings-names.md` is down to **one open question**, and it isn't Robert's: whether any of
+the 19 XL-sourced ids refuse on a Stomp, which needs my pedal.
+
+**Two bits of drift in that sheet, found while editing it.** `### MIDI/Tempo (9)` had ten rows under
+it — `135` was added to the table in the fifty-third round and the heading count was not. And the
+menu-order preamble still said `MENU_ORDER` covers "Ins/Outs and Preferences", written when it did;
+it covers all six sections now, every one from the XL.
+
+## Fifty-sixth round (2026-08-26): **the top of the controller table, read at last**
+
+Robert Tsai sent two more XL presets on issue #13, and between them they close the key-`4` source
+table. `captures/` gains `xl_exp_bypass.msgpack.bin` and `xl_assign_midi_and_snapshots.msgpack.bin`,
+which takes the fixture set to **six Stomp streams and four XL streams**.
+
+**MIDI is 11 and snapshots is 12.** These were the last two entries of the table still computed
+rather than read. One preset put a Teemah's `Gain` under `CC5` and a Stupor OD's `Drive` under
+Snapshots, and they came back at indices **11** and **12** of a 13-long table — where
+`edit::source::midi`/`snapshots` said they would be, with inner key `0` echoing the ordinal in each,
+so each entry is confirmed by its position *and* by its own contents. Both functions were tagged
+`[hypothesis]` above a Stomp's five switches since the fifty-first round; they are `[solid]` now,
+and the eight-switch shape is observed end to end.
+
+The Stomp keeps its asterisk, and the tags say so: on five switches the pair is 8 and 9, ordinal 9
+was accepted by op 37 and filed at index 9, and `tonepush` names both — but nobody has read either
+off that panel. The arithmetic agrees; the evidence is the XL's.
+
+**Key `1` is the MIDI CC number, when the source is MIDI.** It had been read as the target's value
+type — `0` on continuous parameters, `4` on a boolean — on three samples with no counter-example.
+This preset is the counter-example: the MIDI entry carries `1: 5` for `CC5`, while the Snapshots
+entry in the same preset drives an equally continuous parameter and carries `0`. Same value type,
+different key. So the field is read **against the source**, which is exactly what `K_ASSIGN_CC`
+(key `71`) has said all along about the op-37 request that writes one — the read side just hadn't
+met a MIDI assignment yet. The value-type reading survives off a MIDI source and stays
+`[hypothesis]` there.
+
+**Two structural facts the second capture volunteered.** A key-`4` slot holds an *array*, and this
+one has EXP1 driving two blocks — the shape was documented, but nothing had exercised it. And one of
+those two entries points at **slot 1, which holds no block**: this preset's blocks start at slot 2.
+Robert rebuilt the preset by hand from his own description, so the likeliest story is an assignment
+left behind by a block that moved, and the honest statement is that the document contains one and a
+consumer must not assume the slot lookup succeeds. `AssignmentDto` already resolves through
+`find(|b| b.slot == slot)?`, so an orphan renders as a row with no parameter name rather than a
+panic — checked, not assumed. Both facts are now pinned by
+`a_source_may_hold_several_entries_and_one_may_be_orphaned`.
+
+**The fixture is not the preset the last round was written against.** Robert recreated it from his
+textual description rather than re-dumping the original, and it differs: four key-`4` entries where
+the pasted output had three, plus the orphan. Everything the fifty-second round concluded still
+holds and is now pinned rather than resting on pasted text — but the file is a re-creation, and the
+round that cites it should not imply otherwise.
+
+Three tests added to `fretwire-core/tests/controller_table.rs` (**300 → 303**): the 11/12 reading,
+the bypass-source split — EXP1/EXP2 in key `4` and FS7 in the footswitch layout, in one preset, so
+the rule is visible in a single document — and the multi-entry/orphan case.
+
+**Still open on #13:** the opcode that writes a bypass to an expression pedal. Ops 56/57 take a
+plain switch index and nothing we hold shows one accepting an expression input, so the badge stays
+read-only. Both of these assignments were made on the pedal's own panel, which settles the document
+and not the request that produces it.
+
+**Two answers off the back of #17, neither of them in the diff.** Robert confirmed `135` is the
+tenth row of the MIDI/Tempo menu on the pedal, not appended from the list in the sheet — which was
+the one thing that separated a reading from a lucky guess, since an unplaced id already sorted to
+that row. And the `95`/`96`/`68`/`69` question is retired: those four really are under
+**Preferences** on the hardware, as the forty-eighth round recorded on 2026-08-24. It should not
+have been carried forward as a "re-check" at all — `EXP/FS Tip`, `EXP/FS Ring`, `Tip Polarity` and
+`Ring Polarity` sound like EXP Pedals and simply aren't there, and re-asking a settled oddity
+because it still reads oddly is how a checked fact gets turned back into an open one.
+`_TODO-settings-names.md` is down to a single question, and it needs my Stomp rather than anyone
+else's pedal.
+
+## Fifty-seventh round (2026-08-25): **the POD Go is the same protocol and a different data set** (issue #15)
 
 A contributor asked whether the POD Go could be supported and attached a capture of POD Go Edit's
 startup. The answer is yes, and the split is unusually clean: **nothing in the protocol changes;
@@ -3520,7 +3901,7 @@ chain means add/move/delete need their own work. The entry is `Support::Untested
 though that tier's "only the USB IDs are known" now undersells this the same way it undersold the LT
 in August, which is what led to `Reported` being added then.
 
-## Fifty-first round (2026-08-26): **the POD Go's write path is the same, byte for byte** (issue #15)
+## Fifty-eighth round (2026-08-26): **the POD Go's write path is the same, byte for byte** (issue #15)
 
 The contributor sent the three captures asked for — a parameter change, a bypass toggle and a block
 model swap, each on a named slot — and then ran the branch against their pedal.

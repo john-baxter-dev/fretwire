@@ -94,6 +94,9 @@
   let backupProgress = $state(null); // { done, total, name } while a backup sweep runs
   let restoreDlg = $state(null); // { path, entries, index, slot } — entries load from the file
   let snapRenameDlg = $state(null); // { index, name }
+  // Clear preset: empty the chain, reset the snapshot names. Edit buffer only and one undo entry,
+  // but it throws away a whole preset's work in a click, so it confirms first.
+  let clearDlg = $state(false);
   const deleteName = $derived.by(() => {
     const b = deleteDlg != null ? preset?.blocks.find((b) => b.slot === deleteDlg) : null;
     return b ? (b.user_label ?? b.model_name) : "this block";
@@ -207,8 +210,17 @@
       if (!connected) return;
       const tag = e.target?.tagName;
       if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+      if ((e.key === "Delete" || e.key === "Backspace") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (saveAsDlg || renameDlg || deleteDlg || exportDlg || restoreDlg || snapRenameDlg || clearDlg) return;
+        // Routing nodes (split/mixer) have no model to delete — only real blocks answer this.
+        if (selectedBlock?.model_index != null) {
+          e.preventDefault();
+          deleteDlg = selectedBlock.slot;
+        }
+        return;
+      }
       if (e.key === " " && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        if (saveAsDlg || renameDlg || deleteDlg || exportDlg || restoreDlg || snapRenameDlg) return;
+        if (saveAsDlg || renameDlg || deleteDlg || exportDlg || restoreDlg || snapRenameDlg || clearDlg) return;
         const b = selectedBlock;
         if (b && (b.bypassed === true || b.bypassed === false)) {
           e.preventDefault(); // also keeps Space from "clicking" a focused button
@@ -490,6 +502,12 @@
     }
   }
   const onPasteBlock = (slot) => apply(invoke("paste_block", { slot }));
+  const onClearPreset = () => (clearDlg = true);
+  function confirmClear() {
+    clearDlg = false;
+    selectedSlot = null;
+    apply(invoke("clear_preset"));
+  }
   function confirmDelete() {
     const slot = deleteDlg;
     deleteDlg = null;
@@ -1062,7 +1080,7 @@
 <main>
   {#if preset}
     <div class="workspace">
-      <PresetList {presets} currentIndex={preset.index} dirty={preset.dirty} {setlists} {viewBank} currentBank={presetBank} writeBlocked={foreignSetlist} {onPickSetlist} {onGoto} {onSave} {onSaveAs} {onRename} {onExport} {onRestore} {onCopyPreset} {onPastePreset} {presetClip} onNumbering={setNumberingMode} />
+      <PresetList {presets} currentIndex={preset.index} dirty={preset.dirty} {setlists} {viewBank} currentBank={presetBank} writeBlocked={foreignSetlist} {onPickSetlist} {onGoto} {onSave} {onSaveAs} {onRename} {onExport} {onRestore} {onCopyPreset} {onPastePreset} {onClearPreset} {presetClip} onNumbering={setNumberingMode} />
       <div class="content">
         <div class="meta">
           <span>
@@ -1397,6 +1415,24 @@
   </Dialog>
 {/if}
 
+{#if clearDlg}
+  <Dialog
+    title="Clear preset"
+    confirmLabel="Clear"
+    danger
+    onconfirm={confirmClear}
+    oncancel={() => (clearDlg = false)}
+  >
+    <p class="dlg-text">
+      Delete every block from <b>{preset?.name ?? "this preset"}</b> and reset its snapshot names?
+    </p>
+    <p class="dlg-text dim">
+      Footswitch and controller assignments go with the blocks. This only changes the edit buffer —
+      undo it, or reload the preset; the stored preset is untouched until you Save.
+    </p>
+  </Dialog>
+{/if}
+
 <Toast {toasts} ondismiss={dismissToast} />
 
 {#if showGlobals}
@@ -1678,6 +1714,11 @@
   }
   .dlg-text b {
     color: #e6e8ec;
+  }
+  /* Secondary line under a confirmation — the consequences, not the question. */
+  .dlg-text.dim {
+    color: #9aa3b2;
+    margin-top: 8px;
   }
   .dlg-label {
     color: #c3c9d4;

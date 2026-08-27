@@ -193,7 +193,11 @@ anyone builds a server for it.
 
 ## Two deployment facts specific to this setup
 
-### The udev rule does not work headless
+### The udev rule does not work headless — and this is not a serve-mode problem
+
+*(Recorded here because this is where it was found. It blocks the **arm64 CLI** in ROADMAP Phase 8
+just as hard, and that item can ship without any of the lift below, so treat it as a prerequisite of
+both rather than of serve mode.)*
 
 `packaging/70-hxstomp.rules` grants access with `TAG+="uaccess"`, which is a *seat* mechanism:
 systemd-logind grants the locally-seated user. **A Pi reached over SSH has no local session, so

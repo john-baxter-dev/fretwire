@@ -531,6 +531,16 @@ pub async fn delete_block(state: State<'_, AppState>, slot: i64) -> R<PresetDto>
     .await
 }
 
+/// Empty the loaded preset: delete every block and reset every snapshot name to the device's
+/// default. Assignments and footswitch bindings go with the blocks that owned them, and a split
+/// collapses to serial on its own — both verified on hardware, see `Session::clear_preset`.
+///
+/// One history entry, and edit-buffer only: an accidental clear is one Ctrl+Z, or a preset reload.
+#[tauri::command]
+pub async fn clear_preset(state: State<'_, AppState>) -> R<PresetDto> {
+    returning_edit(&state, |_| "Clear preset".to_string(), |s| s.clear_preset()).await
+}
+
 /// Reorder a block within the serial chain to order position `gap` (serial presets only).
 #[tauri::command]
 pub async fn reorder_block(state: State<'_, AppState>, src_slot: i64, gap: usize) -> R<PresetDto> {
@@ -690,9 +700,10 @@ pub async fn unassign_bypass(state: State<'_, AppState>, slot: i64, switch: i64)
 
 /// Put a parameter under controller `source`, or remove it with source 0.
 ///
-/// **The device does not range-check `source`** — ordinal 10 was accepted and silently did nothing,
-/// because the controller table is ten long. Bounded here so a UI bug cannot make an assignment
-/// that appears to work and isn't there.
+/// **The device does not range-check `source`** — an ordinal past the end of the controller table
+/// is accepted and silently does nothing. `Session::assign_param` bounds it against the loaded
+/// preset's own table, which is ten entries on a Stomp and thirteen on an XL; it used to be bounded
+/// here at a flat 9, which refused an XL's FS6 through FS8 (issue #13).
 #[tauri::command]
 pub async fn assign_param(
     state: State<'_, AppState>,
@@ -701,11 +712,6 @@ pub async fn assign_param(
     source: i64,
     paired: bool,
 ) -> R<PresetDto> {
-    if !(0..=9).contains(&source) {
-        return Err(format!(
-            "controller {source} does not exist — sources run 0 (none) to 9"
-        ));
-    }
     mutate_edit(
         &state,
         move |s| {
@@ -713,7 +719,10 @@ pub async fn assign_param(
             if source == 0 {
                 format!("Unassign {p}")
             } else {
-                format!("{} \u{2192} {p}", crate::dto::source_name(source))
+                format!(
+                    "{} \u{2192} {p}",
+                    crate::dto::source_name(source, s.footswitch_count())
+                )
             }
         },
         move |s| s.assign_param(slot, paired, param_index, source),

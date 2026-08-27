@@ -41,16 +41,22 @@ libusb C dependency, clean on Linux; falls back fine for dev on Windows. Workspa
       - send/save a preset to the device
 - [ ] Store each as `captures/NN-<action>.pcapng` + a `.md` describing the exact action.
 
-**Still wanted (2026-08-21), for footswitch/controller assign** — each is one action in HX Edit,
-start capture → do the single thing → stop:
-- `assign_block_to_fs1.pcapng` — a preset with an unbound block; bind that block's bypass to FS1.
-- `unassign_block_from_fs1.pcapng` — the reverse of the above, same preset.
-- `move_block_fs1_to_fs2.pcapng` — a bound block moved between switches (separates "bind" from
-  "reorder the layout").
-- `assign_param_to_exp1.pcapng` — assign one parameter (e.g. a Wah position) to EXP1.
-- `assign_same_param_to_fs4.pcapng` — the *same* parameter, same preset, to a footswitch instead.
-  The pair is what makes the controller-number space readable by diff; a Helix Floor is the useful
-  device here.
+**Mostly answered without the captures (2026-08-22).** This list asked for five footswitch and
+controller assign captures. Four were settled by construction instead — op **56** assigns and
+unassigns a block's bypass to a switch, op **37** assigns a parameter to a source ordinal, both
+byte-exact and verified live, and the CLI has `assign-bypass` / `unassign-bypass` / `assign-param`.
+Worth remembering next time a list like this reads as capture-blocked.
+
+What is left of it:
+- `assign_param_to_exp1.pcapng` — one parameter assigned to **EXP1**. Source ordinals 3..=7 are the
+  footswitches; 1 and 2 are believed to be the two expression inputs and that is **[unverified]**
+  for want of an expression pedal to try it with. This is the only one of the five still worth a
+  capture, and it needs a pedal plugged in more than it needs Windows.
+- A layout **reorder** (a bound block moved between switches) is separate from binding and has no
+  op of its own yet; whether the device treats it as unassign-plus-assign is unchecked.
+
+**Still wanted for the footswitch ring colour / custom label write** (ops 58-62, the one area where
+guessing has already cost a power cycle): see section B of `captures/_RUNBOOK-hx-edit-session.md`.
 
 ## Phase 2 — Protocol decode  (in progress)
 - [x] Identify endpoints — **interrupt EP 0x01 OUT / 0x81 IN**, 16-byte base frames, addr 8.
@@ -270,7 +276,7 @@ start capture → do the single thing → stop:
       level/pan) decoded [solid — io fixtures + input-gate capture: plain op-30 on the node slot];
       io.models meta bundled; IN/OUT glyphs in the grid open the param panel. **Global** settings
       (Input Z/impedance, pad, output level switches) still need a capture round — see
-      `captures/_TODO-global-settings.md`.
+      `docs/protocol.md`.
 - [x] **2026-07-08 editor round** (mock verified; cab paths live-verified 2026-07-09): segmented
       floats (cab mic Angle → 0°/45° buttons, `ParamMeta::stops` from `HelixControls.json` scale),
       **Change cab** on amp+cab combos ([solid]: same-model op-40 swap keeps amp params, new cab
@@ -490,6 +496,18 @@ start capture → do the single thing → stop:
       **Asked for 2026-08-23** (Pi 5 alongside PiPedal). `cargo check` for both
       `aarch64-unknown-linux-musl` and `armv7-unknown-linux-musleabihf` passes unmodified — see
       `docs/serve-mode.md`. Still never linked or run on ARM hardware.
+      **Blocked on the udev rule, and that blocker is not serve mode's** [2026-08-25]. It is written
+      down inside `docs/serve-mode.md` because that is where it was found, but it bites this item
+      identically and this item could ship first: `packaging/70-hxstomp.rules` grants access with
+      `TAG+="uaccess"`, a **seat** mechanism — systemd-logind grants the locally-seated user, and a
+      Pi reached over SSH has no local session, so it grants nothing and the CLI gets `EACCES` with
+      no hint as to why. Shipping an arm64 asset without a `GROUP=`-based variant hands the person
+      who asked a binary that fails at the first USB open. Three places, not one: the rules file,
+      `install-udev` (which `include_str!`s it), and the test asserting
+      `UDEV_RULE.contains(r#"TAG+="uaccess""#)`. **Do this before, or with, the matrix entry.**
+      Sequencing note: line below orders the arm64 artifacts after serve mode, on the grounds that
+      serve mode is what makes them useful. True of the *GUI*; not of the CLI. Headless preset
+      switching, backup and restore need no browser and no lift — this entry's own **Why** says so.
 - [ ] arm64 for the **GUI** — still not planned, and the request that would have triggered it turned
       out to be for something else. Feasible (public repos get free `ubuntu-24.04-arm` runners, so
       it's a native build with no cross-compiled WebKitGTK), but the person who asked runs
@@ -629,8 +647,33 @@ real session.
       backend is ready — `PresetDto.dsps[]` carries each DSP's grid/nodes/load, and every cell and
       block is tagged with its `dsp`; the flat fields mirror `dsps[0]` so the current UI is
       unaffected until it's rewritten.
-- [ ] `.hxb` import/restore — **independently useful, needs no device and no new captures**. Would
-      give the Stomp backup-file interop too. Format is documented well enough to build against.
+- [~] `.hxb` import/restore. **The conversion is built and measured** (2026-08-25):
+      `fretwire_data::tone` turns a `tone` object — what an `.hxb` slot and an `.hlx` file both
+      carry — into the wire preset, and `fretwire hxb-convert` writes an export file the existing
+      `backup-show`/`restore` path already reads. Blocks, split topology and snapshots all come
+      across, and so do the footswitch bindings with their custom labels and LED ring colours;
+      checked against one preset held in both forms (a Floor backup and a wire dump of the same
+      slot off the same unit), where all 15 blocks, 106 parameter values, 320 snapshot-matrix cells
+      and all 8 bypass bindings match the device's own bytes. This gives `.hlx` **import** too — the
+      format is the same tree — which is the more useful half, since `.hlx` is what people share.
+      **Not yet sent to a pedal.** What is left, in order:
+      - **One capture unblocks the biggest gap: a wire dump of a preset containing an Amp+Cab
+        block, off a unit whose `.hxb` we also hold.** Amp+cab blocks are refused today because the
+        tone names the paired cab with a plain `HD2_Cab…` symbol while the one dump we have stores
+        a `HD2_CabMicIr_…` one, with a different parameter list, and nothing pins the two together.
+        This is ~26 of the 128 presets in bank 0 of the sample backup, and amp+cab is how most
+        people build a preset. Everything else about the pairing is already known (cab index at
+        `24 → 26`, its parameters in bank `12`).
+      - **Controller assignments (key `4`)** and the snapshot controller values (`2`) that index
+        off them. Currently the donor's table is *cleared* — a stale row addresses blocks by slot
+        and every slot has changed — so a restored preset arrives with no expression/controller
+        assignments.
+      - **Three more block classes and one topology have no wire evidence** and are refused rather
+        than guessed: tone `@type` 4 (dual cab), 5 (IR), 8 (synth), and topology `AB`. Type 6
+        (looper) is a different slot kind again. Each needs one dump of a preset containing that
+        kind of block — cheap, and the refusal message names what to capture.
+      - The four **input/output nodes** store a ragged prefix of their symbol's parameter list and
+        the rule is unknown; they keep the target's values.
 
 ## Phase 10 — Headless / serve mode
 Opened 2026-08-23 by a Helix Floor owner running a Pi 5 with PiPedal, who asked for a Raspberry Pi

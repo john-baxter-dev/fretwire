@@ -3,6 +3,12 @@
 Everything currently blocked on watching HX Edit do something, in one sitting. Ordered by what it
 unblocks, so stopping early still leaves the valuable ones done.
 
+**A and B are the two to make sure of** (2026-08-25). A is not even a capture — one backup plus a
+few `dump-raw`s afterwards — and it closes the whole remaining gap in `.hxb`/`.hlx` import. B is the
+only thing that safely opens footswitch colours, which have already cost one power cycle to guess at.
+**F needs a two-DSP unit** (Floor or LT) and cannot be done on a Stomp; **G is obsolete** — that
+area moved to Linux when the read op turned up.
+
 Read `README.md` first for the Wireshark setup. **On a Helix Floor the device is VID `0x0E41` /
 PID `0x4248`** (the Stomp is `0x4246`) — the USBPcap interface number will differ from the one the
 README names, so find it by filtering `usb.idVendor == 0x0e41` and reading `usb.device_address`.
@@ -19,7 +25,107 @@ General rules, same as always:
 
 ---
 
-## A. The node move ⭐ highest priority
+## Checklist
+
+Tick as you go. Sections below have the detail and the reasoning; this is the thing to have open.
+
+**In HX Edit (Windows)**
+
+- [ ] **Take the whole-device `.hxb` backup.** ⭐⭐ — §A
+- [ ] Write down the preset slot number holding an **Amp+Cab** block ⭐ — §A
+- [ ] …and one holding a **Cab › Dual**, an **IR** block, a **Looper**, a **synth** block — §A
+- [ ] `fs_colour_set.pcapng` — one switch's ring colour, note the colour's exact name ⭐ — §B
+- [ ] `fs_colour_set_second.pcapng` — a different colour, same switch ⭐ — §B
+- [ ] `fs_label_set.pcapng` — custom name on that switch, note the exact text — §B
+- [ ] `fs_label_clear.pcapng` — clear it again — §B
+- [ ] `node_move_split_right_one.pcapng` / `_back` — drag the split a column, and back — §C
+- [ ] `node_move_mixer_left_one.pcapng` / `_back` — same for the mixer — §C
+- [ ] `variant_delay_mono_to_stereo.pcapng` / `_stereo_to_mono` — note where the control is — §D
+- [ ] `variant_mod_mono_to_stereo.pcapng` — same on a modulation block — §D
+- [ ] `dualcab_create.pcapng`, `dualcab_pan_left.pcapng`, `dualcab_swap_second.pcapng` — §E
+- [ ] Photo: the **footswitch colour picker open**, showing its option list — §B
+- [ ] Photo: the **mono/stereo control**, wherever HX Edit puts it — §D
+- [ ] Photo: the **DSP meter** on a busy preset — settles whose number we display
+
+**Back on Linux** — these pair with the backup and are where its value is realised
+
+- [ ] `fretwire goto <slot>` + `fretwire dump-raw ampcab.bin` for the Amp+Cab slot ⭐ — §A
+- [ ] …and one dump each for the dual-cab, IR, looper and synth slots — §A
+- [ ] `fs_before.bin` / `fs_after.bin` around the colour change — §B
+- [ ] `variant_before.bin` / `variant_after.bin` around the first variant change — §D
+
+**Per capture, every time:** one action, 1–2 s around it, stop, and fill in a copy of
+`_TEMPLATE.md`. An unlabelled capture is close to worthless.
+
+**Skip:** §F (needs a two-DSP unit — a Stomp has no Path 2) and §G (obsolete; that work moved to a
+Linux `settings-dump` → change one menu item → `settings-dump` → `settings-diff` loop).
+
+---
+
+## A. The `.hxb` backup, and the Linux dumps that pair with it ⭐⭐ cheapest, highest value
+
+**Unblocks:** every remaining refusal in the `tone` → wire conversion, which is what stands between
+us and restoring a preset from a backup or importing a shared `.hlx`.
+
+This is not a capture. It is **one backup in HX Edit plus a few `dump-raw`s on Linux afterwards**,
+and it is worth more than anything else on this page because of how the conversion is verified: a
+preset held in *both* forms — host-side `tone` JSON from the backup, and the device's own bytes from
+a dump — is an oracle that settles an encoding question outright. That is how the whole mapping was
+proved (see `docs/preset-format.md`), using a contributor's Floor backup that happened to overlap a
+capture. Doing it deliberately, on a unit we have, closes the rest.
+
+1. **Take the backup.** Whatever HX Edit calls "create/save a device backup" — the whole unit, one
+   `.hxb`. Keep it out of git (`captures/` ignores `*.hxb`; it is your own preset data).
+2. **While you are in there, write down which preset slots contain each of these**, because that is
+   the part that cannot be recovered later:
+   - an **Amp+Cab** block ⭐ — the one that matters most, see below
+   - a **Cab › Dual** block (also section E)
+   - an **IR** block
+   - a **Looper**
+   - a **3 Note Generator** or other synth block
+3. **Back on Linux**, for each slot noted: `fretwire goto <slot>` then
+   `fretwire dump-raw ampcab.bin` (name it after the block it is for).
+
+**Why Amp+Cab is the one to make sure of.** An Amp+Cab block is one block on the wire, with the cab's
+index at `24 → 26` and its parameters in bank `12`. The `tone` names the paired cab with a plain
+`HD2_Cab…` symbol; the one paired dump we hold stores a `HD2_CabMicIr_…` one, a different family with
+a different parameter list (`Mic` first instead of appended, and the trailing `IrData` not stored).
+Nothing pins the two together, so amp+cab blocks are **refused** rather than converted — about a
+fifth of a factory setlist, and it is how most people build a preset. One backup-plus-dump pair ends
+that.
+
+The other four are the same trick applied to the block classes still marked unknown (`@type` 4, 5,
+6, 8 in `fretwire_data::tone`). Each pair settles one, and the refusal messages name what is missing.
+
+## B. Footswitch ring colour and custom label ⭐
+
+**Unblocks:** picking a colour and a name per footswitch in the editor — explicitly one of the few
+things HX Edit still does that we cannot.
+
+**Do not probe this.** `probe-edit --op 58` wedged a pedal on 2026-08-22 and cost a power cycle; all
+five candidate ops (58-62) accept a bare `{102: switch}` and do nothing with it, so acceptance says
+nothing. At current knowledge it is roughly one power cycle per guess. **This capture turns it from a
+search into a confirmation**, which is the whole reason it is worth a session slot.
+
+Reading is already done: op 33 returns the switch record, `109` is the label and `67[].66` the
+assignment's colour as `0xRRGGBB`. The `tone` side carries the same fields (`@fs_ledcolor`,
+`@fs_customlabel`) and now round-trips through a conversion. What is missing is only the **write**.
+
+Start from a preset with at least one block bound to a footswitch.
+
+1. `fs_colour_set.pcapng` — change one footswitch's **ring colour** to a specific option. Nothing
+   else. **Write down which switch, and the exact name of the colour you picked** — the option list
+   is worth as much as the bytes, and a photo of the picker open is ideal.
+2. `fs_colour_set_second.pcapng` — a **different** colour on the **same** switch. The pair is what
+   separates "which op" from "which field".
+3. `fs_label_set.pcapng` — give that switch a **custom name**. Write down the exact text.
+4. `fs_label_clear.pcapng` — clear it again.
+
+Dump before and after #1 (`fs_before.bin` / `fs_after.bin`) so the result can be diffed as well as
+the command. Top-level `66` on the switch record stays nil while the assignment's own colour is set,
+so which of the two the write lands on is one of the open sub-questions.
+
+## C. The node move ⭐ highest priority
 
 **Unblocks:** the op-21 whole-preset write lockup, open since Round 21, and the only thing on record
 that has wedged the pedal hard enough to need a reboot. Ending each unit on a short USB packet took
@@ -43,7 +149,46 @@ Start from a preset with a parallel path and at least one block on the lower row
 In the notes, record the column each node started and ended on, counting the same way the UI draws
 it. If HX Edit *refuses* any of these, that is just as useful — say so and note the exact wording.
 
-## B. The output block's **destination** — the one thing blocking DSP2 presets ⭐
+## D. Mono ↔ stereo on an existing block ⭐
+
+**Unblocks:** letting the editor switch a block's variant. 153 models ship both; we read the variant
+and cost it correctly, and the swap works on the wire, but the GUI's picker collapses to one entry
+per model and only ever offers the variant the block already has. Before building a toggle we should
+know what HX Edit actually sends — plain op 40 to the other symbol index, or something else.
+
+1. `variant_delay_mono_to_stereo.pcapng` — take a **mono** delay and make it stereo, however HX Edit
+   exposes that. **Write down where the control is** — that's half the answer.
+2. `variant_delay_stereo_to_mono.pcapng` — and back.
+3. `variant_mod_mono_to_stereo.pcapng` — same on a modulation block, to check it isn't per-category.
+
+Dump before and after the first one (`variant_before.bin` / `variant_after.bin`) so we can diff what
+changed in the block record besides the model ref.
+
+## E. A two-cab (`Cab › Dual`) block
+
+**Unblocks:** dual-cab support, which is currently absent and probably reads back as half of itself.
+Step 1 below is now part of section A — if you did that, the dump exists and only the captures here
+are still open.
+
+There are 46 `HD2_CabMicIr_*WithPan` symbols and the pedal refuses an in-place swap to any of them
+(`-306`, sometimes `-21`), so HX Edit must create them some other way. We have never decoded a real
+one — our only "dual" fixture is a dual *amp*.
+
+1. **`dualcab.bin` — the dump matters most.** Build a preset with a `Cab › Dual` block in HX Edit,
+   save it, then dump it from Linux. Even with no capture at all this tells us where the second
+   model ref lives.
+2. `dualcab_create.pcapng` — turn a single cab into a dual one.
+3. `dualcab_pan_left.pcapng` — move **cab A's** Pan.
+4. `dualcab_swap_second.pcapng` — change which cab is in the **second** slot.
+
+Note in the template which visual half of the block each action touched — A vs B is the whole
+question.
+
+## F. The output block's **destination** — DSP2 routing — *needs a Floor or an LT, not a Stomp*
+
+**Skip this on an HX Stomp.** The Stomp has one DSP (`Device::dsps == 1`, and key `1` of its presets
+is nil), so there is no Path 2 to route to and no way to perform the action this section describes.
+It stays here for whoever next has a two-DSP unit in front of them.
 
 **Unblocks:** building a preset that uses Path 2 (DSP2) at all. Everything else about DSP2 is
 already solved — slots are global (`dsp*20+index`), edits to a DSP2 block are byte-identical to a
@@ -77,48 +222,18 @@ on slot 9 changing, and confirms whether anything else moves with it.
 If HX Edit turns out to send this as an op-21 whole-preset write rather than a small edit, say so —
 that is the same operation as section A, and the two captures then answer each other.
 
-## C. Mono ↔ stereo on an existing block ⭐
+## G. Global settings — op-25 id space — **obsolete, do not spend session time here**
 
-**Unblocks:** letting the editor switch a block's variant. 153 models ship both; we read the variant
-and cost it correctly, and the swap works on the wire, but the GUI's picker collapses to one entry
-per model and only ever offers the variant the block already has. Before building a toggle we should
-know what HX Edit actually sends — plain op 40 to the other symbol index, or something else.
+This section said "we can already write settings and cannot read any back". That stopped being true
+on 2026-08-22: the **read is op 24**, it had been sitting in the connect capture mis-labelled as a
+"prepare step", and settings are a flat numbered namespace. A 601-id sweep takes 1.4 s.
 
-1. `variant_delay_mono_to_stereo.pcapng` — take a **mono** delay and make it stereo, however HX Edit
-   exposes that. **Write down where the control is** — that's half the answer.
-2. `variant_delay_stereo_to_mono.pcapng` — and back.
-3. `variant_mod_mono_to_stereo.pcapng` — same on a modulation block, to check it isn't per-category.
+So the whole area is now a **Linux** job with no Windows box in it — `settings-dump`, change one
+thing on the pedal's own menus, `settings-dump` again, `settings-diff`. That loop found nineteen ids
+in one sitting on 2026-08-25 and closed both of the empty menus; `_TODO-settings-names.md` carries
+what is left of it. Still no capture required.
 
-Dump before and after the first one (`variant_before.bin` / `variant_after.bin`) so we can diff what
-changed in the block record besides the model ref.
-
-## D. A two-cab (`Cab › Dual`) block
-
-**Unblocks:** dual-cab support, which is currently absent and probably reads back as half of itself.
-
-There are 46 `HD2_CabMicIr_*WithPan` symbols and the pedal refuses an in-place swap to any of them
-(`-306`, sometimes `-21`), so HX Edit must create them some other way. We have never decoded a real
-one — our only "dual" fixture is a dual *amp*.
-
-1. **`dualcab.bin` — the dump matters most.** Build a preset with a `Cab › Dual` block in HX Edit,
-   save it, then dump it from Linux. Even with no capture at all this tells us where the second
-   model ref lives.
-2. `dualcab_create.pcapng` — turn a single cab into a dual one.
-3. `dualcab_pan_left.pcapng` — move **cab A's** Pan.
-4. `dualcab_swap_second.pcapng` — change which cab is in the **second** slot.
-
-Note in the template which visual half of the block each action touched — A vs B is the whole
-question.
-
-## E. Global settings — op-25 id space
-
-**Unblocks:** a Global Settings pane. We can already write settings and cannot read any back.
-
-Full recipe is in `_TODO-global-settings.md`; it hasn't changed. Six small captures, Input Z first,
-and the one that matters most is `global_settings_pane_open.pcapng` — **just opening the pane**, for
-the read-side traffic. Without that the GUI can set values it can never display.
-
-## F. A block with two or more values past its symbol list — *only if you happen to hit one*
+## H. A block with two or more values past its symbol list — *only if you happen to hit one*
 
 Key 29 solved the single trailing extra (Trails on a delay/reverb, `Mic` on a legacy cab). A block
 carrying **two** or more would stay read-only in the editor, because we have no evidence for what the

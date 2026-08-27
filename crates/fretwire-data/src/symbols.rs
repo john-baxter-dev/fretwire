@@ -72,6 +72,32 @@ impl DeviceSymbols {
         self.by_name.get(device_symbol).map(Vec::as_slice)
     }
 
+    /// The inverse of [`Self::by_index`] — a full device symbol's position in `Helix.sym`, which is
+    /// the number a preset stores at `24 → 25`. Needed when *writing* a preset, where the symbol is
+    /// known and the index has to be produced.
+    pub fn index_of(&self, device_symbol: &str) -> Option<usize> {
+        self.ordered.iter().position(|(s, _)| s == device_symbol)
+    }
+
+    /// Which channel-count variants of a **host** symbolic id the device actually has, as the
+    /// suffixes to append — `[""]` for a model with no variants at all (most amps and cabs), one
+    /// entry where the device offers only one (reverbs are `Stereo`-only, IRs `Mono`-only), and
+    /// both where there is a real choice.
+    ///
+    /// This is what makes a `tone` block's missing `@stereo` key readable: HX Edit writes the flag
+    /// only when there is something to choose, so an absent flag means "the one that exists".
+    pub fn variants_of(&self, host_symbol: &str) -> Vec<&'static str> {
+        let mut out: Vec<&'static str> = VARIANTS
+            .iter()
+            .copied()
+            .filter(|v| self.by_name.contains_key(&format!("{host_symbol}{v}")))
+            .collect();
+        if out.is_empty() && self.by_name.contains_key(host_symbol) {
+            out.push("");
+        }
+        out
+    }
+
     /// Resolve the device parameter order for a **host** symbolic id (no suffix) given the observed
     /// param-vector length. Tries the `Mono` then `Stereo` variant and returns the one whose param
     /// count matches `count` as `(variant, ordered_names)`.

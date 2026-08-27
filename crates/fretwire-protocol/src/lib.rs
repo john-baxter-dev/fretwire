@@ -157,10 +157,12 @@ pub struct Device {
 /// Two are [`Support::Reported`], for different reasons, which is the point of the tier being
 /// evidential rather than a ranking: the **Helix LT** was surveyed on real hardware (reads and
 /// browses reconcile; no edit has been sent to one), while the **HX Stomp XL** is known through its
-/// owner — what they can run, read off the panel and paste back. Neither has a capture reconciled
-/// against our builders, and in both cases every field we did not observe stays `None` rather than
-/// being copied from a sibling: the LT reports the Floor's `P21` and still does not inherit its
-/// `preset_device_id`, and the XL's own `P36` says nothing about its DSP or snapshot counts.
+/// owner — what they can run, read off the panel, and two preset streams they captured, which our
+/// reader reconciles. Neither has an *edit* reconciled against our builders byte-for-byte, which is
+/// what `Verified` means here, and in both cases every field we did not observe stays `None` rather
+/// than being copied from a sibling: the LT reports the Floor's `P21` and still does not inherit its
+/// `preset_device_id`, and the XL's own `P36` said nothing about its DSP or snapshot counts — those
+/// two came from the captures, not from the code.
 ///
 /// The **HX Effects** reached [`Support::Reported`] the same way, by outcome alone: its `lsusb`
 /// line arrived first and made it findable, and an owner has since said it works. That report is
@@ -267,8 +269,14 @@ pub const DEVICES: &[Device] = &[
         // Still unknown: nothing we have read exposes it. The model code above comes from an
         // identity string and a preset stamp; this is a different field in the backup header.
         preset_device_id: None,
-        dsps: None,
-        snapshots: None,
+        // **From the first captures we hold off an XL** — two preset streams contributed with
+        // issue #13, 2026-08-25. Key `1` (the second DSP group) is nil and key `0 → 22` holds the
+        // usual 20 slots, read by the same decoder that reports `[0, 1]` on a Floor.
+        dsps: Some(1),
+        // Key `10 → 10` is `Array[4]`: SNAPSHOT 1..4. This is the device's count, not the preset's
+        // — six Stomp streams all say 3 and a Floor says 8 — but only one XL preset has been read,
+        // so it rests on one unit rather than on the pattern. [2026-08-25, issue #13]
+        snapshots: Some(4),
         setlists: None,
         // 32 banks of 4 is 128 presets, which the owner reads off the panel as `01A`-`32D`. Equal
         // to the `setlist_stride` fallback, so it changes no addressing — it records the reading.
@@ -280,8 +288,12 @@ pub const DEVICES: &[Device] = &[
         presets_per_bank: Some(4),
         // An owner ran the 0.2.x editor against one over several sessions — browsing, editing,
         // exporting — and the bugs they filed were device-independent and reproduced on an
-        // HX Stomp. That is enough to say it works, and (with the banking above) not enough to fill
-        // in the rest. [2026-08-20/21, issues #2 and #3]
+        // HX Stomp. [2026-08-20/21, issues #2 and #3]
+        //
+        // Still `Reported` rather than `Verified` even now that we hold streams from one: the two
+        // captures are reads, decoded and reconciled, but no *builder* has been checked against an
+        // XL byte-for-byte, which is what `Verified` means here. What they did settle is the
+        // geometry above and the controller table's size — see `docs/preset-format.md`.
         support: Support::Reported,
     },
     Device {

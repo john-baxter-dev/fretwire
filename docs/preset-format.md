@@ -88,6 +88,67 @@ array is always one shorter than the model's param list:
 
 The bool in each array (`bypass` / `B Polarity`) pins the alignment, so the mapping is not guesswork.
 
+## The host side: `tone` JSON ↔ this format  [solid — 2026-08-25]
+
+An `.hlx` preset file and every slot of an `.hxb` backup carry the same preset as a **`tone`
+object** — named models, named parameters, `@path`/`@position` instead of slot numbers. That is
+the format HX Edit saves and shares, so converting it to this one is what a restore or an `.hlx`
+import needs. `fretwire_data::tone` does it; the reconciliation is below and in that module.
+
+The check is a preset held in **both** forms — a contributor's Floor backup and a wire dump of the
+same slot off the same unit — so this is measured, not inferred. All 15 blocks, both DSPs, both
+split topologies and all 106 parameter values agree.
+
+| tone | wire |
+|---|---|
+| `@model` + `@stereo` | the device symbol's index in `Helix.sym` (`24 → 25`) |
+| named parameters | `11 → 4`, in that symbol's parameter order |
+| `@path`, `@position` | slot index = `@path × 10 + @position + 1` |
+| `@enabled` | content key `10` |
+| `@mic`, `@trails` | one value appended past the symbol's parameters |
+| `@type` | content key `9` (table above) |
+| `global.@topologyN` | DSP group key `21` |
+| `footswitch.dspN.blockM` | key `3 → 8`, transposed: `@fs_index` − 1 is the array position |
+| `@fs_label` / `@fs_ledcolor` / `@fs_enabled` | `11 → 5` (NUL-terminated) / `11 → 6` / `11 → 7` |
+| `@fs_customlabel` / `@fs_momentary` | `14` (NUL-terminated, `13` says whether there is one) / `12` |
+| `snapshotN.@name` / `@tempo` / `@valid` | snapshot keys `4` (NUL-terminated) / `5` / `0` |
+| `snapshotN.@pedalstate` / `@ledcolor` / `@custom_name` | snapshot keys `11` / `12` / `14` |
+| `snapshotN.blocks.dspN.<name>` | snapshot key `3[wire slot][1]` |
+
+Two things here are counter-intuitive enough to be worth stating on their own.
+
+**`@stereo` is written only when the model has both variants.** 153 of the 680 symbols do; the rest
+are `Stereo`-only (36, including every reverb), `Mono`-only (12) or unsuffixed (479, the amps and
+cabs). So an absent `@stereo` means *the variant that exists*, not "Mono" — reading it as Mono
+makes `HD2_ReverbHall` unresolvable, and reading it as a default would pick a symbol with a
+different parameter order.
+
+**Whether a split or mixer is a real branch point comes from the topology string, not from the
+node's own `@enabled`.** Both nodes of a bracket that spans two DSPs report `@enabled: true` on
+both, while the device has DSP1's join and DSP2's split *inactive* (`20 → 18` false, column 0) —
+because the split opens on DSP1 (`SAB`) and the join closes on DSP2 (`ABJ`). The node's `@enabled`
+is its own bypass and lands on the holder's key `10`.
+
+**An amp+cab block's `@cab` is a sibling reference, not a model.** `@cab: "cab0"` names another
+entry of the same `dspN` object, which holds the cab's own `@model`, `@mic` and parameters. The
+pair is one block on the wire, with the cab at `24 → 26` and its parameters in bank `12`. Which
+**symbol** that index names is the open question: the Stomp dump we hold stores a `HD2_CabMicIr_…`
+where the `tone` names a plain `HD2_Cab…`, and the two families differ in spelling and in case
+(`Cab4X12CaliV30` against `CabMicIr_4x12CaliV30`). `fretwire_data::tone` refuses amp+cab blocks
+until one dump of one settles it — a wrong cab on someone's amp is the most audible thing this
+conversion could get wrong.
+
+**A footswitch binding stays in the layout when `@fs_enabled` is false**, carrying `11 → 7` false —
+that is a block assigned to a switch and not currently answering to it, not an unbound switch. One
+switch can hold several bindings, as an array, ordered with the `@fs_primary` one first and each
+entry's position recorded at `10`. [solid — the oracle preset has both cases]
+
+**Path B's input and output nodes live inside the structural slots**: the split slot's key `14` is
+the tone's `inputB` and the mixer slot's key `16` is `outputB`, the same shape as slot 0 (`inputA`)
+and slot 9 (`outputA`). All four store a **ragged prefix** of their symbol's parameter list — DSP1's
+input keeps 3 of 8, DSP2's keeps none — and the rule behind the prefix length is not known, which is
+why `tone` leaves those four alone.
+
 ## Preset map (integer keys)
 | key | value | meaning (inferred) |
 |----:|-------|--------------------|
@@ -96,7 +157,7 @@ The bool in each array (`bypass` / `B Polarity`) pins the alignment, so the mapp
 | 1 | Map `{21: split, 22: Array[20]}` — or nil | **the second DSP's slot array**, same shape as key `0`. **nil on the HX Stomp** (one DSP), populated on the Helix Floor. [solid — 2026-07-22, Floor captures cross-checked against a `.hxb` backup] |
 | 2 | Map `{0: Array[13], 1: Array[13×Array[7]]}` | snapshot/controller matrices (13 = snapshots? all zero here) |
 | 3 | Map `{7: 0, 8: Array[5]}` | **footswitch / stomp layout** — bound blocks only; see below |
-| 4 | Array[10] (all nil) | **parameter-controller** assignments (separate from `3 → 8`; empty here) |
+| 4 | Array[10] (all nil) | **parameter-controller** assignments (separate from `3 → 8`; empty here). Ten because this is a Stomp — the length is `footswitches + 5`, so an XL holds 13 |
 | 5 | Map{15} `{16: f32, 45..56: …, 30, 134}` | **preset-level settings**. Byte-identical across all three captures (all at defaults), so the fields aren't separable yet; `16` = f32 80 is most likely the preset tempo. [hypothesis] |
 | 6 | Map{2} `{98: <slot>, 26: 0}` | **the focused block** — key `98` is the same slot number the edit commands address, and it differs per capture (5, 7, 12), matching the block last selected. [solid] |
 | 10 | Map{6} `{6,7,8, 9: 20, 10: Array[n], 13: Array[20]}` | **snapshots**: `10` is the snapshot array (3 on a Stomp, 8 on a Floor), `9` = the slot count, `13` = a per-slot array. Each snapshot is `{0: enabled, 1: Array[11], 2: Array[64], 3: Array[20], 4: name, 5: f32 tempo, 12, 14}` — note `3` is **per-slot state**, one entry per block slot. [solid] |
@@ -183,10 +244,34 @@ A `type 6` block content is `Map{5}`:
 - `10` = **`enabled` bool** (`true` = block active, `false` = bypassed). **[solid — verified live
   2026-06-23]** by toggling a block and diffing the stream (`fretwire diff-stream`). The block bypass
   state lives **here**, not in the `24` metadata. (An earlier draft wrongly read `24 → 23`.)
-- `24` = `{25: model/DSP id, 26: secondary id, …}` (metadata).
-- `11` = `{2: count, 3: count, 4: [values]}` — **the ordered param vector** (msgpack `float32`
-  for knobs, `int`/`bool` for enums/switches), in `.models` param order.
-- `12` = a second (usually empty) param bank; `9` = flag.
+- `24` = `{23: has-paired-cab, 25: model index, 26: paired index}` (metadata). **`23` is the
+  pairing flag**, not a bypass: it is `true` on exactly the blocks whose `26` is not `-1`, on every
+  amp in every fixture held. [solid — 2026-08-25]
+- `11` = `{2: stored, 3: from-symbol, 4: [values]}` — **the ordered param vector** (msgpack
+  `float32` for knobs, `int`/`bool` for enums/switches), in `Helix.sym` device order.
+  **The two counts are different numbers and say so:** `3` is the model symbol's own parameter
+  count and `2` is how many values are stored, and they differ by exactly one on the blocks that
+  append a trailing extra — a cab's **mic** and a delay/reverb's **trails** switch. So a cab reads
+  `{2: 6, 3: 5}` and a Simple Delay `{2: 7, 3: 6}`. [solid — 2026-08-25, 24 distinct symbols]
+- `12` = the **paired model's** param vector, same `{2, 3, 4}` shape — a cab's mic/cut parameters
+  on an amp+cab block, and empty on everything else. The one paired block we hold a dump of stores
+  `HD2_CabMicIr_1x12USDeluxe` with `{2: 7, 3: 7}`: `Mic` is its **first** parameter (not a value
+  appended after the last, the way a standalone cab's is) and the symbol's trailing `IrData` is not
+  stored, 7 of 8. [solid — 2026-08-25]
+- `9` = the **block class**, a small fixed number per kind of block, equal to the `@type` an `.hlx`
+  / `.hxb` `tone` block carries — not to the catalog category, which is far finer-grained:
+
+  | `9` | tone `@type` | what |
+  |---:|---:|---|
+  | 1 | 0 | any ordinary effect — EQ, comp, dist, mod, wah, vol/pan |
+  | 8 | 7 | delay and reverb, i.e. exactly the trails-capable blocks |
+  | 15 | 2 | a cab on its own |
+  | 17 | 1 | an amp on its own (`26` = −1) |
+  | 33 | 3 | an **amp + cab** pair (`26` = the cab, `23` = true) |
+
+  [solid — 2026-08-25]. `@type` 4 (dual cab), 5 (IR), 6 (looper — a different slot kind entirely)
+  and 8 (synth) all occur in a real backup and in **no** wire dump we hold, so their class is
+  unknown; `fretwire_data::tone` refuses those rather than guessing.
 
 ### Block content for `type 7` (Looper) — a different shape
 A `type 7` slot's content is `Map{4}` and does **not** follow the type-6 layout:
@@ -218,10 +303,13 @@ of a `Map{7}` node:
 - `14` = user label string; `13` = has-label flag (e.g. a `Harmonic Tremolo` renamed `Tremolo`).
 
 ### Controllers / footswitch assignments (`4`), snapshots (`10`/`2`) [solid — corrected 2026-08-21]
-- **`4` = `Array[10]`** — **parameter**-controller assignment table, **indexed by source ordinal**:
+- **`4` = `Array[footswitches + 5]`** — **parameter**-controller assignment table, **indexed by
+  source ordinal**:
   one position per physical control, `nil` where that control drives nothing. A populated entry is an
   `Array` of `{0:<place in table>, 1: Map}` — **one item per assignment on that source**, so a control
-  driving two things has two items. The inner map is
+  driving two things has two items (observed: EXP1 with two, `captures/xl_exp_bypass.msgpack.bin`).
+  A target slot **need not still hold a block** — the same capture has an EXP1 entry aimed at an
+  empty slot 1, so a consumer must treat the slot lookup as fallible. The inner map is
   `{0:<source>, 1:<value type>, 2:<min>, 3:<max>, 5:<target slot>, 6:{28:<path>, 29:<param idx>, 41}, …}`.
 - **The parameter index is `6 → 29`; `6 → 28` is the model path.** This is the reverse of the op-37
   *request* that creates an assignment, where 28 carries the index — and reading the request's shape
@@ -232,16 +320,55 @@ of a `Map{7}` node:
 - **The travel ends are keys `2` and `3`, not `4`/`7`** (which are `0` on every sample held). They are
   in the parameter's own raw units and follow its type: `false`/`true` for a switch, `0`/`1` for a
   0..1 knob, `0`/`8` for a delay time. [solid — three samples]
-- **Source ordinal → physical control:** **footswitches are 3..=7** — FS1 = 3, established by
-  diffing a front-panel assignment and again by writing one with op 37, and the *count* is the
-  device's own: op 33 answers switches 1-5 and refuses 6 with code `-3`, matching the five positions
-  in `3 → 8`. On an HX Stomp three of those are on the panel and two reach the external switch jack.
-  Ordinals **1, 2 and 9** are accepted and file themselves at indices 1, 2 and 9; since 3..=7 are the
-  footswitches, 1 and 2 are the two expression inputs and 9 is the last slot in a ten-long table.
-  `tonepush` names them EXP1/EXP2, MIDI (8) and Snapshots (9) — consistent with everything here, but
-  **which physical control ordinal 1 is remains [unverified]** for want of an expression pedal.
-  Ordinal **10 is silently ignored**: the table is ten long and **the device does not range-check
-  this**, so a caller must. [solid — 2026-08-22]
+- **Source ordinal → physical control — the table is the device's size, not a fixed ten.**
+  [corrected 2026-08-25, issue #13] The layout is: `0` none, `1`/`2` the expression inputs, **one
+  entry per footswitch from 3**, then MIDI, then snapshots. So
+
+  | | HX Stomp (5 switches) | HX Stomp XL (8) |
+  |---|---|---|
+  | footswitches | 3..=7 | 3..=10 |
+  | MIDI | 8 | 11 |
+  | snapshots | 9 | 12 |
+  | `Array` length | 10 | 13 |
+
+  **`length == footswitches + 5` on all ten streams we hold** — six Stomp captures at 5 and 10,
+  four XL captures at 8 and 13. [solid]
+
+  **FS1 = 3 on both**, established by diffing a front-panel assignment and again by writing one with
+  op 37. The run's far end is now observed too: an XL owner assigned a Stupor OD's `Drive` to FS6
+  from the front panel and it filed itself at **ordinal 8** — the index a Stomp calls MIDI.
+  [solid — `captures/xl_assign_param_fs6.msgpack.bin`, pinned by
+  `fretwire-core/tests/controller_table.rs`]
+
+  That observation is what retired the old reading. This table was documented as a flat ten with
+  8 = MIDI and 9 = snapshots, which was an HX Stomp's shape mistaken for the format's, and it held
+  because every capture came off a Stomp. On a Stomp the numbers are unchanged; above five switches
+  everything above the run moves.
+
+  **Ordinals 1 and 2 are EXP1 and EXP2** — read off an XL 2026-08-25, retiring a `[unverified]` that
+  stood for want of an expression pedal. The owner put one block's bypass on EXP1 and another's on
+  EXP2 and read the table back: ordinal 1 targets the block he assigned to EXP1, ordinal 2 the one
+  he assigned to EXP2. The slots are what make it a check rather than a restatement of the label —
+  a swap would have shown the other block. [solid — owner report, issue #13]
+
+  **The far end of the footswitch run is observed too.** The same preset put a parameter under
+  **FS8**, which came back as ordinal **10** — exactly `SOURCE_FS1 + 8 - 1` on an eight-switch
+  device, and a second independent confirmation of the length formula after FS6 → 8.
+  [solid — owner report, issue #13]
+
+  **MIDI is 11 and snapshots is 12 on an XL** — the last two entries of this table to be read rather
+  than computed. One preset put a Teemah's `Gain` under a MIDI CC and a Stupor OD's `Drive` under
+  Snapshots; they came back at indices 11 and 12 of a 13-long table, with inner key `0` echoing the
+  ordinal in each. So the eight-switch shape is observed end to end and the formula describes two
+  pedals rather than fitting one. On a **Stomp** the pair is 8 and 9 — ordinal 9 was accepted by op
+  37 and filed at index 9, and `tonepush` names both — but neither has been read off that panel, so
+  it is the XL that carries this. [solid on an XL — owner report, issue #13, 2026-08-25,
+  `captures/xl_assign_midi_and_snapshots.msgpack.bin`, pinned by
+  `fretwire-core/tests/controller_table.rs`]
+
+  **One past the end is silently ignored** — ordinal 10 on a Stomp was accepted and did nothing —
+  and **the device does not range-check this**, so a caller must. `Session::assign_param` bounds it
+  against the loaded preset's own count. [solid — 2026-08-22]
 - **`6 → 28` is the sub-model selector, not a path.** `0` is the block's own model and `1` its
   paired cab, exactly like key `26` on the edit ops. It read as a constant `0` for as long as every
   sample was a main-model parameter; assigning a **cab** parameter puts a `1` there. This matters
@@ -257,15 +384,32 @@ of a `Map{7}` node:
   when you assign something, and the same field correlates with the op-4 nil-slot puzzle
   (`docs/protocol.md`).
   [solid — assigning a Simple Delay's bypass to FS1 leaves key `4` entirely `nil`;
-  `captures/assign_bypass_on_fs1.msgpack.bin`.] `tonepush` shows a bypass *inside* key 4, but its
-  example is a wah auto-engaging off an expression pedal — a different feature, and probably the only
-  way a bypass reaches this table.
+  `captures/assign_bypass_on_fs1.msgpack.bin`.]
+
+  **A bypass on an *expression pedal* does reach key 4** — the "probably" above resolved on
+  2026-08-25. An XL owner put one block's bypass on EXP1 and another's on EXP2, and both landed here
+  as ordinary key-4 entries carrying a target slot (`5`) and **no parameter reference** (`6`), which
+  is the same test that already separates a bypass entry from a parameter one. So the destination is
+  chosen by the *source*, not by what is being driven: a bypass goes to `3 → 8` when a footswitch
+  drives it and to key `4` when an expression pedal does. `tonepush`'s wah auto-engage example is
+  this, not a different feature. [solid — owner report, issue #13]
+
+  **Which opcode writes that is still unread.** Ops 56/57 take a plain switch index and nothing we
+  hold shows one accepting an expression input; the assignment above was made on the pedal's own
+  panel, so it settles the *document* and not the request that produces it.
 - **Key `1` is not parameter-vs-bypass** [solid as a refutation]. `tonepush` documents it as
   "4 a parameter, 0 a bypass"; every assignment we have captured is a parameter and two of the three
   carry `0`. To tell the two apart, test for the presence of key `6` (the parameter reference).
-  What key `1` *is* reads as the target's **value type** — `0` on both continuous parameters
-  (`Time`, `Mix`), `4` on the boolean one (`OD Switch`). [hypothesis — three samples, no
-  counter-example.]
+
+  **Under a MIDI source, key `1` is the CC number** [solid — issue #13, 2026-08-25]. A `Gain` put
+  under `CC5` gives `1: 5` at ordinal 11, while the Snapshots entry in the same preset drives an
+  equally continuous `Drive` and gives `1: 0`. Same value type, different key — so this field is
+  read **against the source**, which is what `K_ASSIGN_CC` (key `71`) already says of the op-37
+  request that writes one.
+
+  Off a MIDI source it still reads as the target's **value type** — `0` on the continuous
+  parameters (`Time`, `Mix`, `Drive`), `4` on the boolean one (`OD Switch`). [hypothesis — four
+  samples, no counter-example among them.]
 - Worked example: the Dual-Amp preset's entry `[7]` is controller 7 → slot 15 **param 9**, the
   Grammatico GSG's `OD Switch`, swept `false`→`true`. (Previously recorded here as "param 0, an amp
   drive switch" — the description was right, the index was the bug above.)
@@ -399,6 +543,45 @@ Moot for identity now that the `24 → 25` index resolves it exactly.
 (For reference, the test blocks' true table indices are Bucket Brigade 264, 70s Chorus 422,
 Harmonic Tremolo 441, Dynamic Hall 640 — reached by name, not by any preset field.)
 
+## What an empty preset looks like  [solid — HX Stomp, 2026-08-26]
+
+Read off two never-used slots with `read-slot` (op 4, non-destructive — the pedal stays where it
+is), and diffed against a populated one. An empty preset is 2254 bytes and reads:
+
+| Path | Empty |
+| --- | --- |
+| `0 → 22[n] → 19` / `→ 20` | kind `8`, content `nil`, for all 20 slots |
+| `4` | `Array[10]`, every entry `nil` — no controller assignments |
+| `3 → 8` | `Array[5]`, every entry `nil` — no footswitch bindings |
+| `10 → 10[i] → 4` | `SNAPSHOT 1`, `SNAPSHOT 2`, `SNAPSHOT 3` (a Stomp has three) |
+| `10 → 10[i] → 0` | `false` — the snapshot "in use" flag |
+| `0 → 21` | serial |
+
+**There is no canonical blank blob.** Two untouched slots off the same pedal are not byte-identical:
+they disagree on the input node's param `[2]` (`0 → 22[0] → 20 → 7 → 4`), the output node's param
+`[5]` (`0 → 22[19] → …`), and key-`5` flags `49`/`56`. They also carry the build stamp of whatever
+firmware last wrote them (`7 → 37`), which is *not* the running firmware. So "clear a preset" cannot
+mean "write a known-empty document" — it means "remove what the user put in", which is what
+`Session::clear_preset` does.
+
+### What a block takes with it when deleted  [solid — HX Stomp, 2026-08-26]
+
+Op 28 (delete block, preceded by the op-78 structural marker) is not just a slot wipe:
+
+- A **parameter assignment** on the deleted block — key `4[ordinal]`, made here with op 37 source 1
+  (EXP1) — reads back `nil` afterwards. No op-37-source-0 pass is needed to clean up.
+- Its **footswitch bypass binding** — key `3 → 8[switch]` — goes too, as
+  [`Session::delete_block`] already documented.
+- A **split preset collapses to serial on its own** once the last row-B block is deleted (`0 → 21`
+  clears, and the kind-2/kind-3 nodes with it). Nothing has to move the split or mixer node home.
+
+What survives an emptied chain, and therefore has to be reset by name if you want it gone:
+
+- **Snapshot names** (`10 → 10[i] → 4`) — per-preset text no block owns. Op 89 renames them.
+- The preset **tempo** (`5 → 16`), the **footswitch page** (`3 → 7`), and the **focused slot**
+  (`6 → 98`). `clear_preset` leaves all three alone: the first two are per-preset settings with no
+  agreed-on blank value (see above), and the third is UI state.
+
 ## Status
 - [x] Reassembly → envelope → blob → magic/header/preset map (parser + tests in `fretwire-data`).
 - [x] Typed model: `PresetStream::{device_model, firmware, blocks, effect_blocks, loaded_blocks,
@@ -412,6 +595,8 @@ Harmonic Tremolo 441, Dynamic Hall 640 — reached by name, not by any preset fi
 - [x] Name + param-count collision analysis (`tools/analyze-name-collisions.js`): 150/164 colliding
       names resolvable without category — a fallback design for paths where the `Helix.sym` index
       isn't available (the index supersedes it in code).
+- [x] **Empty-preset shape and what a delete takes with it** — see the section above; the basis for
+      `Session::clear_preset`.
 - [ ] Decode path key `11 → 6` → `category` (UI grouping only — no longer needed for identity).
       Computed value, not a binary table; needs the serializer decoded or a device
       preset with amp/preamp blocks to sample more values.

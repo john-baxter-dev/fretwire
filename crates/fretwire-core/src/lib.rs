@@ -50,6 +50,11 @@ pub enum Error {
     Usb(#[from] fretwire_usb::Error),
     #[error("the pedal refused the {0}")]
     Rejected(String),
+    /// An argument this crate rejects before sending anything. Distinct from [`Error::Rejected`]:
+    /// nothing reached the pedal, and saying "the pedal refused" when it never saw the request
+    /// sends the reader looking at the wrong end of the cable.
+    #[error("{0}")]
+    Invalid(String),
     /// A chunked whole-preset write was abandoned because the device stopped granting flow-control
     /// credits. Distinct from [`Error::Usb`]: the transport is fine, the pedal isn't.
     #[error("preset write stalled: {0}")]

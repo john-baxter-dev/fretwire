@@ -156,6 +156,7 @@ fn main() {
             commands::add_block,
             commands::add_block_at,
             commands::delete_block,
+            commands::clear_preset,
             commands::reorder_block,
             commands::move_block_to_row,
             commands::move_before_split,

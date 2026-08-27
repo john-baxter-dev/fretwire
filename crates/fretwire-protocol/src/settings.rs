@@ -5,9 +5,13 @@
 //! pedal by changing one thing on its own menus and diffing two dumps — an HX Stomp for most of
 //! them, an HX Stomp XL for those marked `[XL]` below.
 //!
-//! **166 of ids 0..=600 answer on an HX Stomp. 35 are identified; 34 of them are here.** The odd
+//! **166 of ids 0..=600 answer on an HX Stomp. 54 are identified; 53 of them are here.** The odd
 //! one out is id 28, the current preset index — device state rather than a preference, written
 //! properly by `Session::goto_preset`, and deliberately not offered as a settings row.
+//!
+//! Those two numbers are not a coverage fraction of each other. Nineteen of the identified ids came
+//! off an XL and have never been read on a Stomp, and a three-switch pedal has no `FS7 Function` to
+//! report — which of them refuse there is unchecked, and a refusal is absence, not an error.
 //!
 //! That ratio is the normal state of this table, not a gap to be filled in with plausible guesses:
 //! an id whose meaning nobody has observed is simply absent, and the UI shows it as a raw number
@@ -15,6 +19,12 @@
 //! `fretwire settings-diff`.
 
 /// How a setting's value should be presented and edited.
+///
+/// The split between [`Kind::Flag`] and [`Kind::Choice`] is **the type the wire holds**, not a
+/// style preference — `false`/`true` in a dump is a flag, `0`/`1`/`2` is a choice. A two-option
+/// `Choice` sitting beside a `Flag` (117 and 135 against 10, 25, 26 and 129) is therefore a
+/// recorded difference between those ids, not an inconsistency to tidy away. Id 154 was declared a
+/// `Flag` here until an XL owner read it back as `1 [int]`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Kind {
     /// A `bool`. The two labels are what the pedal's own menu calls the states, in `(true, false)`
@@ -45,7 +55,8 @@ pub struct Setting {
 /// Every setting id we have identified.
 ///
 /// **Read off a physical HX Stomp, 2026-08-22**, except those marked `[XL]`, which an HX Stomp
-/// XL owner read off that pedal the same way and contributed [2026-08-23]. Where the two units'
+/// XL owner read off that pedal the same way and contributed — Ins/Outs and Preferences on
+/// [2026-08-23], then all of Footswitches, EXP Pedals and Displays on [2026-08-25]. Where the two units'
 /// menus name a thing differently the XL's wording is used, because it is the one we have in
 /// writing; an id the XL has and the Stomp does not simply refuses on a Stomp, and `scan_settings`
 /// treats a refusal as absence rather than as an error.
@@ -77,7 +88,7 @@ pub const SETTINGS: &[Setting] = &[
     },
     Setting {
         id: 9,
-        name: "MIDI base channel",
+        name: "MIDI Base Channel",
         group: "MIDI/Tempo",
         // Zero-based on the wire: the pedal's channel 4 reads back as 3. Presented one-based, since
         // that is what the pedal's screen and every other MIDI device call it.
@@ -101,8 +112,9 @@ pub const SETTINGS: &[Setting] = &[
         ]),
     },
     Setting {
-        id: 11,
-        name: "MIDI over USB",
+        id: 10,
+        // [XL]
+        name: "MIDI Thru",
         group: "MIDI/Tempo",
         kind: Kind::Flag {
             on: "On",
@@ -110,18 +122,89 @@ pub const SETTINGS: &[Setting] = &[
         },
     },
     Setting {
-        id: 14,
-        name: "Tempo select",
+        id: 11,
+        name: "USB MIDI",
         group: "MIDI/Tempo",
-        kind: Kind::Choice(&[(0, "Per snapshot"), (1, "Per preset"), (2, "Global")]),
+        kind: Kind::Flag {
+            on: "On",
+            off: "Off",
+        },
+    },
+    Setting {
+        id: 12,
+        // [XL]
+        name: "MIDI PC Rx",
+        group: "MIDI/Tempo",
+        kind: Kind::Choice(&[(0, "Off"), (1, "MIDI"), (2, "USB"), (3, "MIDI+USB")]),
+    },
+    Setting {
+        id: 13,
+        // [XL]
+        name: "Rx MIDI Clock",
+        group: "MIDI/Tempo",
+        kind: Kind::Choice(&[(0, "Off"), (1, "MIDI"), (2, "USB"), (3, "Auto")]),
+    },
+    Setting {
+        id: 14,
+        name: "Tempo Select",
+        group: "MIDI/Tempo",
+        kind: Kind::Choice(&[(0, "Snapsht"), (1, "Preset"), (2, "Global")]),
     },
     Setting {
         id: 16,
-        name: "Tempo",
+        name: "BPM",
         group: "MIDI/Tempo",
         kind: Kind::Number {
             unit: "BPM",
             off: None,
+        },
+    },
+    Setting {
+        id: 17,
+        // [XL]
+        name: "Stomp Select",
+        group: "Footswitches",
+        kind: Kind::Choice(&[(0, "Off"), (1, "Touch"), (2, "Press"), (3, "Both")]),
+    },
+    Setting {
+        id: 18,
+        // [XL]
+        name: "Preset Mode",
+        group: "Footswitches",
+        kind: Kind::Choice(&[(0, "Moment"), (1, "Latch")]),
+    },
+    Setting {
+        id: 19,
+        // [XL]
+        name: "Stomp Mode",
+        group: "Footswitches",
+        kind: Kind::Choice(&[(0, "4 Swtch"), (1, "6 Swtch")]),
+    },
+    Setting {
+        id: 20,
+        // [XL]
+        name: "Up/Down Switches",
+        group: "Footswitches",
+        kind: Kind::Choice(&[(0, "Banks"), (1, "Preset"), (2, "Snapsht")]),
+    },
+    Setting {
+        id: 25,
+        // [XL]
+        name: "LED Rings",
+        group: "Displays",
+        kind: Kind::Flag {
+            on: "Dim/Brt",
+            off: "Off/Brt",
+        },
+    },
+    Setting {
+        id: 26,
+        // [XL]
+        name: "Tap LED",
+        group: "Displays",
+        kind: Kind::Flag {
+            on: "On",
+            off: "Off",
         },
     },
     Setting {
@@ -174,6 +257,20 @@ pub const SETTINGS: &[Setting] = &[
         },
     },
     Setting {
+        id: 66,
+        // [XL]
+        name: "EXP 1 Position",
+        group: "EXP Pedals",
+        kind: Kind::Choice(&[(0, "Snapsht"), (1, "Preset"), (2, "Global")]),
+    },
+    Setting {
+        id: 67,
+        // [XL]
+        name: "Snapsht Mode",
+        group: "Footswitches",
+        kind: Kind::Choice(&[(0, "Moment"), (1, "Latch"), (2, "Toggle")]),
+    },
+    Setting {
         id: 68,
         // [XL]
         name: "Tip Polarity",
@@ -188,10 +285,31 @@ pub const SETTINGS: &[Setting] = &[
         kind: Kind::Choice(&[(0, "Normal"), (1, "Inverted")]),
     },
     Setting {
+        id: 71,
+        // [XL]
+        name: "EXP 2 Position",
+        group: "EXP Pedals",
+        kind: Kind::Choice(&[(0, "Snapsht"), (1, "Preset"), (2, "Global")]),
+    },
+    Setting {
         id: 73,
         name: "Snapshot Edits",
         group: "Preferences",
         kind: Kind::Choice(&[(0, "Recall"), (1, "Discard")]),
+    },
+    Setting {
+        id: 76,
+        // [XL]
+        name: "Tx MIDI Clock",
+        group: "MIDI/Tempo",
+        kind: Kind::Choice(&[(0, "Off"), (1, "MIDI"), (2, "USB"), (3, "MIDI+USB")]),
+    },
+    Setting {
+        id: 77,
+        // [XL]
+        name: "MIDI PC Tx",
+        group: "MIDI/Tempo",
+        kind: Kind::Choice(&[(0, "Off"), (1, "MIDI"), (2, "USB"), (3, "MIDI+USB")]),
     },
     Setting {
         id: 81,
@@ -239,6 +357,13 @@ pub const SETTINGS: &[Setting] = &[
         kind: Kind::Choice(&[(0, "Reload"), (1, "Toggle")]),
     },
     Setting {
+        id: 117,
+        // [XL]
+        name: "Swap Up/Down",
+        group: "Footswitches",
+        kind: Kind::Choice(&[(0, "Off"), (1, "On")]),
+    },
+    Setting {
         id: 127,
         // **Called "Guitar In-Z" here from 2026-08-22 to 2026-08-23, which is not a name this
         // pedal has ever shown.** The pedal said *Auto In-Z*; the write-up supplied a Helix
@@ -259,6 +384,59 @@ pub const SETTINGS: &[Setting] = &[
         name: "Auto In-Z",
         group: "Preferences",
         kind: Kind::Choice(&[(0, "First"), (1, "Enabled")]),
+    },
+    Setting {
+        id: 129,
+        // [XL]
+        name: "TAP Function",
+        group: "Footswitches",
+        kind: Kind::Flag {
+            on: "AllBypas",
+            off: "TAP/Tunr",
+        },
+    },
+    Setting {
+        id: 130,
+        // [XL]
+        name: "FS7 Function",
+        group: "Footswitches",
+        kind: Kind::Choice(&[
+            (0, "TAP/Tunr"),
+            (1, "Stomp 7"),
+            (2, "Bank Up"),
+            (3, "Bank Dn"),
+            (4, "PresetUp"),
+            (5, "PresetDn"),
+            (6, "SnpshtUp"),
+            (7, "SnpshtDn"),
+            (8, "AllBypas"),
+            (9, "TogglEXP"),
+        ]),
+    },
+    Setting {
+        id: 131,
+        // [XL]
+        name: "FS8 Function",
+        group: "Footswitches",
+        kind: Kind::Choice(&[
+            (0, "TAP/Tunr"),
+            (1, "Stomp 8"),
+            (2, "Bank Up"),
+            (3, "Bank Dn"),
+            (4, "PresetUp"),
+            (5, "PresetDn"),
+            (6, "SnpshtUp"),
+            (7, "SnpshtDn"),
+            (8, "AllBypas"),
+            (9, "TogglEXP"),
+        ]),
+    },
+    Setting {
+        id: 135,
+        // [XL]
+        name: "Snapshot CC Send",
+        group: "MIDI/Tempo",
+        kind: Kind::Choice(&[(0, "Off"), (1, "On")]),
     },
     Setting {
         id: 136,
@@ -415,10 +593,18 @@ pub const SETTINGS: &[Setting] = &[
 /// Ids absent from here sort after every id present, by id — see [`menu_rank`]. That is the honest
 /// default: nobody has placed them, so they keep their numeric position rather than being guessed
 /// into the middle of a menu.
+///
+/// Every identified id outside Global EQ has a place here. **135** `Snapshot CC Send` was the last
+/// one without, and is the tenth row of MIDI/Tempo — the same row the unplaced default had been
+/// sorting it to, so nothing moved on screen and the position is now read rather than fallen back
+/// on. `only_the_listed_ids_are_unplaced` holds the set at empty.
 pub const MENU_ORDER: &[i64] = &[
     31, 94, 2, 3, 154, 153, 158, 156, // Ins/Outs
     81, 73, 65, 95, 96, 68, 69, 27, 103, 127, 136, // Preferences
-    9, 11, 14, 16, // MIDI/Tempo
+    17, 19, 18, 67, 20, 117, 129, 130, 131, // Footswitches
+    66, 71, // EXP Pedals
+    9, 10, 13, 76, 14, 16, 11, 12, 77, 135, // MIDI/Tempo
+    25, 26, // Displays
 ];
 
 /// Where `id` sits in the pedal's menus — `MENU_ORDER.len()` for an id nobody has placed.
@@ -484,11 +670,6 @@ pub fn is_writable(id: i64) -> bool {
 /// menu on the pedal. It leads the list because the panel gives it its own tab, and because every
 /// id in it sorts before the rest anyway; it is here so that [`group_rank`] can place it and so
 /// `every_group_is_declared` keeps covering it.
-///
-/// `Footswitches` and `EXP Pedals` hold nothing yet. They are declared because the pedal shows both
-/// sections populated, so the ids are there to be found — an empty group is a standing note that
-/// this is where the next `settings-diff` pass should look, and it costs nothing: the panel renders
-/// only groups that have rows.
 pub const GROUPS: &[&str] = &[
     "Global EQ",
     "Ins/Outs",
@@ -606,6 +787,35 @@ mod tests {
         }
     }
 
+    /// The counterpart to `menu_order_places_real_ids_once`: an identified id outside the Global EQ
+    /// tab should have a place in the pedal's menus, and the ones that don't are named here rather
+    /// than left to be noticed. The list is empty — id 135 was the last entry and was placed by
+    /// PR #17 — so the next id that arrives without a position fails here instead of sorting last
+    /// unremarked. Adding one to `UNPLACED` is how you say "known to be unread", not a way past it.
+    #[test]
+    fn only_the_listed_ids_are_unplaced() {
+        const UNPLACED: &[i64] = &[];
+        let missing: Vec<i64> = SETTINGS
+            .iter()
+            .filter(|s| s.group != "Global EQ" && menu_rank(s.id) == MENU_ORDER.len())
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(missing, UNPLACED, "an identified id has no menu position");
+    }
+
+    /// Footswitches and EXP Pedals were declared and empty from 2026-08-24 to 2026-08-25, with a
+    /// paragraph in [`GROUPS`] explaining why. That paragraph is gone because they are populated;
+    /// this is what keeps them that way, and says a section arrives with its ids, not ahead of them.
+    #[test]
+    fn every_declared_group_has_rows() {
+        for g in GROUPS {
+            assert!(
+                SETTINGS.iter().any(|s| s.group == *g),
+                "group {g:?} is declared but has no settings"
+            );
+        }
+    }
+
     /// An id nobody has placed sorts after every id somebody has, rather than to the top — the
     /// unplaced majority must not push the menu-ordered block down the panel.
     #[test]
@@ -624,7 +834,9 @@ mod tests {
     #[test]
     fn groups_rank_in_the_pedals_menu_order() {
         assert!(group_rank("Ins/Outs") < group_rank("Preferences"));
-        assert!(group_rank("Preferences") < group_rank("MIDI/Tempo"));
+        assert!(group_rank("Preferences") < group_rank("Footswitches"));
+        assert!(group_rank("Footswitches") < group_rank("EXP Pedals"));
+        assert!(group_rank("EXP Pedals") < group_rank("MIDI/Tempo"));
         assert!(group_rank("MIDI/Tempo") < group_rank("Displays"));
         // Not a group at all — the raw tier, which must land after every named section.
         assert_eq!(group_rank("Unidentified"), GROUPS.len());

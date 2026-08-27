@@ -1008,8 +1008,13 @@ filters kind 2 out of its footswitch enrichment, so a block with only a knob on 
 badged as being on FS1 — that filter was written from a fixture and is now proven by construction.
 
 The entry landed at `/4[3]` — **index 3, the FS1 ordinal** our own front-panel diff had established,
-which is a second and independent confirmation of the source-ordinal indexing, and agrees with
-`tonepush`'s full list (0 none, 1-2 expression pedals, 3-7 footswitches, 8 MIDI, 9 snapshots).
+which is a second and independent confirmation of the source-ordinal indexing.
+
+`tonepush`'s full list — 0 none, 1-2 expression pedals, 3-7 footswitches, 8 MIDI, 9 snapshots — is a
+**five-switch device's** version of that space, and taking it as the format's cost us: an HX Stomp
+XL has eight switches, a 13-entry table, and puts **FS6 at ordinal 8**. The run always starts at 3;
+where it ends, and therefore where MIDI and snapshots sit, is `footswitches + 5` long.
+See `docs/preset-format.md` for the table. [corrected 2026-08-25, issue #13]
 
 ### There is no separate "unassign parameter" opcode [solid]
 
@@ -1207,9 +1212,18 @@ Both are small commands, both write flash, and both are followed by op 13 here t
 directory. An earlier probe of op 10 drew `-3` only because it was sent as `{112: slot}` with no
 name — the opcode was right and the target was short.
 
-### Still not decoded: reorder
-Moving an IR between slots has never been captured, and may not exist as an opcode at all — a
-reorder is expressible as delete plus upload. This is the last gap in the family.
+### Still not decoded: reorder, and how a block points at a slot
+Two gaps are left in this family.
+
+**Reorder.** Moving an IR between slots has never been captured, and may not exist as an opcode at
+all — a reorder is expressible as delete plus upload.
+
+**How an IR *block* references a user slot** rather than a built-in cab IR. Everything above is the
+store; nothing here says what a preset's IR block puts in its model reference to name slot *n*. It
+is the last piece between reading the store and editing a preset that uses it, and one capture of
+assigning a user IR to an IR block answers it. Related: a `tone` IR block is `@type` 5 and carries a
+`@uuid`, and the preset's `irUuidTable` maps slot number → uuid, so the host side addresses IRs by
+uuid where the store addresses them by index.
 
 ## Resolved vs. still open
 - [x] Endpoints / framing / channels / sequence.
@@ -1239,7 +1253,7 @@ The MessagePack envelope keys 100/101 are an **operation + target**, and op 20 i
 |---|---|---|
 | **20** | `{107: bank, 108: preset}` | **SELECT PRESET** — loads it; **changes device state** |
 | **76** | `{}` | open the current edit buffer for a (non-destructive) read |
-| **24** | `{118: 128}` | read-sequence prepare (purpose TBD; replicated from capture) |
+| **24** | `{118: id}` | **read a device setting** — reply carries the value at key `119`. The connect sequence sends `{118: 128}`, which is why this was written up for months as a "read-sequence prepare step"; it is not one. See *Device settings* above |
 | **23** | reply `{107:bank, 108:index, 109:name, 92:snapshot, 117:?, 83:[u32,0]}` | read-info: current preset identity **and the live active snapshot** (key 92 — the authority; the preset blob's own `10 → 8` is the *stored* one and can differ). [solid] |
 | **23** | `nil` | read-sequence query — **reply carries the current preset identity** (see below) |
 | **22** | `nil` | start the paged stream — reply = chunk #0 |

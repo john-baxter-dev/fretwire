@@ -11,6 +11,10 @@ use rmpv::Value;
 
 /// Envelope map key whose value holds the nested preset blob (observed `104`).
 const ENVELOPE_PRESET_KEY: i64 = 104;
+/// Envelope map key carrying the request's transaction counter (observed `102`).
+const ENVELOPE_COUNTER_KEY: i64 = 102;
+/// Envelope map key carrying the reply status — `0` on every document the device serves.
+const ENVELOPE_STATUS_KEY: i64 = 103;
 /// Expected magic string at the head of the nested blob.
 pub const PRESET_MAGIC: &str = "l6-helix";
 
@@ -232,6 +236,38 @@ impl PresetStream {
     ///
     /// [solid — 2026-07-31: a mixer drag froze a Floor twice, mid-write, with the stale table
     /// pointing 216 bytes past the end of the blob we were sending]
+    /// Re-wrap into a **reassembled read-stream** — the form [`Self::parse`] accepts, and the form
+    /// `fretwire_core::backup` stores.
+    ///
+    /// The inverse of parsing, and the piece a preset built rather than read needs: a converted
+    /// preset has to be storable and re-inspectable before anything sends it, and every offline
+    /// tool in the workspace takes a stream, not a bare blob.
+    ///
+    /// The envelope is `{102: counter, 103: 0, 104: blob}` behind the 8-byte `marker:u16,
+    /// type:u16, len:u32(LE)` prefix. Nothing here reaches the device — an op-21 write sends the
+    /// blob alone, under key `110` — so the prefix only has to be what our own reader expects.
+    /// `type`'s high byte is volatile even between two reads of an unchanged preset, so it is
+    /// written as zero rather than pretending to a value.
+    pub fn to_stream(&self, counter: u32) -> Vec<u8> {
+        let envelope = Value::Map(vec![
+            (Value::from(ENVELOPE_COUNTER_KEY), Value::from(counter)),
+            (Value::from(ENVELOPE_STATUS_KEY), Value::from(0)),
+            (
+                Value::from(ENVELOPE_PRESET_KEY),
+                Value::Binary(self.to_blob()),
+            ),
+        ]);
+        let mut body = Vec::new();
+        rmpv::encode::write_value(&mut body, &envelope)
+            .expect("msgpack encode to Vec is infallible");
+        let mut out = Vec::with_capacity(STREAM_PREFIX + body.len());
+        out.extend_from_slice(&0u16.to_le_bytes()); // marker
+        out.extend_from_slice(&0u16.to_le_bytes()); // type — volatile on read, so zero on write
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.extend_from_slice(&body);
+        out
+    }
+
     pub fn to_blob(&self) -> Vec<u8> {
         let mut out = Vec::new();
         // magic, re-NUL-terminated → fixstr (e.g. "l6-helix\0" = 0xa9 …)
@@ -950,22 +986,49 @@ pub struct Assignment {
     /// Source ordinal — which physical control drives this. It is the entry's index in the key-`4`
     /// array, and inner key `0` echoes it.
     ///
-    /// **Footswitches are 3..=7** — FS1 = 3, confirmed both by diffing a front-panel assignment and
-    /// by writing one with op 37, and the count is the device's own: op 33 answers switches 1-5 and
-    /// refuses 6 with code `-3`, matching the five positions in the footswitch layout. Ordinals
-    /// **1 and 2** are accepted and file themselves at indices 1 and 2, and 3..=7 being the
-    /// footswitches leaves them as the two expression inputs — `tonepush` names them EXP1/EXP2.
-    /// **8 is MIDI and 9 is snapshots** per the same source; 9 was accepted and filed at index 9
-    /// here. Ordinal 10 is silently ignored — the table is ten long, and **the device does not
-    /// range-check this**, so a caller must. [solid for 1..=9 landing at their own index; the
-    /// *names* for 1, 2 and 8 are `tonepush`'s and unverified for want of an expression pedal.]
+    /// **FS1 is always 3**, and the footswitches run from there — confirmed by diffing a
+    /// front-panel assignment and by writing one with op 37. Ordinals **1 and 2** are accepted and
+    /// file themselves at indices 1 and 2, and the footswitch run starting at 3 leaves them as the
+    /// two expression inputs — `tonepush` names them EXP1/EXP2.
+    ///
+    /// **Where the run ends is the device's, not a constant.** This table was read as ten entries
+    /// with 8 = MIDI and 9 = snapshots, which is a Stomp's shape mistaken for the format's. An
+    /// HX Stomp XL has eight switches, a **13**-entry table, and puts **FS6 at ordinal 8** — the
+    /// index a Stomp calls MIDI [solid — front-panel diff, 2026-08-25, `xl_assign_param_fs6`].
+    /// `length == footswitch_count + 5` on all eight captures we hold: six Stomp streams at 5 and
+    /// 10, two XL streams at 8 and 13. See `fretwire_protocol::edit::source` for the arithmetic,
+    /// and [`PresetStream::controller_table_len`] to read a preset's own.
+    ///
+    /// **Ordinals 1 and 2 are EXP1 and EXP2** [solid — owner report, issue #13, 2026-08-25]: two
+    /// bypasses assigned to the two expression inputs came back at ordinals 1 and 2, each naming
+    /// the block that had been put on that pedal. The far end of the footswitch run is observed
+    /// too — the same preset's FS8 parameter landed at ordinal **10**, which is what the formula
+    /// computes for an eight-switch device.
+    ///
+    /// **MIDI and snapshots sit in the two entries above the run**, and on an XL that is **11 and
+    /// 12** [solid — owner report, issue #13, 2026-08-25, `xl_assign_midi_and_snapshots`]. One
+    /// preset carrying a parameter under a MIDI CC and another under Snapshots put them at those
+    /// two indices of a 13-long table, which is what the arithmetic computes and what this had been
+    /// asserting without evidence. On a Stomp the pair is 8 and 9; 9 was accepted by op 37 and
+    /// filed at index 9, and neither has been read off that panel.
+    ///
+    /// **The device does not range-check the ordinal** — one past the end is silently ignored — so
+    /// a caller must.
     pub controller: i64,
     /// Inner key `1`. **Not** parameter-vs-bypass: all three assignments captured here are
     /// parameters, and two of them carry `0`. [solid as a refutation — `tonepush` documents this key
     /// as "4 a parameter, 0 a bypass"; `Time` and `Mix` are parameters with key `1` = 0.]
     ///
-    /// What it *is* reads as the target's **value type** — `0` on both continuous parameters,
-    /// `4` on the boolean `OD Switch`. [hypothesis — three samples, no counter-example.]
+    /// **Under a MIDI source it is the CC number** [solid — issue #13, 2026-08-25]. An owner put a
+    /// Teemah's `Gain` under `CC5` and the entry at ordinal 11 carries `1 => 5`; the Snapshots entry
+    /// in the same preset drives an equally continuous `Drive` and carries `0`. Same value type,
+    /// different key — so whatever this field means, it is **read against the source**, which is
+    /// what `fretwire_protocol::edit::K_ASSIGN_CC` (key `71`) already says of the op-37 request that
+    /// writes one: decide by the source, never by the value.
+    ///
+    /// Off a MIDI source it still reads as the target's **value type** — `0` on the continuous
+    /// parameters, `4` on the boolean `OD Switch`. [hypothesis — four samples now, no
+    /// counter-example among them.]
     ///
     /// To tell a parameter entry from a bypass entry, test for key `6` (the parameter reference)
     /// rather than this key.
@@ -1110,8 +1173,16 @@ impl PresetStream {
     /// **Only parameter controllers live here.** Assigning a block's *bypass* to a footswitch does
     /// not touch this table at all — that goes to `3 → 8`, the footswitch layout, as a node of type
     /// `1` (see [`Self::footswitch_layout`]). [solid — assigning a Simple Delay's bypass to FS1 on a
-    /// Stomp leaves key `4` entirely `nil`.] `tonepush` shows a bypass *inside* key 4, but its
-    /// example is a wah's auto-engage on an expression pedal, which is a different feature. A populated entry is an array of `{0: place-in-table, 1: def}`,
+    /// Stomp leaves key `4` entirely `nil`.]
+    ///
+    /// **A bypass on an *expression pedal* does live here**, though — the destination is chosen by
+    /// the source, not by what is driven. An XL owner put two blocks' bypasses on EXP1 and EXP2 and
+    /// both came back as ordinary entries with a target slot and **no key `6`**, which is the same
+    /// test that already tells a bypass entry from a parameter one. `tonepush`'s wah auto-engage
+    /// example is this, not a separate feature as this doc used to claim.
+    /// [solid — owner report, issue #13, 2026-08-25]
+    ///
+    /// A populated entry is an array of `{0: place-in-table, 1: def}`,
     /// one per assignment on that source, and the def is
     /// `{0: source, 1: value-type, 2: min, 3: max, 5: slot, 6: {28: path, 29: param}, …}`.
     ///
@@ -1122,6 +1193,18 @@ impl PresetStream {
     /// [solid for source ordinal, parameter index and travel — each pinned by a live diff on a
     /// Stomp, 2026-08-21. See [`Assignment`] for what each key means and which readings it
     /// replaced.]
+    /// How many entries the preset's key-`4` controller table has — the device's own ordinal space.
+    ///
+    /// Ten on an HX Stomp, thirteen on an HX Stomp XL; it tracks the footswitch count as
+    /// `footswitch_layout().len() + 5`. `None` when key `4` is absent or not an array. Read this
+    /// rather than assuming ten: the top two ordinals (MIDI, snapshots) move with it.
+    pub fn controller_table_len(&self) -> Option<usize> {
+        match self.field(4) {
+            Some(Value::Array(a)) => Some(a.len()),
+            _ => None,
+        }
+    }
+
     pub fn assignments(&self) -> Vec<Assignment> {
         let table = match self.field(4) {
             Some(Value::Array(a)) => a,
@@ -1523,7 +1606,7 @@ pub fn map_get(v: &Value, key: i64) -> Option<&Value> {
 }
 
 /// Mutable [`map_get`].
-fn map_get_mut(v: &mut Value, key: i64) -> Option<&mut Value> {
+pub(crate) fn map_get_mut(v: &mut Value, key: i64) -> Option<&mut Value> {
     match v {
         Value::Map(m) => m
             .iter_mut()
@@ -1534,7 +1617,7 @@ fn map_get_mut(v: &mut Value, key: i64) -> Option<&mut Value> {
 }
 
 /// Set integer-keyed `key` of a map `Value` to `val`, inserting it if absent. No-op on non-maps.
-fn set_map_key(v: &mut Value, key: i64, val: Value) {
+pub(crate) fn set_map_key(v: &mut Value, key: i64, val: Value) {
     if let Value::Map(m) = v {
         match m.iter_mut().find(|(k, _)| k.as_i64() == Some(key)) {
             Some(e) => e.1 = val,

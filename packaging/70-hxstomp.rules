@@ -16,8 +16,9 @@ SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="4246", MODE="0660", 
 SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="4248", MODE="0660", TAG+="uaccess"
 # Helix LT — reads verified against a physical unit; no edit has been sent to one.
 SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="424a", MODE="0660", TAG+="uaccess"
-# HX Stomp XL — untested; we have no capture from one. Same family, so the rule is here, but
-# fretwire will warn when it opens it.
+# HX Stomp XL — an owner runs it: two preset streams captured off one reconcile with our reader, and
+# the pedal's own menus supplied 19 of the settings ids. No edit builder has been checked against it
+# byte-for-byte, so fretwire still warns when it opens one.
 SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="4253", MODE="0660", TAG+="uaccess"
 # HX Effects — reported working by an owner; we have no capture from one (issue #10). Same family,
 # so the rule is here, but fretwire will warn when it opens it.

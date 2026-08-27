@@ -926,9 +926,96 @@ pub const K_ASSIGN_FLAG129: i64 = 129;
 /// Source ordinal for **no controller** — what op 37 takes to remove an assignment.
 pub const SOURCE_NONE: i64 = 0;
 
-/// Source ordinal of **Footswitch 1**. Footswitches run 3..=7, so FS`n` is `SOURCE_FS1 + n - 1`.
-/// [solid — verified on an HX Stomp by front-panel diff, 2026-08-21]
+/// Source ordinal of **Footswitch 1**, on every device. FS`n` is `SOURCE_FS1 + n - 1`.
+/// [solid — verified on an HX Stomp by front-panel diff 2026-08-21, and on an HX Stomp XL by the
+/// same method 2026-08-25, where FS6 landed at ordinal 8.]
 pub const SOURCE_FS1: i64 = 3;
+
+/// Source ordinals above the footswitches, for a device with `footswitch_count` of them.
+///
+/// The ordinal space is **not fixed** — it stretches with the device, and reading it as a constant
+/// ten was wrong. The key-`4` table is laid out `0` none, `1`/`2` the expression inputs, then one
+/// entry per footswitch, then MIDI, then snapshots:
+///
+/// | | HX Stomp (5 switches) | HX Stomp XL (8) |
+/// |---|---|---|
+/// | footswitches | 3..=7 | 3..=10 |
+/// | MIDI | 8 | 11 |
+/// | snapshots | 9 | 12 |
+/// | table length | 10 | 13 |
+///
+/// **`length == footswitch_count + 5` on every capture we hold** — six Stomp streams at 5 and 10,
+/// four XL streams at 8 and 13 [solid]. The footswitch run is solid at both ends: FS1 = 3 on a
+/// Stomp, and an XL's FS6 was diffed straight into index 8, which is the slot a Stomp calls MIDI.
+/// That is the observation that killed the constant. A second XL preset then put a parameter under
+/// **FS8** and it came back at ordinal **10**, which is what this computes — the far end of the run
+/// confirmed rather than extrapolated [solid — issue #13, 2026-08-25].
+///
+/// **1 and 2 are EXP1 and EXP2** [solid — same report]. Two bypasses assigned to the two expression
+/// inputs filed themselves at ordinals 1 and 2, each naming the block that had been put on that
+/// pedal, so the labels are no longer `tonepush`'s word alone.
+///
+/// **MIDI is 11 and snapshots is 12 on an XL** [solid — issue #13, 2026-08-25,
+/// `captures/xl_assign_midi_and_snapshots.msgpack.bin`]. Both were arithmetic until an owner put one
+/// parameter under a MIDI CC and another under Snapshots on the same preset: the entries landed at
+/// indices 11 and 12 of a 13-long table, and inner key `0` echoes the ordinal, so each is confirmed
+/// by its position and by its own contents. That is the last of this table read off a device rather
+/// than computed: the eight-switch shape is now observed end to end, so the formula is a description
+/// of two pedals and not a fit to one. On a **Stomp** the top two remain `tonepush`'s naming plus an
+/// op-37 write that was accepted at index 9 — the arithmetic agrees, but nobody has read 8 or 9 off
+/// that panel, and it is the XL that carries the weight here.
+pub mod source {
+    /// Number of entries in the key-`4` controller table.
+    pub fn table_len(footswitch_count: usize) -> usize {
+        footswitch_count + 5
+    }
+
+    /// Ordinal of footswitch `n`, one-based. `None` if the device has no such switch.
+    pub fn footswitch(n: usize, footswitch_count: usize) -> Option<i64> {
+        (1..=footswitch_count)
+            .contains(&n)
+            .then(|| super::SOURCE_FS1 + n as i64 - 1)
+    }
+
+    /// Ordinal of the MIDI source. [solid on an XL — read back at 11; on a Stomp, 8 is `tonepush`'s
+    /// naming of the same slot and has not been read off the panel]
+    pub fn midi(footswitch_count: usize) -> i64 {
+        super::SOURCE_FS1 + footswitch_count as i64
+    }
+
+    /// Ordinal of the snapshots source. [solid on an XL — read back at 12; on a Stomp, 9 was
+    /// accepted by op 37 and filed at index 9, which is a write rather than a front-panel read]
+    pub fn snapshots(footswitch_count: usize) -> i64 {
+        midi(footswitch_count) + 1
+    }
+
+    /// Name the physical control an ordinal refers to, for display.
+    ///
+    /// Needs the device's footswitch count for the same reason the ordinals do: `8` is FS6 on an
+    /// XL and MIDI on a Stomp, and naming it without asking showed an XL owner's front-panel
+    /// assignment as "Driven by MIDI".
+    ///
+    /// A count of `0` means no preset is loaded and therefore no device to size against, so
+    /// everything above the expression inputs prints as a bare ordinal rather than a guess.
+    /// Anything outside the table does the same.
+    pub fn name(ordinal: i64, footswitch_count: usize) -> String {
+        match ordinal {
+            // Verified on an XL, 2026-08-25: a bypass put on EXP1 filed itself at ordinal 1 and
+            // named that block, EXP2 likewise at 2. These were `tonepush`'s names, held on the
+            // reasoning that the footswitch run starting at 3 left them over; now they are read.
+            1 => "EXP1".into(),
+            2 => "EXP2".into(),
+            _ if footswitch_count == 0 => format!("Controller {ordinal}"),
+            n if (super::SOURCE_FS1..midi(footswitch_count)).contains(&n) => {
+                format!("FS{}", n - super::SOURCE_FS1 + 1)
+            }
+            // Both read off an XL at 11 and 12 on 2026-08-25, which is where this puts them.
+            n if n == midi(footswitch_count) => "MIDI".into(),
+            n if n == snapshots(footswitch_count) => "Snapshots".into(),
+            n => format!("Controller {n}"),
+        }
+    }
+}
 
 /// Build an **assign-parameter** body (op 37): put parameter `param_index` of the block in `slot`
 /// under controller `source`. `paired` selects the paired cab's namespace. Pass

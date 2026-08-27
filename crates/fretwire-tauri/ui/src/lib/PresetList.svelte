@@ -24,6 +24,8 @@
     onRestore,
     onCopyPreset,
     onPastePreset,
+    // Empty the loaded preset (edit buffer only — App.svelte confirms first).
+    onClearPreset,
     // Switch the preset-numbering form. On a pedal that answers setting 27 this writes the pedal's
     // own Global Setting, so the menu item is that setting rather than a second opinion about it.
     onNumbering,
@@ -105,6 +107,12 @@
           <button role="menuitem" onclick={() => run(onRename)}>Rename preset…</button>
           <button role="menuitem" onclick={() => run(onExport)}>Export presets to file…</button>
           <button role="menuitem" onclick={() => run(onRestore)}>Restore preset from file…</button>
+          <div class="sep" role="separator"></div>
+          <button
+            role="menuitem"
+            class="danger"
+            title="Delete every block and reset the snapshot names — edit buffer only, Save to keep it"
+            onclick={() => run(onClearPreset)}>Clear preset…</button>
           {#if bankable}
             <div class="sep" role="separator"></div>
             <button
@@ -243,6 +251,9 @@
     color: #e6e8ec;
     cursor: pointer;
     white-space: nowrap;
+  }
+  .menu button.danger {
+    color: #c9403c;
   }
   .menu button:hover {
     background: #2a2f3a;

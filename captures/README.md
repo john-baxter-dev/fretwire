@@ -5,9 +5,15 @@ isolate each message type on the MI_00 control interface.
 
 Device: Line 6 HX Stomp — **VID 0x0E41 / PID 0x4246**.
 
-> **Sitting down for a session?** `_RUNBOOK-hx-edit-session.md` lists everything currently blocked
-> on watching HX Edit, in priority order, with the exact clicks. Work down it and stop wherever you
-> run out of time — it's ordered so the valuable ones are done first.
+> **Sitting down for a session?** `_RUNBOOK-hx-edit-session.md` opens with a **checklist**, then
+> gives each item's exact clicks and what it unblocks. Work down it and stop wherever you run out
+> of time — it's ordered so the valuable ones are done first, and it marks the two sections that no
+> longer need a Windows box at all.
+>
+> The other `_TODO-` sheet is pedal-side, not capture-side: `_TODO-settings-names.md` checks the
+> settings table against the pedal's own screens. It needs no HX Edit. Its companion,
+> `_TODO-settings-discovery.md`, was retired on 2026-08-25 when an XL owner worked it and came back
+> with nineteen ids; what it still wanted is folded into the bottom of the names sheet.
 
 ## One-time setup
 1. Close HX Edit.

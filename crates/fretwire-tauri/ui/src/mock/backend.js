@@ -291,12 +291,12 @@ function makePreset(name, index, slots, opts = {}) {
   };
 }
 
-function serialPreset(name, index, defs, snapshot_names = []) {
+function serialPreset(name, index, defs, snapshot_names = [], assignments = []) {
   const slots = {};
   defs.forEach((d, i) => {
     slots[i + 1] = makeBlock(d.sym, d);
   });
-  return makePreset(name, index, slots, { snapshot_names });
+  return { ...makePreset(name, index, slots, { snapshot_names }), assignments };
 }
 
 function dualAmpPreset() {
@@ -417,7 +417,15 @@ function floorSetlists() {
     ])),
     // Factory 2
     bank(serialPreset("Bumble Acoustic", 0, [{ sym: "comp_deluxe" }, { sym: "eq_graphic" }]),
-      serialPreset("The Blue Agave", 0, [{ sym: "wah_teardrop" }, { sym: "amp_jazz", cab: "cab_112" }])),
+      // The wah carries a **bypass on an expression pedal**: a key-`4` entry with a target slot and
+      // no parameter. That is the other destination a bypass has, chosen by the source rather than
+      // by what is driven (`docs/preset-format.md`). Seeded because the UI hid these entirely until
+      // 2026-08-25 — the param rows match on `param_index`, so an XL owner's preset with two of them
+      // drew no badge at all (issue #13). A wah auto-engaging off a pedal is the case `tonepush`
+      // documents, so this is where it belongs, and this bank is one the default mock mode reaches.
+      // Read-only: which opcode writes one is unread, so nothing here offers it.
+      serialPreset("The Blue Agave", 0, [{ sym: "wah_teardrop" }, { sym: "amp_jazz", cab: "cab_112" }],
+        [], [{ source: 1, target_slot: 1, param_index: null, paired: false, min: null, max: null }])),
     // User 1 — where the tester's "Sludge" lives.
     bank(serialPreset("Sludge", 0, [
       { sym: "gate" }, { sym: "drive_minotaur" }, { sym: "amp_placater", cab: "cab_412", label: "Amp" },
@@ -574,6 +582,7 @@ const EDIT_LABELS = {
   add_block: (a) => `Add ${modelName(a.modelIndex)}`,
   add_block_at: (a) => `Add ${modelName(a.modelIndex)}`,
   delete_block: (a) => `Delete ${slotName(a.slot)}`,
+  clear_preset: () => "Clear preset",
   place_block: (a) => `Move ${slotName(a.srcSlot)}`,
   insert_block: (a) => `Move ${slotName(a.srcSlot)} ${a.before ? "before" : "after"} ${slotName(a.dstSlot)}`,
   reorder_block: (a) => `Move ${slotName(a.srcSlot)}`,
@@ -684,10 +693,24 @@ function toDto(p) {
   };
 }
 
-// Mirrors `dto::source_name`. 3..=7 are the footswitches; the rest are tonepush's names.
-function sourceName(n) {
-  if (n >= 3 && n <= 7) return `FS${n - 2}`;
-  return { 1: "EXP1", 2: "EXP2", 8: "MIDI", 9: "Snapshots" }[n] ?? `Controller ${n}`;
+// Mirrors `fretwire_protocol::edit::source`. The ordinal space is the device's size, not a
+// constant: 0 none, 1/2 the expression inputs, one per footswitch from 3, then MIDI, then
+// snapshots — so the table is `footswitches + 5` and ordinal 8 is MIDI on a Stomp but FS6 on an XL.
+// [solid — six Stomp captures at 5/10, two XL at 8/13; issue #13]
+// Exported for `tests/sources-mock.mjs`: the XL is only reachable through `fretwireMock.device`,
+// which needs a `window`, so the arithmetic is checked directly rather than not at all.
+export const sourceTableLen = (fs) => fs + 5;
+export const sourceMidi = (fs) => 3 + fs;
+export const sourceSnapshots = (fs) => 4 + fs;
+
+export function sourceName(n, fs = DEVICES[deviceMode].footswitches) {
+  if (n === 1) return "EXP1";
+  if (n === 2) return "EXP2";
+  if (fs === 0) return `Controller ${n}`;
+  if (n >= 3 && n < sourceMidi(fs)) return `FS${n - 2}`;
+  if (n === sourceMidi(fs)) return "MIDI";
+  if (n === sourceSnapshots(fs)) return "Snapshots";
+  return `Controller ${n}`;
 }
 
 // Find a mutable param on the current preset by (slot, paired, index).
@@ -762,7 +785,9 @@ function irCheckSlot(slot) {
 }
 
 // The mock pedal's globals. Only the ids fretwire has identified are named; `raw` stands in for the
-// ~138 that answer and have never been explained, so the panel's read-only tier is exercised too.
+// unnamed majority that answer and have never been explained, so the panel's read-only tier is
+// exercised too. FS7/FS8 Function are XL-only on real hardware; they are here because the panel
+// still has to draw a ten-option dropdown somewhere.
 // Keyed in id order, like `fretwire_protocol::settings::SETTINGS`; MENU_ORDER below is what puts
 // them in the pedal's own menu order, exactly as the real backend does it.
 const SETTINGS = new Map([
@@ -770,24 +795,50 @@ const SETTINGS = new Map([
         labels: ["Line", "Instrument"] }],
   [3, { v: false, name: "Send/Return R", group: "Ins/Outs", kind: "flag",
         labels: ["Line", "Instrument"] }],
-  [9, { v: 0, name: "MIDI base channel", group: "MIDI/Tempo", kind: "choice",
+  [9, { v: 0, name: "MIDI Base Channel", group: "MIDI/Tempo", kind: "choice",
         options: Array.from({ length: 16 }, (_, i) => [i, String(i + 1)]) }],
-  [11, { v: true, name: "MIDI over USB", group: "MIDI/Tempo", kind: "flag", labels: ["On", "Off"] }],
-  [14, { v: 1, name: "Tempo select", group: "MIDI/Tempo", kind: "choice",
-         options: [[0, "Per snapshot"], [1, "Per preset"], [2, "Global"]] }],
-  [16, { v: 120, name: "Tempo", group: "MIDI/Tempo", kind: "number", unit: "BPM" }],
+  [11, { v: true, name: "USB MIDI", group: "MIDI/Tempo", kind: "flag", labels: ["On", "Off"] }],
+  [10, { v: false, name: "MIDI Thru", group: "MIDI/Tempo", kind: "flag", labels: ["On", "Off"] }],
+  [12, { v: 3, name: "MIDI PC Rx", group: "MIDI/Tempo", kind: "choice",
+         options: [[0, "Off"], [1, "MIDI"], [2, "USB"], [3, "MIDI+USB"]] }],
+  [13, { v: 3, name: "Rx MIDI Clock", group: "MIDI/Tempo", kind: "choice",
+         options: [[0, "Off"], [1, "MIDI"], [2, "USB"], [3, "Auto"]] }],
+  [14, { v: 1, name: "Tempo Select", group: "MIDI/Tempo", kind: "choice",
+         options: [[0, "Snapsht"], [1, "Preset"], [2, "Global"]] }],
+  [16, { v: 120, name: "BPM", group: "MIDI/Tempo", kind: "number", unit: "BPM" }],
+  [17, { v: 3, name: "Stomp Select", group: "Footswitches", kind: "choice",
+         options: [[0, "Off"], [1, "Touch"], [2, "Press"], [3, "Both"]] }],
+  [18, { v: 0, name: "Preset Mode", group: "Footswitches", kind: "choice",
+         options: [[0, "Moment"], [1, "Latch"]] }],
+  [19, { v: 1, name: "Stomp Mode", group: "Footswitches", kind: "choice",
+         options: [[0, "4 Swtch"], [1, "6 Swtch"]] }],
+  [20, { v: 0, name: "Up/Down Switches", group: "Footswitches", kind: "choice",
+         options: [[0, "Banks"], [1, "Preset"], [2, "Snapsht"]] }],
+  [25, { v: true, name: "LED Rings", group: "Displays", kind: "flag",
+         labels: ["Dim/Brt", "Off/Brt"] }],
+  [26, { v: true, name: "Tap LED", group: "Displays", kind: "flag", labels: ["On", "Off"] }],
   [27, { v: false, name: "Preset Number", group: "Preferences", kind: "flag",
          labels: ["000-127", "01A-32D"] }],
   [31, { v: false, name: "Input Level", group: "Ins/Outs", kind: "flag",
          labels: ["Line", "Instrument"] }],
   [65, { v: false, name: "Tempo Pitch", group: "Preferences", kind: "flag",
          labels: ["Transpr", "Authentc"] }],
+  [66, { v: 1, name: "EXP 1 Position", group: "EXP Pedals", kind: "choice",
+         options: [[0, "Snapsht"], [1, "Preset"], [2, "Global"]] }],
+  [67, { v: 1, name: "Snapsht Mode", group: "Footswitches", kind: "choice",
+         options: [[0, "Moment"], [1, "Latch"], [2, "Toggle"]] }],
   [68, { v: 0, name: "Tip Polarity", group: "Preferences", kind: "choice",
          options: [[0, "Normal"], [1, "Inverted"]] }],
   [69, { v: 0, name: "Ring Polarity", group: "Preferences", kind: "choice",
          options: [[0, "Normal"], [1, "Inverted"]] }],
+  [71, { v: 1, name: "EXP 2 Position", group: "EXP Pedals", kind: "choice",
+         options: [[0, "Snapsht"], [1, "Preset"], [2, "Global"]] }],
   [73, { v: 0, name: "Snapshot Edits", group: "Preferences", kind: "choice",
          options: [[0, "Recall"], [1, "Discard"]] }],
+  [76, { v: 0, name: "Tx MIDI Clock", group: "MIDI/Tempo", kind: "choice",
+         options: [[0, "Off"], [1, "MIDI"], [2, "USB"], [3, "MIDI+USB"]] }],
+  [77, { v: 3, name: "MIDI PC Tx", group: "MIDI/Tempo", kind: "choice",
+         options: [[0, "Off"], [1, "MIDI"], [2, "USB"], [3, "MIDI+USB"]] }],
   [81, { v: false, name: "Bypass Type", group: "Preferences", kind: "flag",
          labels: ["DSP", "Analog"] }],
   [94, { v: true, name: "Output Level", group: "Ins/Outs", kind: "flag",
@@ -798,8 +849,22 @@ const SETTINGS = new Map([
          labels: ["FS8", "EXP 2"] }],
   [103, { v: 0, name: "Snapshot Reselect", group: "Preferences", kind: "choice",
           options: [[0, "Reload"], [1, "Toggle"]] }],
+  [117, { v: 0, name: "Swap Up/Down", group: "Footswitches", kind: "choice",
+          options: [[0, "Off"], [1, "On"]] }],
   [127, { v: 0, name: "Auto In-Z", group: "Preferences", kind: "choice",
           options: [[0, "First"], [1, "Enabled"]] }],
+  [129, { v: false, name: "TAP Function", group: "Footswitches", kind: "flag",
+          labels: ["AllBypas", "TAP/Tunr"] }],
+  [130, { v: 0, name: "FS7 Function", group: "Footswitches", kind: "choice",
+          options: [[0, "TAP/Tunr"], [1, "Stomp 7"], [2, "Bank Up"], [3, "Bank Dn"],
+                   [4, "PresetUp"], [5, "PresetDn"], [6, "SnpshtUp"], [7, "SnpshtDn"],
+                   [8, "AllBypas"], [9, "TogglEXP"]] }],
+  [131, { v: 1, name: "FS8 Function", group: "Footswitches", kind: "choice",
+          options: [[0, "TAP/Tunr"], [1, "Stomp 8"], [2, "Bank Up"], [3, "Bank Dn"],
+                   [4, "PresetUp"], [5, "PresetDn"], [6, "SnpshtUp"], [7, "SnpshtDn"],
+                   [8, "AllBypas"], [9, "TogglEXP"]] }],
+  [135, { v: 0, name: "Snapshot CC Send", group: "MIDI/Tempo", kind: "choice",
+          options: [[0, "Off"], [1, "On"]] }],
   [136, { v: 0, name: "Link Dual Cabs", group: "Preferences", kind: "choice",
           options: [[0, "Off"], [1, "On"]] }],
   [153, { v: 0, name: "USB In 1/2 Trim", group: "Ins/Outs", kind: "number", unit: "dB" }],
@@ -822,14 +887,17 @@ const SETTINGS = new Map([
   [200, { v: 20100, name: "EQ high cut", group: "Global EQ", kind: "number", unit: "Hz", off: 20100 }],
 ]);
 // Ids that answer but have never been identified. Read-only, and shown only with `all`.
-const RAW_IDS = [12, 128, 210, 226];
+const RAW_IDS = [128, 210, 226];
 
 // The pedal's own menu order, for the ids somebody has placed — mirrors
 // `fretwire_protocol::settings::MENU_ORDER`. Anything absent sorts after all of it, by id.
 const MENU_ORDER = [
   31, 94, 2, 3, 154, 153, 158, 156, // Ins/Outs
   81, 73, 65, 95, 96, 68, 69, 27, 103, 127, 136, // Preferences
-  9, 11, 14, 16, // MIDI/Tempo
+  17, 19, 18, 67, 20, 117, 129, 130, 131, // Footswitches
+  66, 71, // EXP Pedals
+  9, 10, 13, 76, 14, 16, 11, 12, 77, 135, // MIDI/Tempo
+  25, 26, // Displays
 ];
 const menuRank = (id) => {
   const i = MENU_ORDER.indexOf(id);
@@ -980,6 +1048,15 @@ const HANDLERS = {
     return toDto(current);
   },
   assign_param: ({ slot, paramIndex, source, paired }) => {
+    // The device does not range-check this — an ordinal past the end of the table is accepted and
+    // silently does nothing — so `Session::assign_param` refuses it, and so does the mock. The
+    // bound is the device's own: 9 on a Stomp, 12 on an XL.
+    const last = sourceTableLen(DEVICES[deviceMode].footswitches) - 1;
+    if (source < 0 || source > last) {
+      throw new Error(
+        `controller ${source} does not exist — this device's sources run 0 (none) to ${last}`,
+      );
+    }
     current.assignments ??= [];
     const same = (a) =>
       a.target_slot === slot && a.param_index === paramIndex && a.paired === !!paired;
@@ -1097,6 +1174,16 @@ const HANDLERS = {
   },
   delete_block: ({ slot }) => {
     if (current.slots[slot]?.kind === "effect") delete current.slots[slot];
+    return toDto(current);
+  },
+  // Empty the preset: every block goes, and every snapshot name returns to the device's default
+  // (`SNAPSHOT 1`…). Assignments live on the blocks here as they do on the pedal, so they leave
+  // with them.
+  clear_preset: () => {
+    for (const slot of Object.keys(current.slots)) {
+      if (current.slots[slot]?.kind === "effect") delete current.slots[slot];
+    }
+    current.snapshot_names = current.snapshot_names.map((_, i) => `SNAPSHOT ${i + 1}`);
     return toDto(current);
   },
   place_block: ({ srcSlot, dstSlot }) => {

@@ -1365,6 +1365,18 @@ impl Session {
             .map(|ps| ps.to_blob())
     }
 
+    /// How many footswitch positions the loaded preset's layout has — the device's own number, and
+    /// what sizes the controller ordinal space (see [`fretwire_protocol::edit::source`]).
+    ///
+    /// `0` when nothing is cached, which callers must read as "unknown", not as "none": it is the
+    /// state before the first preset read, not a device with no switches.
+    pub fn footswitch_count(&self) -> usize {
+        self.last_raw
+            .as_ref()
+            .and_then(|raw| self.catalog.load_preset(raw).ok())
+            .map_or(0, |p| p.footswitch_count)
+    }
+
     /// Human name for the block at `slot` — the user label if set, else the model name — resolved
     /// from the cached pre-edit preset. Falls back to `"slot N"` when nothing is cached (or the
     /// slot is empty/structural). For history-entry labels.
@@ -2051,6 +2063,58 @@ impl Session {
         self.read_preset()
     }
 
+    /// Wipe the loaded preset back to empty: every block deleted, every snapshot name back to the
+    /// device's default. **Edit buffer only** — the stored preset is untouched until a
+    /// `save_preset`, so an accidental clear costs a preset reload.
+    ///
+    /// Built from the **surgical** ops (op 78 + op 28 per block, op 89 per snapshot) rather than an
+    /// op-21 write of a blank document, and it turns out nothing else is needed. Both measured on
+    /// an HX Stomp, 2026-08-26:
+    ///
+    /// * Deleting a block takes its assignments with it — the key-`4` parameter controller entry
+    ///   *and* the key `3 → 8` footswitch binding both read back `nil` afterwards — so there is
+    ///   nothing left for an explicit unassign pass to do.
+    /// * A split preset **collapses to serial on its own** when its last row-B block goes, so the
+    ///   split/mixer nodes need no handling either.
+    ///
+    /// Snapshot names are the one thing that survives an empty chain — per-preset text no block
+    /// owns — so they are renamed back explicitly.
+    ///
+    /// What this deliberately does **not** touch: the preset's tempo, its input/output node
+    /// settings (gate, level, pan) and the rest of key `5`. Two factory-blank slots read off the
+    /// same pedal disagree on those, so there is no single "cleared" value to restore them to.
+    ///
+    /// One read at the end rather than one per delete. Returns the emptied preset.
+    pub fn clear_preset(&mut self) -> crate::Result<EditorPreset> {
+        use fretwire_data::stream::{PresetStream, slot_kind};
+        let raw = self.read_preset_raw()?;
+        let ps = PresetStream::parse(&raw)?;
+
+        let occupied: Vec<i64> = ps
+            .blocks()
+            .iter()
+            .filter(|b| matches!(b.kind, slot_kind::EFFECT | slot_kind::LOOPER))
+            .map(|b| b.wire_slot())
+            .collect();
+        tracing::info!(blocks = occupied.len(), "clearing the preset");
+        for slot in occupied {
+            let t1 = self.bump_txn();
+            self.send_edit(edit::begin_structural(slot, t1))?;
+            let t2 = self.bump_txn();
+            self.send_edit(edit::delete_block(slot, t2))?;
+        }
+
+        let (_, names) = ps.snapshots();
+        for (index, name) in names.iter().enumerate() {
+            let default = crate::editor::default_snapshot_name(index);
+            if *name != default {
+                self.rename_snapshot(index as i64, &default)?;
+            }
+        }
+
+        self.read_preset()
+    }
+
     /// Reorder a block within the serial chain: move the block at `src_slot` so it lands at order
     /// position `gap` among the serial blocks (`gap` = how many blocks precede the drop point;
     /// `0` = front, `n` = end), shifting the others to make room. Since op 43 only relocates a block
@@ -2290,8 +2354,14 @@ impl Session {
     /// Put parameter `param_index` of the block in `slot` under controller `source` (op 37).
     ///
     /// `source` is the ordinal the preset's controller table is indexed by — 0 none, 1-2 the
-    /// expression pedals, 3..=7 the footswitches ([`fretwire_protocol::edit::SOURCE_FS1`] is FS1),
-    /// 8 MIDI, 9 snapshots. Passing 0 removes the assignment.
+    /// expression pedals, then one per footswitch from [`fretwire_protocol::edit::SOURCE_FS1`],
+    /// then MIDI, then snapshots. Passing 0 removes the assignment. The run's length is the
+    /// device's: 3..=7 on a Stomp, 3..=10 on an XL. See [`fretwire_protocol::edit::source`].
+    ///
+    /// **Rejected here rather than by the device**, which does not range-check this: an ordinal
+    /// past the end of the table is accepted and silently does nothing, so an unbounded caller
+    /// makes an assignment that looks like it worked. The bound comes from the loaded preset's own
+    /// footswitch count, so it widens on an XL without anything here knowing about models.
     ///
     /// Read it back with `PresetStream::assignments`, which decodes the same table.
     /// [solid — verified live on an HX Stomp 2026-08-22]
@@ -2302,6 +2372,15 @@ impl Session {
         param_index: i64,
         source: i64,
     ) -> crate::Result<()> {
+        let switches = self.footswitch_count();
+        let last = edit::source::table_len(switches) as i64 - 1;
+        // With no preset cached there is no device to size against; 0 (remove) is still meaningful,
+        // and anything else would be bounded against a number we do not have.
+        if source < 0 || (switches > 0 && source > last) {
+            return Err(crate::Error::Invalid(format!(
+                "controller {source} does not exist — this device's sources run 0 (none) to {last}"
+            )));
+        }
         let txn = self.bump_txn();
         self.send_edit(edit::assign_param(slot, paired, param_index, source, txn))?;
         Ok(())

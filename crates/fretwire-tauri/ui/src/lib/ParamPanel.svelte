@@ -30,9 +30,27 @@
     assignments = [],
     footswitchCount = 0,
     onBypassSwitch,
+    onSwitchLabel,
+    onSwitchColor,
     onAssignParam,
     onAssignTravel,
   } = $props();
+
+  // The device's footswitch colour palette, by wire index (layout key `16` / `@fs_customcolor`).
+  // Colours observed live on an HX Stomp ring, 2026-08-27 — the CSS values approximate what the
+  // LED shows; the true RGB the firmware uses is not readable over the protocol.
+  const FS_PALETTE = [
+    { index: 1, css: "#ffffff", name: "White" },
+    { index: 2, css: "#ff1a10", name: "Red" },
+    { index: 3, css: "#ff7a00", name: "Orange" },
+    { index: 4, css: "#ffd500", name: "Yellow" },
+    { index: 5, css: "#e0f269", name: "Pale yellow" },
+    { index: 6, css: "#06ff00", name: "Green" },
+    { index: 7, css: "#00e5cc", name: "Aqua" },
+    { index: 8, css: "#0a68ff", name: "Blue" },
+    { index: 9, css: "#7a1fd0", name: "Purple" },
+    { index: 10, css: "#ff4ad8", name: "Magenta" },
+  ];
 
   // ---- controller assignments ----
   //
@@ -100,6 +118,15 @@
 
   let swapping = $state(false);
   let swappingCab = $state(false);
+  // Custom label/colour mini-editor for the switch this block sits on.
+  let fsEditing = $state(false);
+  let fsLabelDraft = $state("");
+
+  function commitFsLabel() {
+    const text = fsLabelDraft.trim();
+    // An empty label is a clear — the device keeps the stale string behind a false gate anyway.
+    onSwitchLabel(block.footswitch, text || null);
+  }
   // Reset the swap pickers when the selected block changes.
   $effect(() => {
     block?.slot;
@@ -354,6 +381,17 @@
               {/each}
             </select>
           </label>
+          {#if block.footswitch > 0 && !block.is_controller}
+            <button
+              class="fsedit"
+              class:open={fsEditing}
+              title="Custom label and LED colour for FS{block.footswitch}"
+              onclick={() => {
+                fsEditing = !fsEditing;
+                fsLabelDraft = block.user_label || "";
+              }}>✎</button
+            >
+          {/if}
         {:else if block.footswitch > 0}
           <span class="fs" title="This block's bypass is on footswitch {block.footswitch}."
             >FS{block.footswitch}</span
@@ -398,6 +436,46 @@
         {/if}
       </div>
     </div>
+
+    {#if fsEditing && editable && block.footswitch > 0}
+      <!-- Both write the preset document (there is no surgical op) — edit-buffer only, undoable,
+           and the ring/scribble on the pedal repaint immediately [verified live 2026-08-27]. -->
+      <div class="fseditor">
+        <span class="cap">FS{block.footswitch}</span>
+        <input
+          placeholder={block.model_name}
+          value={fsLabelDraft}
+          maxlength="16"
+          oninput={(e) => (fsLabelDraft = e.currentTarget.value)}
+          onkeydown={(e) => e.key === "Enter" && commitFsLabel()}
+        />
+        <button class="act" onclick={commitFsLabel}>Set label</button>
+        <button
+          class="act"
+          disabled={!block.user_label}
+          onclick={() => onSwitchLabel(block.footswitch, null)}>Clear</button
+        >
+        <span class="swatches">
+          {#each FS_PALETTE as p}
+            <button
+              class="swatch"
+              class:sel={block.custom_color === p.index}
+              style="background: {p.css}"
+              title={p.name}
+              aria-label="LED colour {p.name}"
+              onclick={() => onSwitchColor(block.footswitch, p.index)}
+            ></button>
+          {/each}
+          <button
+            class="swatch none"
+            class:sel={block.custom_color == null}
+            title="No custom colour — the block's own"
+            aria-label="Clear custom LED colour"
+            onclick={() => onSwitchColor(block.footswitch, null)}>×</button
+          >
+        </span>
+      </div>
+    {/if}
 
     {#if isSplit && splitTypes.length}
       <div class="splittype">
@@ -705,6 +783,66 @@
     align-items: center;
     gap: 10px;
     margin-bottom: 12px;
+  }
+  .title .fsedit {
+    margin-left: 4px;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: #9aa3b2;
+    font-size: 12px;
+    cursor: pointer;
+    padding: 0 4px;
+  }
+  .title .fsedit:hover,
+  .title .fsedit.open {
+    color: #e6e9ef;
+    border-color: #3a4150;
+  }
+  .fseditor {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .fseditor .cap {
+    color: #c3c9d4;
+    font-size: 13px;
+  }
+  .fseditor input {
+    width: 140px;
+    font-size: 12px;
+    padding: 3px 6px;
+  }
+  .fseditor .swatches {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: 4px;
+  }
+  .fseditor .swatch {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 2px solid #2a2f3a;
+    padding: 0;
+    cursor: pointer;
+  }
+  .fseditor .swatch.sel {
+    border-color: #e6e9ef;
+  }
+  .fseditor .swatch.none {
+    background: none;
+    border-style: dashed;
+    border-width: 1px;
+    color: #9aa3b2;
+    font-size: 11px;
+    line-height: 1;
+  }
+  .fseditor .swatch.none.sel {
+    border-color: #e6e9ef;
+    border-style: solid;
   }
   .splittype .cap {
     color: #c3c9d4;

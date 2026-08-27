@@ -600,29 +600,20 @@ real session.
       coming back `0x06FF00` (green) and an amp `0xFF0003` (red). The same key in the type-41 status
       push is the ring's *current* colour, bright when engaged and ~1/16 brightness when bypassed,
       which refutes the "state bitmask" reading that section carried.
-- [ ] **Custom footswitch colours and labels.** The feature: pick a ring colour and a name per
-      footswitch in the GUI, the way HX Edit does, instead of inheriting the block's category colour
-      and name. Wanted — it is one of the few things HX Edit still does that we cannot.
+- [x] **Custom footswitch colours and labels — SHIPPED (2026-08-27).** Pick a ring colour and a
+      name per footswitch, the way HX Edit does. Storage decoded the same day (label = layout key
+      `14` gated by `13`, colour = `16` gated by `15`; `docs/preset-format.md`), written through the
+      op-21 document path since no surgical op is known: `Session::{set_switch_label,
+      set_switch_color}`, CLI `switch-label`/`switch-color`, and a ✎ mini-editor on the GUI block
+      panel with the ten palette swatches. The palette was mapped live by sweeping indices 1-10 and
+      reading the ring: white, red, orange, yellow, pale yellow, green, aqua, blue, purple, magenta.
+      The ring and scribble repaint immediately on the write. `hxb-convert` carries
+      `@fs_customlabel` and `@fs_customcolor`.
 
-      **Storage is fully decoded (2026-08-27), so the feature no longer waits on ops 58-62.** The
-      label is layout-entry key `14` gated by `13`, the colour override key `16` gated by `15`, and
-      op 33 mirrors them as `109` / top-level `66` — proved by writing them through the op-21
-      document path on a live Stomp (`docs/protocol.md`). A read-modify-write of the edit buffer can
-      set either today, and `hxb-convert` now carries `@fs_customlabel` **and** `@fs_customcolor`.
-
-      **Ops 58-62 are now only the *incremental* route** (what HX Edit presumably sends per
-      keystroke), and probing them is still expensive: `probe-edit --op 58 --set 102=1 --set 66=255`
-      **wedged an HX Stomp** and cost a power cycle (2026-08-22; `docs/safety.md`). All five accept
-      a bare `{102: switch}` and do nothing, so acceptance proves nothing. **Do not resume by
-      guessing bodies** — get `tonepush`'s op documentation or capture HX Edit setting a colour on
-      Windows first.
-
-      Open sub-questions: the colour **palette** — `@fs_customcolor` is an index (1–10 observed),
-      and which index is which colour is unmapped (set one in HX Edit, or on a Floor's panel, and
-      look); which of 58-62 is which; whether `65`/`68`/`26`/`120` matter.
-
-      Once the GUI grows the control it already has the pieces: the footswitch binding UI exists,
-      and `Catalog::category_color` gives the inherited colour the custom one departs from.
+      Still open, low priority: ops 58-62 (HX Edit's incremental route — **do not probe by
+      guessing**, one power cycle per guess, see `docs/safety.md`); whether record keys
+      `65`/`68`/`26`/`120` matter; the LEDs' exact RGB (the GUI's swatch colours are by-eye
+      approximations).
 - [x] **`assign-bypass` leaves the switch label unset where the pedal sets it — SETTLED
       (2026-08-27).** Op 33's `109` mirrors the layout entry's key `14` gated by `13`, and the pedal
       **never** backfills them — not with time, not on re-read, not on a snapshot change, not across

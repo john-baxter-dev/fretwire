@@ -416,6 +416,14 @@ enum Command {
     AssignBypass { slot: i64, switch: i64 },
     /// Take a block's bypass off a footswitch (op 57). Zero-based, like `assign-bypass`.
     UnassignBypass { slot: i64, switch: i64 },
+    /// Set or clear a footswitch's custom label (no label = clear). Zero-based, like
+    /// `assign-bypass`. Goes through the op-21 whole-preset write — edit-buffer only, `save` to
+    /// keep. The switch must have a block bound; `read-switch` shows the result as key 109.
+    SwitchLabel { switch: i64, label: Option<String> },
+    /// Set or clear a footswitch's custom LED colour (no value = clear). The value is HX Edit's
+    /// palette index, not RGB. Zero-based switch; op-21 path, edit-buffer only, like
+    /// `switch-label`.
+    SwitchColor { switch: i64, color: Option<i64> },
     /// Put a parameter under a controller (op 37).
     ///
     /// `source` is the controller ordinal: 0 none (removes it), 1-2 expression pedals,
@@ -1391,6 +1399,33 @@ fn main() -> Result<()> {
             let mut s = fretwire_core::Session::connect()?;
             s.unassign_bypass_from_switch(slot, switch)?;
             println!("slot {slot} bypass off FS{}", switch + 1);
+        }
+        Command::SwitchLabel { switch, label } => {
+            let mut s = fretwire_core::Session::connect()?;
+            s.set_switch_label(switch as usize, label.as_deref())?;
+            // Confirm off the device's own read, not our write: op 33's 109 is the gated mirror.
+            let rec = s.read_switch(switch + 1)?;
+            let what = match label {
+                Some(l) => format!("label set to {l:?}"),
+                None => "label cleared".into(),
+            };
+            match rec {
+                Some(v) => println!("FS{} {what} (op 33 answers {v})", switch + 1),
+                None => println!("FS{} {what} (op 33: no decodable reply)", switch + 1),
+            }
+        }
+        Command::SwitchColor { switch, color } => {
+            let mut s = fretwire_core::Session::connect()?;
+            s.set_switch_color(switch as usize, color)?;
+            let rec = s.read_switch(switch + 1)?;
+            let what = match color {
+                Some(c) => format!("colour set to {c}"),
+                None => "colour cleared".into(),
+            };
+            match rec {
+                Some(v) => println!("FS{} {what} (op 33 answers {v})", switch + 1),
+                None => println!("FS{} {what} (op 33: no decodable reply)", switch + 1),
+            }
         }
         Command::AssignParam {
             slot,

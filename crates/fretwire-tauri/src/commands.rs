@@ -698,6 +698,47 @@ pub async fn unassign_bypass(state: State<'_, AppState>, slot: i64, switch: i64)
     .await
 }
 
+/// Set or clear (`label: None`) the custom label on footswitch `switch` (zero-based). Rides the
+/// op-21 whole-preset write — there is no surgical op we know for it — so it is edit-buffer only,
+/// like every other edit here.
+#[tauri::command]
+pub async fn set_switch_label(
+    state: State<'_, AppState>,
+    switch: i64,
+    label: Option<String>,
+) -> R<PresetDto> {
+    let undo = match &label {
+        Some(l) => format!("FS{} label \u{201c}{l}\u{201d}", switch + 1),
+        None => format!("FS{} label cleared", switch + 1),
+    };
+    returning_edit(
+        &state,
+        move |_| undo,
+        move |s| s.set_switch_label(switch as usize, label.as_deref()),
+    )
+    .await
+}
+
+/// Set or clear (`color: None`) the custom LED colour on footswitch `switch` (zero-based). The
+/// value is HX Edit's palette index. Same op-21 route as `set_switch_label`.
+#[tauri::command]
+pub async fn set_switch_color(
+    state: State<'_, AppState>,
+    switch: i64,
+    color: Option<i64>,
+) -> R<PresetDto> {
+    let undo = match color {
+        Some(c) => format!("FS{} colour {c}", switch + 1),
+        None => format!("FS{} colour cleared", switch + 1),
+    };
+    returning_edit(
+        &state,
+        move |_| undo,
+        move |s| s.set_switch_color(switch as usize, color),
+    )
+    .await
+}
+
 /// Put a parameter under controller `source`, or remove it with source 0.
 ///
 /// **The device does not range-check `source`** — an ordinal past the end of the controller table

@@ -4108,3 +4108,26 @@ backup corroborates the label half from a second device: 11 custom-label entries
 
 `docs/protocol.md` (new section replacing the two superseded paragraphs), `docs/preset-format.md`,
 and the roadmap's two footswitch items updated.
+
+## Sixty-third round (2026-08-27): **custom footswitch labels and colours ship, and the palette is mapped by eye**
+
+Round 62 proved the storage; this round makes it a feature. `PresetStream::{set_switch_label,
+set_switch_color}` write the value-plus-gate pairs on every binding of a switch (a two-block
+switch must not disagree with itself), `Session` wraps them in the op-21 read-modify-write, the
+CLI exposes `switch-label`/`switch-color`, and the GUI's block panel grew a ✎ next to the FS
+picker: a label field and ten palette swatches, undoable like every edit, edit-buffer only like
+every op-21 write. `BlockDto` now carries `custom_color` alongside `user_label`, and the mock
+backend models both (including the bind-first refusal).
+
+**The palette itself was mapped with the pedal's own ring as the instrument.** A script swept
+`switch-color` 1 through 10 on a bound switch, eight seconds apart, with the label set to
+"Color *n*" each step so the scribble named the index being shown; the user read the colours off
+the hardware: **white, red, orange, yellow, pale yellow, green, aqua, blue, purple, magenta**.
+That upgrades the round-62 `[hypothesis]` to `[solid]` twice over — ten distinct hues means the
+value is a palette index (raw RGB 1-10 would all be near-black), and the sweep itself showed the
+ring and scribble **repaint immediately** on an op-21 write, no reload involved. The GUI's swatch
+CSS is a by-eye approximation of what the LEDs show; the true RGB values are not readable over
+the protocol.
+
+Everything ran in the edit buffer — no flash writes; the preset was reloaded afterwards and op 33
+confirms the switch is back to virgin.

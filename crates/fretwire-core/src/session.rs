@@ -2039,6 +2039,51 @@ impl Session {
         self.read_preset()
     }
 
+    /// Set or clear a footswitch's **custom label** (zero-based switch, wire numbering — the same
+    /// number `assign_bypass_to_switch` takes). `None` clears. There is no known surgical op for
+    /// this — HX Edit's ops 58-62 are undecoded and probing them wedges the device — but the label
+    /// is just layout-entry key `14` behind gate `13`, so it goes through the **op-21 whole-preset
+    /// write** (edit buffer only; persist with `save_preset`). Op 33 confirms a landed write
+    /// without a re-read. [solid — live HX Stomp 2026-08-27]
+    ///
+    /// Errors when the switch has no bindings: the label rides the binding entries, so an unbound
+    /// switch has nowhere to carry one.
+    pub fn set_switch_label(
+        &mut self,
+        switch: usize,
+        label: Option<&str>,
+    ) -> crate::Result<EditorPreset> {
+        self.edit_switch(switch, |ps| ps.set_switch_label(switch, label))
+    }
+
+    /// Set or clear a footswitch's **custom LED colour** (layout-entry key `16` behind gate `15`;
+    /// op 33's top-level `66`). The value is the palette index the tones call `@fs_customcolor`,
+    /// not `0xRRGGBB`. Same route and constraints as [`Self::set_switch_label`].
+    pub fn set_switch_color(
+        &mut self,
+        switch: usize,
+        color: Option<i64>,
+    ) -> crate::Result<EditorPreset> {
+        self.edit_switch(switch, |ps| ps.set_switch_color(switch, color))
+    }
+
+    fn edit_switch(
+        &mut self,
+        switch: usize,
+        edit: impl FnOnce(&mut fretwire_data::stream::PresetStream) -> bool,
+    ) -> crate::Result<EditorPreset> {
+        let raw = self.read_preset_raw()?;
+        let mut ps = fretwire_data::stream::PresetStream::parse(&raw)?;
+        if !edit(&mut ps) {
+            return Err(fretwire_data::Error::Stream(format!(
+                "switch {switch} has no bindings — bind a block first, the label/colour ride the bindings"
+            ))
+            .into());
+        }
+        self.write_preset(ps.to_blob())?;
+        self.read_preset()
+    }
+
     /// **Probe:** read the current preset and write it straight back **unchanged** via op 21, then
     /// re-read. Exercises the serializer + chunked write end-to-end without altering anything — the
     /// safe first hardware test of the op-21 path. If the re-read matches, the foundation works

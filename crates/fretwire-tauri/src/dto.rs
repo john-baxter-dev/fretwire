@@ -231,6 +231,8 @@ pub struct BlockDto {
     pub row: u8,
     pub model_name: String,
     pub user_label: Option<String>,
+    /// Custom footswitch LED colour on this block's switch — HX Edit's palette index, not RGB.
+    pub custom_color: Option<i64>,
     pub symbolic_id: Option<String>,
     pub category: Option<i64>,
     pub bypassed: Option<bool>,
@@ -257,6 +259,7 @@ impl From<&EditorBlock> for BlockDto {
             row: b.row,
             model_name: b.model_name.clone(),
             user_label: b.user_label.clone(),
+            custom_color: b.custom_color,
             symbolic_id: b.symbolic_id.clone(),
             category: b.category,
             bypassed: b.bypassed,

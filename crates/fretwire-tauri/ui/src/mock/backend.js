@@ -179,6 +179,7 @@ function makeBlock(sym, opts = {}) {
     symbolic_id: md.symbolic_id,
     model_name: md.name,
     user_label: opts.label ?? null,
+    custom_color: null,
     category: md.category,
     variant: null,
     bypassed: opts.bypassed ?? false,
@@ -591,6 +592,8 @@ const EDIT_LABELS = {
   set_node_pos: (a) => `Move ${a.node} node → col ${a.pos}`,
   set_split_type: (a) => `Split type → ${SPLIT_TYPES.find((t) => t.index === a.modelIndex)?.label ?? "?"}`,
   assign_bypass: (a) => `FS${a.switch + 1} → ${slotName(a.slot)}`,
+  set_switch_label: (a) => (a.label ? `FS${a.switch + 1} label “${a.label}”` : `FS${a.switch + 1} label cleared`),
+  set_switch_color: (a) => (a.color != null ? `FS${a.switch + 1} colour ${a.color}` : `FS${a.switch + 1} colour cleared`),
   unassign_bypass: (a) => `${slotName(a.slot)} off FS${a.switch + 1}`,
   assign_param: (a) => (a.source === 0 ? "Unassign parameter" : `${sourceName(a.source)} → parameter`),
   set_assign_travel: (a) => `${a.max ? "Max" : "Min"} ${a.value}`,
@@ -605,7 +608,8 @@ function blockDto(p, slot, e) {
   const cab = e.paired_index != null ? findModel(e.paired_index) : null;
   return {
     slot, dsp: dspOf(slot), row: isRowB(slot) ? 1 : 0,
-    model_name: e.model_name, user_label: e.user_label, symbolic_id: e.symbolic_id,
+    model_name: e.model_name, user_label: e.user_label, custom_color: e.custom_color ?? null,
+    symbolic_id: e.symbolic_id,
     model_index: e.modelIndex,
     category: e.category, bypassed: e.bypassed, variant: e.variant, is_controller: false,
     footswitch: e.footswitch, dsp_load: e.dsp_load, params: clone(e.params),
@@ -1053,6 +1057,20 @@ const HANDLERS = {
   unassign_bypass: ({ slot }) => {
     const e = current.slots[slot];
     if (e) e.footswitch = 0;
+    return toDto(current);
+  },
+  // Label and colour ride the binding entries, so they apply to whatever sits on that switch —
+  // and clearing keeps nothing visible, like the device's gate flip.
+  set_switch_label: ({ switch: sw, label }) => {
+    const e = Object.values(current.slots).find((b) => b?.footswitch === sw + 1);
+    if (!e) throw new Error(`switch ${sw} has no bindings — bind a block first`);
+    e.user_label = label ?? null;
+    return toDto(current);
+  },
+  set_switch_color: ({ switch: sw, color }) => {
+    const e = Object.values(current.slots).find((b) => b?.footswitch === sw + 1);
+    if (!e) throw new Error(`switch ${sw} has no bindings — bind a block first`);
+    e.custom_color = color ?? null;
     return toDto(current);
   },
   assign_param: ({ slot, paramIndex, source, paired }) => {

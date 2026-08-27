@@ -450,6 +450,12 @@
         ? invoke("assign_bypass", { slot, switch: oneBased - 1 })
         : invoke("unassign_bypass", { slot, switch: wasOneBased - 1 }),
     );
+  // Custom footswitch label/colour (layout keys 14/13 and 16/15, via the op-21 write; see
+  // docs/preset-format.md). One-based here like `block.footswitch`, zero-based on the wire.
+  const onSwitchLabel = (oneBased, label) =>
+    apply(invoke("set_switch_label", { switch: oneBased - 1, label }));
+  const onSwitchColor = (oneBased, color) =>
+    apply(invoke("set_switch_color", { switch: oneBased - 1, color }));
   const onAssignParam = (slot, paired, index, source) =>
     apply(invoke("assign_param", { slot, paired, paramIndex: index, source }));
   const onAssignTravel = (slot, paired, index, max, value) =>
@@ -1190,6 +1196,8 @@
             assignments={preset?.assignments ?? []}
             footswitchCount={preset?.footswitch_count ?? 0}
             {onBypassSwitch}
+            {onSwitchLabel}
+            {onSwitchColor}
             {onAssignParam}
             {onAssignTravel}
           />

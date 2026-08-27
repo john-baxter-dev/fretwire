@@ -218,6 +218,60 @@ impl PresetStream {
         true
     }
 
+    /// Set or clear a footswitch's **custom label** — layout entry key `14` with its gate `13`,
+    /// the pair op 33 mirrors as `109` [solid — flag-flip experiments, live HX Stomp 2026-08-27].
+    /// Clearing flips only the gate; the stale string stays behind it, which is the device's own
+    /// behaviour (a cleared label leaves key 14 populated and 13 false).
+    ///
+    /// The pair lives on each **binding entry**, so every binding on the switch gets it — a
+    /// two-block switch shows one label, and writing only the first entry would leave the two
+    /// disagreeing. Returns `false` when the switch has no bindings (an unbound switch has nowhere
+    /// to carry a label). Re-serialize with [`to_blob`] and write via op 21 to apply.
+    pub fn set_switch_label(&mut self, switch: usize, label: Option<&str>) -> bool {
+        self.for_switch_bindings(switch, |entry| match label {
+            Some(text) => {
+                set_map_key(entry, 14, Value::from(format!("{text}\0")));
+                set_map_key(entry, 13, Value::from(true));
+            }
+            None => set_map_key(entry, 13, Value::from(false)),
+        })
+    }
+
+    /// Set or clear a footswitch's **custom LED colour** — layout entry key `16` with its gate
+    /// `15`, mirrored by op 33 as its top-level `66` [solid — live HX Stomp 2026-08-27]. The value
+    /// is the palette index HX Edit's tones call `@fs_customcolor`, not `0xRRGGBB`. Same
+    /// per-binding, clear-keeps-the-stale-value shape as [`Self::set_switch_label`].
+    pub fn set_switch_color(&mut self, switch: usize, color: Option<i64>) -> bool {
+        self.for_switch_bindings(switch, |entry| match color {
+            Some(index) => {
+                set_map_key(entry, 16, Value::from(index));
+                set_map_key(entry, 15, Value::from(true));
+            }
+            None => set_map_key(entry, 15, Value::from(false)),
+        })
+    }
+
+    /// Apply `write` to every binding entry on layout position `switch` (preset key `3 → 8`).
+    /// `false` when the position is absent, unbound (`nil`) or empty.
+    fn for_switch_bindings(&mut self, switch: usize, mut write: impl FnMut(&mut Value)) -> bool {
+        let Some(layout) = map_get_mut(&mut self.preset, 3) else {
+            return false;
+        };
+        let Some(Value::Array(positions)) = map_get_mut(layout, 8) else {
+            return false;
+        };
+        let Some(Value::Array(entries)) = positions.get_mut(switch) else {
+            return false;
+        };
+        if entries.is_empty() {
+            return false;
+        }
+        for entry in entries {
+            write(entry);
+        }
+        true
+    }
+
     /// Re-serialize to the nested blob the device round-trips: `magic ⧺ header ⧺ preset-map`, the
     /// exact byte sequence carried under read-stream key 104 and written back under op-21 key 110.
     ///
@@ -691,6 +745,7 @@ impl PresetStream {
                     model_index: b.model_ref,
                     paired_index: b.paired_ref,
                     user_label: pb.and_then(|p| p.user_label.clone()),
+                    custom_color: pb.and_then(|p| p.custom_color),
                     bypassed: b.bypassed,
                     params: b.params.clone(),
                     paired_params: b.paired_params.clone(),
@@ -752,6 +807,7 @@ impl PresetStream {
             model_index,
             paired_index: None,
             user_label: None,
+            custom_color: None,
             bypassed,
             params,
             paired_params: Vec::new(),
@@ -798,6 +854,7 @@ impl PresetStream {
             model_index: None,
             paired_index: None,
             user_label: None,
+            custom_color: None,
             bypassed: None,
             params,
             paired_params: Vec::new(),
@@ -961,12 +1018,18 @@ impl PresetStream {
                     })
                     .filter(|s| !s.is_empty());
                 let slot = map_get(model, 8).and_then(Value::as_i64);
+                // The custom LED colour rides the same value-plus-gate shape right next door:
+                // key 16 behind key 15, a palette index. [solid — live HX Stomp 2026-08-27]
+                let custom_color = map_get(node, 16)
+                    .filter(|_| map_get(node, 15).and_then(Value::as_bool) == Some(true))
+                    .and_then(Value::as_i64);
                 // Footswitch = layout position + 1 (FS1 = pos 0); empty positions leave that switch
                 // unbound (→ global tap/tuner). Proven by an FS1↔FS2 swap diff + an FS1-bind diff.
                 Some(PathBlock {
                     model_name,
                     model_id,
                     user_label,
+                    custom_color,
                     slot,
                     node_kind,
                     footswitch: pos_index as i64 + 1,
@@ -1272,6 +1335,8 @@ pub struct LoadedBlock {
     /// `Helix.sym` index of the paired cab/IR (`24 → 26`), if any.
     pub paired_index: Option<i64>,
     pub user_label: Option<String>,
+    /// Custom footswitch LED colour (a palette index), if one is set on the block's switch.
+    pub custom_color: Option<i64>,
     /// Bypass state (content key `10` = enabled; `bypassed = !enabled`).
     pub bypassed: Option<bool>,
     /// Ordered parameter values, in the model's `Helix.sym` order.
@@ -1298,8 +1363,10 @@ pub struct PathBlock {
     pub model_name: String,
     /// Numeric model id (key `… → 11 → 6`); exact encoding TBD.
     pub model_id: Option<i64>,
-    /// User-assigned block label (key `… → 14`), if any.
+    /// User-assigned block label (key `… → 14`, gated by `13`), if any.
     pub user_label: Option<String>,
+    /// Custom LED colour (key `… → 16`, gated by `15`), a palette index, if any.
+    pub custom_color: Option<i64>,
     /// Index into the block-slots array (`0 → 22`) this entry refers to (key `… → 11 → 8`).
     pub slot: Option<i64>,
     /// Node type (`… → 11 → 0`): 1 = DSP block, 2 = controller/footswitch node.

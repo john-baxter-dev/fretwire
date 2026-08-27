@@ -1113,11 +1113,12 @@ and either can be produced deliberately.
 Consequence: **custom footswitch labels and colours are writable today** through the document
 (op-21) path, and `hxb-convert` carries a tone's `@fs_customlabel` and `@fs_customcolor` into
 `14`/`13` and `16`/`15`. Ops 58-62 remain interesting only as the *incremental* edit route HX Edit
-presumably uses. One thing is still `[hypothesis]`: `16`'s unit. The tone's `@fs_customcolor` is a
-**palette index** (1–10 across a 460-preset reference backup) while `@fs_ledcolor` is raw
-`0xRRGGBB`, and both are produced by HX Edit reading the device — so the wire value is read as the
-index, but no wire document with a real custom colour has been observed, and the index→colour
-palette itself is unmapped.
+presumably uses. `16`'s unit is the **palette index**, not RGB [solid — writing 1 through 10 and
+watching the ring gave ten distinct hues matching HX Edit's palette (white, red, orange, yellow,
+pale yellow, green, aqua, blue, purple, magenta), where raw RGB 1–10 would all be near-black].
+The same sweep showed the ring and scribble **repaint immediately** on an op-21 write — the custom
+label and colour are fully live-editable, and `Session::{set_switch_label,set_switch_color}` (CLI
+`switch-label` / `switch-color`, and the ✎ editor in the GUI's block panel) do exactly that.
 
 ### Not built yet
 

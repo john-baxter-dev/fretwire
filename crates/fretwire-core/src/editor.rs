@@ -199,6 +199,8 @@ pub struct EditorBlock {
     pub model_name: String,
     /// User-assigned block label, if any.
     pub user_label: Option<String>,
+    /// Custom footswitch LED colour (a palette index), if one is set on the block's switch.
+    pub custom_color: Option<i64>,
     /// Canonical model id, resolved against the model table (`HD2_TremoloHarmonic`).
     pub symbolic_id: Option<String>,
     /// The model's `Helix.sym` index as read from the preset — the wire selector to pass back to
@@ -1058,6 +1060,7 @@ impl Catalog {
             slot: b.slot,
             model_name: display.to_string(),
             user_label: None,
+            custom_color: None,
             symbolic_id: Some(sym.to_string()),
             model_index: None,
             category: None,
@@ -1123,6 +1126,7 @@ impl Catalog {
             slot: b.slot,
             model_name,
             user_label: b.user_label,
+            custom_color: b.custom_color,
             symbolic_id,
             model_index: b.model_index,
             category,

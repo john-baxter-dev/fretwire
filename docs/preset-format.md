@@ -327,9 +327,12 @@ of a `Map{7}` node:
   `16` = custom LED colour; `15` = has-colour flag — the same value-plus-gate shape. Op 33 mirrors
   `14` as its `109` and `16` as its top-level `66` exactly when the gate is true [solid — flag-flip
   experiments through the op-21 write path, live HX Stomp, 2026-08-27]. `16`'s value is
-  `@fs_customcolor`'s **palette index** (1–10), not `0xRRGGBB` `[hypothesis` — never observed on a
-  wire document, but HX Edit backups report `@fs_ledcolor` as raw RGB and `@fs_customcolor` as a
-  small index, and both come from reading the device`]`. Which index is which colour is unmapped.
+  `@fs_customcolor`'s **palette index**, not `0xRRGGBB` [solid — sweeping 1–10 through a live
+  Stomp's ring produced ten distinct hues matching HX Edit's palette, where raw RGB 1–10 would all
+  be near-black]. The palette, as the ring shows it: **1** white, **2** red, **3** orange,
+  **4** yellow, **5** pale yellow, **6** green, **7** aqua, **8** blue, **9** purple,
+  **10** magenta. The ring and scribble repaint immediately on an op-21 write of these keys — no
+  reload needed. The LEDs' exact RGB values are not readable over the protocol.
 
 ### Controllers / footswitch assignments (`4`), snapshots (`10`/`2`) [solid — corrected 2026-08-21]
 - **`4` = `Array[footswitches + 5]`** — **parameter**-controller assignment table, **indexed by

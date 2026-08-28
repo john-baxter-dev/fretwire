@@ -35,4 +35,6 @@ __pycache__/
 # Contributor-supplied captures and device backups. These contain other people's personal
 # preset data; keep them local, never commit them. Distilled findings go in docs/ instead.
 /captures/helix-floor/
+/captures/pod-go/
 *.hxb
+*.pgb

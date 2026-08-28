@@ -1,22 +1,41 @@
-//! The `.hxb` **device backup** container written by HX Edit.
+//! The `.hxb` / `.pgb` **device backup** container written by HX Edit and POD Go Edit.
 //!
-//! Fully decoded from a Helix Floor backup (see `docs/helix-floor.md`). The header is fixed-layout
-//! little-endian; the payload is **concatenated raw zlib streams, back to back** — no index, no
-//! length prefixes, so you inflate one and start the next where it ended:
+//! One format under two extensions — the whole difference between a Floor's `.hxb` and a POD Go's
+//! `.pgb` is which sections each writes. First decoded from a Helix Floor backup as a fixed header
+//! plus concatenated zlib streams; a POD Go backup whose payload did *not* start at the Floor's
+//! fixed offset forced a second look, which found the real structure: the container is a **tagged
+//! archive with an index table at the end**. [solid — 2026-08-28, issue #15]
 //!
 //! ```text
 //! 0x00  "AF6L"     magic
 //! 0x04  u32        version (1)
-//! 0x18  u32        device id  (0x210001 = Helix Floor, matching a preset's own `device`)
-//! 0x1c  u32        device version
+//! 0x08  u32        offset of the section table
+//! 0x10  u64        section count
+//! 0x18  u32        device id  (0x210001 = Helix Floor, 0x210007 = POD Go — a preset's `device`)
+//! 0x1c  u32        device version (matches the identity reply's, e.g. Floor 0x3800000 = fw 3.80)
+//! 0x20  u32        firmware build sha, as an integer whose hex digits are the sha — the Floor's
+//!                  0x07d01f5e ↔ its build `7d01f5e`, the POD Go's 0x6e984472 ↔ `v2.01-19-g6e98447`
 //! 0x28  u32        unix timestamp
-//! 0x30  char[64]   user comment, NUL-padded
-//! 0x70  ...        payload
+//! 0x30  ...        section data — every table entry points back into this region
 //! ```
 //!
-//! In the Floor backup the 138 streams are: `#0` globals JSON, `#1..=#128` the 128 IR slots as
-//! RIFF WAV, `#129` an `L6UMDArchive` model-usage table, and `#130..=#137` the **eight setlists**
-//! (`schema: "L6Setlist"`), each holding exactly 128 preset slots.
+//! Each table entry is 36 bytes: a 4-byte tag **stored reversed** (`"CSED"` on disk = `DESC`),
+//! u64 data offset, u64 stored length, u32 compressed flag (1 = one zlib stream), u64 inflated
+//! length, 4 pad bytes. `table offset + 36 × count` lands exactly on end-of-file in both real
+//! backups we hold. Tags seen:
+//!
+//! | tag | holds |
+//! |---|---|
+//! | `HXDI` / `PGDI` | the fixed header fields themselves (offset 0x18, length 0x18) |
+//! | `DESC` | the user's comment, raw text (HX Edit; POD Go Edit writes none) |
+//! | `SLNM` | the setlist names, NUL-terminated, raw |
+//! | `GLOB` | device globals, JSON |
+//! | `I000`… | IR slots, **hex**-numbered, RIFF WAV — the Floor writes all 128 (`I000`–`I07F`), the POD Go only the populated ones |
+//! | `UMDS` | the `L6UMDArchive` model-usage table, JSON |
+//! | `SL00`… | the setlists, `L6Setlist` JSON — 8 on a Floor, 2 on a POD Go (`Factory`, `User`), 128 slots each |
+//!
+//! A file without a valid table (we synthesize such in tests; no real one has been seen) falls
+//! back to the original reading: comment at 0x30..0x70, then a scan for back-to-back zlib streams.
 //!
 //! **This reads a backup; it does not restore one.** A preset inside a `.hxb` is a `tone` **JSON**
 //! object, not the MessagePack blob the wire protocol exchanges, so writing one back to the device
@@ -32,24 +51,31 @@ use serde_json::Value as Json;
 
 /// Magic at offset 0.
 pub const MAGIC: &[u8; 4] = b"AF6L";
-/// Where the zlib payload starts.
+/// Where the zlib payload starts in a file with no section table (the legacy fallback reading).
 const PAYLOAD_OFFSET: usize = 0x70;
+/// A section-table entry on disk.
+const TABLE_ENTRY: usize = 36;
 /// Refuse absurd inflate results — a corrupt stream shouldn't be able to exhaust memory.
 const MAX_STREAM: usize = 64 << 20;
 
-/// A parsed `.hxb` backup.
+/// A parsed `.hxb`/`.pgb` backup.
 #[derive(Debug, Clone)]
 pub struct Hxb {
     /// Container format version (1 in every file seen).
     pub version: u32,
-    /// Device id, same space as a preset's `device` field (`0x0021_0001` = Helix Floor).
+    /// Device id, same space as a preset's `device` field (`0x0021_0001` = Helix Floor,
+    /// `0x0021_0007` = POD Go).
     pub device_id: u32,
     /// Device firmware version word.
     pub device_version: u32,
     /// Backup timestamp, seconds since the Unix epoch.
     pub timestamp: u32,
-    /// The user's comment, NUL-trimmed.
+    /// The user's comment (the `DESC` section), NUL-trimmed. POD Go Edit writes none.
     pub comment: String,
+    /// The `SLNM` section: the setlist names as the editor wrote them, in bank order. Redundant
+    /// with each setlist's own JSON `meta.name` in every file seen, but cheap to read — it needs
+    /// no inflation. Empty when the file has no section table.
+    pub setlist_names: Vec<String>,
     /// Every inflated stream, in file order.
     pub streams: Vec<Vec<u8>>,
 }
@@ -85,26 +111,59 @@ pub struct HxbPreset {
 }
 
 impl Hxb {
-    /// Parse a `.hxb` file.
+    /// Parse a `.hxb`/`.pgb` file.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         if bytes.len() < PAYLOAD_OFFSET || &bytes[0..4] != MAGIC {
-            return Err(Error::Stream("not an .hxb backup (bad AF6L magic)".into()));
+            return Err(Error::Stream(
+                "not an .hxb/.pgb backup (bad AF6L magic)".into(),
+            ));
         }
         let u32_at = |off: usize| -> u32 {
             u32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]])
         };
-        let comment_end = bytes[0x30..0x70]
-            .iter()
-            .position(|&b| b == 0)
-            .unwrap_or(0x40);
-        Ok(Self {
+        let mut hxb = Self {
             version: u32_at(0x04),
             device_id: u32_at(0x18),
             device_version: u32_at(0x1c),
             timestamp: u32_at(0x28),
-            comment: String::from_utf8_lossy(&bytes[0x30..0x30 + comment_end]).into_owned(),
-            streams: inflate_all(&bytes[PAYLOAD_OFFSET..]),
-        })
+            comment: String::new(),
+            setlist_names: Vec::new(),
+            streams: Vec::new(),
+        };
+        if let Some(sections) = section_table(bytes) {
+            for s in sections {
+                match (&s.tag, s.compressed) {
+                    (b"DESC", false) => {
+                        hxb.comment = String::from_utf8_lossy(s.data)
+                            .trim_end_matches('\0')
+                            .into();
+                    }
+                    (b"SLNM", false) => {
+                        hxb.setlist_names = s
+                            .data
+                            .split(|&b| b == 0)
+                            .filter(|n| !n.is_empty())
+                            .map(|n| String::from_utf8_lossy(n).into_owned())
+                            .collect();
+                    }
+                    // GLOB, Innn, UMDS, SLnn — the payload proper. A section that fails to
+                    // inflate is dropped, matching what the legacy scan did with bytes it could
+                    // not read.
+                    (_, true) => hxb.streams.extend(inflate_all(s.data)),
+                    // HXDI/PGDI points back at the fixed header fields already read above.
+                    (_, false) => {}
+                }
+            }
+        } else {
+            // No valid table: the original fixed-layout reading.
+            let comment_end = bytes[0x30..0x70]
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(0x40);
+            hxb.comment = String::from_utf8_lossy(&bytes[0x30..0x30 + comment_end]).into_owned();
+            hxb.streams = inflate_all(&bytes[PAYLOAD_OFFSET..]);
+        }
+        Ok(hxb)
     }
 
     /// Every stream that parses as JSON with the given `schema`, in file order.
@@ -167,8 +226,9 @@ impl Hxb {
             .collect()
     }
 
-    /// The IR slots, as raw RIFF WAV bytes (32-bit float, 48 kHz, mono). An all-zero or absent
-    /// slot is still returned — the device keeps 128 either way.
+    /// The IR slots, as raw RIFF WAV bytes (32-bit float, 48 kHz, mono). What this holds is what
+    /// the editor wrote: HX Edit stores all 128 slots, empty or not; POD Go Edit stores only the
+    /// populated ones.
     pub fn impulse_responses(&self) -> Vec<&[u8]> {
         self.streams
             .iter()
@@ -176,6 +236,47 @@ impl Hxb {
             .map(|s| s.as_slice())
             .collect()
     }
+}
+
+/// One entry out of the section table.
+struct Section<'a> {
+    /// The on-disk byte-reversed tag, turned back around (`"CSED"` → `DESC`).
+    tag: [u8; 4],
+    data: &'a [u8],
+    compressed: bool,
+}
+
+/// The section table, if this file carries a valid one, in file order.
+///
+/// Validation is strict — the table offset (header 0x08) plus 36 bytes per entry (header 0x10)
+/// must land exactly on end-of-file, and every entry must point inside the region before the
+/// table — because a wrong guess here silently misreads the whole file, and the legacy scan
+/// below is a working answer for anything that doesn't match.
+fn section_table(bytes: &[u8]) -> Option<Vec<Section<'_>>> {
+    let table = u32::from_le_bytes(bytes[0x08..0x0c].try_into().unwrap()) as usize;
+    let count = u64::from_le_bytes(bytes[0x10..0x18].try_into().unwrap()) as usize;
+    if table < 0x30
+        || count == 0
+        || table.checked_add(count.checked_mul(TABLE_ENTRY)?)? != bytes.len()
+    {
+        return None;
+    }
+    let mut out = Vec::with_capacity(count);
+    for entry in bytes[table..].as_chunks::<TABLE_ENTRY>().0 {
+        let tag = [entry[3], entry[2], entry[1], entry[0]];
+        let off = u64::from_le_bytes(entry[4..12].try_into().unwrap()) as usize;
+        let len = u64::from_le_bytes(entry[12..20].try_into().unwrap()) as usize;
+        let compressed = u32::from_le_bytes(entry[20..24].try_into().unwrap()) != 0;
+        if off.checked_add(len)? > table || !tag.iter().all(|b| b.is_ascii_graphic()) {
+            return None;
+        }
+        out.push(Section {
+            tag,
+            data: &bytes[off..off + len],
+            compressed,
+        });
+    }
+    Some(out)
 }
 
 /// Inflate concatenated raw zlib streams. Each stream ends where the decompressor says it does,

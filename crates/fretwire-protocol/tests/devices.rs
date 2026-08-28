@@ -5,7 +5,7 @@
 
 use fretwire_protocol::{
     DEVICES, Device, PID_HELIX_FLOOR, PID_HELIX_LT, PID_HX_EFFECTS, PID_HX_STOMP, PID_HX_STOMP_XL,
-    Support,
+    PID_POD_GO, Support,
 };
 
 #[test]
@@ -186,15 +186,33 @@ fn every_device_has_a_udev_rule() {
 }
 
 #[test]
-fn the_two_verified_devices_differ_where_we_measured_them() {
+fn the_verified_devices_differ_where_we_measured_them() {
     let stomp = Device::by_pid(PID_HX_STOMP).unwrap();
     let floor = Device::by_pid(PID_HELIX_FLOOR).unwrap();
+    let pod = Device::by_pid(PID_POD_GO).unwrap();
 
     assert_eq!((stomp.dsps, stomp.snapshots), (Some(1), Some(3)));
     assert_eq!((floor.dsps, floor.snapshots), (Some(2), Some(8)));
+    assert_eq!((pod.dsps, pod.snapshots), (Some(1), Some(4)));
     assert_eq!(stomp.preset_device_id, Some(0x0021_0006));
     assert_eq!(floor.preset_device_id, Some(0x0021_0001));
+    assert_eq!(pod.preset_device_id, Some(0x0021_0007));
     assert_ne!(stomp.model_code, floor.model_code);
+    assert_ne!(stomp.model_code, pod.model_code);
+}
+
+/// The POD Go's owner-supplied facts (issue #15): the `.pgb` backup named the setlists and the
+/// device id, and their panel report gave the bank labelling.
+#[test]
+fn the_pod_go_is_fully_described() {
+    let pod = Device::by_pid(PID_POD_GO).unwrap();
+    assert_eq!(pod.support, Support::Verified);
+    assert_eq!(pod.setlist_names(), &["Factory", "User"]);
+    assert_eq!(pod.setlist_size, Some(128));
+    // "Each has 128 slots labelled from 01A, 01B, 01C, 01D through to 32D" — the owner's words,
+    // and the same arithmetic that derived the Stomp's banked form reproduces them.
+    let (flat, banked) = pod.preset_numbering_labels().unwrap();
+    assert_eq!((flat.as_str(), banked.as_str()), ("000-127", "01A-32D"));
 }
 
 /// The pedal's own preset numbering: `01A`, `01B`, `01C`, `02A`, … A label, never an address.

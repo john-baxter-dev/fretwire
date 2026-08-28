@@ -1,9 +1,10 @@
 # POD Go — device survey
 
-What we know about the **POD Go**, from one contributor capture of POD Go Edit's startup
-(2026-08-25, issue #15) plus the reference data shipped in POD Go Edit v2.50. Like the LT survey
-this rests on no device backup; unlike it, **fretwire has never talked to a POD Go** — every claim
-below comes from decoding somebody else's session, not from driving the pedal.
+What we know about the **POD Go**, from an owner's captures, backup and hardware reports
+(2026-08-25 through 2026-08-28, issue #15) plus the reference data shipped in POD Go Edit v2.50.
+The device is **`Support::Verified`**: every field in its `Device` entry is measured, and every
+edit builder we have reproduces its captured bytes exactly. The owner has also driven a POD Go
+from fretwire itself, both directions.
 
 **Bottom line: the protocol needs no change; the *data* does.** The frame codec, the channel ids,
 the handshake, the MessagePack envelope, the op numbers and the paged preset stream are all the HX
@@ -55,7 +56,7 @@ Geometry read off the capture's preset:
 |---|---|---|
 | DSPs | **1** | group key `0` populated, key `1` nil, all blocks in slots 1..10 |
 | Snapshots | **4** | the snapshot table holds four entries, named `SNAPSHOT 1`..`4` |
-| Setlists | **>1** | the host asks for preset info with `107` (bank) = 1; the capture never names them |
+| Setlists | **2** | `Factory` and `User`, 128 slots each — named by the backup, sized by the wire (see below) |
 
 ## The model index space is the POD Go's own  [solid]
 
@@ -114,20 +115,18 @@ and 537/627 POD Go symbols where stripping alone got 372.
 
 ## What is still unknown
 
-- **Structural writes.** Parameter, bypass and model-swap are reconciled (below); what is *not* is
-  anything that changes the chain's shape — add, move, delete. A POD Go owner has replaced the
-  fixed, normally non-editable wah slot with a delay block and the device accepted it, which we do
-  not yet understand and should not lean on.
-- **Setlist geometry.** How many setlists, how big, and how the panel numbers presets.
-- **Footswitch layout.** We map a block to a switch by layout position + 1, which is the Stomp's
-  rule; it currently reports things like `FS9` on a four-switch pedal, so the POD Go's mapping is
-  its own and unmeasured.
-- **Fixed topology.** The POD Go's chain has dedicated wah / volume / amp / cab / EQ positions
-  rather than free blocks, so add / move / delete-block semantics need their own work. `insert_block`
-  now refuses a slot outside the HX row windows instead of panicking on one (the POD Go's ten blocks
-  are one row, so slots 9 and 10 hold blocks where the HX has bounding nodes).
+- **Structural writes.** Parameter, bypass, model-swap and footswitch assignment are reconciled
+  (below); what is *not* is anything that changes the chain's shape — add, move, delete. The
+  POD Go's chain is **fixed** (see "The fixed chain" below), so those ops may not even exist for
+  it in the form the HX uses; `insert_block` refuses a slot outside the HX row windows rather than
+  guessing. A POD Go owner has replaced the fixed wah slot with a delay via the JSON
+  export-edit-reimport route and the device accepted it, which we do not yet understand and should
+  not lean on.
+- Nothing about the slot array — it is now fully read (below) — but `hxb-convert` (tone JSON →
+  wire) is still HX-only: its slot arithmetic, block-clearing and node targets are all written
+  against the HX 20-slot topology, and parameterizing them for the POD Go's 12-slot one is real
+  work not yet done. A `.pgb` currently converts to a clean per-preset refusal.
 - **Preset key `12`** (`Array[128]`).
-- `preset_device_id`, which on the Stomp and Floor came from a `.hxb` header we do not have.
 
 ## The write path is the same too  [solid — 2026-08-26 captures]
 
@@ -177,9 +176,81 @@ missing from the *HX* picker too:
 | Reverb | — | 23 | 25 | 25 |
 | Delay | 10 | 43 | 40 | **48** |
 
+## The backup — `.pgb` is `.hxb`, and it closed out `Verified`  [solid — 2026-08-27, issue #15]
+
+POD Go Edit exports backups as `.pgb`. Same `AF6L` container as HX Edit's `.hxb` — and the file
+whose payload did *not* start at the `.hxb`'s assumed fixed offset is what forced the container's
+real structure out: a **tagged archive with a 36-byte-per-entry index table at the end**, fully
+decoded in `fretwire-data/src/hxb.rs`. (The Floor's `.hxb` re-reads identically under the table —
+its comment happens to be exactly the 64 bytes the old fixed-layout reading assumed.)
+
+What the backup settled:
+
+- **`preset_device_id` = `0x210007`**, twice over: the container header's device-id field and the
+  `L6UMDArchive` section's `"device": 2162695`. That was the last unknown `Device` field — the
+  POD Go is now `Support::Verified`.
+- The header's device-version field reads `0x02500000`, matching the identity reply's — which
+  confirms that reply's second word is the *version*, not the device id.
+- **Two setlists, `Factory` and `User`, 128 slots each** (123 and 12 populated in this one), from
+  the `SLNM` section, both setlists' own `meta.name`, and the owner's panel description agreeing.
+- POD Go Edit writes **no comment** (`DESC`) section and stores **only the populated IR slots**
+  (7 here), where HX Edit writes all 128.
+- The tone JSON is the HX shape with the geometry differences already known from the wire: `dsp0`
+  only, blocks `block0`..`block9`, four snapshots — and **no `@path`** on blocks (one row makes it
+  meaningless), which is what `hxb-convert` trips on (see "still unknown").
+
+## Setlists and banks  [solid — 2026-08-27 capture + owner report]
+
+The panel calls the two setlists **Factory** and **User** — functionally identical, the names
+describe pre-population — and numbers slots `01A`..`32D`, four to a bank
+(`presets_per_bank: Some(4)` reproduces exactly that as `01A-32D`). On the wire nothing is new:
+
+- The startup `read_info` answers `{107: 0, 108: 0, 109: "US Deluxe Nrm"}` — bank 0, slot 0,
+  matching the backup's Factory 01A.
+- Switching lists in the editor is just a **browse of the other bank** (op 1, `{107: 1}`), and the
+  reply keys are global indices with the familiar 128 stride (first populated User entry arrives
+  keyed 136 = 1 × 128 + 8). No mode-switch message exists.
+- The owner reports the *pedal-side* bank switch emits USB-**MIDI** Bank Change + Program Change
+  (which the capture, taken on the `MI_00` interface only, does not carry) and that the editor
+  sends no equivalent — the two preset lists scroll independently until a load. [reported]
+
+## The footswitch map  [solid — 2026-08-27 capture]
+
+Assigning slot 6's bypass to the switch POD Go Edit calls **FS3** produced op 56 with
+`{98: 6, 102: 2}`, and the follow-up read asked op 33 for `102: 3` — the HX Stomp's exact opcodes
+**and** its off-by-one-on-purpose numbering (one-based to read, zero-based to write). Both are
+golden-tested in `pod_go_writes.rs`. So the wire rule was never wrong — position + 1 *is* the
+FS label for the stomp switches.
+
+The `FS9`-on-a-small-pedal display was the **expression toe switch**: in the backup's tones the
+wah and the volume pedal both carry `@fs_index: 9` (one enabled at a time — the toe toggles
+between them), so wire layout position 8 is the toe switch, not a ninth stomp. The status push
+after the assignment is the familiar type 31: `{98: slot, 70: switch, 79: assigned}`.
+
+## The fixed chain  [reported — 2026-08-27, issue #15]
+
+Per the owner, POD Go Edit and the pedal both enforce that every preset contains exactly one each
+of **volume pedal, wah, FX loop (mono or stereo), amp, cab/IR**, plus **at least one EQ** — in any
+order, leaving four freely assignable blocks. The editor implements this as fixed-type slots. The
+community bypasses it by editing a preset's exported JSON and reimporting, with no widely-reported
+ill effect; the restriction is assumed part DSP budget, part product segmentation. This is why
+add/move/delete may be a different shape here than on the HX chain, and why we don't send them.
+
+## The wire slot array  [solid — read from the 2026-08-27 capture's preset]
+
+The POD Go's group-0 slot array holds **12 entries**, not the HX's 20:
+
+```
+[0]      kind 0   input node
+[1]..[10] kind 6  the ten chain blocks
+[11]     kind 1   output node
+```
+
+No split or mixer nodes — the chain is one row, structurally. The footswitch layout array
+(`3 → 8`) is **9 positions**: 0..5 are the stomp switches FS1..FS6, position 8 is the expression
+toe switch (see "The footswitch map"), and positions 6..7 have not been seen carrying anything.
+
 ### Captures that would still help
 
-- A `.hxb` backup from a POD Go — the one thing that would fill in `preset_device_id`, the only
-  field keeping the device at `Reported` rather than `Verified`.
-- Anything that names the setlists, or shows how the panel numbers presets.
-- A footswitch assignment, to replace the Stomp's layout rule we currently apply blind.
+- **Anything showing add / move / delete from POD Go Edit**, if the editor can do them at all —
+  or confirmation that it refuses. This is the one remaining write family.

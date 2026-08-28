@@ -97,23 +97,27 @@ computation that `edit::set_value` depends on** should carry over to the Floor u
 
 ## The `.hxb` backup container  [solid]
 
-Fully decoded, and simple enough to support directly:
+Fully decoded — twice. First read as a fixed header plus concatenated zlib streams; a POD Go's
+`.pgb` (2026-08-28, issue #15) then revealed the container's real structure, which resolves the
+two fields this section used to mark unconfirmed:
 
 ```
 0x00  "AF6L"          magic (4 bytes)
 0x04  u32             version = 1
-0x08  u32             1100769   (payload-ish length; not yet pinned down)
-0x10  u32             141       (= stream count 138 + 3?  unconfirmed)
+0x08  u32             1100769   offset of the section table at the end of the file
+0x10  u64             141       section count (36-byte entries)
 0x18  u32             0x210001  device ID
 0x1c  u32             0x03800000 device version
+0x20  u32             the firmware build sha as an integer — 0x07D01F5E ↔ this unit's `7d01f5e`
 0x28  u32             unix timestamp of the backup
-0x30  char[64]        user comment, NUL-padded
-0x70  ...             payload
+0x30  ...             section data (in this file: the comment, then the zlib streams)
 ```
 
-The payload is **concatenated raw zlib streams**, back to back, no index or length prefixes — you
-just inflate one and start the next where it ended. The file we were sent has 138, then two `\0`
-bytes:
+Each table entry names a tagged section — `HXDI` (the header fields), `DESC` (the comment, whose
+64 bytes are what the fixed reading took for a fixed-size field), `SLNM` (setlist names), and the
+zlib-compressed payload sections `GLOB`, `I000`–`I07F`, `UMDS`, `SL00`–`SL07`. Full table format
+in `fretwire-data/src/hxb.rs`; this file's 138 compressed streams under the table are exactly the
+138 the original stream-walk found, so everything below stands unchanged:
 
 1. `#0` — globals JSON (`DSP`, `EQ`, `L6Link`, `System`, `Tuner`).
 2. `#1`–`#128` — 128 IR slots as RIFF WAV (32-bit float, 48 kHz, mono).

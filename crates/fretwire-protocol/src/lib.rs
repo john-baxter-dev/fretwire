@@ -71,10 +71,11 @@ pub enum Support {
     /// purpose: "a user has this working" is real information, and calling it [`Support::Untested`]
     /// understates it, while [`Support::Verified`] promises a device we can describe completely.
     ///
-    /// It does **not** imply we hold no traffic. The POD Go sits here with its reads *and* writes
-    /// reconciled byte-for-byte against captures from a real unit; what it lacks is a
-    /// `preset_device_id`, which only a backup file carries. The tier tracks how completely we know
-    /// the device, not how much evidence we have.
+    /// It does **not** imply we hold no traffic. The Helix LT sits here with its reads surveyed on
+    /// real hardware — what keeps it out of `Verified` is that no edit has ever been sent to one —
+    /// and the POD Go worked its way through this tier and out the top as its owner sent captures
+    /// (issue #15). The tier tracks how completely we know the device, not how much evidence we
+    /// have.
     Reported,
     /// Only the USB IDs are known. The device is in the HX family and very probably speaks the
     /// same protocol, but nothing has been checked against real traffic from one.
@@ -151,8 +152,10 @@ pub struct Device {
 
 /// Every HX device fretwire knows about.
 ///
-/// The HX Stomp and Helix Floor are both [`Support::Verified`] — the handshake is byte-identical
-/// between them and every edit builder reproduces both devices' own wire bytes.
+/// The HX Stomp, Helix Floor and POD Go are [`Support::Verified`] — the handshake is
+/// byte-identical across them and every edit builder reproduces each device's own wire bytes. The
+/// POD Go is the interesting one: it is not even marketed as an HX device, and it still speaks the
+/// identical protocol (issue #15).
 ///
 /// Two are [`Support::Reported`], for different reasons, which is the point of the tier being
 /// evidential rather than a ranking: the **Helix LT** was surveyed on real hardware (reads and
@@ -214,6 +217,47 @@ pub const DEVICES: &[Device] = &[
         // guess here has two plausible answers and no evidence — and the wrong one mislabels every
         // preset on the unit. Needs one look at a Floor's screen.
         presets_per_bank: None,
+        support: Support::Verified,
+    },
+    Device {
+        pid: PID_POD_GO,
+        name: "POD Go",
+        // `P34`, from two independent paths in one capture — the handshake identity reply returns
+        // "P34Main" on the primary channel, and the preset the device then streamed carries
+        // `7 -> 36` = "P34\0". The same two-source standard the XL's `P36` was accepted on.
+        // [solid — 2026-08-25, issue #15 capture]
+        model_code: Some("P34"),
+        // From the owner's `.pgb` backup, twice over: the container header's device-id field reads
+        // 0x210007, and the `L6UMDArchive` section inside says `"device": 2162695` — the same
+        // number. (Not the `0x02500000` the identity reply carries beside the model code — that
+        // matches the backup's *device version* field, as the Floor's 0x3800000 does its fw 3.80.)
+        // [solid — 2026-08-27 backup, issue #15]
+        preset_device_id: Some(0x0021_0007),
+        // One. The streamed preset populates group key `0` only — key `1` is nil — and every block
+        // sits in slots 1..10, inside the first group's stride. This is the same reasoning that put
+        // the LT on two, run the other way. [solid — 2026-08-25 capture]
+        dsps: Some(1),
+        // Four, against the Stomp's three: the preset's snapshot table holds exactly four entries,
+        // named SNAPSHOT 1..4. Read out of the preset itself, not from the footswitch count.
+        // [solid — 2026-08-25 capture]
+        snapshots: Some(4),
+        // Two, and these are the pedal's own names for them: the backup's SLNM section and both
+        // setlists' JSON `meta.name`, confirmed against the owner's panel description — identical
+        // but for pre-population. [solid — 2026-08-27 backup, issue #15]
+        setlists: Some(&["Factory", "User"]),
+        // Both setlists hold exactly 128 slots, and the wire agrees: browsing bank 1 answers
+        // entries keyed from 128 up (136 = 1 × 128 + 8 in the owner's capture).
+        setlist_size: Some(128),
+        // Read off the pedal's screen by its owner: slots run 01A..32D, four to a bank.
+        // [2026-08-27 owner report, issue #15]
+        presets_per_bank: Some(4),
+        // Reads: frame codec, channel ids, handshake and paged preset stream all parse unchanged.
+        // Writes: the owner captured a parameter change, a bypass toggle, a block model swap and a
+        // footswitch assignment, and the `edit` builders — written entirely from HX Stomp traffic —
+        // reproduce every one byte-for-byte (`tests/pod_go_writes.rs`); the bypass body differs
+        // from the Stomp's captured one in exactly one byte, the slot number. The last unknown
+        // field, `preset_device_id`, arrived with their backup. What remains open is geometry, not
+        // protocol: the fixed chain's add/move/delete semantics. [solid — 2026-08-28, issue #15]
         support: Support::Verified,
     },
     Device {
@@ -315,49 +359,6 @@ pub const DEVICES: &[Device] = &[
         // information about the protocol, confirmed by outcome. [2026-08-24 owner report]
         support: Support::Reported,
     },
-    Device {
-        pid: PID_POD_GO,
-        name: "POD Go",
-        // `P34`, from two independent paths in one capture — the handshake identity reply returns
-        // "P34Main" on the primary channel, and the preset the device then streamed carries
-        // `7 -> 36` = "P34\0". The same two-source standard the XL's `P36` was accepted on.
-        // [solid — 2026-08-25, issue #15 capture]
-        model_code: Some("P34"),
-        // Not the `0x02500000` the identity reply carries beside the model code — that is the
-        // field matching preset key `35` (the Stomp's reads `0x03800000`), not this one. The
-        // Stomp's and Floor's `preset_device_id` came from `.hxb` backup headers, and we have no
-        // backup from a POD Go.
-        preset_device_id: None,
-        // One. The streamed preset populates group key `0` only — key `1` is nil — and every block
-        // sits in slots 1..10, inside the first group's stride. This is the same reasoning that put
-        // the LT on two, run the other way. [solid — 2026-08-25 capture]
-        dsps: Some(1),
-        // Four, against the Stomp's three: the preset's snapshot table holds exactly four entries,
-        // named SNAPSHOT 1..4. Read out of the preset itself, not from the footswitch count.
-        // [solid — 2026-08-25 capture]
-        snapshots: Some(4),
-        // More than one — POD Go Edit's startup asks for preset info with `107` (bank) = 1, which
-        // the Stomp's single flat list would never do — but the capture never names them or shows
-        // how many there are, so listing any would be invention.
-        setlists: None,
-        setlist_size: None,
-        // Unknown: nobody has read a POD Go's screen. Left `None` so presets are numbered by slot
-        // rather than mislabelled, as on the Floor.
-        presets_per_bank: None,
-        // Both halves are now reconciled against a real unit. Reads: the frame codec, channel ids,
-        // handshake and paged preset stream all parse unchanged, and the op numbers match. Writes:
-        // the contributor captured a parameter change, a bypass toggle and a block model swap on
-        // named slots, and the `edit` builders — written entirely from HX Stomp traffic — reproduce
-        // all three byte-for-byte (`tests/pod_go_writes.rs`); the bypass body differs from the
-        // Stomp's captured one in exactly one byte, the slot number. They have also driven a POD Go
-        // from the editor in both directions.
-        //
-        // `Reported` rather than `Verified` on one count only: `preset_device_id` is unknown,
-        // because that field has only ever come from a `.hxb` backup header and nobody has sent a
-        // POD Go backup. The remaining gaps are *geometry*, not protocol — the fixed chain's
-        // add/move/delete semantics and the footswitch mapping. [solid — 2026-08-26, issue #15]
-        support: Support::Reported,
-    },
 ];
 
 impl Device {
@@ -406,7 +407,8 @@ impl Device {
     /// than the generic one. That is the Floor and the LT today — 128 slots each, bank size unknown.
     ///
     /// **Every string this produces has been read off a screen, with one deliberate exception** —
-    /// Stomp `000-125` and `01A-42C` [2026-08-24], XL `01A-32D` [2026-08-21]. The exception is the
+    /// Stomp `000-125` and `01A-42C` [2026-08-24], XL `01A-32D` [2026-08-21], POD Go `01A-32D`
+    /// ("labelled from 01A … through to 32D" — owner report, 2026-08-27). The exception is the
     /// XL's flat form: its menu draws `000-128`, which is a **firmware bug** — that unit's presets
     /// stop at 127 [owner, 2026-08-24] — so this derives the truthful `000-127` and the editor
     /// disagrees with the pedal's screen by one character. See the note on setting 27.

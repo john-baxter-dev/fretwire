@@ -4154,3 +4154,35 @@ Two deliberate choices: it confirms first (same stakes as Clear — unsaved work
 and it goes through the undo history rather than the goto path's history reset, so **the state it
 discards stays one Undo away** — a safety net for the one gesture whose whole job is throwing
 edits out. Verified live: two edits, `revert`, and the buffer is byte-identical to flash.
+
+## Sixty-fifth round (2026-08-28): **the POD Go goes Verified, and the backup container gives up its real structure** (issue #15)
+
+The contributor answered all three asks in one day: a `.pgb` backup, a footswitch-assignment
+capture, and a bank-switching capture with a panel description.
+
+**The `.pgb` forced a discovery that improves the `.hxb` too.** Its payload did not start at the
+fixed offset the Floor's file had suggested, and the real container structure fell out: `AF6L` is a
+**tagged archive with a 36-byte-per-entry index table at the end** — sections `HXDI`/`PGDI`, `DESC`
+(comment), `SLNM` (setlist names), `GLOB`, `I000`… (IRs, hex-numbered), `UMDS`, `SL00`… (setlists),
+each entry `{reversed tag, offset, length, compressed, inflated length}`. The two header fields the
+Floor doc had marked "unconfirmed" are the table offset and entry count, and the unknown at 0x20 is
+the firmware build sha as an integer. `hxb.rs` now parses the table (the old stream-walk stays as
+the fallback), the Floor file re-reads identically, and `show-backup`/`hxb-convert` take a `.pgb`.
+
+**What the new material settled — every remaining `Device` field, so `support` is now
+`Support::Verified`:**
+
+- `preset_device_id: 0x210007`, from the backup header and its `L6UMDArchive` agreeing.
+- `setlists: ["Factory", "User"]`, 128 slots each — backup, wire (bank-1 browse keys start at
+  128 + slot) and panel all agreeing. `presets_per_bank: 4`: the owner reads `01A`..`32D` off the
+  screen, exactly what `preset_numbering_labels` derives.
+- The footswitch assignment is **byte-exact** against `assign_bypass_to_switch`/`read_switch`
+  (now in `pod_go_writes.rs`), including the Stomp's one-based-read/zero-based-write rule. The
+  phantom "FS9" is the **expression toe switch**: wah and volume both sit at layout position 8,
+  one enabled at a time.
+- The wire slot array read whole: **12 entries** — input 0, blocks 1..10, output 11, no
+  split/mixer. `hxb-convert` stays HX-only for now (its slot arithmetic is the HX topology's) and
+  refuses a `.pgb` per-preset with the real reason instead of a cryptic key error.
+
+Remaining POD Go unknowns: add/move/delete on the fixed chain (may not exist in HX form — the
+owner documented the editor-enforced one-of-each constraints), and preset key `12`. 330 tests.

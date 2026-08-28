@@ -64,3 +64,17 @@ fn the_post_swap_refresh_matches_the_pod_go_bytes() {
     assert_eq!(edit::read_info(1013), hex("8366cd03f5641765c0"));
     assert_eq!(edit::stream_start(1014), hex("8366cd03f6641665c0"));
 }
+
+/// Assigning slot 6's bypass (Cali Q Graphic) to the switch POD Go Edit calls **FS3** — op 56
+/// with the zero-based `102: 2`, then the follow-up read of the same switch as the one-based
+/// `102: 3`. The same opcodes, and the same off-by-one-on-purpose numbering, as the HX Stomp
+/// (see `docs/protocol.md`, "one-based to read and zero-based to write").
+/// `{102: 1016, 100: 56, 101: {98: 6, 102: 2}}` [capture: 2026-08-27, issue #15]
+#[test]
+fn the_footswitch_assignment_matches_the_pod_go_bytes() {
+    assert_eq!(
+        edit::assign_bypass_to_switch(6, 2, 1016),
+        hex("8366cd03f86438658262066602")
+    );
+    assert_eq!(edit::read_switch(3, 1017), hex("8366cd03f9642165816603"));
+}

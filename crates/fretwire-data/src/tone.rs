@@ -246,7 +246,18 @@ pub fn apply_tone(
                 continue;
             }
             let index = slot_index(block).ok_or_else(|| {
-                Error::Stream(format!("{tone_key}.{name}: no usable @path/@position"))
+                Error::Stream(if block.get("@path").is_none() {
+                    // A POD Go tone: its fixed chain is one row, so the blocks carry no `@path`
+                    // — and the slot arithmetic *around* this lookup (rows 1..=8 and 11..=18,
+                    // structural nodes at 9/10/19) is the HX topology, which that pedal does not
+                    // have. Refuse with the real reason rather than half-convert.
+                    format!(
+                        "{tone_key}.{name}: a fixed-chain tone (no @path — POD Go) — \
+                         conversion is only mapped for the HX row geometry"
+                    )
+                } else {
+                    format!("{tone_key}.{name}: no usable @path/@position")
+                })
             })?;
             let encoded = encode_block(block, tone_dsp, syms)
                 .map_err(|e| Error::Stream(format!("{tone_key}.{name}: {e}")))?;

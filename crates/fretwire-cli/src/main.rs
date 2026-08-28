@@ -80,16 +80,17 @@ enum Command {
         #[arg(default_value_t = 4)]
         depth: usize,
     },
-    /// Inspect an HX Edit `.hxb` device backup offline. Reads only.
+    /// Inspect a device backup (HX Edit `.hxb` / POD Go Edit `.pgb`) offline. Reads only.
     ShowBackup {
         backup: String,
         /// Also list every preset in every setlist.
         #[arg(long)]
         presets: bool,
     },
-    /// Convert presets out of an HX Edit `.hxb` backup into a fretwire export file. **Offline.**
+    /// Convert presets out of a device backup (`.hxb`/`.pgb`) into a fretwire export file.
+    /// **Offline.**
     ///
-    /// A `.hxb` holds its presets as host-side `tone` JSON, not as the blob the device exchanges,
+    /// A backup holds its presets as host-side `tone` JSON, not as the blob the device exchanges,
     /// which is why `show-backup` could read one and nothing could restore from it. This does that
     /// conversion, and writes an export file the rest of the tooling already understands —
     /// inspect it with `backup-show`, put it on a pedal with `restore`.
@@ -721,7 +722,12 @@ fn main() -> Result<()> {
                 );
             }
 
-            let catalog = fretwire_core::Catalog::load()?;
+            // A tone names its models in its own family's symbol table, so a POD Go backup must
+            // be converted against POD Go data — the same routing `Session::connect` does by PID.
+            let catalog = match backup_device.and_then(|d| d.model_code) {
+                Some(code) => fretwire_core::Catalog::load_for_model(code)?,
+                None => fretwire_core::Catalog::load()?,
+            };
             let syms = &catalog.symbols;
 
             let setlists = hxb.setlists();

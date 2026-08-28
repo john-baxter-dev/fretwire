@@ -4186,3 +4186,24 @@ the fallback), the Floor file re-reads identically, and `show-backup`/`hxb-conve
 
 Remaining POD Go unknowns: add/move/delete on the fixed chain (may not exist in HX form — the
 owner documented the editor-enforced one-of-each constraints), and preset key `12`. 330 tests.
+
+## Sixty-sixth round (2026-08-28): **`.pgb` backups convert — the tone mapping learns the POD Go's chain**
+
+Follow-through on the round above: `hxb-convert` was refusing POD Go tones because `tone.rs`
+hardcoded the HX 20-slot topology. Now the conversion reads the **donor's own slot array** to pick
+the chain shape (`Chain::HxRows` / `Chain::SingleRow`), and the POD Go path was reconciled the
+same way the HX one originally was — against presets held in both forms. We hold two ("US Deluxe
+Nrm" and "AC30 Ambient", the latter recognized as the very first capture's mystery preset), and
+converting each backup tone reproduces the device's own wire preset slot for slot
+(`fretwire-data/tests/pgb_to_wire.rs`, 4 tests; the donor is vandalised first so nothing can pass
+by luck).
+
+What fell out of the reconciliation, all now in `docs/pod-go.md`: the POD Go's own `@type`
+vocabulary (2 = IR, 4 = looper, 5 = trails) and class bytes (EQ 23, cab 26, FX loop 9, IR 15),
+controller rows without the HX's key 13, snapshot matrices defaulting true on the I/O cells,
+empty slots as `{"@position": n}` stubs — and that **POD Go Edit rounds parameter values to three
+decimals in its backups**, so any restore is at the file's precision, not the wire's.
+
+101 of the owner's 135 presets convert. The 34 refusals are honest: 32 IR blocks (the wire stores
+a sixth value whose rule one sample can't pin) and 2 loopers (slot shape unobserved). One more
+wire read of an IR preset would lift the big one. 335 tests.

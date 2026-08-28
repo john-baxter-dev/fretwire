@@ -122,10 +122,12 @@ and 537/627 POD Go symbols where stripping alone got 372.
   guessing. A POD Go owner has replaced the fixed wah slot with a delay via the JSON
   export-edit-reimport route and the device accepted it, which we do not yet understand and should
   not lean on.
-- Nothing about the slot array — it is now fully read (below) — but `hxb-convert` (tone JSON →
-  wire) is still HX-only: its slot arithmetic, block-clearing and node targets are all written
-  against the HX 20-slot topology, and parameterizing them for the POD Go's 12-slot one is real
-  work not yet done. A `.pgb` currently converts to a clean per-preset refusal.
+- **The IR block's sixth stored value.** Beside its five symbol parameters the wire stores one
+  more (`6` beside `Index: 7` in the one sample held) whose rule can't be pinned from a single
+  observation — 0-based mirror of Index? an `irUuidTable` position? Until a second IR preset is
+  seen on the wire, `hxb-convert` refuses IR blocks rather than guess what lands in flash. The
+  looper's slot shape is likewise unobserved (its HX cousin uses its own slot kind). Everything
+  else converts — see "Backups convert" below.
 - **Preset key `12`** (`Array[128]`).
 
 ## The write path is the same too  [solid — 2026-08-26 captures]
@@ -250,7 +252,34 @@ No split or mixer nodes — the chain is one row, structurally. The footswitch l
 (`3 → 8`) is **9 positions**: 0..5 are the stomp switches FS1..FS6, position 8 is the expression
 toe switch (see "The footswitch map"), and positions 6..7 have not been seen carrying anything.
 
+## Backups convert  [solid — 2026-08-28]
+
+`fretwire hxb-convert` turns a `.pgb` into restorable presets, verified against the two presets
+held in **both** forms — the backup's tone JSON and the same unit's own wire stream ("US Deluxe
+Nrm" and "AC30 Ambient"). Converting the tone reproduces the device's preset slot for slot:
+every block, class, parameter value, the footswitch layout with its toe-switch pair, the
+controller table and all four snapshot matrices (`fretwire-data/tests/pgb_to_wire.rs`). Of the
+owner's 135 presets, 101 convert; the 34 refusals are exactly the IR and looper blocks above.
+
+What the POD Go's tones do differently (each reconciled, not assumed):
+
+- No `@path`; slot = `@position + 1`. Empty slots are written as bare `{"@position": n}` stubs
+  where HX Edit omits the entry. The structural entries are `input`/`output`, not `inputA`/…
+- Its **own `@type` vocabulary**: 0 effect/EQ/cab, 1 amp, **2 IR**, **4 looper**, **5 trails**
+  (FX loop, delay, reverb) — against the HX's 5 = IR, 6 = looper, 7 = trails.
+- Its **own class bytes** where the HX disagrees: EQ = 23 (HX: 1 — and 23 is the HX's *synth*),
+  cab = 26 (HX: 31), FX loop = 9 (HX: 1), IR = 15 (HX: 19). Amps (17), plain effects (1) and
+  delay/reverb (8) match. See `pod_go_block_class`.
+- Controller rows stop at key 7 (no HX key 13), and snapshot matrices default **true** on the
+  input/output cells where the HX holds false.
+- **POD Go Edit rounds parameter values to three decimals in the backup** (`"Tone" : 0.270`
+  against the wire's `0.26999998`) — so any restore from a `.pgb`, by anyone, is at that
+  precision. The `.hxb` does not round.
+
 ### Captures that would still help
 
 - **Anything showing add / move / delete from POD Go Edit**, if the editor can do them at all —
   or confirmation that it refuses. This is the one remaining write family.
+- **A wire read of any second IR preset** (`dump-raw` once fretwire is connected, or a capture of
+  POD Go Edit opening one) — two samples of the IR's sixth stored value would pin its rule and
+  lift the one conversion refusal that matters (32 of the owner's presets carry an IR).

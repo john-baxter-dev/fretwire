@@ -1,10 +1,21 @@
-//! Convert HX Edit's **`tone` JSON** into the wire preset the device exchanges.
+//! Convert the editors' **`tone` JSON** into the wire preset the device exchanges.
 //!
 //! A `tone` tree is what an `.hlx` preset file carries and what sits inside every slot of an
-//! `.hxb` device backup ([`crate::hxb`]). It is the *host* side of the same preset the device
-//! streams as integer-keyed MessagePack ([`crate::stream`]) — the same blocks, in a different
-//! encoding: models named by symbol rather than by index, parameters keyed by name rather than
-//! ordered, and structure spelled out as `@path`/`@position` rather than as a slot number.
+//! `.hxb`/`.pgb` device backup ([`crate::hxb`]). It is the *host* side of the same preset the
+//! device streams as integer-keyed MessagePack ([`crate::stream`]) — the same blocks, in a
+//! different encoding: models named by symbol rather than by index, parameters keyed by name
+//! rather than ordered, and structure spelled out as `@path`/`@position` rather than as a slot
+//! number.
+//!
+//! Two chain shapes are supported, told apart by the **donor's own slot array** ([`Chain`]): the
+//! HX 20-slot rows, and the POD Go's single fixed row, whose tones differ in more than geometry —
+//! no `@path` on blocks, plain `input`/`output` names, its own `@type` vocabulary and class bytes
+//! ([`pod_go_block_class`]), empty slots written as bare `{"@position": n}` stubs, and controller
+//! rows without key 13. Each of those was reconciled against the same two-form standard as the
+//! HX mapping below: two presets held as both wire stream and backup tone ("US Deluxe Nrm",
+//! "AC30 Ambient" — `tests/pgb_to_wire.rs`, issue #15, 2026-08-28). One caveat is the source
+//! itself: **POD Go Edit rounds parameter values to three decimals in its backups** (`0.270`
+//! against the wire's `0.26999998`), so a restore is as precise as the file, not the wire.
 //!
 //! Going host → device is what a **restore** needs. Reading a `.hxb` has worked since 2026-07-26
 //! but restoring from one did not, because nothing turned a `tone` object back into a blob.
@@ -120,6 +131,59 @@ impl Node {
     };
 }
 
+/// The donor's chain shape — read off its own group-0 slot array, not assumed from anywhere else.
+/// Everything that turns a `tone` address into a wire slot branches on this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Chain {
+    /// The HX 20-slot topology: input 0, row A 1..=8, output 9, split 10, row B 11..=18,
+    /// mixer 19. Blocks carry `@path`/`@position`.
+    HxRows,
+    /// One fixed row (the POD Go): input 0, blocks 1..=n, output n+1, no split or mixer.
+    /// Blocks carry `@position` only — with a single row, `@path` says nothing and the editor
+    /// leaves it out.
+    SingleRow {
+        /// How many block slots the row holds (10 on a POD Go).
+        blocks: usize,
+    },
+}
+
+impl Chain {
+    /// Classify the donor. 20 slots is the HX layout every prior conversion ran against; anything
+    /// else must literally read as `[input, blocks…, output]` by its own slot kinds (`19`: 0 =
+    /// input, 1 = output, 6/7/8 = effect/looper/empty) or the conversion refuses — a wrong guess
+    /// here writes blocks over structural nodes.
+    /// [SingleRow solid — the POD Go's 12-slot array, issue #15 2026-08-28]
+    fn of(donor: &PresetStream) -> Result<Chain> {
+        let Some(Value::Array(slots)) =
+            map_get(&donor.preset, DSP_GROUP_KEYS[0]).and_then(|g| map_get(g, 22))
+        else {
+            return Err(Error::Stream("the donor has no group-0 slot array".into()));
+        };
+        if slots.len() == 2 * ROW_STRIDE {
+            return Ok(Chain::HxRows);
+        }
+        let kind = |i: usize| {
+            slots
+                .get(i)
+                .and_then(|s| map_get(s, 19))
+                .and_then(Value::as_i64)
+        };
+        let blocks = slots.len().saturating_sub(2);
+        if blocks > 0
+            && kind(0) == Some(0)
+            && kind(slots.len() - 1) == Some(1)
+            && (1..=blocks).all(|i| matches!(kind(i), Some(6..=8)))
+        {
+            return Ok(Chain::SingleRow { blocks });
+        }
+        Err(Error::Stream(format!(
+            "the donor's slot array ({} slots) is neither the HX 20-slot layout nor a plain \
+             input/blocks/output row — refusing to place blocks by guesswork",
+            slots.len()
+        )))
+    }
+}
+
 /// What a conversion carried, and what it did not.
 ///
 /// `not_carried` exists because this conversion is deliberately partial: it is one line per part of
@@ -180,6 +244,41 @@ pub fn block_class(tone_type: i64, symbol: &str, paired_symbol: Option<&str>) ->
     }
 }
 
+/// The POD Go's `@type` + resolved symbol → its wire block class — the same job as
+/// [`block_class`], for a device whose `@type` vocabulary **and** class bytes are both its own.
+///
+/// Every value read off a device-written POD Go preset ("US Deluxe Nrm" and "AC30 Ambient", each
+/// held as both wire stream and backup tone — issue #15, 2026-08-28):
+///
+/// | `@type` | means | class | evidence |
+/// |---:|---|---:|---|
+/// | 0 | plain effect | 1 | wah, volume, comp, two dists, tremolo, chorus |
+/// | 0 + `HD2_EQ_…` | EQ | **23** | `EQ_STATIC_ParametricStereo` (12 params), `…Simple3BandStereo` (5) — the HX writes 1 for its EQs and uses 23 for a synth |
+/// | 0 + `HD2_CabMicIr_…` | cab | **26** | one sample (`CabMicIr_1x12USDeluxe`); the HX writes 31 |
+/// | 1 | amp | 17 | two amps — same as the HX |
+/// | 2 | impulse response | 15 | one sample; **refused** — see below |
+/// | 4 | looper | ? | never seen on a POD Go wire preset — refused |
+/// | 5 + `HD2_FXLoop…` | FX loop | **9** | two samples, `@trails` extra appended |
+/// | 5 | delay / reverb | 8 | four samples, `@trails` extra — the class the HX gives its `@type` 7 |
+///
+/// The IR (`@type` 2) resolves to class 15 but is refused at [`encode_block`]: beside its five
+/// symbol parameters the device stores a sixth value whose rule one sample cannot pin (`6` beside
+/// `Index: 7` — 0-based mirror? table index?), and this blob is written to flash.
+pub fn pod_go_block_class(tone_type: i64, symbol: &str) -> Option<i64> {
+    match tone_type {
+        0 if symbol.starts_with("HD2_CabMicIr_") => Some(26),
+        // A legacy `HD2_Cab…` has never been seen on a POD Go, whose cab engine is the new one.
+        0 if symbol.starts_with("HD2_Cab") => None,
+        0 if symbol.starts_with("HD2_EQ_") => Some(23),
+        0 => Some(1),
+        1 => Some(17),
+        2 => Some(15),
+        5 if symbol.starts_with("HD2_FXLoop") => Some(9),
+        5 => Some(8),
+        _ => None,
+    }
+}
+
 /// A `tone`'s `global.@topologyN` string → the DSP group's split-type integer (preset key `21`).
 ///
 /// The string spells out what the DSP's signal path does: `A` is one path, `S` opens a split, `AB`
@@ -225,6 +324,7 @@ pub fn apply_tone(
     syms: &DeviceSymbols,
 ) -> Result<Conversion> {
     let mut out = Conversion::default();
+    let chain = Chain::of(donor)?;
     for (dsp, &group_key) in DSP_GROUP_KEYS.iter().enumerate() {
         let tone_key = format!("dsp{dsp}");
         let Some(tone_dsp) = tone.get(&tone_key).and_then(Json::as_object) else {
@@ -240,56 +340,66 @@ pub fn apply_tone(
             continue;
         }
 
-        clear_blocks(donor, group_key);
+        clear_blocks(donor, group_key, chain);
         for (name, block) in tone_dsp {
             if !name.starts_with("block") {
                 continue;
             }
-            let index = slot_index(block).ok_or_else(|| {
-                Error::Stream(if block.get("@path").is_none() {
-                    // A POD Go tone: its fixed chain is one row, so the blocks carry no `@path`
-                    // — and the slot arithmetic *around* this lookup (rows 1..=8 and 11..=18,
-                    // structural nodes at 9/10/19) is the HX topology, which that pedal does not
-                    // have. Refuse with the real reason rather than half-convert.
+            // POD Go Edit writes an **empty** slot as a bare `{"@position": n}` stub (28 of the
+            // owner's 135 presets hold one); HX Edit just omits the entry. The slot is already
+            // cleared, so there is nothing to place.
+            if chain != Chain::HxRows && block.get("@model").is_none() {
+                continue;
+            }
+            let index = slot_index(block, chain).ok_or_else(|| {
+                Error::Stream(if chain == Chain::HxRows && block.get("@path").is_none() {
+                    // A single-row (POD Go) tone against an HX donor — different device
+                    // families. The CLI's device check catches the labelled case; this
+                    // catches an unlabelled one.
                     format!(
-                        "{tone_key}.{name}: a fixed-chain tone (no @path — POD Go) — \
-                         conversion is only mapped for the HX row geometry"
+                        "{tone_key}.{name}: a fixed-chain tone (no @path) cannot be placed \
+                             on this donor's HX row geometry — the donor must come from the \
+                             same device family as the backup"
                     )
                 } else {
-                    format!("{tone_key}.{name}: no usable @path/@position")
+                    format!("{tone_key}.{name}: no usable @path/@position for this chain")
                 })
             })?;
-            let encoded = encode_block(block, tone_dsp, syms)
+            let encoded = encode_block(block, tone_dsp, syms, chain)
                 .map_err(|e| Error::Stream(format!("{tone_key}.{name}: {e}")))?;
             write_slot(donor, group_key, index, encoded)?;
             out.blocks += 1;
         }
 
-        let topology = dsp_topology(tone, dsp);
-        apply_node(
-            donor,
-            group_key,
-            tone_dsp,
-            Node::SPLIT,
-            topology,
-            syms,
-            &mut out,
-        );
-        apply_node(
-            donor,
-            group_key,
-            tone_dsp,
-            Node::MIXER,
-            topology,
-            syms,
-            &mut out,
-        );
-        apply_topology(donor, group_key, topology, dsp, &mut out);
+        // A single-row chain has no split or mixer, and the HX node indices (10, 19) point at
+        // its blocks — so the nodes and the topology string are HX-only ground.
+        if chain == Chain::HxRows {
+            let topology = dsp_topology(tone, dsp);
+            apply_node(
+                donor,
+                group_key,
+                tone_dsp,
+                Node::SPLIT,
+                topology,
+                syms,
+                &mut out,
+            );
+            apply_node(
+                donor,
+                group_key,
+                tone_dsp,
+                Node::MIXER,
+                topology,
+                syms,
+                &mut out,
+            );
+            apply_topology(donor, group_key, topology, dsp, &mut out);
+        }
     }
 
-    let (placed, controller_switch_rows) = apply_controllers(donor, tone, syms, &mut out);
-    apply_snapshots(donor, tone, &placed, &mut out);
-    apply_footswitches(donor, tone, controller_switch_rows, &mut out);
+    let (placed, controller_switch_rows) = apply_controllers(donor, tone, syms, chain, &mut out);
+    apply_snapshots(donor, tone, &placed, chain, &mut out);
+    apply_footswitches(donor, tone, controller_switch_rows, chain, &mut out);
     note_omissions(tone, &mut out);
     Ok(out)
 }
@@ -328,9 +438,10 @@ fn apply_footswitches(
     donor: &mut PresetStream,
     tone: &JsonMap<String, Json>,
     controller_rows: Vec<(usize, bool, Value)>,
+    chain: Chain,
     out: &mut Conversion,
 ) {
-    let placement = block_placement(tone);
+    let placement = block_placement(tone, chain);
     let slot_of = |dsp: usize, name: &str| {
         placement
             .iter()
@@ -540,6 +651,7 @@ fn apply_controllers(
     donor: &mut PresetStream,
     tone: &JsonMap<String, Json>,
     syms: &DeviceSymbols,
+    chain: Chain,
     out: &mut Conversion,
 ) -> (Vec<PlacedController>, Vec<(usize, bool, Value)>) {
     let table_len = match map_get_mut(&mut donor.preset, 4) {
@@ -604,7 +716,7 @@ fn apply_controllers(
                     continue;
                 }
                 let on_switch = ordinal > switch_offset && ordinal < midi_ordinal;
-                match controller_row(target, param, spec, ordinal, dsp, tone_dsp, syms) {
+                match controller_row(target, param, spec, ordinal, dsp, tone_dsp, syms, chain) {
                     Ok(row) => {
                         // The layout half of a switch-sourced binding, at the switch the ordinal
                         // names. The slot is the row's own (key 5).
@@ -686,6 +798,7 @@ fn apply_controllers(
 }
 
 /// The inner map of one key-4 row (its key `1`), or why it cannot be built.
+#[allow(clippy::too_many_arguments)] // one row needs exactly this much context to build
 fn controller_row(
     target: &str,
     param: &str,
@@ -694,15 +807,18 @@ fn controller_row(
     dsp: usize,
     tone_dsp: &JsonMap<String, Json>,
     syms: &DeviceSymbols,
+    chain: Chain,
 ) -> std::result::Result<Value, String> {
-    let index = match target {
-        "split" => Node::SPLIT.index,
-        "join" => Node::MIXER.index,
-        "inputA" => 0,
-        "outputA" => 9,
-        t if t.starts_with("block") => tone_dsp
+    let index = match (chain, target) {
+        (Chain::HxRows, "split") => Node::SPLIT.index,
+        (Chain::HxRows, "join") => Node::MIXER.index,
+        (Chain::HxRows, "inputA") => 0,
+        (Chain::HxRows, "outputA") => 9,
+        (Chain::SingleRow { .. }, "input") => 0,
+        (Chain::SingleRow { blocks }, "output") => blocks + 1,
+        (_, t) if t.starts_with("block") => tone_dsp
             .get(t)
-            .and_then(slot_index)
+            .and_then(|b| slot_index(b, chain))
             .ok_or("its target block has no usable @path/@position")?,
         _ => {
             return Err(
@@ -724,7 +840,7 @@ fn controller_row(
         .iter()
         .position(|p| fold_param_name(p) == want)
         .ok_or_else(|| format!("{param:?} is not a parameter of {model}"))?;
-    Ok(Value::Map(vec![
+    let mut row = vec![
         (Value::from(0), Value::from(ordinal)),
         (Value::from(1), Value::from(4)),
         (
@@ -746,11 +862,16 @@ fn controller_row(
             ]),
         ),
         (Value::from(7), Value::from(0)),
-        (
+    ];
+    // Key 13 (`@snapshot_disable`) is an HX-generation field: the POD Go's own rows stop at
+    // key 7 — both EXP rows of the oracle preset lack it. [solid — 2026-08-28, issue #15]
+    if chain == Chain::HxRows {
+        row.push((
             Value::from(13),
             json_to_msgpack(spec.get("@snapshot_disable").unwrap_or(&Json::Bool(false))),
-        ),
-    ]))
+        ));
+    }
+    Ok(Value::Map(row))
 }
 
 /// Preset key `10` — the snapshots.
@@ -784,9 +905,10 @@ fn apply_snapshots(
     donor: &mut PresetStream,
     tone: &JsonMap<String, Json>,
     placed: &[PlacedController],
+    chain: Chain,
     out: &mut Conversion,
 ) {
-    let placement = block_placement(tone);
+    let placement = block_placement(tone, chain);
     let Some(group) = map_get_mut(&mut donor.preset, 10) else {
         return;
     };
@@ -827,7 +949,7 @@ fn apply_snapshots(
             Some(Value::Array(a)) => a.len(),
             _ => continue,
         };
-        set_map_key(snapshot, 3, bypass_matrix(from, &placement, width));
+        set_map_key(snapshot, 3, bypass_matrix(from, &placement, width, chain));
 
         // Key 2 — one row per assignment place; sentinel [false, len, nil] where nothing is.
         let len2 = match map_get(snapshot, 2) {
@@ -871,19 +993,23 @@ fn apply_snapshots(
 ///
 /// The structural nodes are in here too: a snapshot can bypass the split, and the `tone` names it
 /// `split` alongside the blocks.
-fn block_placement(tone: &JsonMap<String, Json>) -> Vec<((usize, String), usize)> {
+fn block_placement(tone: &JsonMap<String, Json>, chain: Chain) -> Vec<((usize, String), usize)> {
     let mut out = Vec::new();
     for dsp in 0..DSP_GROUP_KEYS.len() {
         let Some(tone_dsp) = tone.get(&format!("dsp{dsp}")).and_then(Json::as_object) else {
             continue;
         };
         for (name, block) in tone_dsp {
-            let index = match name.as_str() {
-                "split" => Some(Node::SPLIT.index),
-                "join" => Some(Node::MIXER.index),
-                "inputA" => Some(0),
-                "outputA" => Some(9),
-                n if n.starts_with("block") => slot_index(block),
+            // The structural names differ with the chain: the HX writes `inputA`/`outputA` (and
+            // has split/join); the single-row POD Go writes plain `input`/`output`.
+            let index = match (chain, name.as_str()) {
+                (Chain::HxRows, "split") => Some(Node::SPLIT.index),
+                (Chain::HxRows, "join") => Some(Node::MIXER.index),
+                (Chain::HxRows, "inputA") => Some(0),
+                (Chain::HxRows, "outputA") => Some(9),
+                (Chain::SingleRow { .. }, "input") => Some(0),
+                (Chain::SingleRow { blocks }, "output") => Some(blocks + 1),
+                (_, n) if n.starts_with("block") => slot_index(block, chain),
                 _ => None,
             };
             if let Some(index) = index {
@@ -900,10 +1026,21 @@ fn block_placement(tone: &JsonMap<String, Json>) -> Vec<((usize, String), usize)
 /// an empty slot — except the input, output and mixer slots of each DSP, which are always `false`.
 /// The first element of each pair is `false` throughout on every snapshot of every fixture we hold
 /// and discriminates nothing.
-fn bypass_matrix(snapshot: &Json, placement: &[((usize, String), usize)], width: usize) -> Value {
+fn bypass_matrix(
+    snapshot: &Json,
+    placement: &[((usize, String), usize)],
+    width: usize,
+    chain: Chain,
+) -> Value {
     let stride = DSP_SLOT_STRIDE as usize;
     let mut enabled: Vec<bool> = (0..width)
-        .map(|slot| !matches!(slot % stride, 0 | 9 | 19))
+        .map(|slot| match chain {
+            Chain::HxRows => !matches!(slot % stride, 0 | 9 | 19),
+            // Unlike the HX, the POD Go's matrix holds **true** on its input and output cells
+            // too — every cell of every snapshot the tone doesn't override. [solid — all four
+            // snapshots of the oracle preset, issue #15 2026-08-28]
+            Chain::SingleRow { .. } => true,
+        })
         .collect();
     for ((dsp, name), slot) in placement {
         let Some(state) = snapshot
@@ -927,7 +1064,7 @@ fn bypass_matrix(snapshot: &Json, placement: &[((usize, String), usize)], width:
 }
 
 /// Empty every draggable slot of one DSP, so a donor block never survives into the result.
-fn clear_blocks(donor: &mut PresetStream, group_key: i64) {
+fn clear_blocks(donor: &mut PresetStream, group_key: i64, chain: Chain) {
     let Some(group) = map_get_mut(&mut donor.preset, group_key) else {
         return;
     };
@@ -935,7 +1072,10 @@ fn clear_blocks(donor: &mut PresetStream, group_key: i64) {
         return;
     };
     for (i, slot) in slots.iter_mut().enumerate() {
-        let is_block_slot = matches!(i % ROW_STRIDE, 1..=ROW_WIDTH) && i < 2 * ROW_STRIDE;
+        let is_block_slot = match chain {
+            Chain::HxRows => matches!(i % ROW_STRIDE, 1..=ROW_WIDTH) && i < 2 * ROW_STRIDE,
+            Chain::SingleRow { blocks } => (1..=blocks).contains(&i),
+        };
         if !is_block_slot {
             continue; // input, output, split and mixer nodes are not ours to clear
         }
@@ -944,11 +1084,27 @@ fn clear_blocks(donor: &mut PresetStream, group_key: i64) {
     }
 }
 
-/// `@path × 10 + @position + 1` — a `tone` block's slot in its DSP's 20-slot array.
-fn slot_index(block: &Json) -> Option<usize> {
-    let path = block.get("@path")?.as_i64()? as usize;
+/// A `tone` block's slot in its DSP's slot array.
+///
+/// On the HX rows that is `@path × 10 + @position + 1`; on a single-row chain the editor writes
+/// no `@path` (one row makes it meaningless) and the slot is `@position + 1`. The bounds are the
+/// chain's own: a pathless block against an HX donor is `None` — that tone is from the other
+/// device family, and mapping it positionally would land position 8 on the HX's output node.
+fn slot_index(block: &Json, chain: Chain) -> Option<usize> {
     let position = block.get("@position")?.as_i64()? as usize;
-    (path < 2 && position < ROW_WIDTH).then_some(path * ROW_STRIDE + position + 1)
+    match chain {
+        Chain::HxRows => {
+            let path = block.get("@path")?.as_i64()? as usize;
+            (path < 2 && position < ROW_WIDTH).then_some(path * ROW_STRIDE + position + 1)
+        }
+        Chain::SingleRow { blocks } => {
+            // Tolerate an explicit `@path: 0`; anything else names a row this chain doesn't have.
+            if block.get("@path").is_some_and(|p| p.as_i64() != Some(0)) {
+                return None;
+            }
+            (position < blocks).then_some(position + 1)
+        }
+    }
 }
 
 /// Build one `type 6` effect slot from a `tone` block.
@@ -960,14 +1116,31 @@ fn encode_block(
     block: &Json,
     siblings: &JsonMap<String, Json>,
     syms: &DeviceSymbols,
+    chain: Chain,
 ) -> Result<Value> {
     let model = block
         .get("@model")
         .and_then(Json::as_str)
         .ok_or_else(|| Error::Stream("no @model".into()))?;
     let tone_type = block.get("@type").and_then(Json::as_i64).unwrap_or(0);
-    if tone_type == 6 {
+    if chain == Chain::HxRows && tone_type == 6 {
         return encode_looper(block, model, syms);
+    }
+    if chain != Chain::HxRows {
+        // The POD Go numbers its types differently: 4 is its looper, 2 its impulse response.
+        // Neither has been seen on a POD Go wire preset in a form we can reproduce — the looper
+        // not at all, the IR with a sixth stored value whose rule one sample cannot pin — and
+        // this blob is written to flash, so both are refusals, not guesses.
+        if tone_type == 4 {
+            return Err(Error::Stream(format!(
+                "{model} is a looper (@type 4) and no POD Go wire preset we hold contains one —                  its slot shape is unknown"
+            )));
+        }
+        if tone_type == 2 {
+            return Err(Error::Stream(format!(
+                "{model} is an impulse response (@type 2) — the device stores a sixth value                  beyond its five parameters whose rule one sample cannot pin, so converting it                  would mean guessing what lands in flash"
+            )));
+        }
     }
 
     let (index, symbol, params) = resolve_symbol(model, block, syms)?;
@@ -976,6 +1149,13 @@ fn encode_block(
     // The paired model, where the type carries one. `@cab` on a type this has never been seen on
     // stays a refusal: the pairing classes were measured per type, not assumed transferable.
     let cab_ref = block.get("@cab").and_then(Json::as_str);
+    if chain != Chain::HxRows && cab_ref.is_some() {
+        // The POD Go keeps its amp and cab as separate chain blocks; no tone of its family
+        // carries a sibling reference, so one arriving here is a shape the device never wrote.
+        return Err(Error::Stream(format!(
+            "{model} carries a cab sibling — no POD Go preset pairs blocks"
+        )));
+    }
     let paired = match (tone_type, cab_ref) {
         (3 | 4, Some(name)) => {
             let sibling = siblings.get(name).ok_or_else(|| {
@@ -1010,11 +1190,14 @@ fn encode_block(
         (_, None) => None,
     };
 
-    let class = block_class(
-        tone_type,
-        &symbol,
-        paired.as_ref().map(|(_, s, ..)| s.as_str()),
-    )
+    let class = match chain {
+        Chain::HxRows => block_class(
+            tone_type,
+            &symbol,
+            paired.as_ref().map(|(_, s, ..)| s.as_str()),
+        ),
+        Chain::SingleRow { .. } => pod_go_block_class(tone_type, &symbol),
+    }
     .ok_or_else(|| {
         Error::Stream(format!(
             "{model} is a @type {tone_type} block and no device-written preset we hold contains \
@@ -1062,7 +1245,7 @@ fn encode_block(
             param_bank(values.len() as i64, symbol_count, values),
         ),
     ];
-    if tone_type == 5 {
+    if chain == Chain::HxRows && tone_type == 5 {
         // An IR block has no second bank at all; in its place the content carries key 27, the
         // referenced IR's UUID, NUL-terminated — the tone's `@uuid`, and how the device re-matches
         // the IR by content when slots have moved. A dual IR concatenates its two UUIDs into the
@@ -1416,7 +1599,12 @@ mod tests {
 
     #[test]
     fn slot_index_is_row_times_ten_plus_column() {
-        let at = |path, pos| slot_index(&serde_json::json!({ "@path": path, "@position": pos }));
+        let at = |path, pos| {
+            slot_index(
+                &serde_json::json!({ "@path": path, "@position": pos }),
+                Chain::HxRows,
+            )
+        };
         // Row A occupies 1..=8, row B 11..=18 — the layout `dsp_grid` draws.
         assert_eq!(at(0, 0), Some(1));
         assert_eq!(at(0, 7), Some(8));
@@ -1425,6 +1613,26 @@ mod tests {
         // Past the end of a row would land on the output or mixer node.
         assert_eq!(at(0, 8), None);
         assert_eq!(at(2, 0), None);
+    }
+
+    #[test]
+    fn slot_index_on_a_single_row_is_position_plus_one() {
+        let row = Chain::SingleRow { blocks: 10 };
+        let at = |pos| slot_index(&serde_json::json!({ "@position": pos }), row);
+        assert_eq!(at(0), Some(1));
+        assert_eq!(at(9), Some(10));
+        // Position 10 would land on the output node.
+        assert_eq!(at(10), None);
+        // A pathless block cannot be placed on the HX rows — that tone is from the other family.
+        assert_eq!(
+            slot_index(&serde_json::json!({ "@position": 0 }), Chain::HxRows),
+            None
+        );
+        // And a row the single-row chain doesn't have is refused, not wrapped.
+        assert_eq!(
+            slot_index(&serde_json::json!({ "@path": 1, "@position": 0 }), row),
+            None
+        );
     }
 
     #[test]

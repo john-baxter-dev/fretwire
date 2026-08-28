@@ -43,7 +43,7 @@ enum Row {
     Series,
 }
 
-/// Independent Linux editor for the Line 6 HX Stomp / Helix Floor.
+/// Independent Linux editor for the Line 6 HX Stomp / Helix Floor / POD Go.
 ///
 /// Offline commands work anywhere; **live** commands need the pedal on USB (see `install-udev`
 /// if they fail with a permissions error). Commands marked ⚠ write to the device's flash.

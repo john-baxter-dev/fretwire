@@ -12,7 +12,9 @@ event's name and JSON payload defined once in `fretwire_commands::events::Event`
 transport cannot drift from what `App.svelte` expects. Behavior-identical by construction — the
 heartbeat moved byte-for-byte (its lock/emit ordering and `LOST_AFTER_BEATS` logic are
 load-bearing), and the wrappers keep the exact signatures so Tauri derives the same camelCase wire
-argument names. Verified offline (build + full suite); live smoke test pending.
+argument names. Verified offline (build + full suite + UI tests) and live on the HX Stomp
+(2026-09-01): connect, edits, and pedal-side footswitch bypass following in the GUI — the
+`device-pushes` path through the new sink.
 
 ## GUI direction change (2026-07-05): migrating to Tauri
 The iced GUI is capped by its renderer: it's on tiny-skia (wgpu is ruled out by EGL/dmabuf driver

@@ -676,9 +676,11 @@ transport seam with two implementations behind it (Tauri, and the browser mock),
 runs in a plain remote browser via `npm run dev`, and of 61 commands only 2 touch `AppHandle`,
 for 3 event names total.
 
-- [ ] Lift `commands.rs` + `dto.rs` out of `fretwire-tauri` into a transport-neutral crate;
-      `fretwire-tauri` keeps 61 one-line `#[tauri::command]` wrappers. Mechanical, but it is the
-      bulk of the diff. `spawn_heartbeat` needs an event sink in place of its `AppHandle`.
+- [x] Lift `commands.rs` + `dto.rs` out of `fretwire-tauri` into a transport-neutral crate — DONE
+      (2026-08-31): **`fretwire-commands`**, in `default-members` so the offline suite covers it.
+      `fretwire-tauri` keeps 65 one-line `#[tauri::command]` wrappers (the surface had grown from
+      61) plus a `TauriSink`; `spawn_heartbeat` and `export_setlists` take an
+      `events::EventSink`, and each event's name + JSON payload live once in `events::Event`.
 - [ ] `fretwire-serve`: static `dist/` + `POST /invoke/<command>` + a WebSocket for
       `device-pushes` / `device-lost` / `backup-progress`. Separate crate, out of `default-members`
       like `fretwire-tauri`, so a built frontend never becomes a prerequisite for `cargo build`.

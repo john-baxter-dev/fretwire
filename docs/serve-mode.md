@@ -1,7 +1,8 @@
 # Serve mode — the editor over HTTP, for headless machines
 
-Status: **planned, not started** (opened 2026-08-23). No code yet. This doc is the survey that
-should stop the next person re-deriving it.
+Status: **the §1 lift is done** (2026-08-31) — the command layer now lives in the
+transport-neutral `fretwire-commands` crate (see below); the server itself is not started.
+Opened 2026-08-23; this doc is the survey that should stop the next person re-deriving it.
 
 It covers **two** requested features, because they turn out to rest on the same refactor: serving
 the editor over HTTP to a headless machine, and exposing it over MCP to an LLM client. The lift
@@ -69,20 +70,24 @@ The entire event surface is three names, all consumed in `App.svelte`:
 
 ## The work
 
-### 1. Lift the command layer out of `fretwire-tauri`
+### 1. Lift the command layer out of `fretwire-tauri` — DONE (2026-08-31)
 
-Move `commands.rs` + `dto.rs` into a transport-neutral crate. `fretwire-tauri` keeps 61 one-line
+Moved `commands.rs` + `dto.rs` into the transport-neutral **`fretwire-commands`** crate (a
+`default-members` member, so the offline suite covers it). `fretwire-tauri` keeps one-line
 `#[tauri::command]` wrappers over it; the server becomes a second consumer of the same layer — and
-an MCP server would be a third, which is the strongest argument for doing this lift at all.
+an MCP server would be a third, which was the strongest argument for doing this lift at all.
 
-This is the bulk of the diff and almost all of it is mechanical. The two non-mechanical parts:
+By the time it landed the surface had grown to **65** commands (the counts below were measured at
+61). As predicted, almost all of it was mechanical. The two non-mechanical parts, as built:
 
-- `AppState` holds `Arc<Mutex<Option<Session>>>` plus the clipboards and the `cancel_export`
-  flag. That struct moves as-is; only its *owner* changes.
-- `spawn_heartbeat(app: tauri::AppHandle, ...)` takes the `AppHandle` purely to emit. It needs the
-  event sink instead. Keep its behaviour exactly — the `LOST_AFTER_BEATS` giving-up logic and the
-  poll-under-lock-then-release-before-emitting ordering both exist for reasons recorded in its
-  doc comment, and a server has the same failure mode.
+- `AppState` (the `Arc<Mutex<Option<Session>>>`, the clipboards, the `cancel_export` flag) moved
+  as-is; only its owner changed.
+- The event sink is `fretwire_commands::events::EventSink`, taken as a parameter by
+  `spawn_heartbeat` and `export_setlists` (the only two producers). Each event's wire name and
+  JSON payload are defined once, in `events::Event`, so transports cannot drift; `fretwire-tauri`
+  adapts it with a `TauriSink(AppHandle)` newtype. The heartbeat's behaviour is unchanged — the
+  `LOST_AFTER_BEATS` giving-up logic and the poll-under-lock-then-release-before-emitting ordering
+  both exist for reasons recorded in its doc comment, and a server has the same failure mode.
 
 ### 2. A `fretwire-serve` binary
 
@@ -99,12 +104,16 @@ static binary: `scp` it to the Pi and run it. No WebKitGTK, no Tauri, none of th
 ### 3. The file-picker problem — the only real design work
 
 `ipc.js` exposes `pickPath()`, which opens a **native** dialog (Tauri) or prompts for a typed path
-(mock). Over a network neither is right: the paths that matter are on the *server*, and three
-flows depend on them.
+(mock). Over a network neither is right: the paths that matter are on the *server*. Three call
+sites (verified 2026-08-31):
 
-- first-run data import — locating an HX Edit installer or `res` folder
-- backup export / restore
-- IR export
+- first-run data import — locating an HX Edit installer or `res` folder (`FirstRun.svelte`)
+- IR upload — opening a `.wav` (`IrPanel.svelte`)
+- IR export — the only `save: true` caller (`IrPanel.svelte`)
+
+Backup export/restore do **not** go through `pickPath`: they are already typed paths in in-app
+dialogs, resolved on the Rust side by `backup_path()` (`~/` lands in `$HOME`) — which is exactly
+the "server-side path" model, and arguably what the directory browser should replace everywhere.
 
 Needs a small server-side directory browser. Typing absolute paths blind is a bad first-run
 experience and first run is exactly when a new user is least able to guess what to type.

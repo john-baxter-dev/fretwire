@@ -942,6 +942,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fretwire-commands"
+version = "0.4.0"
+dependencies = [
+ "fretwire-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "fretwire-core"
 version = "0.4.0"
 dependencies = [
@@ -977,9 +988,8 @@ dependencies = [
 name = "fretwire-tauri"
 version = "0.4.0"
 dependencies = [
+ "fretwire-commands",
  "fretwire-core",
- "serde",
- "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

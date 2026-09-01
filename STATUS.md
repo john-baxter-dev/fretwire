@@ -2,6 +2,18 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Command layer lifted out of fretwire-tauri (2026-08-31).** The whole command surface —
+`AppState`, the 65 command bodies, the DTOs and the keepalive heartbeat — now lives in the new
+transport-neutral **`fretwire-commands`** crate (in `default-members`, so the offline suite covers
+it), the first step of serve mode (`docs/serve-mode.md`, ROADMAP Phase 10). `fretwire-tauri` keeps
+65 one-line `#[tauri::command]` wrappers plus a `TauriSink` newtype; the three events
+(`device-pushes` / `device-lost` / `backup-progress`) go through an `EventSink` trait, with each
+event's name and JSON payload defined once in `fretwire_commands::events::Event` so a second
+transport cannot drift from what `App.svelte` expects. Behavior-identical by construction — the
+heartbeat moved byte-for-byte (its lock/emit ordering and `LOST_AFTER_BEATS` logic are
+load-bearing), and the wrappers keep the exact signatures so Tauri derives the same camelCase wire
+argument names. Verified offline (build + full suite); live smoke test pending.
+
 ## GUI direction change (2026-07-05): migrating to Tauri
 The iced GUI is capped by its renderer: it's on tiny-skia (wgpu is ruled out by EGL/dmabuf driver
 issues here) and tiny-skia **can't stroke paths**, so the routing UI can't draw wires/branches. A

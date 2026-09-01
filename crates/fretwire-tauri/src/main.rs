@@ -2,12 +2,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 //! fretwire — Tauri (WebKitGTK webview) front end over the `fretwire-core`
-//! stack. The Rust core (protocol/transport/preset decode/`Session`/`Catalog`) is reused unchanged;
-//! this crate adds the `#[command]` surface (see [`commands`]) and the serde wire types ([`dto`]).
-//! The live session lives in Tauri-managed [`commands::AppState`]. Run: `cargo run -p fretwire-tauri`.
+//! stack. The command bodies and serde wire types live in the transport-neutral
+//! `fretwire-commands` crate; this crate binds them to Tauri (see [`commands`]) and owns the
+//! window. The live session lives in Tauri-managed [`commands::AppState`].
+//! Run: `cargo run -p fretwire-tauri`.
 
 mod commands;
-mod dto;
 
 use tauri::Manager;
 

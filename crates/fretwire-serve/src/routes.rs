@@ -31,9 +31,55 @@ pub struct Served {
     /// second concurrent browser is refused rather than silently sharing them
     /// (`docs/serve-mode.md`, open questions). Released when that socket closes, so a page
     /// refresh reclaims it.
-    lease: Mutex<Option<String>>,
+    lease: Mutex<Lease>,
     /// `index.html` with the transport marker injected, prepared once at startup.
     index: String,
+}
+
+/// How long the daemon may sit with no editor connected before it closes the device session,
+/// returning the pedal to standalone. Long enough that a refresh, a Wi-Fi blip, or a short
+/// laptop sleep never costs the undo history (the session survives those); short enough that a
+/// closed tab doesn't leave the USB interface claimed all night — an unclean host shutdown with
+/// a session open is the one state that leaves the pedal needing a power cycle.
+const IDLE_CLOSE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// The lease with a generation counter, bumped on every claim *and* release — so an idle-close
+/// timer armed at one release can tell whether anything happened since, and a stale timer never
+/// closes a session an editor came back to.
+#[derive(Default)]
+struct Lease {
+    holder: Option<String>,
+    generation: u64,
+}
+
+impl Lease {
+    /// Claim for `client`; false if another client holds it. Re-claiming one's own is fine
+    /// (a reconnect after a network blip).
+    fn claim(&mut self, client: &str) -> bool {
+        match self.holder.as_deref() {
+            Some(held) if held != client => false,
+            _ => {
+                self.holder = Some(client.to_string());
+                self.generation += 1;
+                true
+            }
+        }
+    }
+
+    /// Release if `client` still holds it, returning the generation to arm an idle timer with.
+    fn release(&mut self, client: &str) -> Option<u64> {
+        if self.holder.as_deref() != Some(client) {
+            return None;
+        }
+        self.holder = None;
+        self.generation += 1;
+        Some(self.generation)
+    }
+
+    /// Whether nothing has happened since the timer was armed at `generation`.
+    fn still_idle(&self, generation: u64) -> bool {
+        self.holder.is_none() && self.generation == generation
+    }
 }
 
 impl Served {
@@ -54,7 +100,7 @@ impl Served {
         Self {
             app,
             events,
-            lease: Mutex::new(None),
+            lease: Mutex::new(Lease::default()),
             index,
         }
     }
@@ -135,7 +181,7 @@ async fn invoke(
         .unwrap_or("");
     {
         let lease = srv.lease.lock().expect("lease lock");
-        if let Some(held) = lease.as_deref()
+        if let Some(held) = lease.holder.as_deref()
             && held != client
         {
             return (StatusCode::CONFLICT, "another editor is connected").into_response();
@@ -168,16 +214,7 @@ async fn events(
 }
 
 async fn event_socket(srv: Arc<Served>, client: String, mut socket: WebSocket) {
-    let claimed = {
-        let mut lease = srv.lease.lock().expect("lease lock");
-        match lease.as_deref() {
-            Some(held) if held != client => false,
-            _ => {
-                *lease = Some(client.clone());
-                true
-            }
-        }
-    };
+    let claimed = srv.lease.lock().expect("lease lock").claim(&client);
     if !claimed {
         // Accept-then-close so the browser sees the code; a refused upgrade would be
         // indistinguishable from the server being down.
@@ -212,11 +249,37 @@ async fn event_socket(srv: Arc<Served>, client: String, mut socket: WebSocket) {
         }
     }
 
-    let mut lease = srv.lease.lock().expect("lease lock");
-    if lease.as_deref() == Some(client.as_str()) {
-        *lease = None;
+    let armed = srv.lease.lock().expect("lease lock").release(&client);
+    if let Some(generation) = armed {
         tracing::info!("editor disconnected");
+        spawn_idle_close(srv, generation);
     }
+}
+
+/// Arm the idle close: if no editor has held the lease for [`IDLE_CLOSE`] after this release,
+/// tear the session down cleanly so the pedal returns to standalone. The generation check under
+/// the lease lock makes a stale timer a no-op — any claim since (even a claim-and-release, which
+/// armed its own fresher timer) bumps it.
+fn spawn_idle_close(srv: Arc<Served>, generation: u64) {
+    tokio::spawn(async move {
+        tokio::time::sleep(IDLE_CLOSE).await;
+        let taken = {
+            let lease = srv.lease.lock().expect("lease lock");
+            if !lease.still_idle(generation) {
+                return;
+            }
+            // Taken under the lease lock so a claim can't slip in between the check and the
+            // take. (Invokes lock lease then session sequentially, never nested — no deadlock.)
+            srv.app.session.lock().ok().and_then(|mut g| g.take())
+        };
+        if let Some(mut session) = taken {
+            tracing::info!(
+                "no editor for {} min — closing the device session; the pedal is standalone again",
+                IDLE_CLOSE.as_secs() / 60
+            );
+            let _ = tokio::task::spawn_blocking(move || session.close()).await;
+        }
+    });
 }
 
 /// The Origin/Host check, on for every non-static request regardless of bind address: a local
@@ -257,7 +320,34 @@ fn host_is_loopback(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::host_is_loopback;
+    use super::{Lease, host_is_loopback};
+
+    /// The idle-close arming rules: a stale timer must see any claim since its release — even a
+    /// claim-and-release pair, which armed its own fresher timer.
+    #[test]
+    fn a_stale_idle_timer_is_a_no_op() {
+        let mut lease = Lease::default();
+        assert!(lease.claim("a"));
+        assert!(!lease.claim("b"), "second editor refused");
+        assert!(
+            lease.claim("a"),
+            "reclaiming one's own is a reconnect, not a conflict"
+        );
+        assert_eq!(lease.release("b"), None, "only the holder releases");
+        let armed = lease.release("a").expect("holder releases");
+        assert!(
+            lease.still_idle(armed),
+            "nothing happened yet — timer may fire"
+        );
+        assert!(lease.claim("b"), "released lease is claimable");
+        assert!(!lease.still_idle(armed), "a claim disarms the old timer");
+        let rearmed = lease.release("b").expect("holder releases");
+        assert!(
+            !lease.still_idle(armed),
+            "the fresher timer owns this idle span"
+        );
+        assert!(lease.still_idle(rearmed));
+    }
 
     #[test]
     fn loopback_hosts_pass() {

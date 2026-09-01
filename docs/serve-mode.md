@@ -111,6 +111,12 @@ Built as surveyed, axum + rust-embed:
   serve, and the `npm run dev` mock
 - clean teardown on SIGINT/SIGTERM (the session close the GUI does on exit), and the heartbeat
   spawned at startup exactly as the GUI's setup hook does
+- an **idle close** (added 2026-09-01): the session survives editor disconnects — a refresh or a
+  Wi-Fi blip must not cost the undo history — but after 5 minutes with no lease holder the daemon
+  closes it cleanly, so a closed tab doesn't leave the USB interface claimed all night (an
+  unclean host shutdown with a session open is the state that leaves the pedal needing a power
+  cycle). Guarded by a lease generation counter so a stale timer never closes a session an
+  editor came back to.
 
 It is a separate crate, out of `default-members`, exactly as `fretwire-tauri` is — a built
 frontend must never become a prerequisite for `cargo build` (see the `default-members` comment in

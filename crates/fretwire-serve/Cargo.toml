@@ -16,7 +16,7 @@ path = "src/main.rs"
 fretwire-commands = { path = "../fretwire-commands" }
 fretwire-core = { path = "../fretwire-core" }
 axum = { version = "0.8", features = ["ws"] }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "time"] }
 # Embeds dist/ in release builds (single binary to scp onto a Pi); reads it from disk in debug.
 rust-embed = "8"
 serde = { workspace = true }

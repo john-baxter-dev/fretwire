@@ -688,10 +688,12 @@ for 3 event names total.
       HTTP 409; released on disconnect). Out of `default-members` like `fretwire-tauri`. The UI's
       `ipc.js` picked up the third transport (`serve.js`), selected by a marker the daemon injects
       into `index.html` — the same dist runs under Tauri, serve, and the mock.
-- [ ] **The file picker.** `pickPath()` under serve is a typed *server-side* path prompt for now
-      (the model the backup dialogs already use). The server-side directory browser — the only
-      piece that is design rather than plumbing — is still open. Three call sites: first-run
-      import, IR upload, IR export (backup/restore never used `pickPath`; verified 2026-08-31).
+- [ ] **The file picker / client-side files.** `pickPath()` under serve is a typed *server-side*
+      path prompt for now. Direction settled 2026-09-01 (see `docs/serve-mode.md` §3): move IRs
+      (KB-sized) and backup restore to **client-side bytes** (browser upload/download) with
+      byte-taking command variants; keep data import server-side permanently (`fretwire
+      import-data` over SSH — the installer is ~1 GB). The server-side directory browser then
+      shrinks to a nice-to-have for the remaining server-path cases.
 - [ ] **Auth for non-loopback** — partially done 2026-09-01: binds `127.0.0.1` and **refuses** a
       non-loopback `--bind` (SSH tunnel is the supported remote path), and the `Host`/`Origin`
       check is always on (DNS rebinding reaches a loopback server from any page the browser

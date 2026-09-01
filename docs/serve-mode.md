@@ -139,6 +139,24 @@ Backup export/restore do **not** go through `pickPath`: they are already typed p
 dialogs, resolved on the Rust side by `backup_path()` (`~/` lands in `$HOME`) — which is exactly
 the "server-side path" model, and arguably what the directory browser should replace everywhere.
 
+**Direction settled 2026-09-01: prefer client-side bytes over a server-side browser, per flow.**
+Every one of these commands currently takes a `path: String` and does `std::fs` on the *serving*
+machine — under Tauri the distinction never existed; serve mode makes it visible, and for most
+flows the user's files are on the laptop, not the Pi. The plan when this is picked up:
+
+- **IRs — client-side, the ideal case.** An HX IR is 2048 samples (~KB): upload via a browser
+  file input carrying the bytes in the invoke, export as a browser download. Needs byte-taking
+  variants of `ir_upload`/`ir_export` in `fretwire-commands`. This removes two of `pickPath`'s
+  three call sites.
+- **Backup JSON — client-side restore + export-as-download, but keep the server-side path
+  option too**: exporting to the Pi's own disk stays useful (cron-able, lives with the rig).
+- **Data import — stays server-side, permanently.** The HX Edit installer is ~a gigabyte and
+  `res/` is a folder tree; uploading that through a browser is clunky, and
+  `fretwire import-data` over SSH already does it (the CLI and daemon share the data dir).
+
+With that split, the server-side **directory browser shrinks from "the only real design work" to
+a nice-to-have** for the remaining server-path cases (data import, backup-to-Pi paths).
+
 Needs a small server-side directory browser. Typing absolute paths blind is a bad first-run
 experience and first run is exactly when a new user is least able to guess what to type.
 

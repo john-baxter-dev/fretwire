@@ -2,6 +2,21 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Serve mode works on loopback (2026-09-01).** `fretwire-serve` (ROADMAP Phase 10, survey in
+`docs/serve-mode.md`) serves the same built frontend the GUI embeds, answers its `invoke()` calls
+on `POST /invoke/{command}` via the new `fretwire_commands::dispatch` (an explicit 65-arm match,
+offline-tested, accepting the frontend's camelCase argument names like Tauri does), and pushes the
+three events over a WebSocket at `/events`. The UI's `ipc.js` gained the third transport
+(`lib/serve.js`), selected by a `window.__FRETWIRE_SERVE__` marker the daemon injects into
+`index.html` — one dist runs under Tauri, serve, and the browser mock. Safety posture: loopback
+bind only (a non-loopback `--bind` is refused; SSH tunnel for remote), `Host`/`Origin` checked on
+every non-static request, JSON Content-Type required on invokes, and a single-editor lease (a
+second concurrent browser gets WS close 4409 / HTTP 409, released on disconnect — the clipboards
+and undo history are single-editor state). Verified end-to-end on loopback with curl + a
+WebSocket lease script and clean SIGTERM teardown; a live browser-to-pedal session is the
+remaining smoke test. `pickPath()` under serve is a typed server-side path for now; the directory
+browser and the non-loopback token flow are the open Phase 10 items.
+
 **Command layer lifted out of fretwire-tauri (2026-08-31).** The whole command surface —
 `AppState`, the 65 command bodies, the DTOs and the keepalive heartbeat — now lives in the new
 transport-neutral **`fretwire-commands`** crate (in `default-members`, so the offline suite covers

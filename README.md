@@ -23,8 +23,10 @@ from your own HX Edit installation (see [The reference data](#the-reference-data
 | `crates/fretwire-protocol` | `MI_00` wire message types + codec |
 | `crates/fretwire-usb`      | USB transport via `nusb` |
 | `crates/fretwire-core`     | device session API |
+| `crates/fretwire-commands` | transport-neutral editor command layer (shared by the GUI and serve mode) |
 | `crates/fretwire-cli`      | `fretwire` command-line driver |
 | `crates/fretwire-tauri`    | the graphical editor — Tauri (WebKitGTK) + Svelte |
+| `crates/fretwire-serve`    | the same editor served over HTTP, for headless machines |
 | `captures/`                | per-capture action notes + small preset-stream fixtures used by the tests |
 | `docs/`, `ROADMAP.md`      | protocol notes, preset format, safety, and the plan |
 
@@ -141,6 +143,25 @@ When it can't find a Tauri runtime it routes every backend call to the mock, whi
 full command surface: a setlist, the model catalog, split routing, and simulated live pushes from
 the hardware. `fretwireMock.needsData()` then reload shows the first-run import screen.
 See `crates/fretwire-tauri/ui/README.md`.
+
+### Headless: serve mode
+
+For a machine with no display — a Raspberry Pi with the pedal plugged in — `fretwire-serve` runs
+the same editor as a small HTTP daemon and you open it in a browser instead of a window. It shares
+the built frontend with the GUI, so build that first:
+
+```
+cd crates/fretwire-tauri/ui && npm install && npm run build && cd ../../..
+cargo run -p fretwire-serve            # → http://127.0.0.1:8317/
+```
+
+A release build embeds the frontend, so the deliverable is one static binary to copy over.
+
+**It binds loopback only, deliberately** — this is write access to your rig. From another machine,
+tunnel: `ssh -L 8317:127.0.0.1:8317 <host>`, then open `http://127.0.0.1:8317/` locally. Requests
+with a non-loopback `Host`/`Origin` are refused even on loopback (DNS rebinding reaches a local
+server from any web page your browser visits), and a second concurrent browser is refused — the
+editor is single-seat. A token flow for binding wider is planned; see `docs/serve-mode.md`.
 
 ## Talking to a real device
 

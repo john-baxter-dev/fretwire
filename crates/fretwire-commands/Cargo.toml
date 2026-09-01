@@ -12,3 +12,7 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 # `spawn_blocking` only. Both consumers run on tokio — Tauri's async_runtime is one.
 tokio = { workspace = true, features = ["rt"] }
+
+[dev-dependencies]
+# The dispatch tests await the commands, so they need `#[tokio::test]`.
+tokio = { workspace = true, features = ["rt", "macros"] }

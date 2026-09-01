@@ -1,8 +1,10 @@
 # Serve mode — the editor over HTTP, for headless machines
 
-Status: **the §1 lift is done** (2026-08-31) — the command layer now lives in the
-transport-neutral `fretwire-commands` crate (see below); the server itself is not started.
-Opened 2026-08-23; this doc is the survey that should stop the next person re-deriving it.
+Status: **serve mode works on loopback** (2026-09-01) — the §1 lift landed 2026-08-31
+(`fretwire-commands`), and `fretwire-serve` (§2) plus the ipc.js HTTP transport are built and
+verified end-to-end. Still open: the server-side directory browser (§3) and the token flow for a
+non-loopback bind (§4 — until then a wider `--bind` is refused and SSH tunneling is the remote
+path). Opened 2026-08-23; this doc is the survey that should stop the next person re-deriving it.
 
 It covers **two** requested features, because they turn out to rest on the same refactor: serving
 the editor over HTTP to a headless machine, and exposing it over MCP to an LLM client. The lift
@@ -89,17 +91,30 @@ By the time it landed the surface had grown to **65** commands (the counts below
   `LOST_AFTER_BEATS` giving-up logic and the poll-under-lock-then-release-before-emitting ordering
   both exist for reasons recorded in its doc comment, and a server has the same failure mode.
 
-### 2. A `fretwire-serve` binary
+### 2. A `fretwire-serve` binary — DONE (2026-09-01)
 
-- static file serving for the built `dist/`
-- `POST /invoke/<command>` carrying the JSON args, mirroring Tauri's shape
-- a WebSocket for the three events
+Built as surveyed, axum + rust-embed:
 
-**Keep it a separate crate, out of `default-members`,** exactly as `fretwire-tauri` is. Embedding
-`dist/` into `fretwire-cli` would make a built frontend a prerequisite for `cargo build`, which is
-the thing the workspace layout deliberately avoids (see the `default-members` comment in the root
-`Cargo.toml`). With `dist/` embedded via `rust-embed`/`include_dir`, the deliverable is a single
-static binary: `scp` it to the Pi and run it. No WebKitGTK, no Tauri, none of the Pi GPU risk.
+- static file serving for the built `dist/` (shared with `fretwire-tauri`; embedded in release —
+  one static binary — read from disk in debug)
+- `POST /invoke/{command}` carrying the JSON args, mirroring Tauri's shape — including the
+  **camelCase argument names** the frontend sends (`paramIndex`, `modelIndex`), which Tauri's
+  macro normally converts. The dispatcher (`fretwire_commands::dispatch`, an explicit 65-arm
+  match) lives in `fretwire-commands` rather than the server so the offline suite covers it on a
+  clean clone, and a future MCP server reuses it. Errors cross as plain strings with a 500,
+  matching how Tauri rejects an `invoke`.
+- a WebSocket at `/events` for the three events, framed `{"event", "payload"}` — the client wraps
+  them in the `{event, payload, id}` envelope the handlers expect
+- transport selection: the daemon injects `<script>window.__FRETWIRE_SERVE__={}</script>` into
+  `index.html`'s `<head>` (inline, so it runs before Vite's deferred module scripts), and
+  `ipc.js` routes to `lib/serve.js` when it sees the marker — the same dist runs under Tauri,
+  serve, and the `npm run dev` mock
+- clean teardown on SIGINT/SIGTERM (the session close the GUI does on exit), and the heartbeat
+  spawned at startup exactly as the GUI's setup hook does
+
+It is a separate crate, out of `default-members`, exactly as `fretwire-tauri` is — a built
+frontend must never become a prerequisite for `cargo build` (see the `default-members` comment in
+the root `Cargo.toml`). No WebKitGTK, no Tauri, none of the Pi GPU risk.
 
 ### 3. The file-picker problem — the only real design work
 
@@ -118,14 +133,17 @@ the "server-side path" model, and arguably what the directory browser should rep
 Needs a small server-side directory browser. Typing absolute paths blind is a bad first-run
 experience and first run is exactly when a new user is least able to guess what to type.
 
-### 4. Auth, before it binds to anything but loopback
+### 4. Auth, before it binds to anything but loopback — partially done (2026-09-01)
 
 This grants write access to someone's guitar rig. Minimum bar:
 
-- default to `127.0.0.1`; going wider is an explicit flag
+- default to `127.0.0.1`; going wider is an explicit flag — **done, stricter**: a non-loopback
+  `--bind` is *refused* until the token exists; the supported remote path is an SSH tunnel
+  (`ssh -L 8317:127.0.0.1:8317 <host>`)
 - **check the `Origin` header** — a local HTTP server without one is reachable by any web page the
-  laptop visits, via DNS rebinding, regardless of firewalls
-- a token for the non-loopback case
+  laptop visits, via DNS rebinding, regardless of firewalls — **done, always on** (`Host` and
+  `Origin` both, plus a `Content-Type: application/json` gate on invokes, which forms can't send)
+- a token for the non-loopback case — **still open**, the one piece blocking a LAN bind
 
 ## A second consumer: MCP
 
@@ -265,11 +283,17 @@ ever been run on ARM hardware.
 
 ## Open questions for serve mode
 
-- **Does the heartbeat survive a slow network client?** It beats every 250 ms holding the session
-  lock. That is tuned for a local webview; a WebSocket to a laptop is a different latency regime.
-- **What happens with two browsers open?** Tauri has exactly one frontend by construction. A
-  server does not, and `AppState`'s clipboards and undo history are single-editor assumptions.
-  Simplest honest answer for v1: refuse a second session.
+- **Does the heartbeat survive a slow network client?** ANSWERED (2026-09-01): yes, by
+  construction. The 250 ms poll-under-lock loop runs entirely on the serving machine next to the
+  USB device — the network sits only between browser and server. Delivery is decoupled through a
+  broadcast channel; a WebSocket that can't keep up skips a burst (`Lagged` → continue) instead
+  of back-pressuring the beat, which is fine because pushes are advisory live-follow and every
+  mutation returns fresh authoritative state.
+- **What happens with two browsers open?** ANSWERED (2026-09-01): refused, as proposed. The page
+  generates a random client id; its WebSocket claims a single-editor lease. A second browser's
+  socket is accepted then closed with code **4409** (so it can render "editor open elsewhere" and
+  stop reconnecting), its invokes get HTTP 409, and the lease releases when the holder's socket
+  closes — a page refresh reclaims it.
 - **Should `fretwire-serve` and the GUI ship together?** They would share the lifted command layer
   but have separate binaries and separate packaging.
 - **32-bit Pi OS.** `armv7` checks clean, but ROADMAP Phase 8 deliberately excludes it as an

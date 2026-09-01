@@ -16,6 +16,7 @@
 //! Mutating commands re-read the preset and return the fresh `PresetDto`, so the frontend always
 //! renders authoritative device state.
 
+pub mod dispatch;
 pub mod dto;
 pub mod events;
 

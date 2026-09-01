@@ -214,6 +214,8 @@ enum Command {
     /// Delete a block (op 28 surgical delete — preserves the other blocks' footswitch layout).
     DeleteBlock { slot: i64 },
     /// Move a block. The destination slot encodes the row: a parallel slot index moves it to row B.
+    /// On a POD Go (slots 1..=10, one row) this rides POD Go Edit's own path: a whole-preset
+    /// rewrite into the edit buffer, not the HX move op.
     Move { src_slot: i64, dst_slot: i64 },
     /// Position-aware cross-row move.
     MoveToRow {

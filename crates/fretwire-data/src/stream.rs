@@ -176,6 +176,115 @@ impl PresetStream {
         true
     }
 
+    /// Rearrange a **single-row chain** (POD Go): pull the block out of slot `src` and drop it at
+    /// slot `dst`, sliding everything between by one — the document rewrite behind POD Go Edit's
+    /// drag-a-block, measured from its own move capture (op 78 on the source slot, then the whole
+    /// rewritten preset as an op 21 write; issue #15, 2026-08-28). The rewrite touches five
+    /// regions, and this reproduces all of them:
+    ///
+    /// 1. the slot array (`0 → 22`): entries `src..=dst` rotate — kinds travel with their
+    ///    content, so an emptied slot slides like any block;
+    /// 2. the footswitch layout (`3 → 8`): every binding's target slot (`11 → 8`) renumbered;
+    /// 3. the controller table (`4`): rows sit per **controller** on this device (not per slot,
+    ///    as on the HX), so rows stay put and only each entry's target slot (`1 → 5`) renumbers;
+    /// 4. the snapshots (`10`): each bypass matrix (`3`) rotates its `src..=dst` cells, as does
+    ///    the per-slot array at group key `13`;
+    /// 5. the selected slot (`6 → 98`): set to `dst` — the editor's selection follows the block
+    ///    that moved.
+    ///
+    /// Slot 0 and the last slot are the input/output nodes and stay put — a range touching them
+    /// returns `false` (as does an absent array or `src == dst`). Re-serialize with [`to_blob`]
+    /// and write via op 21 to apply, after an op-78 `begin_structural` on `src`.
+    pub fn move_block_single_row(&mut self, src: usize, dst: usize) -> bool {
+        let (lo, hi) = (src.min(dst), src.max(dst));
+        let Some(group) = map_get_mut(&mut self.preset, 0) else {
+            return false;
+        };
+        let Some(Value::Array(slots)) = map_get_mut(group, 22) else {
+            return false;
+        };
+        if src == dst || lo == 0 || hi + 1 >= slots.len() {
+            return false;
+        }
+        // 1. Slot entries rotate: src's entry lands on dst, the span between slides one over.
+        if src < dst {
+            slots[lo..=hi].rotate_left(1);
+        } else {
+            slots[lo..=hi].rotate_right(1);
+        }
+        // Where an old slot number ends up after the move.
+        let remap = |s: i64| -> i64 {
+            let (src, dst) = (src as i64, dst as i64);
+            if s == src {
+                dst
+            } else if src < dst && s > src && s <= dst {
+                s - 1
+            } else if dst < src && s >= dst && s < src {
+                s + 1
+            } else {
+                s
+            }
+        };
+        // 2. Footswitch layout: renumber each binding's target slot.
+        if let Some(layout) = map_get_mut(&mut self.preset, 3)
+            && let Some(Value::Array(positions)) = map_get_mut(layout, 8)
+        {
+            for entry in positions.iter_mut().flat_map(|p| match p {
+                Value::Array(bindings) => bindings.iter_mut(),
+                _ => [].iter_mut(),
+            }) {
+                if let Some(target) = map_get_mut(entry, 11)
+                    && let Some(s) = map_get(target, 8).and_then(Value::as_i64)
+                {
+                    set_map_key(target, 8, Value::from(remap(s)));
+                }
+            }
+        }
+        // 3. Controller table: renumber each assignment's target slot.
+        if let Some(Value::Array(rows)) = map_get_mut(&mut self.preset, 4) {
+            for entry in rows.iter_mut().flat_map(|r| match r {
+                Value::Array(assignments) => assignments.iter_mut(),
+                _ => [].iter_mut(),
+            }) {
+                if let Some(def) = map_get_mut(entry, 1)
+                    && let Some(s) = map_get(def, 5).and_then(Value::as_i64)
+                {
+                    set_map_key(def, 5, Value::from(remap(s)));
+                }
+            }
+        }
+        // 4. Snapshots: the per-slot bypass matrices and the group's per-slot array rotate.
+        if let Some(snap_group) = map_get_mut(&mut self.preset, 10) {
+            if let Some(Value::Array(snapshots)) = map_get_mut(snap_group, 10) {
+                for snapshot in snapshots.iter_mut() {
+                    if let Some(Value::Array(cells)) = map_get_mut(snapshot, 3)
+                        && hi < cells.len()
+                    {
+                        if src < dst {
+                            cells[lo..=hi].rotate_left(1);
+                        } else {
+                            cells[lo..=hi].rotate_right(1);
+                        }
+                    }
+                }
+            }
+            if let Some(Value::Array(per_slot)) = map_get_mut(snap_group, 13)
+                && hi < per_slot.len()
+            {
+                if src < dst {
+                    per_slot[lo..=hi].rotate_left(1);
+                } else {
+                    per_slot[lo..=hi].rotate_right(1);
+                }
+            }
+        }
+        // 5. Selection follows the moved block.
+        if let Some(selection) = map_get_mut(&mut self.preset, 6) {
+            set_map_key(selection, 98, Value::from(dst as i64));
+        }
+        true
+    }
+
     /// Set a structural node's signal-flow **column position** (2 = split, 3 = mixer) — the model
     /// holder's key `13`, the write mirror of [`Self::structural_node_pos`]. Only the holder carries
     /// the position (the companion 14/16 sub-map doesn't — [solid], dual_amp + split_preset

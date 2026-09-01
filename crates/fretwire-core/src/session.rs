@@ -805,22 +805,98 @@ impl Session {
     /// Swap the model of the block in `slot` to `model_index` (its `Helix.sym` index), with
     /// `paired_index` for a paired cab/IR (`-1` = none). The device resets the block's params to the
     /// new model's defaults (confirmed by on-device diff). Op 40; rides the edit channel.
+    ///
+    /// On a **POD Go** the wah and volume blocks refuse to become anything else: the pedal rejects
+    /// the op (`code=-19`) and then **wedges** — preset switching stops working until a reboot
+    /// (issue #15, owner-reported on fw 2.01, 2026-08-31; earlier firmware states accepted the
+    /// same swap). A rejection that corrupts device state is not a safe probe, so the swap is
+    /// refused here instead, before anything is sent.
     pub fn swap_model(
         &mut self,
         slot: i64,
         model_index: i64,
         paired_index: i64,
     ) -> crate::Result<()> {
+        self.guard_pod_go_swap(slot, model_index)?;
         let txn = self.bump_txn();
         let body = edit::swap_model(slot, model_index, paired_index, txn);
         self.send_edit(body)?;
         Ok(())
     }
 
+    /// The [`Self::swap_model`] guard for the POD Go's mandated wah/volume blocks (see there).
+    /// Consults the last-read stream — every swap flow we ship reads first — and stays out of the
+    /// way when the slot's occupant is unknown: this protects against a known wedge, it does not
+    /// second-guess ops we haven't seen fail.
+    fn guard_pod_go_swap(&mut self, slot: i64, model_index: i64) -> crate::Result<()> {
+        if self.device().pid != fretwire_protocol::PID_POD_GO {
+            return Ok(());
+        }
+        let Some(ps) = self
+            .last_raw
+            .as_deref()
+            .and_then(|raw| fretwire_data::stream::PresetStream::parse(raw).ok())
+        else {
+            return Ok(());
+        };
+        let current = ps
+            .loaded_blocks()
+            .into_iter()
+            .find(|b| b.slot == slot)
+            .and_then(|b| b.model_index);
+        let sym = |i: i64| {
+            self.catalog
+                .symbols
+                .by_index(i as usize)
+                .map(|(s, _)| s)
+                .unwrap_or("")
+        };
+        let family = |s: &str| ["HD2_Wah", "HD2_VolPan"].iter().find(|p| s.starts_with(*p));
+        let Some(kept) = current.and_then(|i| family(sym(i))) else {
+            return Ok(());
+        };
+        if family(sym(model_index)) == Some(kept) {
+            return Ok(());
+        }
+        Err(fretwire_data::Error::Stream(format!(
+            "slot {slot} holds the POD Go's {} block, which the pedal will not swap to another \
+             type — it rejects the op and then stops switching presets until rebooted \
+             (fw 2.01). Pick another {} model, or edit a different slot",
+            if *kept == "HD2_Wah" { "wah" } else { "volume" },
+            if *kept == "HD2_Wah" {
+                "wah"
+            } else {
+                "volume/pan"
+            },
+        ))
+        .into())
+    }
+
     /// Move the block in `src` slot to `dst` slot (op 43). The destination slot encodes the row, so a
     /// parallel-path slot index moves the block to row B. The caller should re-read afterward (HX Edit
     /// does), as positions shift. Rides the edit channel.
+    ///
+    /// On a **POD Go** there is no op-43 move: POD Go Edit rearranges by rewriting the whole
+    /// preset document (op 78 on the source slot, then the rewritten preset as an op 21 write —
+    /// measured, issue #15's move capture, 2026-08-28), so that is the path taken here — see
+    /// [`PresetStream::move_block_single_row`] for the document rewrite itself. Edit buffer only;
+    /// flash is untouched until a `save_preset`.
     pub fn move_block(&mut self, src: i64, dst: i64) -> crate::Result<()> {
+        if self.device().pid == fretwire_protocol::PID_POD_GO {
+            let raw = self.read_preset_raw()?;
+            let mut ps = fretwire_data::stream::PresetStream::parse(&raw)?;
+            if !ps.move_block_single_row(src as usize, dst as usize) {
+                return Err(fretwire_data::Error::Stream(format!(
+                    "cannot move slot {src} to {dst}: both must be chain slots \
+                     (1..=10 on a POD Go), and distinct"
+                ))
+                .into());
+            }
+            let txn = self.bump_txn();
+            self.send_edit(edit::begin_structural(src, txn))?;
+            self.write_preset(ps.to_blob())?;
+            return Ok(());
+        }
         let txn = self.bump_txn();
         let body = edit::move_block(src, dst, txn);
         self.send_edit(body)?;
@@ -843,6 +919,17 @@ impl Session {
         model_index: i64,
         paired_index: i64,
     ) -> crate::Result<()> {
+        if self.device().pid == fretwire_protocol::PID_POD_GO {
+            // POD Go Edit has no add: the chain is fixed at ten slots, filled by swapping what a
+            // slot holds. Sent anyway, op 39 is erratic on this pedal — sometimes rejected
+            // (`code=-306`), sometimes accepted into chain states the pedal then mishandles
+            // (issue #15, owner experiments, 2026-08-31) — so it is refused here.
+            return Err(fretwire_data::Error::Stream(format!(
+                "the POD Go has no add-block operation — its chain is a fixed ten slots. \
+                 Swap the model in slot {slot} instead"
+            ))
+            .into());
+        }
         let txn = self.bump_txn();
         let body = edit::add_block(slot, model_index, -1, txn);
         self.send_edit(body)?;

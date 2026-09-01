@@ -199,14 +199,18 @@ fn controllers_and_snapshots_come_across() {
 
 /// The second oracle pair: "AC30 Ambient" (User 04A, backup `SL01[12]`) — the preset the very
 /// first POD Go capture streamed (2026-08-25). It adds the classes the Factory preset lacks:
-/// a distortion, the Simple 3-Band EQ (class 23's second sample), and a delay at class 8 with
-/// its `@trails` extra.
+/// a distortion, the Simple 3-Band EQ (class 23's second sample), a delay at class 8 with its
+/// `@trails` extra — and the **impulse response**.
 ///
-/// Its impulse response is the one block the conversion refuses (the unpinned sixth value — see
-/// `pod_go_block_class`), so the whole-tone conversion must fail on exactly that, and the tone
-/// minus the IR must reproduce every other slot.
+/// The IR converts in POD Go Edit's own op-21 shape (five symbol parameters, bare uuid — see
+/// `encode_block`), so its slot compares against the device stream with the measured writer
+/// differences pinned: the device's read-back appends a sixth, device-generated value and
+/// NUL-terminates the uuid. `Index` agrees here (both `7`, the IR's library slot), but it is
+/// the uuid that binds — it is the MD5 of the IR's raw samples (hashing the backup's own `I006`
+/// WAV section produces exactly this preset's uuid), and the second-IR capture shows the pedal
+/// re-resolving a stale backup `Index: 41` to the live slot `6` by that hash.
 #[test]
-fn the_second_preset_reproduces_too_and_the_ir_is_the_one_refusal() {
+fn the_second_preset_reproduces_too_including_the_ir() {
     let (Some(syms), Some(hxb), Some(oracle)) = (
         symbols(),
         backup(),
@@ -222,31 +226,52 @@ fn the_second_preset_reproduces_too_and_the_ir_is_the_one_refusal() {
         .clone()
         .expect("SL01[12]")
         .tone;
-    let mut tone = tone.as_object().expect("tone object").clone();
+    let tone = tone.as_object().expect("tone object").clone();
 
-    // Whole tone: the IR (@type 2) is refused, by name.
     let mut donor = oracle.clone();
     vandalise(&mut donor);
-    let err = apply_tone(&mut donor, &tone, &syms).expect_err("the IR must refuse");
-    assert!(
-        err.to_string().contains("impulse response"),
-        "unexpected refusal: {err}"
-    );
-
-    // Without the IR, everything else comes back — its slot (7) stays empty on the converted
-    // side, so the comparison skips it.
-    let dsp0 = tone.get_mut("dsp0").unwrap().as_object_mut().unwrap();
-    dsp0.remove("block6");
-    let mut donor = oracle.clone();
-    vandalise(&mut donor);
-    let report = apply_tone(&mut donor, &tone, &syms).expect("conversion minus the IR");
-    assert_eq!(report.blocks, 9);
+    let report = apply_tone(&mut donor, &tone, &syms).expect("conversion");
+    assert_eq!(report.blocks, 10, "all ten blocks convert, the IR included");
     let slots = |ps: &PresetStream| match map_get(&ps.preset, 0).and_then(|m| map_get(m, 22)) {
         Some(Value::Array(a)) => a.clone(),
         _ => Vec::new(),
     };
     for (i, (got, want)) in slots(&donor).iter().zip(&slots(&oracle)).enumerate() {
         if i == 7 {
+            // The IR slot: pin the writer differences, then compare the rest.
+            let bank = |v: &Value| map_get(v, 20).and_then(|c| map_get(c, 11)).cloned();
+            let (Some(got_bank), Some(want_bank)) = (bank(got), bank(want)) else {
+                panic!("IR slot has no param bank");
+            };
+            let values = |b: &Value| match map_get(b, 4) {
+                Some(Value::Array(a)) => a.clone(),
+                _ => Vec::new(),
+            };
+            let (gv, wv) = (values(&got_bank), values(&want_bank));
+            assert_eq!((gv.len(), wv.len()), (5, 6), "five written, six read back");
+            assert_eq!(wv[5].as_i64(), Some(6), "the device-generated extra");
+            assert_eq!(gv[0].as_i64(), Some(7), "the backup's save-time Index");
+            assert_eq!(
+                wv[0].as_i64(),
+                Some(7),
+                "the live library slot — agreeing here"
+            );
+            for (a, b) in gv[1..5].iter().zip(&wv[1..5]) {
+                assert!(similar(a, b), "IR param: {a:?} vs {b:?}");
+            }
+            let uuid = |v: &Value| {
+                map_get(v, 20)
+                    .and_then(|c| map_get(c, 27))
+                    .and_then(Value::as_str)
+                    .map(|s| s.trim_end_matches('\0').to_string())
+            };
+            assert_eq!(uuid(got), uuid(want), "the uuid binds, modulo termination");
+            assert_eq!(
+                uuid(got).as_deref(),
+                Some("48b188d8be8f7fca84c097e9be82dd01")
+            );
+            let class = |v: &Value| map_get(v, 20).and_then(|c| map_get(c, 9)).cloned();
+            assert_eq!(class(got), class(want), "class 15 both sides");
             continue;
         }
         if i == 4 {

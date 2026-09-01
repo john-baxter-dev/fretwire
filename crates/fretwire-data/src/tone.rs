@@ -256,14 +256,23 @@ pub fn block_class(tone_type: i64, symbol: &str, paired_symbol: Option<&str>) ->
 /// | 0 + `HD2_EQ_…` | EQ | **23** | `EQ_STATIC_ParametricStereo` (12 params), `…Simple3BandStereo` (5) — the HX writes 1 for its EQs and uses 23 for a synth |
 /// | 0 + `HD2_CabMicIr_…` | cab | **26** | one sample (`CabMicIr_1x12USDeluxe`); the HX writes 31 |
 /// | 1 | amp | 17 | two amps — same as the HX |
-/// | 2 | impulse response | 15 | one sample; **refused** — see below |
+/// | 2 | impulse response | 15 | two samples, and POD Go Edit's own op-21 write keeps 15 |
 /// | 4 | looper | ? | never seen on a POD Go wire preset — refused |
 /// | 5 + `HD2_FXLoop…` | FX loop | **9** | two samples, `@trails` extra appended |
 /// | 5 | delay / reverb | 8 | four samples, `@trails` extra — the class the HX gives its `@type` 7 |
 ///
-/// The IR (`@type` 2) resolves to class 15 but is refused at [`encode_block`]: beside its five
-/// symbol parameters the device stores a sixth value whose rule one sample cannot pin (`6` beside
-/// `Index: 7` — 0-based mirror? table index?), and this blob is written to flash.
+/// The class bytes above are the **device's read-back vocabulary**, which is what this converter
+/// emits. POD Go Edit's own op-21 serializer re-spells two of them — the EQ goes out as `1` and
+/// the FX loop as `8` — and the pedal accepts that and re-emits 23/9 on read-back (measured, the
+/// move capture vs the same preset's device stream), so the class byte is normalized by the
+/// pedal rather than binding. The device form is emitted here because it is the one the device
+/// itself round-trips.
+///
+/// The IR's sixth stored value (`6` beside five symbol params in both device streams) turned out
+/// to be **device-generated**: POD Go Edit's op-21 write carries only the five symbol parameters
+/// and the pedal appends the sixth itself on read-back — so conversion writes five and lets the
+/// pedal do its thing, and the old refusal is lifted. [solid — the move capture's op-21 blob
+/// holds an IR block written with five values]
 pub fn pod_go_block_class(tone_type: i64, symbol: &str) -> Option<i64> {
     match tone_type {
         0 if symbol.starts_with("HD2_CabMicIr_") => Some(26),
@@ -1126,21 +1135,13 @@ fn encode_block(
     if chain == Chain::HxRows && tone_type == 6 {
         return encode_looper(block, model, syms);
     }
-    if chain != Chain::HxRows {
-        // The POD Go numbers its types differently: 4 is its looper, 2 its impulse response.
-        // Neither has been seen on a POD Go wire preset in a form we can reproduce — the looper
-        // not at all, the IR with a sixth stored value whose rule one sample cannot pin — and
-        // this blob is written to flash, so both are refusals, not guesses.
-        if tone_type == 4 {
-            return Err(Error::Stream(format!(
-                "{model} is a looper (@type 4) and no POD Go wire preset we hold contains one —                  its slot shape is unknown"
-            )));
-        }
-        if tone_type == 2 {
-            return Err(Error::Stream(format!(
-                "{model} is an impulse response (@type 2) — the device stores a sixth value                  beyond its five parameters whose rule one sample cannot pin, so converting it                  would mean guessing what lands in flash"
-            )));
-        }
+    if chain != Chain::HxRows && tone_type == 4 {
+        // The POD Go numbers its types differently: 4 is its looper. It has never been seen on a
+        // POD Go wire preset, and this blob is written to flash, so it stays a refusal, not a
+        // guess. (Its @type 2, the impulse response, converts — see the key-27 branch below.)
+        return Err(Error::Stream(format!(
+            "{model} is a looper (@type 4) and no POD Go wire preset we hold contains one —              its slot shape is unknown"
+        )));
     }
 
     let (index, symbol, params) = resolve_symbol(model, block, syms)?;
@@ -1245,15 +1246,33 @@ fn encode_block(
             param_bank(values.len() as i64, symbol_count, values),
         ),
     ];
-    if chain == Chain::HxRows && tone_type == 5 {
+    let is_ir = match chain {
+        Chain::HxRows => tone_type == 5,
+        Chain::SingleRow { .. } => tone_type == 2,
+    };
+    if is_ir {
         // An IR block has no second bank at all; in its place the content carries key 27, the
-        // referenced IR's UUID, NUL-terminated — the tone's `@uuid`, and how the device re-matches
-        // the IR by content when slots have moved. A dual IR concatenates its two UUIDs into the
-        // one string (64 hex chars, measured). A block aimed at an **empty** IR slot stores the
-        // empty string, and a tone with no `@uuid` is that case.
-        // [solid — class_ir_{mono,dual,unreferenced} fixtures, 2026-08-26]
+        // referenced IR's UUID — the tone's `@uuid`, and how the device re-matches the IR by
+        // content when slots have moved: it is the **MD5 of the IR's raw samples** (the WAV
+        // `data` chunk — both `.pgb` library sections hash to their presets' uuids), and the
+        // stored `Index` is just the slot the IR sat in at save time, re-resolved live (a backup
+        // `Index: 41` reads back `6` off the wire once the uuid matches library slot 6). A dual
+        // IR concatenates its two UUIDs into the one string (64 hex chars, measured). A block
+        // aimed at an **empty** IR slot stores the empty string, and a tone with no `@uuid` is
+        // that case. [solid — class_ir_{mono,dual,unreferenced} fixtures 2026-08-26; POD Go
+        // captures + backup, issue #15 2026-08-31]
+        //
+        // Termination differs by writer: the HX fixtures carry a NUL, while POD Go Edit's own
+        // op-21 write stores the uuid **bare** — and also stores only the five symbol parameters,
+        // where the device's read-back appends a sixth, device-generated value. Writing the
+        // POD Go Edit form is what its pedal has been measured accepting, so that is the form
+        // emitted here for a single-row chain. [solid — the move capture's op-21 blob]
         let uuid = block.get("@uuid").and_then(Json::as_str).unwrap_or("");
-        content.push((Value::from(27), Value::from(format!("{uuid}\0"))));
+        let stored = match chain {
+            Chain::HxRows => format!("{uuid}\0"),
+            Chain::SingleRow { .. } => uuid.to_string(),
+        };
+        content.push((Value::from(27), Value::from(stored)));
     } else {
         content.push((Value::from(12), paired_bank));
     }

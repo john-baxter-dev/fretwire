@@ -383,6 +383,10 @@ their own transaction, save included.
 > `move_EQ_right_two_slots` is a bare op-21 with no bracket, `one_by_one_move_all_blocks_one_right`
 > is `78,43` eleven times with no op-21, and `move_simple_eq_to_parallel_path` is `43,23`. HX Edit
 > sends a whole-preset write on its own, exactly as we do. Dropped as a lead.
+>
+> Postscript (2026-08-31): the **POD Go** turned out to use a two-thirds version of it for real —
+> POD Go Edit's move is `op 78 → op 21` (no op 43 at all; the whole rewritten document rides the
+> op-21). See `docs/pod-go.md` § "Structural edits".
 
 ### The reply's key 103 is a status, and `255` means refused [solid] — from the 2026-07-30 Floor log
 Every reply envelope is `{102: txn, 103: kind, 104: payload}`, and until now we read key 103 as a

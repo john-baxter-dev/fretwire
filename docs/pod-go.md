@@ -115,20 +115,17 @@ and 537/627 POD Go symbols where stripping alone got 372.
 
 ## What is still unknown
 
-- **Structural writes.** Parameter, bypass, model-swap and footswitch assignment are reconciled
-  (below); what is *not* is anything that changes the chain's shape — add, move, delete. The
-  POD Go's chain is **fixed** (see "The fixed chain" below), so those ops may not even exist for
-  it in the form the HX uses; `insert_block` refuses a slot outside the HX row windows rather than
-  guessing. A POD Go owner has replaced the fixed wah slot with a delay via the JSON
-  export-edit-reimport route and the device accepted it, which we do not yet understand and should
-  not lean on.
-- **The IR block's sixth stored value.** Beside its five symbol parameters the wire stores one
-  more (`6` beside `Index: 7` in the one sample held) whose rule can't be pinned from a single
-  observation — 0-based mirror of Index? an `irUuidTable` position? Until a second IR preset is
-  seen on the wire, `hxb-convert` refuses IR blocks rather than guess what lands in flash. The
-  looper's slot shape is likewise unobserved (its HX cousin uses its own slot kind). Everything
-  else converts — see "Backups convert" below.
+- **The looper's slot shape.** The POD Go's `@type` 4 has never been seen on a wire preset, so
+  `hxb-convert` refuses the owner's two looper presets rather than guess. Everything else
+  converts — see "Backups convert" below.
+- **Whether the pedal accepts the device class vocabulary in an op-21 write.** Our structural
+  rewrites (move) send the pedal's own read-back document; POD Go Edit's serializer re-spells
+  the EQ/FX-loop classes and the IR bank on the way in (see "Structural edits"), and only *that*
+  spelling has been measured being accepted. Sending a device its own bytes back is the same
+  bet the HX restore path proved out on hardware, but on a POD Go it awaits a live test.
 - **Preset key `12`** (`Array[128]`).
+- No write of any kind has yet been confirmed **on POD Go hardware by fretwire itself** — every
+  reconciliation so far is against captures of POD Go Edit doing the writing.
 
 ## The write path is the same too  [solid — 2026-08-26 captures]
 
@@ -229,14 +226,23 @@ wah and the volume pedal both carry `@fs_index: 9` (one enabled at a time — th
 between them), so wire layout position 8 is the toe switch, not a ninth stomp. The status push
 after the assignment is the familiar type 31: `{98: slot, 70: switch, 79: assigned}`.
 
-## The fixed chain  [reported — 2026-08-27, issue #15]
+## The fixed chain  [reported — 2026-08-27, issue #15; op-40 hazard measured 2026-08-31]
 
 Per the owner, POD Go Edit and the pedal both enforce that every preset contains exactly one each
 of **volume pedal, wah, FX loop (mono or stereo), amp, cab/IR**, plus **at least one EQ** — in any
 order, leaving four freely assignable blocks. The editor implements this as fixed-type slots. The
 community bypasses it by editing a preset's exported JSON and reimporting, with no widely-reported
-ill effect; the restriction is assumed part DSP budget, part product segmentation. This is why
-add/move/delete may be a different shape here than on the HX chain, and why we don't send them.
+ill effect; the restriction is assumed part DSP budget, part product segmentation.
+
+**The wah/volume half of this is enforced with teeth**: swapping either block to another type via
+op 40 gets rejected (`code=-19`) and then **wedges the pedal** — preset switching stops working
+until a reboot (owner-measured on fw 2.01; an earlier state of the same pedal accepted the same
+swap and produced presets it then mishandled). A rejection that corrupts device state is not a
+safe probe, so `Session::swap_model` refuses wah→non-wah and volume→non-volume swaps client-side
+before anything is sent. The EQ and FX loop blocks swap freely (owner-verified). Op 39 (add) is
+likewise erratic here — sometimes `-306`, sometimes accepted into states the pedal mishandles —
+and POD Go Edit has no add at all, so fretwire refuses it too; an emptied slot is re-filled with
+a swap.
 
 ## The wire slot array  [solid — read from the 2026-08-27 capture's preset]
 
@@ -249,17 +255,56 @@ The POD Go's group-0 slot array holds **12 entries**, not the HX's 20:
 ```
 
 No split or mixer nodes — the chain is one row, structurally. The footswitch layout array
-(`3 → 8`) is **9 positions**: 0..5 are the stomp switches FS1..FS6, position 8 is the expression
-toe switch (see "The footswitch map"), and positions 6..7 have not been seen carrying anything.
+(`3 → 8`) is **9 positions**: 0..5 are the stomp switches FS1..FS6, positions 6..7 are the
+**external footswitch jacks FS7/FS8** (owner-identified — the pedal also takes an external
+expression pedal, EXP2), and position 8 is the expression toe switch (see "The footswitch map").
 
-## Backups convert  [solid — 2026-08-28]
+## Structural edits: move is a whole-document rewrite, empty is op 28  [solid — 2026-08-28 captures]
+
+The owner captured POD Go Edit's two structural verbs, and neither is the HX's op 43:
+
+- **Move** (volume, slot 1 → slot 10) is **op 78** `{98: source-slot}` followed by **op 21**
+  carrying the *entire rewritten preset document* (~4.7 KB) — POD Go Edit rearranges its own
+  document and re-uploads it. No op 43 anywhere. `PresetStream::move_block_single_row` reproduces
+  that rewrite — the slot rotation, the renumbered footswitch/controller targets (the controller
+  table sits per *controller* on this device, not per slot as on the HX), the rotated snapshot
+  matrices, and the selection following the moved block — verified both directions against the
+  capture's own before/after pair (`fretwire-data/tests/pod_go_move.rs`), and `Session::move_block`
+  takes this path on a POD Go.
+- **Set a block to empty** is bare **op 28** `{98: slot}` — the exact op and shape our
+  `delete_block` already sends (ours prefixes the op-78 marker, as HX Edit does; POD Go Edit
+  skips it).
+- **There is no add.** POD Go Edit cannot add or delete blocks, only empty a slot and swap; see
+  "The fixed chain" for why fretwire refuses op 39 here too.
+
+The op-21 blob also exposed POD Go Edit's serializer habits, pinned in the move tests: it
+re-spells the EQ as class `1` and the FX loop as class `8` where the device reads back `23`/`9`
+(the pedal accepts both and normalizes), writes the IR block with only its five symbol parameters
+and a bare uuid (see "Backups convert"), drops zero-valued layout keys, and sorts controller-row
+assignments by id. Our rewrite keeps the device's own read-back forms.
+
+## Backups convert  [solid — 2026-08-28; IRs 2026-08-31]
 
 `fretwire hxb-convert` turns a `.pgb` into restorable presets, verified against the two presets
 held in **both** forms — the backup's tone JSON and the same unit's own wire stream ("US Deluxe
 Nrm" and "AC30 Ambient"). Converting the tone reproduces the device's preset slot for slot:
 every block, class, parameter value, the footswitch layout with its toe-switch pair, the
 controller table and all four snapshot matrices (`fretwire-data/tests/pgb_to_wire.rs`). Of the
-owner's 135 presets, 101 convert; the 34 refusals are exactly the IR and looper blocks above.
+owner's 135 presets, **133 convert**; the 2 refusals are the looper presets above.
+
+**The IR block is fully understood** (second wire sample + the move capture's op-21 blob):
+
+- The preset's `@uuid` / wire key 27 is the **MD5 of the IR's raw samples** — the `data` chunk
+  of the WAV the `.pgb` itself stores per library slot (`I000`… sections, 2048-sample float32
+  mono). Hashing the backup's own `I005`/`I006` sections reproduces both presets' uuids exactly.
+- The `Index` parameter is just the IR's **1-based library slot**, re-resolved live by uuid: a
+  backup carrying the stale `Index: 41` reads back `6` off the wire once the uuid matches
+  library slot 6. The hash binds; the index is decoration.
+- The **sixth stored value** beside the IR's five parameters is **device-generated**: POD Go
+  Edit's own op-21 write carries only the five symbol values (and the uuid bare, no NUL) and the
+  pedal appends the sixth on read-back (`6` on this unit — plausibly library-derived; it never
+  leaves the editor, so its rule no longer matters). Conversion writes the five-value POD Go
+  Edit form, which is the form this pedal has been measured accepting.
 
 What the POD Go's tones do differently (each reconciled, not assumed):
 
@@ -276,10 +321,15 @@ What the POD Go's tones do differently (each reconciled, not assumed):
   against the wire's `0.26999998`) — so any restore from a `.pgb`, by anyone, is at that
   precision. The `.hxb` does not round.
 
-### Captures that would still help
+### What would still help
 
-- **Anything showing add / move / delete from POD Go Edit**, if the editor can do them at all —
-  or confirmation that it refuses. This is the one remaining write family.
-- **A wire read of any second IR preset** (`dump-raw` once fretwire is connected, or a capture of
-  POD Go Edit opening one) — two samples of the IR's sixth stored value would pin its rule and
-  lift the one conversion refusal that matters (32 of the owner's presets carry an IR).
+Both capture asks were delivered (the move + set-to-empty captures and the second IR preset —
+they produced everything in the three sections above). What's left needs the pedal, not Wireshark:
+
+- **A live fretwire `move` on the POD Go** — our rewrite is byte-verified against POD Go Edit's,
+  but ours sends the device's own class/IR spellings where POD Go Edit re-spells them, and the
+  pedal accepting its own read-back forms via op 21 is still [hypothesis]. Recoverable if wrong:
+  the write is edit-buffer only, and a same-slot `goto` reloads from flash.
+- **A restore of a converted preset**, same caveat and same recovery.
+- **A looper preset seen on the wire** (load one in POD Go Edit and capture the startup, like
+  the IR one) — would lift the last two conversion refusals.

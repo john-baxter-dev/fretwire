@@ -4207,3 +4207,36 @@ decimals in its backups**, so any restore is at the file's precision, not the wi
 101 of the owner's 135 presets convert. The 34 refusals are honest: 32 IR blocks (the wire stores
 a sixth value whose rule one sample can't pin) and 2 loopers (slot shape unobserved). One more
 wire read of an IR preset would lift the big one. 335 tests.
+
+## Sixty-seventh round (2026-08-31): **move lands, the IR refusal lifts, and the wah swap gets a guard** (issue #15)
+
+The owner answered both asks with three captures, and each one closed something:
+
+- **Move is real, and it's `op 78 → op 21`** — no op 43. POD Go Edit rearranges its own document
+  and re-uploads the whole preset. `PresetStream::move_block_single_row` reproduces that rewrite
+  (slot rotation, footswitch/controller retargeting — the controller table is per *controller* on
+  this device, not per slot — snapshot matrices, selection), byte-verified **both directions**
+  against the capture's before/after pair (`tests/pod_go_move.rs`; the "before" turned out to be
+  the same preset the IR capture streamed minutes earlier). `Session::move_block` dispatches to
+  it on a POD Go. "Set to empty" is bare op 28 — the delete we already ship. There is no add.
+- **The IR block is solved and `hxb-convert` stops refusing it.** The op-21 blob shows POD Go
+  Edit writes an IR with only its five symbol params and a bare uuid — the mystery **sixth value
+  is device-generated** and never leaves the editor. The uuid is the **MD5 of the IR's WAV
+  `data` chunk** (verified against the `.pgb`'s own `I00n` sections), and `Index` is just the
+  1-based library slot, re-resolved live by hash (backup `41` → wire `6`). **133 of 135 presets
+  convert now**; the 2 left are loopers (wire shape still unobserved).
+- **The op-21 rewrite exposed POD Go Edit's serializer**: EQ goes out class 1 and FX loop class 8
+  where the device reads back 23/9 — the pedal normalizes class bytes rather than binding on
+  them. Pinned in the move tests; our writes keep the device's own vocabulary.
+
+Also from the owner's reports: **swapping the wah or volume block to another type wedges the
+pedal** (op 40 rejected `-19`, then preset switching dies until reboot) — `swap_model` now
+refuses those client-side, and `add_block` refuses on POD Go outright (op 39 is erratic there and
+the editor has no add). The blank In/Out param labels in the GUI were the io-node symbols being
+HX-spelled — `build_io_node` now probes `P34_AppDSPFlowInput`/`…Output`, whose meta the POD Go's
+own `io.models` carries. FS7/FS8 in the 9-position layout are the external footswitch jacks
+(owner-identified; EXP2 exists too).
+
+Still open before "fully supported": a live fretwire move/restore on the pedal (our blobs carry
+the device's own read-back forms — accepted-in-principle, unproven on hardware), the looper, and
+preset key 12. 338 tests.

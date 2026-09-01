@@ -34,6 +34,16 @@
       dataStatus = { present: false, dir: "", files: 0 };
     }
     dataReady = dataStatus.present;
+    // Under fretwire-serve the backend outlives the page, so a reload can land on a live device
+    // session (it survives editor disconnects for a few minutes). Re-attach instead of showing a
+    // disconnected view over a session that's still open — `connect` is an idempotent re-read,
+    // not a second handshake, and the undo history rides along. Under Tauri and the mock a fresh
+    // page always answers false here, so nothing changes for them.
+    try {
+      if (await invoke("is_connected")) await connect();
+    } catch {
+      /* the disconnected view is the honest fallback */
+    }
   });
 
   let status = $state("Ready — WebKitGTK webview is painting.");

@@ -116,7 +116,10 @@ Built as surveyed, axum + rust-embed:
   closes it cleanly, so a closed tab doesn't leave the USB interface claimed all night (an
   unclean host shutdown with a session open is the state that leaves the pedal needing a power
   cycle). Guarded by a lease generation counter so a stale timer never closes a session an
-  editor came back to.
+  editor came back to. The page's side of the same coin: on startup the UI asks `is_connected`
+  and re-attaches to a live session automatically (`connect` is an idempotent re-read), so a
+  reload lands back in the editor — under Tauri and the mock that check is always false and
+  nothing changes.
 
 It is a separate crate, out of `default-members`, exactly as `fretwire-tauri` is — a built
 frontend must never become a prerequisite for `cargo build` (see the `default-members` comment in

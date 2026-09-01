@@ -162,8 +162,8 @@ tunnel: `ssh -L 8317:127.0.0.1:8317 <host>`, then open `http://127.0.0.1:8317/` 
 with a non-loopback `Host`/`Origin` are refused even on loopback (DNS rebinding reaches a local
 server from any web page your browser visits), and a second concurrent browser is refused — the
 editor is single-seat. The device session survives a tab refresh or a network blip (your undo
-history with it); after **5 minutes with no editor connected** the daemon closes it cleanly and
-the pedal is standalone again. A token flow for binding wider is planned; see
+history with it) and the page re-attaches to it automatically on reload; after **5 minutes with
+no editor connected** the daemon closes it cleanly and the pedal is standalone again. A token flow for binding wider is planned; see
 `docs/serve-mode.md`.
 
 ## Talking to a real device

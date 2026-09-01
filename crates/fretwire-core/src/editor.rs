@@ -996,14 +996,14 @@ impl Catalog {
                         &ps,
                         d,
                         0,
-                        "HelixStomp_AppDSPFlowInput",
+                        &["HelixStomp_AppDSPFlowInput", "P34_AppDSPFlowInput"],
                         "Input",
                     ),
                     output_node: self.build_io_node(
                         &ps,
                         d,
                         1,
-                        "HelixStomp_AppDSPFlowOutputMain",
+                        &["HelixStomp_AppDSPFlowOutputMain", "P34_AppDSPFlowOutput"],
                         "Output",
                     ),
                     grid: ps.dsp_grid(d),
@@ -1032,7 +1032,7 @@ impl Catalog {
         ps: &PresetStream,
         dsp: usize,
         kind: i64,
-        sym: &str,
+        sym_candidates: &[&str],
         display: &str,
     ) -> Option<EditorBlock> {
         const DISPLAY_NAMES: &[(&str, &str)] = &[
@@ -1042,6 +1042,14 @@ impl Catalog {
             ("pan", "Pan"),
             ("gain", "Level"),
         ];
+        // The node's device symbol is family-spelled (`HelixStomp_…` on the HX line, `P34_…` on
+        // the POD Go), so probe the loaded table for whichever spelling it actually has —
+        // otherwise the params come back unnamed (issue #15's blank In/Out labels).
+        let sym = sym_candidates
+            .iter()
+            .find(|s| self.symbols.params(s).is_some())
+            .copied()
+            .unwrap_or(sym_candidates[0]);
         let b = ps.dsp_io_node(dsp, kind)?;
         // IO nodes (gate / level-pan) have no category and no trailing-extra quirk.
         let mut params = name_params(

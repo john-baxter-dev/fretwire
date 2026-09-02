@@ -161,7 +161,7 @@ The server-side **directory browser** is now a nice-to-have for the data import 
 backup-to-daemon path — typing an absolute path blind is a poor first-run experience, but the
 SSH route covers it and nothing else needs it.
 
-### 4. Auth — DONE (2026-09-02): a bearer token beyond loopback, no TLS to start
+### 4. Auth — DONE (2026-09-02, confirmed live on the LAN): a bearer token beyond loopback, no TLS to start
 
 This grants write access to someone's guitar rig. What stands, in layers:
 

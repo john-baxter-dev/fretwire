@@ -17,8 +17,9 @@ own origin with no token and gets a 401, so the token is the defense and the dae
 which names the user types. Decided with the user: the link is the credential (no login page) and
 **no TLS to start** — a LAN bind assumes a trusted network, and the SSH tunnel, a VPN, or a TLS
 proxy cover the rest. Probed live: 401/200 by token, Host and Origin rules, socket close 4401,
-file generation and reuse, the env var, and an unchanged tokenless loopback. `docs/serve-mode.md`
-§4.
+file generation and reuse, the env var, and an unchanged tokenless loopback — and confirmed on the
+LAN the same day (a wide bind, the printed link opened from another machine, editor up with no
+prompt). `docs/serve-mode.md` §4.
 
 **Serve mode: files cross the seam as bytes (2026-09-02).** Every file command took a path on
 the *serving* machine, which under Tauri was also the user's machine and under serve is a Pi

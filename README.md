@@ -201,6 +201,11 @@ write you did not enable. Firmware and flash traffic never appear, as everywhere
 Export your presets first (`backup_export`, or the editor's Export) before letting anything edit
 them.
 
+One pedal, one session at a time: each Claude Code session starts its own `fretwire-mcp`, and
+whichever one connects first holds the USB interface — a second session's `device_connect` gets
+"Device or resource busy" until the first runs `device_disconnect` (or exits). The same applies
+to the GUI, the daemon and the CLI, which all claim the device the same way.
+
 ## Talking to a real device
 
 Linux's default `uaccess` tags only `/dev/snd/*`, not the HX Stomp's raw vendor USB node, so without

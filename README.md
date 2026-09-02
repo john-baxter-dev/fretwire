@@ -27,6 +27,7 @@ from your own HX Edit installation (see [The reference data](#the-reference-data
 | `crates/fretwire-cli`      | `fretwire` command-line driver |
 | `crates/fretwire-tauri`    | the graphical editor — Tauri (WebKitGTK) + Svelte |
 | `crates/fretwire-serve`    | the same editor served over HTTP, for headless machines |
+| `crates/fretwire-mcp`      | an MCP server: a curated tool surface for AI assistants |
 | `captures/`                | per-capture action notes + small preset-stream fixtures used by the tests |
 | `docs/`, `ROADMAP.md`      | protocol notes, preset format, safety, and the plan |
 
@@ -178,6 +179,27 @@ are sitting at, and a preset export is a download (with an option to save it on 
 instead, for a backup that lives with the rig). The one exception is the first-run data import —
 the HX Edit installer is about a gigabyte, so that names a path on the daemon's machine, and
 `fretwire import-data` over SSH is the easy way to do it.
+
+### AI assistants: the MCP server
+
+`fretwire-mcp` exposes the editor to anything that speaks the Model Context Protocol over stdio —
+Claude Code, Claude Desktop and the like. Not the whole command surface: a curated set of tools
+that answer in plain text (a preset as a listing of its blocks and settings, a diff as the lines
+that changed), because that is what an assistant reasons over. Half of them need no pedal: they
+read fretwire export files and the model catalog.
+
+```
+cargo build --release -p fretwire-mcp
+claude mcp add fretwire -- target/release/fretwire-mcp            # Claude Code
+```
+
+It is **read-only unless told otherwise**. `--allow-writes` adds the tools that change the pedal's
+edit buffer (parameters, bypass, blocks, snapshots, preset changes, undo) — audible immediately,
+gone on a preset change or power cycle. `--allow-save` adds the one tool that writes flash.
+Ungated tools are not merely refused, they are not listed, so an assistant cannot be talked into a
+write you did not enable. Firmware and flash traffic never appear, as everywhere in fretwire.
+Export your presets first (`backup_export`, or the editor's Export) before letting anything edit
+them.
 
 ## Talking to a real device
 

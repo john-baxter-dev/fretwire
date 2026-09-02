@@ -203,7 +203,31 @@ proxy such as Caddy for real certificates. One consequence worth knowing: on a p
 address browsers withhold secure-context APIs (`crypto.randomUUID` among them); `serve.js`
 already falls back where it matters.
 
-## A second consumer: MCP
+## A second consumer: MCP — landed 2026-09-02 (`crates/fretwire-mcp`)
+
+**What was built.** A stdio MCP server over `fretwire-commands`, on the official `rmcp` SDK.
+The surface is exactly the shape argued for below: **14 read tools**, +10 with `--allow-writes`,
++1 (`preset_save`) with `--allow-save`; ungated tools are absent from `tools/list`, not refused.
+Results are text, not DTOs — `summary.rs` renders a preset as its blocks in signal order with
+values the way HX Edit displays them (the DTO's format rules run forwards for display and
+*backwards* for `param_set`, so an assistant says "6.5" or "450 ms", never a stored 0.65). The
+offline half (`backup_list` / `backup_describe` / `backup_diff`, `catalog_categories` /
+`catalog_models`, `data_status`) decodes export files through the catalog into the same DTO the
+live path produces, so one summarizer serves both. The live half (`device_status` / `_connect` /
+`_disconnect`, `preset_read`, `block_params`, `preset_list`, `setlists`, `backup_export`, then the
+gated `preset_goto`, `block_bypass`, `param_set`, `block_add` / `_swap` / `_delete`,
+`snapshot_select`, `undo` / `redo`, `preset_revert`, `preset_save`) wraps the command layer
+directly, so the edit history, the heartbeat and every safety rule are the GUI's. Verified
+2026-09-02 offline on a fixture export and live read-only against the HX Stomp.
+
+**Not done, by choice:** the streamable-HTTP transport inside `fretwire-serve` (one process
+owning the pedal, human in the browser while the assistant edits). It needs a second seat on the
+single-editor lease and a "preset changed" broadcast for host-originated edits; the stdio binary
+opens its own session and cannot run beside the GUI or daemon. Also open: a `model_params` tool
+(a model's parameters before it is in a preset — needs a catalog accessor), and HX Edit `.hxb`
+files, whose tones are JSON rather than preset streams.
+
+The survey that led here, kept as the rationale:
 
 Asked for the same day (2026-08-23), independently: *"Would you consider adding MCP support? That
 would enable all sorts of AI-assisted fun. CLI seems like it might be inefficient for that purpose

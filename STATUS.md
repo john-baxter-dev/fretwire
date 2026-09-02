@@ -2,6 +2,23 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**MCP server (2026-09-02).** `fretwire-mcp` — the third consumer the command-layer lift was for
+(ROADMAP Phase 10, survey in `docs/serve-mode.md`). A stdio server on the official `rmcp` SDK
+with a **curated** surface rather than the 70 commands: 14 read tools, +10 with `--allow-writes`
+(edit-buffer changes: parameters, bypass, blocks, snapshots, preset changes, undo), +1 with
+`--allow-save` (flash); an ungated tool is not listed at all. Results are text — a preset as its
+blocks in signal order with values as HX Edit displays them, a diff as the lines that changed —
+and `param_set` takes display units back ("6.5", "450 ms", an enum's label, on/off): the DTO's
+format rules run backwards, with the unit picking the rule where a param switches by magnitude.
+The offline half decodes fretwire export files through the catalog into the same DTO the live
+path uses, so one summarizer serves both; the live half wraps `fretwire-commands` directly, so
+history, heartbeat and the safety rules are the GUI's. Out of `default-members` like the other
+front ends (`cargo test -p fretwire-mcp`; a CI job runs it). Verified over stdio: handshake,
+tool lists per gate, the offline tools on a fixture export (names, units, a diff), and a live
+read-only session against the HX Stomp (connect, read with params, list, disconnect cleanly). Not
+built: the in-daemon HTTP transport (needs a second seat on the single-editor lease), a
+`model_params` tool, `.hxb` input.
+
 **Serve mode binds beyond loopback with a token (2026-09-02).** Phase 10's last blocking item.
 Loopback stays tokenless; any wider `--bind` now requires a bearer token instead of being
 refused — generated once (32 bytes of `/dev/urandom`, hex) into

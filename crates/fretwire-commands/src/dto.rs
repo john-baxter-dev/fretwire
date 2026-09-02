@@ -107,7 +107,7 @@ fn param_kind(v: &ParamValue) -> &'static str {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct ParamDto {
     /// Wire selector (edit target key 28) — pass back to `set_param`.
     pub index: usize,
@@ -149,7 +149,7 @@ pub struct ParamDto {
     pub default: Option<f64>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct SegStopDto {
     pub value: f64,
     pub label: String,
@@ -158,7 +158,7 @@ pub struct SegStopDto {
 /// Display recipe for a continuous param — see [`fretwire_core::editor::NumFormat`]. The panel
 /// applies `scale` and `offset`, picks the first rule bracketing the result, multiplies by its
 /// `mult`, and fills the printf-ish `template`.
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct NumFormatDto {
     pub scale: f64,
     /// Added after `scale`; non-zero only for the bipolar controls (pan: ×200 − 100).
@@ -166,7 +166,7 @@ pub struct NumFormatDto {
     pub rules: Vec<FormatRuleDto>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct FormatRuleDto {
     /// `null` for an unbounded end — JSON has no infinity.
     pub lo: Option<f64>,
@@ -221,7 +221,7 @@ impl From<&EditorParam> for ParamDto {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct BlockDto {
     /// Wire slot — global across DSPs (`dsp * 20 + index`), and the edit address.
     pub slot: i64,
@@ -320,7 +320,7 @@ pub struct DspDto {
     pub dsp_load: f64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct PresetDto {
     pub name: Option<String>,
     pub index: Option<i64>,

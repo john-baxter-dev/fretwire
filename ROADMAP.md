@@ -716,7 +716,13 @@ for 3 event names total.
       this has never been tested here.
 - [ ] The arm64 **serve** artifact, once the crate exists (the arm64 CLI shipped independently —
       Phase 8).
-- [ ] **MCP server — a third consumer of the same lift.** Asked for independently on 2026-08-23,
+- [x] **MCP server — a third consumer of the same lift.** DONE (2026-09-02): `fretwire-mcp`, a
+      stdio server on the official `rmcp` SDK — 14 read tools (offline export-file and catalog
+      tools, live reads), +10 edit-buffer tools behind `--allow-writes`, +`preset_save` behind
+      `--allow-save`; ungated tools are unlisted. Text results in HX Edit's display units, set
+      the same way. Left open: the in-daemon HTTP transport (needs a second seat on the lease),
+      `model_params`, `.hxb` input. See `docs/serve-mode.md`. The original case:
+      asked for independently on 2026-08-23,
       the same day as serve mode, which is the strongest argument for doing the lift at all. The
       requester's guess that the CLI is a poor fit is correct and measurable: ~60 live subcommands
       each call `Session::connect()`, so it's one handshake and teardown per invocation with no

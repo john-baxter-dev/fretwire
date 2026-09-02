@@ -115,9 +115,6 @@ and 537/627 POD Go symbols where stripping alone got 372.
 
 ## What is still unknown
 
-- **The looper's slot shape.** The POD Go's `@type` 4 has never been seen on a wire preset, so
-  `hxb-convert` refuses the owner's two looper presets rather than guess. Everything else
-  converts — see "Backups convert" below.
 - **Whether the pedal accepts the device class vocabulary in an op-21 write.** Our structural
   rewrites (move) send the pedal's own read-back document; POD Go Edit's serializer re-spells
   the EQ/FX-loop classes and the IR bank on the way in (see "Structural edits"), and only *that*
@@ -283,14 +280,21 @@ re-spells the EQ as class `1` and the FX loop as class `8` where the device read
 and a bare uuid (see "Backups convert"), drops zero-valued layout keys, and sorts controller-row
 assignments by id. Our rewrite keeps the device's own read-back forms.
 
-## Backups convert  [solid — 2026-08-28; IRs 2026-08-31]
+## Backups convert  [solid — 2026-08-28; IRs 2026-08-31; loopers 2026-09-01]
 
 `fretwire hxb-convert` turns a `.pgb` into restorable presets, verified against the two presets
 held in **both** forms — the backup's tone JSON and the same unit's own wire stream ("US Deluxe
 Nrm" and "AC30 Ambient"). Converting the tone reproduces the device's preset slot for slot:
 every block, class, parameter value, the footswitch layout with its toe-switch pair, the
-controller table and all four snapshot matrices (`fretwire-data/tests/pgb_to_wire.rs`). Of the
-owner's 135 presets, **133 convert**; the 2 refusals are the looper presets above.
+controller table and all four snapshot matrices (`fretwire-data/tests/pgb_to_wire.rs`). **All
+135 of the owner's presets convert**, no refusals left.
+
+**The looper is the HX looper** (startup capture with a `HD2_LooperMono` in slot 3, 2026-09-01):
+the POD Go's `@type` 4 lands on the wire as the same slot shape the HX writes for its `@type` 6 —
+slot kind 7, class 22, the model's `PodGo.sym` index at key 8 (`127` = `HD2_LooperMono`), and
+only the tone's four stored parameters (`Playback`, `Overdub`, `lowCut`, `highCut`) in a bank at
+key 7. `encode_looper` serves both devices; the two backup presets that used to refuse
+(`HD2_LooperOneSwitchMono` at slot 1) now convert into that shape, pinned against the capture.
 
 **The IR block is fully understood** (second wire sample + the move capture's op-21 blob):
 
@@ -323,13 +327,11 @@ What the POD Go's tones do differently (each reconciled, not assumed):
 
 ### What would still help
 
-Both capture asks were delivered (the move + set-to-empty captures and the second IR preset —
-they produced everything in the three sections above). What's left needs the pedal, not Wireshark:
+Every capture ask was delivered (move + set-to-empty, the second IR preset, and the looper —
+they produced everything in the sections above). What's left needs the pedal, not Wireshark:
 
 - **A live fretwire `move` on the POD Go** — our rewrite is byte-verified against POD Go Edit's,
   but ours sends the device's own class/IR spellings where POD Go Edit re-spells them, and the
   pedal accepting its own read-back forms via op 21 is still [hypothesis]. Recoverable if wrong:
   the write is edit-buffer only, and a same-slot `goto` reloads from flash.
 - **A restore of a converted preset**, same caveat and same recovery.
-- **A looper preset seen on the wire** (load one in POD Go Edit and capture the startup, like
-  the IR one) — would lift the last two conversion refusals.

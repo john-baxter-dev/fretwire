@@ -4240,3 +4240,14 @@ own `io.models` carries. FS7/FS8 in the 9-position layout are the external foots
 Still open before "fully supported": a live fretwire move/restore on the pedal (our blobs carry
 the device's own read-back forms — accepted-in-principle, unproven on hardware), the looper, and
 preset key 12. 338 tests.
+
+## Sixty-eighth round (2026-09-01) — the looper closes the converter
+
+The owner delivered the last capture ask: a startup with a `HD2_LooperMono` in slot 3 of an
+otherwise stock preset. **The POD Go's looper is the HX looper on the wire** — slot kind 7,
+class 22, the model's `PodGo.sym` index at key 8 (`127`), and the four stored params in a bank
+at key 7 — so the POD Go's `@type` 4 now routes to `encode_looper` like the HX's `@type` 6, and
+the two backup presets that used to refuse convert. **All 135 of the owner's presets convert.**
+`tests/pgb_to_wire.rs` pins the converted slot shape against the capture's (model index and
+enabled flag aside — different model, same shape). `docs/pod-go.md`: the looper leaves the
+unknowns list; the capture asks are all delivered, only hardware tests remain. 339 tests.

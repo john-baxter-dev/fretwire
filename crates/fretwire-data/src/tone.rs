@@ -257,7 +257,7 @@ pub fn block_class(tone_type: i64, symbol: &str, paired_symbol: Option<&str>) ->
 /// | 0 + `HD2_CabMicIr_…` | cab | **26** | one sample (`CabMicIr_1x12USDeluxe`); the HX writes 31 |
 /// | 1 | amp | 17 | two amps — same as the HX |
 /// | 2 | impulse response | 15 | two samples, and POD Go Edit's own op-21 write keeps 15 |
-/// | 4 | looper | ? | never seen on a POD Go wire preset — refused |
+/// | 4 | looper | 22 | not via this table: the HX looper's slot shape, byte for byte (kind 7, model index at key 8, params at key 7) — one sample, 2026-09-01; see [`encode_looper`] |
 /// | 5 + `HD2_FXLoop…` | FX loop | **9** | two samples, `@trails` extra appended |
 /// | 5 | delay / reverb | 8 | four samples, `@trails` extra — the class the HX gives its `@type` 7 |
 ///
@@ -1132,16 +1132,13 @@ fn encode_block(
         .and_then(Json::as_str)
         .ok_or_else(|| Error::Stream("no @model".into()))?;
     let tone_type = block.get("@type").and_then(Json::as_i64).unwrap_or(0);
-    if chain == Chain::HxRows && tone_type == 6 {
+    // The looper: HX `@type` 6, POD Go `@type` 4 — one slot shape on both devices.
+    let looper_type = match chain {
+        Chain::HxRows => 6,
+        Chain::SingleRow { .. } => 4,
+    };
+    if tone_type == looper_type {
         return encode_looper(block, model, syms);
-    }
-    if chain != Chain::HxRows && tone_type == 4 {
-        // The POD Go numbers its types differently: 4 is its looper. It has never been seen on a
-        // POD Go wire preset, and this blob is written to flash, so it stays a refusal, not a
-        // guess. (Its @type 2, the impulse response, converts — see the key-27 branch below.)
-        return Err(Error::Stream(format!(
-            "{model} is a looper (@type 4) and no POD Go wire preset we hold contains one —              its slot shape is unknown"
-        )));
     }
 
     let (index, symbol, params) = resolve_symbol(model, block, syms)?;
@@ -1292,7 +1289,10 @@ fn encode_block(
 /// params the tone actually has, not a nil-padded full list.
 ///
 /// [solid — the "Sultans" Floor stream holds a device-written looper slot and the same unit's
-/// `.hxb` holds its tone; `tests/paired_blocks.rs` compares the two]
+/// `.hxb` holds its tone; `tests/paired_blocks.rs` compares the two. The POD Go writes the
+/// identical shape — its `@type` 4: the 2026-09-01 startup capture holds `HD2_LooperMono` at
+/// slot 3 as `{8: 127, 9: 22, 10: false, 7: {2: 4, 3: 4, 4: [...]}}`, index 127 being the
+/// symbol's `PodGo.sym` position; `tests/pgb_to_wire.rs` pins it]
 fn encode_looper(block: &Json, model: &str, syms: &DeviceSymbols) -> Result<Value> {
     let (index, _, params) = resolve_symbol(model, block, syms)?;
     let values: Vec<Value> = params

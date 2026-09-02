@@ -302,3 +302,84 @@ fn the_second_preset_reproduces_too_including_the_ir() {
         );
     }
 }
+
+/// The looper: the POD Go's `@type` 4 converts through the HX looper encoder, because the
+/// device writes the identical slot shape. The oracle is the owner's 2026-09-01 startup capture
+/// (a `HD2_LooperMono` dropped into an otherwise stock preset, slot 3, bypassed); the tones are
+/// the backup's two looper presets (`SL01[0]`/`SL01[2]`, a `HD2_LooperOneSwitchMono` at slot 1),
+/// which were the last two refusals. Different model, different slot, same preset-independent
+/// shape: slot kind 7, class 22, the model's `PodGo.sym` index at key 8, and exactly the tone's
+/// four stored parameters (`Playback`, `Overdub`, `lowCut`, `highCut`) in a bank at key 7 —
+/// not the symbol's ten.
+#[test]
+fn the_looper_converts_in_the_captured_shape() {
+    let (Some(syms), Some(hxb), Some(oracle)) = (
+        symbols(),
+        backup(),
+        PresetStream::parse(
+            &std::fs::read(captures().join("looper-preset.msgpack.bin")).unwrap_or_default(),
+        )
+        .ok(),
+    ) else {
+        eprintln!("skipping: needs the POD Go looper capture + backup + reference data");
+        return;
+    };
+    let slot =
+        |ps: &PresetStream, i: usize| match map_get(&ps.preset, 0).and_then(|m| map_get(m, 22)) {
+            Some(Value::Array(slots)) => slots[i].clone(),
+            other => panic!("no slot array: {other:?}"),
+        };
+    // Strip the model index (key 8) and enabled flag (key 10) — the two things that legitimately
+    // differ between the captured looper and the backup's — leaving the shape to compare whole.
+    let shape = |v: &Value| {
+        let mut v = v.clone();
+        if let Some(Value::Map(content)) = map_get_mut(&mut v, 20) {
+            content.retain(|(k, _)| !matches!(k.as_i64(), Some(8 | 10)));
+            content.sort_by_key(|(k, _)| k.as_i64());
+        }
+        v
+    };
+    let index_of = |sym: &str| syms.index_of(sym).expect(sym) as i64;
+
+    let captured = slot(&oracle, 3);
+    let content = map_get(&captured, 20).expect("looper content");
+    assert_eq!(
+        map_get(&captured, 19).and_then(Value::as_i64),
+        Some(7),
+        "slot kind"
+    );
+    assert_eq!(
+        map_get(content, 8).and_then(Value::as_i64),
+        Some(index_of("HD2_LooperMono")),
+        "the captured looper's model index is its PodGo.sym position (127)"
+    );
+    assert_eq!(map_get(content, 10).and_then(Value::as_bool), Some(false));
+
+    for idx in [0, 2] {
+        let tone = hxb.setlists()[1].presets[idx]
+            .clone()
+            .unwrap_or_else(|| panic!("SL01[{idx}]"))
+            .tone;
+        let tone = tone.as_object().expect("tone object").clone();
+        let mut donor = oracle.clone();
+        vandalise(&mut donor);
+        let report = apply_tone(&mut donor, &tone, &syms).expect("the looper preset converts");
+        assert!(report.blocks >= 1, "SL01[{idx}] converts its blocks");
+        let got = slot(&donor, 1);
+        let got_content = map_get(&got, 20).expect("converted looper content");
+        assert_eq!(
+            map_get(got_content, 8).and_then(Value::as_i64),
+            Some(index_of("HD2_LooperOneSwitchMono")),
+            "the backup's looper resolves to its own symbol"
+        );
+        assert_eq!(
+            map_get(got_content, 10).and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            shape(&got),
+            shape(&captured),
+            "SL01[{idx}]: the converted looper must have the captured slot shape"
+        );
+    }
+}

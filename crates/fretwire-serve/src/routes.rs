@@ -22,6 +22,9 @@ struct Assets;
 /// WebSocket close code for "another editor holds the lease" — in the 4000–4999 private-use
 /// range, mirroring HTTP 409. The client must not reconnect on it.
 const CLOSE_CONFLICT: u16 = 4409;
+/// WebSocket close code for a missing or wrong token, mirroring HTTP 401. Accept-then-close like
+/// the lease refusal, so the page can ask for the token instead of retrying against a 1006.
+const CLOSE_UNAUTHORIZED: u16 = 4401;
 
 pub struct Served {
     pub app: AppState,
@@ -34,6 +37,12 @@ pub struct Served {
     lease: Mutex<Lease>,
     /// `index.html` with the transport marker injected, prepared once at startup.
     index: String,
+    /// The bearer token every invoke and event socket must carry, when the bind is wider than
+    /// loopback (or one was given anyway). `None` on a plain loopback bind — see `crate::token`.
+    token: Option<String>,
+    /// The bound port, which a `Host` header must name when the token stands in for the
+    /// loopback rule.
+    port: u16,
 }
 
 /// How long the daemon may sit with no editor connected before it closes the device session,
@@ -83,14 +92,22 @@ impl Lease {
 }
 
 impl Served {
-    pub fn new(app: AppState, events: broadcast::Sender<String>) -> Self {
+    pub fn new(
+        app: AppState,
+        events: broadcast::Sender<String>,
+        token: Option<String>,
+        port: u16,
+    ) -> Self {
         let raw = Assets::get("index.html").expect("dist/index.html is embedded (build.rs)");
         let raw = String::from_utf8(raw.data.into_owned()).expect("index.html is UTF-8");
         // The marker must be an inline, non-module script so it runs before Vite's deferred
-        // module scripts — ipc.js picks its transport at module evaluation.
+        // module scripts — ipc.js picks its transport at module evaluation. `auth` tells the
+        // page to ask for a token up front when it has none, instead of finding out on the
+        // first 401.
+        let marker = serde_json::json!({ "auth": token.is_some() });
         let index = raw.replacen(
             "<head>",
-            "<head><script>window.__FRETWIRE_SERVE__={}</script>",
+            &format!("<head><script>window.__FRETWIRE_SERVE__={marker}</script>"),
             1,
         );
         assert!(
@@ -102,6 +119,8 @@ impl Served {
             events,
             lease: Mutex::new(Lease::default()),
             index,
+            token,
+            port,
         }
     }
 }
@@ -161,8 +180,15 @@ async fn invoke(
     headers: HeaderMap,
     body: String,
 ) -> Response {
-    if let Err(refused) = origin_guard(&headers) {
+    if let Err(refused) = origin_guard(&srv, &headers) {
         return refused;
+    }
+    let bearer = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    if !srv.authorized(bearer) {
+        return (StatusCode::UNAUTHORIZED, "missing or wrong token").into_response();
     }
     // Forms can't send application/json, so requiring it shuts out CSRF POSTs for free. (The
     // body is taken as a String and parsed by hand because axum's Json extractor would answer
@@ -208,6 +234,10 @@ async fn invoke(
 struct EventsQuery {
     /// The page's random id — the lease key.
     client: String,
+    /// The bearer token, as a query parameter because browser JavaScript cannot set headers on
+    /// a WebSocket handshake. Same wire as everything else; the daemon's own logs don't record
+    /// query strings.
+    token: Option<String>,
 }
 
 async fn events(
@@ -216,13 +246,23 @@ async fn events(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    if let Err(refused) = origin_guard(&headers) {
+    if let Err(refused) = origin_guard(&srv, &headers) {
         return refused;
     }
-    ws.on_upgrade(move |socket| event_socket(srv, q.client, socket))
+    let authorized = srv.authorized(q.token.as_deref());
+    ws.on_upgrade(move |socket| event_socket(srv, q.client, authorized, socket))
 }
 
-async fn event_socket(srv: Arc<Served>, client: String, mut socket: WebSocket) {
+async fn event_socket(srv: Arc<Served>, client: String, authorized: bool, mut socket: WebSocket) {
+    if !authorized {
+        let _ = socket
+            .send(Message::Close(Some(CloseFrame {
+                code: CLOSE_UNAUTHORIZED,
+                reason: "missing or wrong token".into(),
+            })))
+            .await;
+        return;
+    }
     let claimed = srv.lease.lock().expect("lease lock").claim(&client);
     if !claimed {
         // Accept-then-close so the browser sees the code; a refused upgrade would be
@@ -294,24 +334,58 @@ fn spawn_idle_close(srv: Arc<Served>, generation: u64) {
 /// The Origin/Host check, on for every non-static request regardless of bind address: a local
 /// HTTP server without one is reachable by any web page the browser visits, via DNS rebinding,
 /// firewalls notwithstanding (`docs/serve-mode.md` §4).
-fn origin_guard(headers: &HeaderMap) -> Result<(), Response> {
-    let host_ok = headers
-        .get(header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(host_is_loopback);
-    if !host_ok {
+fn origin_guard(srv: &Served, headers: &HeaderMap) -> Result<(), Response> {
+    let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
+    let tokened = srv.token.is_some();
+    if !host.is_some_and(|h| host_allowed(h, tokened, srv.port)) {
         return Err((StatusCode::FORBIDDEN, "refused: unexpected Host").into_response());
     }
     if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
-        let ok = origin
-            .split_once("://")
-            .map(|(_, rest)| rest)
-            .is_some_and(host_is_loopback);
+        let authority = origin.split_once("://").map(|(_, rest)| rest);
+        // With a token the page may be at any name (an IP, `pi.local`) — the rule is same-origin
+        // with the Host actually used. Without one, the loopback rule stands on both.
+        let ok = if tokened {
+            authority == host
+        } else {
+            authority.is_some_and(host_is_loopback)
+        };
         if !ok {
             return Err((StatusCode::FORBIDDEN, "refused: cross-origin request").into_response());
         }
     }
     Ok(())
+}
+
+impl Served {
+    /// Whether `given` unlocks this daemon: always, with no token configured; otherwise only an
+    /// exact (constant-time) match.
+    fn authorized(&self, given: Option<&str>) -> bool {
+        match &self.token {
+            None => true,
+            Some(expected) => given.is_some_and(|g| crate::token::matches(expected, g)),
+        }
+    }
+}
+
+/// Whether a `Host` header value may reach the API. Loopback always. With a token configured,
+/// any name on our port: DNS rebinding can make a hostile page land here, but it then runs on
+/// its own origin, with no token, and gets a 401 — the token is the defense, and the daemon
+/// cannot know which names (an IP, `pi.local`, a DNS entry) the user legitimately types.
+fn host_allowed(value: &str, tokened: bool, port: u16) -> bool {
+    host_is_loopback(value) || (tokened && host_port(value) == Some(port))
+}
+
+/// The explicit port in a `Host`-style value, if any (`[::1]:8317`, `pi.local:8317`).
+fn host_port(value: &str) -> Option<u16> {
+    let after_host = match value.strip_prefix('[') {
+        Some(rest) => rest.split_once(']').map(|(_, tail)| tail)?,
+        None => value.rsplit_once(':').map(|(_, port)| port)?,
+    };
+    after_host
+        .strip_prefix(':')
+        .unwrap_or(after_host)
+        .parse()
+        .ok()
 }
 
 /// Whether a `Host`-style value (name or address, optional port) is loopback.
@@ -329,7 +403,7 @@ fn host_is_loopback(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Lease, host_is_loopback};
+    use super::{Lease, host_allowed, host_is_loopback, host_port};
 
     /// The idle-close arming rules: a stale timer must see any claim since its release — even a
     /// claim-and-release pair, which armed its own fresher timer.
@@ -384,5 +458,32 @@ mod tests {
         ] {
             assert!(!host_is_loopback(h), "{h} should be refused");
         }
+    }
+
+    /// The token relaxes the Host rule to "our port" and nothing else: loopback still passes,
+    /// a foreign name on our port passes (the token, not the name, is the defense), any other
+    /// port does not, and without a token the loopback rule is untouched.
+    #[test]
+    fn a_token_admits_any_name_on_our_port() {
+        assert!(host_allowed("localhost:8317", true, 8317));
+        assert!(host_allowed("pi.local:8317", true, 8317));
+        assert!(host_allowed("192.168.1.20:8317", true, 8317));
+        assert!(host_allowed("[fe80::1]:8317", true, 8317));
+        assert!(!host_allowed("pi.local:8318", true, 8317));
+        assert!(
+            !host_allowed("pi.local", true, 8317),
+            "no port is not our port"
+        );
+        assert!(!host_allowed("pi.local:8317", false, 8317));
+        assert!(host_allowed("127.0.0.1:8317", false, 8317));
+    }
+
+    #[test]
+    fn host_ports_parse() {
+        assert_eq!(host_port("pi.local:8317"), Some(8317));
+        assert_eq!(host_port("[::1]:8317"), Some(8317));
+        assert_eq!(host_port("[::1]"), None);
+        assert_eq!(host_port("pi.local"), None);
+        assert_eq!(host_port("pi.local:x"), None);
     }
 }

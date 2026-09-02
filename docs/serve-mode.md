@@ -2,9 +2,9 @@
 
 Status: **serve mode works on loopback** (2026-09-01; a live browser-to-pedal session confirmed the same day) and **files cross the seam as bytes** (2026-09-02) — the §1 lift landed 2026-08-31
 (`fretwire-commands`), and `fretwire-serve` (§2) plus the ipc.js HTTP transport are built and
-verified end-to-end; IRs and exports cross the seam as bytes (§3). Still open: the token flow for
-a non-loopback bind (§4 — until then a wider `--bind` is refused and SSH tunneling is the remote
-path); the server-side directory browser (§3) is a nice-to-have. Opened 2026-08-23; this doc is the survey that should stop the next person re-deriving it.
+verified end-to-end; IRs and exports cross the seam as bytes (§3). A bind beyond loopback takes a
+bearer token (§4, 2026-09-02; plain HTTP on a trusted network, SSH tunnel otherwise). Nice-to-
+haves left: the server-side directory browser (§3). Opened 2026-08-23; this doc is the survey that should stop the next person re-deriving it.
 
 It covers **two** requested features, because they turn out to rest on the same refactor: serving
 the editor over HTTP to a headless machine, and exposing it over MCP to an LLM client. The lift
@@ -161,17 +161,47 @@ The server-side **directory browser** is now a nice-to-have for the data import 
 backup-to-daemon path — typing an absolute path blind is a poor first-run experience, but the
 SSH route covers it and nothing else needs it.
 
-### 4. Auth, before it binds to anything but loopback — partially done (2026-09-01)
+### 4. Auth — DONE (2026-09-02): a bearer token beyond loopback, no TLS to start
 
-This grants write access to someone's guitar rig. Minimum bar:
+This grants write access to someone's guitar rig. What stands, in layers:
 
-- default to `127.0.0.1`; going wider is an explicit flag — **done, stricter**: a non-loopback
-  `--bind` is *refused* until the token exists; the supported remote path is an SSH tunnel
-  (`ssh -L 8317:127.0.0.1:8317 <host>`)
-- **check the `Origin` header** — a local HTTP server without one is reachable by any web page the
-  laptop visits, via DNS rebinding, regardless of firewalls — **done, always on** (`Host` and
-  `Origin` both, plus a `Content-Type: application/json` gate on invokes, which forms can't send)
-- a token for the non-loopback case — **still open**, the one piece blocking a LAN bind
+- **Loopback by default, tokenless.** Only local processes reach the port; the supported remote
+  path with no setup is an SSH tunnel (`ssh -L 8317:127.0.0.1:8317 <host>`).
+- **`Host`/`Origin` always checked** (2026-09-01) — a local HTTP server without that is reachable
+  by any web page the laptop visits, via DNS rebinding, regardless of firewalls — plus a
+  `Content-Type: application/json` gate on invokes, which forms can't send.
+- **A token for anything wider** (2026-09-02). Decided in discussion the same day: the **link is
+  the credential** (a fragment, not a login page), and **no TLS in v1**.
+
+How the token works:
+
+- **Generated once**, 32 bytes from `/dev/urandom` as hex, kept in
+  `~/.local/share/fretwire/serve-token` (mode 0600, beside the data dir so a data wipe never
+  touches it; `--token-file` moves it). `--token` or `FRETWIRE_SERVE_TOKEN` override it — the env
+  form is for a systemd unit's `Environment=`. Giving `--token` on loopback demands it there too.
+- **Printed at startup** as `http://<host>:8317/#token=…`. The fragment never reaches the server,
+  its logs, or a `Referer`; the page reads it once, keeps it in `localStorage` (per origin), and
+  strips it from the address bar. With no stored token and the daemon's injected marker saying
+  `auth: true`, the page asks for one up front (a paste box) rather than failing on its first
+  call; a 401 on an invoke or a **4401** close on the event socket forgets the stored token and
+  asks again, so a rotated token never leaves a page silently broken.
+- **Carried** as `Authorization: Bearer` on every invoke and as `?token=` on the WebSocket
+  handshake (browser JavaScript cannot set headers there; the daemon logs no query strings).
+  Compared constant-time. Static assets stay open — the page has to load before it can read the
+  fragment, and `index.html` holds nothing secret.
+- **`Host` relaxes to "our port"** when a token is configured, and `Origin`, if present, must equal
+  `Host`. The daemon cannot know which names a user legitimately types (an IP, `pi.local`, a DNS
+  entry), and it doesn't need to: a DNS-rebinding page lands on *its* origin, whose `localStorage`
+  holds no token, and gets a 401. The token is the defense; the strict loopback rule stays for a
+  tokenless bind.
+
+**No TLS, and why.** A self-signed certificate means browser warnings and certificate management
+for every user, and it doesn't stop a hostile network from simply refusing the connection. The
+honest statement, printed under the link, is that a LAN bind assumes a **trusted network** (home
+Wi-Fi). For anything else: the SSH tunnel, Tailscale/WireGuard (encryption for free), or a reverse
+proxy such as Caddy for real certificates. One consequence worth knowing: on a plain-HTTP LAN
+address browsers withhold secure-context APIs (`crypto.randomUUID` among them); `serve.js`
+already falls back where it matters.
 
 ## A second consumer: MCP
 

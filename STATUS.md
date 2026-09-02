@@ -2,6 +2,24 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Serve mode binds beyond loopback with a token (2026-09-02).** Phase 10's last blocking item.
+Loopback stays tokenless; any wider `--bind` now requires a bearer token instead of being
+refused — generated once (32 bytes of `/dev/urandom`, hex) into
+`~/.local/share/fretwire/serve-token` (0600, beside the data dir), overridable with `--token` /
+`FRETWIRE_SERVE_TOKEN` / `--token-file`, and printed at startup as the link to open,
+`http://<host>:8317/#token=…`. The fragment never reaches the server or a Referer; `serve.js`
+reads it once, keeps it per origin, strips it from the address bar, sends it as
+`Authorization: Bearer` on invokes and `?token=` on the event socket, and puts up a paste box when
+the daemon's marker says a token is needed and none is stored (or on a 401 / WebSocket close
+4401 — a rotated token gets asked for, not silently failed). Constant-time compare. With a token
+the `Host` rule relaxes to "our port" and `Origin` must equal `Host`: a rebinding page lands on its
+own origin with no token and gets a 401, so the token is the defense and the daemon needn't guess
+which names the user types. Decided with the user: the link is the credential (no login page) and
+**no TLS to start** — a LAN bind assumes a trusted network, and the SSH tunnel, a VPN, or a TLS
+proxy cover the rest. Probed live: 401/200 by token, Host and Origin rules, socket close 4401,
+file generation and reuse, the env var, and an unchanged tokenless loopback. `docs/serve-mode.md`
+§4.
+
 **Serve mode: files cross the seam as bytes (2026-09-02).** Every file command took a path on
 the *serving* machine, which under Tauri was also the user's machine and under serve is a Pi
 across the room. Five `_inline` variants in `fretwire-commands` carry the file in the call
@@ -31,7 +49,7 @@ every non-static request, JSON Content-Type required on invokes, and a single-ed
 second concurrent browser gets WS close 4409 / HTTP 409, released on disconnect — the clipboards
 and undo history are single-editor state). Verified end-to-end on loopback with curl + a
 WebSocket lease script and clean SIGTERM teardown, and live browser-to-pedal the same day
-(connect, edits, footswitch follow). The non-loopback token flow is the open Phase 10 item.
+(connect, edits, footswitch follow). The non-loopback token flow followed on 2026-09-02.
 
 **Command layer lifted out of fretwire-tauri (2026-08-31).** The whole command surface —
 `AppState`, the 65 command bodies, the DTOs and the keepalive heartbeat — now lives in the new

@@ -696,11 +696,17 @@ for 3 event names total.
       daemon's disk. Data import stays server-side permanently (`fretwire import-data` over SSH —
       the installer is ~1 GB); that is the one flow still reaching `pickPath()` under serve, and the
       server-side directory browser is a nice-to-have for it. See `docs/serve-mode.md` §3.
-- [ ] **Auth for non-loopback** — partially done 2026-09-01: binds `127.0.0.1` and **refuses** a
-      non-loopback `--bind` (SSH tunnel is the supported remote path), and the `Host`/`Origin`
-      check is always on (DNS rebinding reaches a loopback server from any page the browser
-      visits) plus a Content-Type gate on invokes. Still open: the token flow that would make a
-      wider bind acceptable. This is write access to someone's rig.
+- [x] **Auth for non-loopback** — DONE (2026-09-02). Loopback needs nothing (only local
+      processes reach it); any wider `--bind` requires a bearer token, generated once into
+      `~/.local/share/fretwire/serve-token` (0600; or `--token` / `FRETWIRE_SERVE_TOKEN`) and
+      printed at startup inside the link to open — `#token=…`, a fragment, so it never reaches
+      logs or a Referer. The page keeps it per origin, sends it as `Authorization: Bearer` on
+      invokes and as a query parameter on the event socket (browser JS can't set handshake
+      headers), and asks for it on a 401 / close 4401. With a token the `Host` rule relaxes to
+      "our port" and `Origin` must equal `Host` (a rebinding page lands on its own origin with no
+      token); without one the 2026-09-01 loopback rule stands. No TLS to start, by decision: a
+      LAN bind assumes a trusted network, and the SSH tunnel, a VPN, or a TLS proxy cover the
+      rest. See `docs/serve-mode.md` §4.
 - [x] **A `GROUP=` udev rule** — DONE (2026-08-26), with the arm64 CLI item in Phase 8: every rule
       line now grants `GROUP="plugdev"` alongside `uaccess`, `install-udev` creates the group and
       prints the `usermod` step, and the test asserts both grants per line.

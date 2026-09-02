@@ -5,13 +5,17 @@
 //! events (`device-pushes` / `device-lost` / `backup-progress`) over a WebSocket at `/events`.
 //! Run it on the machine the pedal is plugged into; open it in a browser.
 //!
-//! **Loopback only, deliberately.** This is write access to someone's rig, so until the token
-//! flow exists (`docs/serve-mode.md` §4) the bind address must be loopback and a non-loopback
-//! `--bind` is refused. Reach it from another machine through an SSH tunnel. The Origin/Host
-//! check in `routes` is on regardless — DNS rebinding reaches a loopback server from any web
-//! page the browser visits.
+//! **Loopback by default; a token anywhere wider.** This is write access to someone's rig. On
+//! loopback only local processes reach the port and nothing more is asked. Any other bind
+//! requires a bearer token (`token`), generated once and printed at startup inside the link to
+//! open; every invoke and the event socket must carry it. Traffic is plain HTTP, so a wider bind
+//! assumes a trusted network — from anywhere else, tunnel (`ssh -L 8317:127.0.0.1:8317 <host>`)
+//! or put a VPN or a TLS proxy in front (`docs/serve-mode.md` §4). The Origin/Host check in
+//! `routes` is on regardless — DNS rebinding reaches a loopback server from any web page the
+//! browser visits.
 
 mod routes;
+mod token;
 
 use clap::Parser;
 use fretwire_commands::AppState;
@@ -22,10 +26,19 @@ use tokio::sync::broadcast;
 #[derive(Parser)]
 #[command(name = "fretwire-serve", version, about)]
 struct Args {
-    /// Address to bind. Loopback only for now; from another machine, tunnel:
-    /// `ssh -L 8317:127.0.0.1:8317 <host>`.
+    /// Address to bind. Loopback needs no token. Any other address requires one (generated and
+    /// kept on first use, printed at startup as the link to open) and is plain HTTP, so it
+    /// assumes a trusted network — from anywhere else, tunnel: `ssh -L 8317:127.0.0.1:8317 <host>`.
     #[arg(long, default_value = "127.0.0.1:8317")]
     bind: std::net::SocketAddr,
+    /// Use this token instead of the stored one. On loopback, where none is needed, giving one
+    /// demands it there too.
+    #[arg(long, env = "FRETWIRE_SERVE_TOKEN", hide_env_values = true)]
+    token: Option<String>,
+    /// Where the generated token is kept (mode 0600). Default: `serve-token` next to the data
+    /// directory, i.e. `~/.local/share/fretwire/serve-token`.
+    #[arg(long)]
+    token_file: Option<std::path::PathBuf>,
 }
 
 /// [`EventSink`] over the broadcast channel every connected WebSocket subscribes to. The frame is
@@ -56,13 +69,38 @@ fn main() {
         "fretwire-serve starting"
     );
 
-    if !args.bind.ip().is_loopback() {
-        eprintln!(
-            "fretwire-serve binds loopback only for now — this is write access to your rig, and \
-             the token flow for wider binds isn't built yet (docs/serve-mode.md §4).\n\
-             From another machine, tunnel instead:  ssh -L 8317:127.0.0.1:{} <this-host>",
-            args.bind.port()
-        );
+    let token = match (&args.token, args.bind.ip().is_loopback()) {
+        (Some(t), _) => Some(t.trim().to_string()).filter(|t| !t.is_empty()),
+        (None, true) => None,
+        (None, false) => {
+            let path = args
+                .token_file
+                .clone()
+                .unwrap_or_else(|| token_path_default());
+            match token::load_or_create(&path) {
+                Ok((t, created)) => {
+                    if created {
+                        tracing::info!(path = %path.display(), "generated a new token");
+                    } else {
+                        tracing::info!(path = %path.display(), "using the stored token");
+                    }
+                    Some(t)
+                }
+                Err(e) => {
+                    eprintln!(
+                        "fretwire-serve: a bind beyond loopback needs a token, and reading or \
+                         creating {} failed: {e}\nPass one with --token, or bind loopback and \
+                         tunnel:  ssh -L 8317:127.0.0.1:{} <this-host>",
+                        path.display(),
+                        args.bind.port()
+                    );
+                    std::process::exit(2);
+                }
+            }
+        }
+    };
+    if token.is_none() && !args.bind.ip().is_loopback() {
+        eprintln!("fretwire-serve: --token must not be empty for a bind beyond loopback");
         std::process::exit(2);
     }
 
@@ -70,12 +108,27 @@ fn main() {
         .enable_all()
         .build()
         .expect("building the tokio runtime")
-        .block_on(serve(args));
+        .block_on(serve(args, token));
 }
 
-async fn serve(args: Args) {
+/// `~/.local/share/fretwire/serve-token` — beside the data dir, not inside it, so an import or
+/// a wipe of the reference data never touches it.
+fn token_path_default() -> std::path::PathBuf {
+    let data = fretwire_core::data_dir();
+    data.parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or(data)
+        .join("serve-token")
+}
+
+async fn serve(args: Args, token: Option<String>) {
     let (events, _) = broadcast::channel(64);
-    let srv = Arc::new(routes::Served::new(AppState::default(), events.clone()));
+    let srv = Arc::new(routes::Served::new(
+        AppState::default(),
+        events.clone(),
+        token.clone(),
+        args.bind.port(),
+    ));
 
     // Same keepalive as the GUI's setup hook — the pedal needs its status channel drained
     // whether the frontend is a webview or a browser across the room.
@@ -84,7 +137,32 @@ async fn serve(args: Args) {
     let listener = tokio::net::TcpListener::bind(args.bind)
         .await
         .unwrap_or_else(|e| panic!("binding {}: {e}", args.bind));
-    tracing::info!("serving the editor on http://{}/", args.bind);
+    match &token {
+        // The link is the credential: the fragment carries the token to the page, which keeps it
+        // and drops it from the address bar. Printed rather than logged-only so it is the first
+        // thing a headless setup shows.
+        Some(t) => {
+            let host = if args.bind.ip().is_unspecified() {
+                "<this machine's address>".to_string()
+            } else {
+                match args.bind.ip() {
+                    std::net::IpAddr::V6(v6) => format!("[{v6}]"),
+                    v4 => v4.to_string(),
+                }
+            };
+            tracing::info!(
+                "serving the editor on http://{}/ (token required)",
+                args.bind
+            );
+            eprintln!(
+                "\nOpen the editor at:\n\n    http://{host}:{}/#token={t}\n\nThe link carries \
+                 the token; anyone with it can edit the pedal. Plain HTTP — use it on a network \
+                 you trust.\n",
+                args.bind.port()
+            );
+        }
+        None => tracing::info!("serving the editor on http://{}/", args.bind),
+    }
 
     axum::serve(listener, routes::router(srv.clone()))
         .with_graceful_shutdown(shutdown_signal())

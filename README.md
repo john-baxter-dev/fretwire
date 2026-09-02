@@ -157,14 +157,21 @@ cargo run -p fretwire-serve            # → http://127.0.0.1:8317/
 
 A release build embeds the frontend, so the deliverable is one static binary to copy over.
 
-**It binds loopback only, deliberately** — this is write access to your rig. From another machine,
-tunnel: `ssh -L 8317:127.0.0.1:8317 <host>`, then open `http://127.0.0.1:8317/` locally. Requests
-with a non-loopback `Host`/`Origin` are refused even on loopback (DNS rebinding reaches a local
-server from any web page your browser visits), and a second concurrent browser is refused — the
-editor is single-seat. The device session survives a tab refresh or a network blip (your undo
-history with it) and the page re-attaches to it automatically on reload; after **5 minutes with
-no editor connected** the daemon closes it cleanly and the pedal is standalone again. A token flow
-for binding wider is planned; see `docs/serve-mode.md`.
+**It binds loopback by default** — this is write access to your rig. The zero-setup way in from
+another machine is a tunnel: `ssh -L 8317:127.0.0.1:8317 <host>`, then open
+`http://127.0.0.1:8317/` locally. To bind wider (`--bind 0.0.0.0:8317`) the daemon requires a
+token: it generates one on first use, keeps it in `~/.local/share/fretwire/serve-token`, and
+prints the link to open — `http://<host>:8317/#token=…`. The link is the credential; the page
+remembers it, so you paste it once per browser. Traffic is plain HTTP, so do this on a network you
+trust (home Wi-Fi); elsewhere use the tunnel, a VPN such as Tailscale or WireGuard, or a TLS proxy
+in front. `--token` / `FRETWIRE_SERVE_TOKEN` set the token explicitly (for a systemd unit).
+
+Requests with an unexpected `Host`/`Origin` are refused (DNS rebinding reaches a local server from
+any web page your browser visits), and a second concurrent browser is refused — the editor is
+single-seat. The device session survives a tab refresh or a network blip (your undo history with
+it) and the page re-attaches to it automatically on reload; after **5 minutes with no editor
+connected** the daemon closes it cleanly and the pedal is standalone again. Details in
+`docs/serve-mode.md`.
 
 Files are yours, not the daemon's: in the browser, IRs upload from and download to the machine you
 are sitting at, and a preset export is a download (with an option to save it on the daemon's disk

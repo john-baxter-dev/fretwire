@@ -1,10 +1,10 @@
 # Serve mode — the editor over HTTP, for headless machines
 
-Status: **serve mode works on loopback** (2026-09-01) — the §1 lift landed 2026-08-31
+Status: **serve mode works on loopback** (2026-09-01; a live browser-to-pedal session confirmed the same day) and **files cross the seam as bytes** (2026-09-02) — the §1 lift landed 2026-08-31
 (`fretwire-commands`), and `fretwire-serve` (§2) plus the ipc.js HTTP transport are built and
-verified end-to-end. Still open: the server-side directory browser (§3) and the token flow for a
-non-loopback bind (§4 — until then a wider `--bind` is refused and SSH tunneling is the remote
-path). Opened 2026-08-23; this doc is the survey that should stop the next person re-deriving it.
+verified end-to-end; IRs and exports cross the seam as bytes (§3). Still open: the token flow for
+a non-loopback bind (§4 — until then a wider `--bind` is refused and SSH tunneling is the remote
+path); the server-side directory browser (§3) is a nice-to-have. Opened 2026-08-23; this doc is the survey that should stop the next person re-deriving it.
 
 It covers **two** requested features, because they turn out to rest on the same refactor: serving
 the editor over HTTP to a headless machine, and exposing it over MCP to an LLM client. The lift
@@ -125,40 +125,41 @@ It is a separate crate, out of `default-members`, exactly as `fretwire-tauri` is
 frontend must never become a prerequisite for `cargo build` (see the `default-members` comment in
 the root `Cargo.toml`). No WebKitGTK, no Tauri, none of the Pi GPU risk.
 
-### 3. The file-picker problem — the only real design work
+### 3. Files across the seam — DONE (2026-09-02), one server-path case left by design
 
-`ipc.js` exposes `pickPath()`, which opens a **native** dialog (Tauri) or prompts for a typed path
-(mock). Over a network neither is right: the paths that matter are on the *server*. Three call
-sites (verified 2026-08-31):
+Every file command took a `path: String` and did `std::fs` on the *serving* machine. Under Tauri
+the distinction never existed (one disk); serve mode made it visible, and for most flows the
+user's files are on the laptop, not the Pi. Settled 2026-09-01 and landed 2026-09-02, per flow:
 
-- first-run data import — locating an HX Edit installer or `res` folder (`FirstRun.svelte`)
-- IR upload — opening a `.wav` (`IrPanel.svelte`)
-- IR export — the only `save: true` caller (`IrPanel.svelte`)
+- **IRs — client-side.** An HX IR is 2048 samples (~KB), so the file rides inside the invoke:
+  `ir_upload_inline` takes the WAV as base64 plus a name (there is no path to derive one from);
+  `ir_export_inline` returns `{name, wav_base64}` and the browser saves it as a download. Same
+  parser, same 48 kHz rule, same error text as the path pair — `ir_write`/`ir_wav` are the shared
+  bodies in `fretwire-commands`.
+- **Backup JSON — client-side restore and export-as-download, server path kept as an option.**
+  `export_setlists_inline(banks)` runs the same sweep (same progress events, same cancel) and
+  returns `{count, json}`; `backup_show_inline(json)` and `restore_preset_inline(json, …)` take
+  the file's text. The daemon keeps no per-page file state, so the restore sends the text back
+  along with the choice (a few MB at most — the `/invoke` route's body cap was raised from axum's
+  2 MB default to 64 MB for exactly this). The export dialog under serve has a checkbox for
+  **saving on the daemon's disk instead** (a backup that lives with the rig, cron-able), which is
+  the one place the server-path variant is still reachable from the browser UI.
+- **Data import — server-side, permanently.** The HX Edit installer is ~a gigabyte and `res/` is
+  a folder tree; uploading that through a browser is clunky, and `fretwire import-data` over SSH
+  already does it (the CLI and daemon share the data dir). This is the one flow that still reaches
+  `pickPath()` under serve (`FirstRun.svelte`): a typed server-side path.
 
-Backup export/restore do **not** go through `pickPath`: they are already typed paths in in-app
-dialogs, resolved on the Rust side by `backup_path()` (`~/` lands in `$HOME`) — which is exactly
-the "server-side path" model, and arguably what the directory browser should replace everywhere.
+On the UI side `ipc.js` exports `INLINE_FILES` (`IS_SERVE || IS_MOCK`: "the user's files are on
+this side of the seam"), `lib/files.js` holds the browser plumbing (`pickFile`, `saveFile`, the
+base64 helpers — chunked; the Rust side decodes the standard padded alphabet), and the IR panel
+and the two backup dialogs branch on it. The mock backend implements the `_inline` pair for real
+(a genuine WAV out, the header read on the way in; export files parse back) so `npm run dev`
+exercises the same UI path serve does. Tauri keeps the native picker and the path commands; all
+70 commands are registered on every transport so the surface is one set.
 
-**Direction settled 2026-09-01: prefer client-side bytes over a server-side browser, per flow.**
-Every one of these commands currently takes a `path: String` and does `std::fs` on the *serving*
-machine — under Tauri the distinction never existed; serve mode makes it visible, and for most
-flows the user's files are on the laptop, not the Pi. The plan when this is picked up:
-
-- **IRs — client-side, the ideal case.** An HX IR is 2048 samples (~KB): upload via a browser
-  file input carrying the bytes in the invoke, export as a browser download. Needs byte-taking
-  variants of `ir_upload`/`ir_export` in `fretwire-commands`. This removes two of `pickPath`'s
-  three call sites.
-- **Backup JSON — client-side restore + export-as-download, but keep the server-side path
-  option too**: exporting to the Pi's own disk stays useful (cron-able, lives with the rig).
-- **Data import — stays server-side, permanently.** The HX Edit installer is ~a gigabyte and
-  `res/` is a folder tree; uploading that through a browser is clunky, and
-  `fretwire import-data` over SSH already does it (the CLI and daemon share the data dir).
-
-With that split, the server-side **directory browser shrinks from "the only real design work" to
-a nice-to-have** for the remaining server-path cases (data import, backup-to-Pi paths).
-
-Needs a small server-side directory browser. Typing absolute paths blind is a bad first-run
-experience and first run is exactly when a new user is least able to guess what to type.
+The server-side **directory browser** is now a nice-to-have for the data import and the
+backup-to-daemon path — typing an absolute path blind is a poor first-run experience, but the
+SSH route covers it and nothing else needs it.
 
 ### 4. Auth, before it binds to anything but loopback — partially done (2026-09-01)
 

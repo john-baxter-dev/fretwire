@@ -638,6 +638,24 @@ impl From<&'static fretwire_core::fretwire_usb::Device> for DetectedDeviceDto {
     }
 }
 
+/// An IR as a file, for the frontend to save itself (`ir_export_inline`).
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct IrFileDto {
+    /// The name stored in the slot — the natural file stem.
+    pub name: String,
+    /// The 32-bit float, 48 kHz mono WAV, base64 (standard alphabet, padded).
+    pub wav_base64: String,
+}
+
+/// An export file handed back instead of written (`export_setlists_inline`).
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct BackupFileDto {
+    /// Presets in the file — what `export_setlists` returns on its own.
+    pub count: i64,
+    /// The file's text, exactly what the path variant would have written.
+    pub json: String,
+}
+
 /// One user IR slot, as the IR panel renders it.
 ///
 /// The two listings the device offers answer with different fields — the directory (op 13) carries

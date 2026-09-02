@@ -12,6 +12,8 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 # `spawn_blocking` only. Both consumers run on tokio — Tauri's async_runtime is one.
 tokio = { workspace = true, features = ["rt"] }
+# The `_inline` file commands carry binary (an IR's WAV) through JSON.
+base64 = { workspace = true }
 
 [dev-dependencies]
 # The dispatch tests await the commands, so they need `#[tokio::test]`.

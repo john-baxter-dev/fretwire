@@ -8,7 +8,8 @@
   // confirm, and why the confirmations name what is about to be lost rather than asking "are you
   // sure".
   import Dialog from "./Dialog.svelte";
-  import { pickPath } from "./ipc.js";
+  import { INLINE_FILES, pickPath } from "./ipc.js";
+  import { fileStem, pickFile } from "./files.js";
 
   let {
     slots = [],
@@ -49,17 +50,26 @@
   // a real IR in every other column.
   const isSilent = (slot) => slot.used && slot.checksum === 0;
 
+  // The job carries either a `path` for the backend to read (Tauri) or the `file` itself
+  // (a browser, whose files the backend can't reach) — App.svelte picks the command by which.
   async function startUpload(preferSlot = null) {
-    const path = await pickPath({
-      title: "Choose an impulse response",
-      filters: [{ name: "WAV audio", extensions: ["wav"] }],
-    });
-    if (!path) return;
-    const stem = path.split(/[\\/]/).pop().replace(/\.[^.]+$/, "");
+    let source;
+    if (INLINE_FILES) {
+      const file = await pickFile({ accept: ".wav,audio/wav,audio/x-wav" });
+      if (!file) return;
+      source = { file, shown: file.name, stem: fileStem(file.name) };
+    } else {
+      const path = await pickPath({
+        title: "Choose an impulse response",
+        filters: [{ name: "WAV audio", extensions: ["wav"] }],
+      });
+      if (!path) return;
+      source = { path, shown: path, stem: fileStem(path.split(/[\\/]/).pop()) };
+    }
     uploading = {
-      path,
+      ...source,
       // The device stores 31 characters; trimming here rather than letting it truncate silently.
-      name: stem.slice(0, 31),
+      name: source.stem.slice(0, 31),
       slot: preferSlot ?? (freeSlots.length ? freeSlots[0] : 0),
       force: false,
     };
@@ -73,6 +83,11 @@
   }
 
   async function exportSlot(slot) {
+    // In a browser the export is a download; the file name is the backend's to suggest.
+    if (INLINE_FILES) {
+      onExport?.(slot.index, null);
+      return;
+    }
     const path = await pickPath({
       title: `Save IR ${label(slot.index)} as…`,
       filters: [{ name: "WAV audio", extensions: ["wav"] }],
@@ -214,7 +229,7 @@
     onconfirm={confirmUpload}
     oncancel={() => (uploading = null)}
   >
-    <div class="path" title={uploading.path}>{uploading.path}</div>
+    <div class="path" title={uploading.shown}>{uploading.shown}</div>
     <label class="row-field">
       <span>Name</span>
       <input class="field" bind:value={uploading.name} maxlength="31" />

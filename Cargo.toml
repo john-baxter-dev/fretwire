@@ -47,6 +47,7 @@ futures-lite = "2"
 futures-timer = "3"
 # `spawn_blocking` for the command layer; consumers pick their own runtime features.
 tokio = "1"
+base64 = "0.22"
 # zlib inflate for the `.hxb` backup container (pure-Rust miniz_oxide backend).
 flate2 = "1"
 tracing = "0.1"

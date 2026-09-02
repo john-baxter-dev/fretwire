@@ -16,6 +16,10 @@ import * as serve from "./serve.js";
 const HAS_WINDOW = typeof window !== "undefined";
 export const IS_SERVE = HAS_WINDOW && "__FRETWIRE_SERVE__" in window;
 export const IS_MOCK = !IS_SERVE && !(HAS_WINDOW && "__TAURI_INTERNALS__" in window);
+/// Whether the user's files are on this side of the seam. Under Tauri the backend shares the disk
+/// and takes paths; in a browser it does not, so files travel inside the invoke (see ./files.js
+/// and the `_inline` commands).
+export const INLINE_FILES = IS_SERVE || IS_MOCK;
 
 if (IS_MOCK) {
   console.info(
@@ -29,14 +33,15 @@ if (IS_MOCK) {
 export const invoke = IS_SERVE ? serve.invoke : IS_MOCK ? mock.invoke : tauriInvoke;
 export const listen = IS_SERVE ? serve.listen : IS_MOCK ? mock.listen : tauriListen;
 
-/// Native file/folder picker, behind the same seam. Tauri routes to the dialog plugin; the mock
-/// (a plain browser, which can't read arbitrary paths) falls back to typing a path. Returns the
-/// chosen path, or null if the user cancelled.
+/// Native file/folder picker for a path *the backend* will open, behind the same seam. Tauri
+/// routes to the dialog plugin; a browser can't walk the backend's disk, so it falls back to typing
+/// a path. Returns the chosen path, or null if the user cancelled. Only the flows whose file
+/// genuinely lives with the backend still come here (the data import); the rest carry the file
+/// itself under INLINE_FILES.
 export async function pickPath({ directory = false, title, filters, save = false } = {}) {
   if (IS_SERVE) {
-    // The paths that matter are on the machine running the daemon, which the browser can't
-    // walk. A typed server-side path is the honest v1 — the same model the backup dialogs
-    // already use; a server-side directory browser is planned (docs/serve-mode.md §3).
+    // The path is on the machine running the daemon. A typed server-side path is the honest v1;
+    // a directory browser is a nice-to-have (docs/serve-mode.md §3).
     const answer = window.prompt(
       `${title ?? "Choose a path"}\n\n(Type a path on the machine running fretwire-serve.)`,
     );

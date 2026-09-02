@@ -21,10 +21,13 @@ pub mod dto;
 pub mod events;
 
 use crate::dto::{
-    CategoryDto, DataStatusDto, DetectedDeviceDto, ImportResultDto, IrSlotDto, ModelChoiceDto,
-    PresetDto, PresetListItem, SettingDto, SplitTypeDto,
+    BackupFileDto, CategoryDto, DataStatusDto, DetectedDeviceDto, ImportResultDto, IrFileDto,
+    IrSlotDto, ModelChoiceDto, PresetDto, PresetListItem, SettingDto, SplitTypeDto,
 };
 use crate::events::{Event, EventSink};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use fretwire_core::backup::Backup;
 use fretwire_core::{EditorPreset, Session};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -931,6 +934,45 @@ pub async fn export_setlists(
     banks: Vec<i64>,
 ) -> R<i64> {
     let target = backup_path(&path);
+    sweep_setlists(state, sink, banks, move |backup| {
+        std::fs::write(&target, backup.to_json()).map_err(|e| {
+            fretwire_core::Error::Backup(format!("writing {}: {e}", target.display()))
+        })?;
+        Ok(backup.presets.len() as i64)
+    })
+    .await
+}
+
+/// [`export_setlists`] with the file handed back instead of written: the JSON text plus the
+/// count, for a frontend whose disk is elsewhere (serve mode offers it as a browser download).
+/// Same sweep, same progress events, same cancel.
+pub async fn export_setlists_inline(
+    state: &AppState,
+    sink: impl EventSink,
+    banks: Vec<i64>,
+) -> R<BackupFileDto> {
+    sweep_setlists(state, sink, banks, |backup| {
+        Ok(BackupFileDto {
+            count: backup.presets.len() as i64,
+            json: backup.to_json(),
+        })
+    })
+    .await
+}
+
+/// The sweep behind both `export_setlists` variants: read `banks` off the device with progress
+/// streamed to `sink`, then hand the [`Backup`] to `finish` — still on the blocking thread and
+/// still under the session lock, so the file is complete before any other command can run.
+async fn sweep_setlists<T, F>(
+    state: &AppState,
+    sink: impl EventSink,
+    banks: Vec<i64>,
+    finish: F,
+) -> R<T>
+where
+    T: Send + 'static,
+    F: FnOnce(Backup) -> fretwire_core::Result<T> + Send + 'static,
+{
     let cancel = state.cancel_export.clone();
     cancel.store(false, Ordering::Relaxed);
     run(state, move |s| {
@@ -944,10 +986,7 @@ pub async fn export_setlists(
             });
             !cancel.load(Ordering::Relaxed)
         })?;
-        std::fs::write(&target, backup.to_json()).map_err(|e| {
-            fretwire_core::Error::Backup(format!("writing {}: {e}", target.display()))
-        })?;
-        Ok(backup.presets.len() as i64)
+        finish(backup)
     })
     .await
 }
@@ -966,27 +1005,42 @@ pub async fn backup_show(path: String) -> R<Vec<PresetListItem>> {
         let target = backup_path(&path);
         let text = std::fs::read_to_string(&target)
             .map_err(|e| format!("reading {}: {e}", target.display()))?;
-        let backup = fretwire_core::backup::Backup::from_json(&text).map_err(|e| e.to_string())?;
-        Ok(backup
-            .presets
-            .into_iter()
-            .map(|p| PresetListItem {
-                // An export file records no device banking, and the file may be from another unit,
-                // so its entries stay on slot numbers.
-                label: None,
-                index: p.index,
-                bank: p.bank,
-                setlist: backup
-                    .setlists
-                    .iter()
-                    .find(|(b, _)| *b == p.bank)
-                    .map(|(_, n)| n.clone()),
-                name: p.name,
-            })
-            .collect())
+        let backup = Backup::from_json(&text).map_err(|e| e.to_string())?;
+        Ok(backup_entries(backup))
     })
     .await
     .map_err(|e| format!("task error: {e}"))?
+}
+
+/// [`backup_show`] for a file the frontend already holds — `json` is the file's text. Parsing a
+/// multi-megabyte export is real work, so it stays off the caller's thread like the file read.
+pub async fn backup_show_inline(json: String) -> R<Vec<PresetListItem>> {
+    tokio::task::spawn_blocking(move || {
+        let backup = Backup::from_json(&json).map_err(|e| e.to_string())?;
+        Ok(backup_entries(backup))
+    })
+    .await
+    .map_err(|e| format!("task error: {e}"))?
+}
+
+fn backup_entries(backup: Backup) -> Vec<PresetListItem> {
+    backup
+        .presets
+        .into_iter()
+        .map(|p| PresetListItem {
+            // An export file records no device banking, and the file may be from another unit,
+            // so its entries stay on slot numbers.
+            label: None,
+            index: p.index,
+            bank: p.bank,
+            setlist: backup
+                .setlists
+                .iter()
+                .find(|(b, _)| *b == p.bank)
+                .map(|(_, n)| n.clone()),
+            name: p.name,
+        })
+        .collect()
 }
 
 /// Restore one preset from a backup file into setlist `slot` — **overwrites the slot in flash**
@@ -1004,16 +1058,40 @@ pub async fn restore_preset(
         let text = std::fs::read_to_string(&target).map_err(|e| {
             fretwire_core::Error::Backup(format!("reading {}: {e}", target.display()))
         })?;
-        let backup = fretwire_core::backup::Backup::from_json(&text)?;
-        let entry = backup.preset(bank, index).ok_or_else(|| {
-            fretwire_core::Error::Backup(format!(
-                "export file has no preset at bank {bank} slot {index}"
-            ))
-        })?;
-        let p = s.restore_preset(&entry.raw, bank, slot, &entry.name)?;
-        Ok(dto(s, &p))
+        restore_from(s, &Backup::from_json(&text)?, index, slot, bank)
     })
     .await
+}
+
+/// [`restore_preset`] from a file the frontend holds — `json` is the export file's text, sent
+/// along with the choice (the daemon keeps no per-page file state).
+pub async fn restore_preset_inline(
+    state: &AppState,
+    json: String,
+    index: i64,
+    slot: i64,
+    bank: i64,
+) -> R<PresetDto> {
+    run(state, move |s| {
+        restore_from(s, &Backup::from_json(&json)?, index, slot, bank)
+    })
+    .await
+}
+
+fn restore_from(
+    s: &mut Session,
+    backup: &Backup,
+    index: i64,
+    slot: i64,
+    bank: i64,
+) -> fretwire_core::Result<PresetDto> {
+    let entry = backup.preset(bank, index).ok_or_else(|| {
+        fretwire_core::Error::Backup(format!(
+            "export file has no preset at bank {bank} slot {index}"
+        ))
+    })?;
+    let p = s.restore_preset(&entry.raw, bank, slot, &entry.name)?;
+    Ok(dto(s, &p))
 }
 
 /// Copy the currently-loaded preset into the app's paste buffer. Reads only. Returns the name, so
@@ -1341,17 +1419,35 @@ pub async fn ir_scan(state: &AppState) -> R<Vec<IrSlotDto>> {
 /// Write slot `slot` out to `path` as a 32-bit float, 48 kHz mono WAV. **Reads the device only.**
 pub async fn ir_export(state: &AppState, slot: i64, path: String) -> R<String> {
     run(state, move |s| {
-        let Some((info, blob)) = s.ir_export(slot)? else {
-            return Err(fretwire_core::fretwire_data::Error::Stream(format!(
-                "IR slot {slot} is empty"
-            ))
-            .into());
-        };
-        std::fs::write(&path, fretwire_core::fretwire_data::ir::to_wav(&blob))
-            .map_err(fretwire_core::fretwire_data::Error::Io)?;
-        Ok(info.name)
+        let (name, wav) = ir_wav(s, slot)?;
+        std::fs::write(&path, wav).map_err(fretwire_core::fretwire_data::Error::Io)?;
+        Ok(name)
     })
     .await
+}
+
+/// [`ir_export`] with the WAV handed back (base64) instead of written — an IR is a few KB, so the
+/// file travels comfortably inside the reply for a frontend that will save it itself.
+pub async fn ir_export_inline(state: &AppState, slot: i64) -> R<IrFileDto> {
+    run(state, move |s| {
+        let (name, wav) = ir_wav(s, slot)?;
+        Ok(IrFileDto {
+            name,
+            wav_base64: BASE64.encode(wav),
+        })
+    })
+    .await
+}
+
+/// Read slot `slot` and render it as a WAV file: `(stored name, file bytes)`.
+fn ir_wav(s: &mut Session, slot: i64) -> fretwire_core::Result<(String, Vec<u8>)> {
+    let Some((info, blob)) = s.ir_export(slot)? else {
+        return Err(fretwire_core::fretwire_data::Error::Stream(format!(
+            "IR slot {slot} is empty"
+        ))
+        .into());
+    };
+    Ok((info.name, fretwire_core::fretwire_data::ir::to_wav(&blob)))
 }
 
 /// Upload the WAV at `path` into slot `slot`. **Writes device flash.**
@@ -1368,26 +1464,60 @@ pub async fn ir_upload(
 ) -> R<Vec<IrSlotDto>> {
     run(state, move |s| {
         let bytes = std::fs::read(&path).map_err(fretwire_core::fretwire_data::Error::Io)?;
-        let (blob, rate) = fretwire_core::fretwire_data::ir::from_wav(&bytes)
-            .map_err(|e| fretwire_core::fretwire_data::Error::Stream(format!("{path}: {e}")))?;
-        if rate != fretwire_core::fretwire_data::ir::IR_SAMPLE_RATE && !force {
-            return Err(fretwire_core::fretwire_data::Error::Stream(format!(
-                "that file is {rate} Hz and the device runs at {} Hz. Nothing here resamples, so \
-                 it would play short and bright — convert it first",
-                fretwire_core::fretwire_data::ir::IR_SAMPLE_RATE
-            ))
-            .into());
-        }
         let name = name.unwrap_or_else(|| {
             std::path::Path::new(&path)
                 .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_default()
         });
-        s.ir_upload(slot, &name, &blob, overwrite)?;
-        Ok(s.ir_directory()?.iter().map(IrSlotDto::from).collect())
+        ir_write(s, slot, &bytes, &path, &name, overwrite, force)
     })
     .await
+}
+
+/// [`ir_upload`] with the WAV's bytes inline (base64) instead of a path. `name` is required: with
+/// no path there is nothing to derive one from, and the device stores a name with every slot.
+pub async fn ir_upload_inline(
+    state: &AppState,
+    slot: i64,
+    wav_base64: String,
+    name: String,
+    overwrite: bool,
+    force: bool,
+) -> R<Vec<IrSlotDto>> {
+    // Decoded before touching the session, so a garbled payload fails without a device.
+    let bytes = BASE64
+        .decode(wav_base64)
+        .map_err(|e| format!("wav_base64: {e}"))?;
+    run(state, move |s| {
+        ir_write(s, slot, &bytes, &name, &name, overwrite, force)
+    })
+    .await
+}
+
+/// Parse a WAV, check its rate, write it to `slot`, and return the fresh directory. `label` names
+/// the file in errors (its path, or its name when there is no path).
+fn ir_write(
+    s: &mut Session,
+    slot: i64,
+    bytes: &[u8],
+    label: &str,
+    name: &str,
+    overwrite: bool,
+    force: bool,
+) -> fretwire_core::Result<Vec<IrSlotDto>> {
+    let (blob, rate) = fretwire_core::fretwire_data::ir::from_wav(bytes)
+        .map_err(|e| fretwire_core::fretwire_data::Error::Stream(format!("{label}: {e}")))?;
+    if rate != fretwire_core::fretwire_data::ir::IR_SAMPLE_RATE && !force {
+        return Err(fretwire_core::fretwire_data::Error::Stream(format!(
+            "that file is {rate} Hz and the device runs at {} Hz. Nothing here resamples, so \
+             it would play short and bright — convert it first",
+            fretwire_core::fretwire_data::ir::IR_SAMPLE_RATE
+        ))
+        .into());
+    }
+    s.ir_upload(slot, name, &blob, overwrite)?;
+    Ok(s.ir_directory()?.iter().map(IrSlotDto::from).collect())
 }
 
 /// Empty a slot. **Writes device flash**, and there is no undo.

@@ -2,6 +2,23 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Serve mode: files cross the seam as bytes (2026-09-02).** Every file command took a path on
+the *serving* machine, which under Tauri was also the user's machine and under serve is a Pi
+across the room. Five `_inline` variants in `fretwire-commands` carry the file in the call
+instead — `ir_upload_inline` (WAV as base64 + name) / `ir_export_inline` (`{name, wav_base64}`),
+`export_setlists_inline` (`{count, json}`, same sweep/progress/cancel), `backup_show_inline` and
+`restore_preset_inline` (the export's text) — sharing their bodies with the path pair so the
+parsing, the 48 kHz rule and the error text are identical; the dispatcher is now 70 arms and the
+`/invoke` body cap went from axum's 2 MB to 64 MB (a restore sends the whole export back). The
+UI branches on a new `INLINE_FILES` (`IS_SERVE || IS_MOCK`) through `lib/files.js`: in a browser
+IRs upload from and download to *your* machine and a preset export is a download, with a
+serve-only checkbox to save on the daemon's disk instead (a backup that lives with the rig).
+Data import stays server-side by design (`fretwire import-data` over SSH; the installer is
+~1 GB) and is the one flow that still reaches `pickPath()` under serve. The mock implements the pair for real (a
+genuine WAV out, the header read on the way in; its export files parse back), so `npm run dev`
+walks the same UI path — 163 UI tests (+29), all Rust suites green, and the new arms probed live
+through the daemon with curl (a 5 MB body clears the cap). Survey: `docs/serve-mode.md` §3.
+
 **Serve mode works on loopback (2026-09-01).** `fretwire-serve` (ROADMAP Phase 10, survey in
 `docs/serve-mode.md`) serves the same built frontend the GUI embeds, answers its `invoke()` calls
 on `POST /invoke/{command}` via the new `fretwire_commands::dispatch` (an explicit 65-arm match,
@@ -13,9 +30,8 @@ bind only (a non-loopback `--bind` is refused; SSH tunnel for remote), `Host`/`O
 every non-static request, JSON Content-Type required on invokes, and a single-editor lease (a
 second concurrent browser gets WS close 4409 / HTTP 409, released on disconnect — the clipboards
 and undo history are single-editor state). Verified end-to-end on loopback with curl + a
-WebSocket lease script and clean SIGTERM teardown; a live browser-to-pedal session is the
-remaining smoke test. `pickPath()` under serve is a typed server-side path for now; the directory
-browser and the non-loopback token flow are the open Phase 10 items.
+WebSocket lease script and clean SIGTERM teardown, and live browser-to-pedal the same day
+(connect, edits, footswitch follow). The non-loopback token flow is the open Phase 10 item.
 
 **Command layer lifted out of fretwire-tauri (2026-08-31).** The whole command surface —
 `AppState`, the 65 command bodies, the DTOs and the keepalive heartbeat — now lives in the new

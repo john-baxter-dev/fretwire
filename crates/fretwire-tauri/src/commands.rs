@@ -9,8 +9,8 @@
 
 use fretwire_commands::R;
 use fretwire_commands::dto::{
-    CategoryDto, DataStatusDto, DetectedDeviceDto, ImportResultDto, IrSlotDto, ModelChoiceDto,
-    PresetDto, PresetListItem, SettingDto, SplitTypeDto,
+    BackupFileDto, CategoryDto, DataStatusDto, DetectedDeviceDto, ImportResultDto, IrFileDto,
+    IrSlotDto, ModelChoiceDto, PresetDto, PresetListItem, SettingDto, SplitTypeDto,
 };
 use fretwire_commands::events::{Event, EventSink};
 use tauri::{Emitter, State};
@@ -388,6 +388,35 @@ pub async fn restore_preset(
     fretwire_commands::restore_preset(&state, path, index, slot, bank).await
 }
 
+// The `_inline` variants exist for serve mode (the browser's files are not the daemon's); the
+// Tauri UI takes the path routes above, but the whole surface is registered so the three
+// transports expose one command set.
+
+#[tauri::command]
+pub async fn export_setlists_inline(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    banks: Vec<i64>,
+) -> R<BackupFileDto> {
+    fretwire_commands::export_setlists_inline(&state, TauriSink(app), banks).await
+}
+
+#[tauri::command]
+pub async fn backup_show_inline(json: String) -> R<Vec<PresetListItem>> {
+    fretwire_commands::backup_show_inline(json).await
+}
+
+#[tauri::command]
+pub async fn restore_preset_inline(
+    state: State<'_, AppState>,
+    json: String,
+    index: i64,
+    slot: i64,
+    bank: i64,
+) -> R<PresetDto> {
+    fretwire_commands::restore_preset_inline(&state, json, index, slot, bank).await
+}
+
 // ---- clipboards ----
 
 #[tauri::command]
@@ -495,4 +524,21 @@ pub async fn ir_delete(state: State<'_, AppState>, slot: i64) -> R<Vec<IrSlotDto
 #[tauri::command]
 pub async fn ir_rename(state: State<'_, AppState>, slot: i64, name: String) -> R<Vec<IrSlotDto>> {
     fretwire_commands::ir_rename(&state, slot, name).await
+}
+
+#[tauri::command]
+pub async fn ir_export_inline(state: State<'_, AppState>, slot: i64) -> R<IrFileDto> {
+    fretwire_commands::ir_export_inline(&state, slot).await
+}
+
+#[tauri::command]
+pub async fn ir_upload_inline(
+    state: State<'_, AppState>,
+    slot: i64,
+    wav_base64: String,
+    name: String,
+    overwrite: bool,
+    force: bool,
+) -> R<Vec<IrSlotDto>> {
+    fretwire_commands::ir_upload_inline(&state, slot, wav_base64, name, overwrite, force).await
 }

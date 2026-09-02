@@ -28,6 +28,8 @@ pub const COMMAND_NAMES: &[&str] = &[
     "ir_scan",
     "ir_export",
     "ir_upload",
+    "ir_export_inline",
+    "ir_upload_inline",
     "ir_delete",
     "ir_rename",
     "import_data",
@@ -76,6 +78,9 @@ pub const COMMAND_NAMES: &[&str] = &[
     "cancel_export",
     "backup_show",
     "restore_preset",
+    "export_setlists_inline",
+    "backup_show_inline",
+    "restore_preset_inline",
     "split_types",
     "categories",
     "models_in_category",
@@ -288,6 +293,19 @@ pub async fn dispatch(
             a.req("bank")?,
         )
         .await?),
+        // The same three with the file inline — for a frontend whose disk the daemon can't see.
+        "export_setlists_inline" => {
+            ok(c::export_setlists_inline(state, sink, a.req("banks")?).await?)
+        }
+        "backup_show_inline" => ok(c::backup_show_inline(a.req("json")?).await?),
+        "restore_preset_inline" => ok(c::restore_preset_inline(
+            state,
+            a.req("json")?,
+            a.req("index")?,
+            a.req("slot")?,
+            a.req("bank")?,
+        )
+        .await?),
         // ---- clipboards ----
         "copy_preset" => ok(c::copy_preset(state).await?),
         "paste_preset" => ok(c::paste_preset(state).await?),
@@ -320,6 +338,16 @@ pub async fn dispatch(
         .await?),
         "ir_delete" => ok(c::ir_delete(state, a.req("slot")?).await?),
         "ir_rename" => ok(c::ir_rename(state, a.req("slot")?, a.req("name")?).await?),
+        "ir_export_inline" => ok(c::ir_export_inline(state, a.req("slot")?).await?),
+        "ir_upload_inline" => ok(c::ir_upload_inline(
+            state,
+            a.req("slot")?,
+            a.req("wavBase64")?,
+            a.req("name")?,
+            a.req("overwrite")?,
+            a.req("force")?,
+        )
+        .await?),
         _ => Err(format!("unknown command: {command}")),
     }
 }
@@ -348,7 +376,7 @@ mod tests {
     /// pinned by `connect_is_matched_without_running`.
     #[tokio::test]
     async fn every_name_dispatches() {
-        assert_eq!(COMMAND_NAMES.len(), 65, "the surface was 65 commands");
+        assert_eq!(COMMAND_NAMES.len(), 70, "the surface was 70 commands");
         for name in COMMAND_NAMES {
             if *name == "connect" {
                 continue;
@@ -431,6 +459,49 @@ mod tests {
         .await
         .unwrap_err();
         assert!(e.contains("reading"), "got: {e}");
+    }
+
+    /// The inline variants parse what they are handed, without a device or a disk.
+    #[tokio::test]
+    async fn backup_show_inline_lists_the_file() {
+        let backup = fretwire_core::backup::Backup {
+            device: "HX Stomp".into(),
+            setlists: vec![(0, "FACTORY 1".into())],
+            presets: vec![fretwire_core::backup::BackupPreset {
+                bank: 0,
+                index: 3,
+                name: "Clean".into(),
+                raw: vec![1, 2, 3],
+            }],
+        };
+        let v = call(
+            "backup_show_inline",
+            serde_json::json!({"json": backup.to_json()}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(v[0]["index"], 3);
+        assert_eq!(v[0]["name"], "Clean");
+        assert_eq!(v[0]["setlist"], "FACTORY 1");
+
+        let e = call(
+            "backup_show_inline",
+            serde_json::json!({"json": "not json"}),
+        )
+        .await
+        .unwrap_err();
+        assert!(!e.contains("not connected"), "got: {e}");
+    }
+
+    #[tokio::test]
+    async fn ir_upload_inline_rejects_bad_base64_before_the_device() {
+        let e = call(
+            "ir_upload_inline",
+            serde_json::json!({"slot": 0, "wavBase64": "@@@", "name": "x", "overwrite": false, "force": false}),
+        )
+        .await
+        .unwrap_err();
+        assert!(e.starts_with("wav_base64:"), "got: {e}");
     }
 
     /// Optional args accept absent and null alike.

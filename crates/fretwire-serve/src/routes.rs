@@ -5,7 +5,7 @@
 use crate::ServeSink;
 use axum::Router;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
-use axum::extract::{Path, Query, State, WebSocketUpgrade};
+use axum::extract::{DefaultBodyLimit, Path, Query, State, WebSocketUpgrade};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
@@ -106,10 +106,19 @@ impl Served {
     }
 }
 
+/// The most an invoke body may carry, in bytes. See the `/invoke` route.
+const INVOKE_BODY_LIMIT: usize = 64 * 1024 * 1024;
+
 pub fn router(srv: Arc<Served>) -> Router {
     Router::new()
         .route("/", get(index))
-        .route("/invoke/{command}", post(invoke))
+        // axum's default cap is 2 MB. The `_inline` file commands carry the file in the body —
+        // a restore sends the whole export back (a Floor's eight setlists run past that) and an
+        // IR is a few KB — so the cap is raised to a size no honest request approaches.
+        .route(
+            "/invoke/{command}",
+            post(invoke).layer(DefaultBodyLimit::max(INVOKE_BODY_LIMIT)),
+        )
         .route("/events", get(events))
         .route("/{*path}", get(asset))
         .with_state(srv)

@@ -163,8 +163,14 @@ with a non-loopback `Host`/`Origin` are refused even on loopback (DNS rebinding 
 server from any web page your browser visits), and a second concurrent browser is refused — the
 editor is single-seat. The device session survives a tab refresh or a network blip (your undo
 history with it) and the page re-attaches to it automatically on reload; after **5 minutes with
-no editor connected** the daemon closes it cleanly and the pedal is standalone again. A token flow for binding wider is planned; see
-`docs/serve-mode.md`.
+no editor connected** the daemon closes it cleanly and the pedal is standalone again. A token flow
+for binding wider is planned; see `docs/serve-mode.md`.
+
+Files are yours, not the daemon's: in the browser, IRs upload from and download to the machine you
+are sitting at, and a preset export is a download (with an option to save it on the daemon's disk
+instead, for a backup that lives with the rig). The one exception is the first-run data import —
+the HX Edit installer is about a gigabyte, so that names a path on the daemon's machine, and
+`fretwire import-data` over SSH is the easy way to do it.
 
 ## Talking to a real device
 

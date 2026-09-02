@@ -4332,3 +4332,42 @@ the two backup presets that used to refuse convert. **All 135 of the owner's pre
 `tests/pgb_to_wire.rs` pins the converted slot shape against the capture's (model index and
 enabled flag aside — different model, same shape). `docs/pod-go.md`: the looper leaves the
 unknowns list; the capture asks are all delivered, only hardware tests remain. 339 tests.
+
+## Sixty-ninth round (2026-09-01) — **the Helix Rack, and the firmware-2.82 id split**
+
+The user found a Helix Rack PID online: `0x4242`. It is a real id and it is the **wrong one** for
+any unit this editor could talk to.
+
+The Linux kernel's Line 6 rate quirk (`sound/usb/format.c`,
+`line6_parse_audio_format_rates_quirk`) lists the family twice over: `0x4241` "Helix", `0x4242`
+"Helix Rack", `0x4244` "Helix LT" — and then `0x4248` "Helix **>= fw 2.82**", `0x4249` "Helix Rack
+>= fw 2.82", `0x424A` "Helix LT >= fw 2.82". The three original Helix units changed product id at
+firmware 2.82.
+
+We can check that table without owning a Rack, because **we have measured two of its three new
+ids**: the Floor answered on `0x4248` (a contributor's descriptor, fw 3.82) and the LT on `0x424A`
+(read off a physical unit, 2026-08-18). Both endpoints of the new-id row are ours and both agree,
+so the value between them is what a current Rack presents.
+
+So the table gains **`0x4249`, `Support::Untested`** — the tier's literal definition (only the USB
+ids are known) and the only entry that got here without a person: no owner, no capture, no `lsusb`
+from a real unit. Every field is `None`, and that is deliberate rather than lazy. The Rack is a
+Floor in a 19" box and near-certainly stamps the same `P21`, which is exactly why it is not written
+down: a guessed code would make `by_model_code("P21")` ambiguous and would let a Rack pass
+`session::handshake`'s identity check on a string nobody has read off one. Left `None`, it takes
+the "accept any `P##`" path instead, which is what an unobserved device should get.
+
+The pre-2.82 ids are **not** listed, `0x4242` included. The protocol here was recovered from
+firmware 3.x; the Floor's `0x4241` and the LT's `0x4244` are absent for the same reason, and
+listing only the Rack's old id would be the odd one out. `no_pre_282_helix_id_is_listed` pins that
+as a decision rather than an oversight.
+
+Also in: the udev rule (`4249`), the README device table (the "not recognised yet" row becomes a
+real one, with the `0x4242` caveat and an ask for Rack owners), and a
+`devices_are_listed_in_descending_order_of_evidence` test — the table was already sorted by tier
+and `Transport::open` relies on it, but only the Verified/not-Verified boundary was checked. 365
+tests.
+
+**Still open:** everything about the Rack. `fretwire detect` printing `Helix Rack: present
+(untested device)` would be the whole of the report we need to move it to `Reported`; an `lsusb`
+saying `4242` instead would tell us the unit predates fw 2.82 and reopen the question above.

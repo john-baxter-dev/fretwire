@@ -4,8 +4,8 @@
 //! preset — nothing is inferred from another device in the family. See `docs/helix-floor.md`.
 
 use fretwire_protocol::{
-    DEVICES, Device, PID_HELIX_FLOOR, PID_HELIX_LT, PID_HX_EFFECTS, PID_HX_STOMP, PID_HX_STOMP_XL,
-    PID_POD_GO, Support,
+    DEVICES, Device, PID_HELIX_FLOOR, PID_HELIX_LT, PID_HELIX_RACK, PID_HX_EFFECTS, PID_HX_STOMP,
+    PID_HX_STOMP_XL, PID_POD_GO, Support,
 };
 
 #[test]
@@ -38,6 +38,10 @@ fn lookup_by_pid() {
     assert_eq!(
         Device::by_pid(PID_HX_EFFECTS).map(|d| d.name),
         Some("HX Effects")
+    );
+    assert_eq!(
+        Device::by_pid(PID_HELIX_RACK).map(|d| d.name),
+        Some("Helix Rack")
     );
     assert!(Device::by_pid(0xFFFF).is_none());
 }
@@ -139,6 +143,59 @@ fn the_hx_effects_carries_no_geometry_it_has_not_been_shown() {
     assert_eq!(fx.setlist_stride(), 128);
     assert_eq!(fx.setlist_names(), &["Presets"]);
     assert_eq!(fx.preset_label(0), None);
+}
+
+/// The Helix Rack is in the table on a line of kernel source and nothing else — no owner, no
+/// capture, no `lsusb` from a real unit. `Untested` is the tier that says so, and every field
+/// stays empty even though the Rack is a Floor in a rack box: "obviously the same as its sibling"
+/// is precisely the inference this table refuses to make.
+#[test]
+fn the_helix_rack_is_a_usb_id_and_nothing_more() {
+    let rack = Device::by_pid(PID_HELIX_RACK).unwrap();
+    assert_eq!(rack.support, Support::Untested);
+    assert!(rack.support.caveat().is_some());
+    assert!(rack.model_code.is_none());
+    assert!(rack.preset_device_id.is_none());
+    assert!(rack.dsps.is_none());
+    assert!(rack.snapshots.is_none());
+    assert!(rack.setlists.is_none());
+    assert!(rack.setlist_size.is_none());
+    assert!(rack.presets_per_bank.is_none());
+    // Not the Floor's `P21`, so a preset stamped `P21` still resolves to the Floor.
+    assert_eq!(
+        Device::by_model_code("P21").map(|d| d.pid),
+        Some(PID_HELIX_FLOOR)
+    );
+}
+
+/// The pre-firmware-2.82 ids are not ours to claim: the kernel's table also carries `0x4241`
+/// (Helix), `0x4242` (Helix Rack) and `0x4244` (Helix LT) for units on older firmware, and this
+/// editor's protocol was recovered from firmware 3.x. Listing none of the three is the consistent
+/// position; listing only the Rack's would be the odd one out.
+#[test]
+fn no_pre_282_helix_id_is_listed() {
+    for pid in [0x4241, 0x4242, 0x4244] {
+        assert!(
+            Device::by_pid(pid).is_none(),
+            "{pid:#06x} is a pre-fw-2.82 Helix id and should not be in the table"
+        );
+    }
+}
+
+/// Tiers sort by how much we know, so the caveat a user sees gets weaker as the list is walked.
+#[test]
+fn devices_are_listed_in_descending_order_of_evidence() {
+    let rank = |s: Support| match s {
+        Support::Verified => 0,
+        Support::Reported => 1,
+        Support::Untested => 2,
+    };
+    let mut ranks = DEVICES.iter().map(|d| rank(d.support));
+    let mut prev = ranks.next().unwrap();
+    for r in ranks {
+        assert!(r >= prev, "device table is not ordered by support tier");
+        prev = r;
+    }
 }
 
 #[test]

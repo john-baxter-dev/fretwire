@@ -577,6 +577,16 @@ real session.
       cabs), so nothing is inherited from the Stomp.
       **Still open:** everything else — the report carries no capture and no panel readings. One
       `pull` from an owner would settle its model code and preset geometry.
+- [x] **Helix Rack — PID `0x4249`, `Untested` (2026-09-01).** The table's only entry added without
+      a person behind it. The id is the Linux kernel's Line 6 rate quirk, which labels it
+      "Helix Rack >= fw 2.82"; the same table's `0x4248` "Helix >= fw 2.82" and `0x424A` "Helix LT
+      >= fw 2.82" are the two ids we *did* measure on hardware, so the value between them is
+      corroborated at both ends. Every field is `None` — not even the Floor's `P21`, though the
+      Rack is a Floor in a rack box, because a guessed code would make `by_model_code` ambiguous.
+      The **pre-2.82 ids are deliberately absent** (`0x4241` Helix, `0x4242` Helix Rack, `0x4244`
+      Helix LT): this protocol was recovered from firmware 3.x.
+      **Still open:** everything. `fretwire detect` naming one is the entire report needed to move
+      it to `Reported`.
 - [x] **Global settings — op 24 reads, op 25 writes, 27 ids named (2026-08-22, and eight Ins/Outs
       ids from an HX Stomp XL owner on 2026-08-23).** The namespace is
       flat and numbered; a 601-id sweep costs 1.4 s, so `settings-dump` / `settings-diff` maps it

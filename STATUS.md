@@ -15,7 +15,8 @@ path uses, so one summarizer serves both; the live half wraps `fretwire-commands
 history, heartbeat and the safety rules are the GUI's. Out of `default-members` like the other
 front ends (`cargo test -p fretwire-mcp`; a CI job runs it). Verified over stdio: handshake,
 tool lists per gate, the offline tools on a fixture export (names, units, a diff), and a live
-read-only session against the HX Stomp (connect, read with params, list, disconnect cleanly). Not
+read-only session against the HX Stomp (connect, read with params, list, disconnect cleanly), and
+confirmed the same day from Claude Code itself (`claude mcp add`, writes enabled). Not
 built: the in-daemon HTTP transport (needs a second seat on the single-editor lease), a
 `model_params` tool, `.hxb` input.
 

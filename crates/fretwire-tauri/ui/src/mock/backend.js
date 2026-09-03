@@ -844,7 +844,7 @@ let dataPresent = true;
 
 // The update check. The preference starts unanswered so `npm run dev` walks the ask bar, and
 // the "latest release" is one patch past the mock's own version so the badge is visible.
-const MOCK_VERSION = "0.4.0";
+const MOCK_VERSION = "0.5.0";
 const MOCK_LATEST = MOCK_VERSION.replace(/\d+$/, (n) => String(Number(n) + 1));
 let updatePref = null; // null = not asked
 let updateLatest = null;

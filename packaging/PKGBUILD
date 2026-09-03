@@ -9,7 +9,7 @@
 # from a copy outside this repo (makepkg litters src/ and pkg/).
 
 pkgname=fretwire
-pkgver=0.4.0
+pkgver=0.5.0
 pkgrel=1
 pkgdesc="Independent editor for Line 6 HX, Helix and POD Go devices"
 arch=('x86_64')
@@ -23,7 +23,9 @@ options=('!lto')
 makedepends=('cargo' 'npm' 'pkgconf')
 optdepends=('p7zip: unpack an HX Edit installer during `fretwire import-data`')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('d6d38c4a4ad3c22b3e3ae60667921a9b1d9bb610bf30af98982c75b4a7760fed')
+# SKIP until the v0.5.0 tag exists on GitHub — then `updpkgsums` (CI builds from the checkout and
+# skips this; the AUR copy must carry the real hash).
+sha256sums=('SKIP')
 
 prepare() {
   cd "$pkgname-$pkgver"
@@ -47,7 +49,8 @@ check() {
   export RUSTUP_TOOLCHAIN=stable
   # Offline suite only — the data-gated tests compile out without the reference data, and nothing
   # here touches hardware.
-  cargo test --release --frozen -p fretwire-data -p fretwire-protocol -p fretwire-core -p fretwire-cli
+  cargo test --release --frozen -p fretwire-data -p fretwire-protocol -p fretwire-core \
+    -p fretwire-commands -p fretwire-cli
 }
 
 package() {

@@ -1,6 +1,6 @@
 pkgbase = fretwire
 	pkgdesc = Independent editor for Line 6 HX, Helix and POD Go devices
-	pkgver = 0.4.0
+	pkgver = 0.5.0
 	pkgrel = 1
 	url = https://github.com/john-baxter-dev/fretwire
 	arch = x86_64
@@ -13,7 +13,7 @@ pkgbase = fretwire
 	depends = gtk3
 	optdepends = p7zip: unpack an HX Edit installer during `fretwire import-data`
 	options = !lto
-	source = fretwire-0.4.0.tar.gz::https://github.com/john-baxter-dev/fretwire/archive/refs/tags/v0.4.0.tar.gz
-	sha256sums = d6d38c4a4ad3c22b3e3ae60667921a9b1d9bb610bf30af98982c75b4a7760fed
+	source = fretwire-0.5.0.tar.gz::https://github.com/john-baxter-dev/fretwire/archive/refs/tags/v0.5.0.tar.gz
+	sha256sums = SKIP
 
 pkgname = fretwire

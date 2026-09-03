@@ -1,14 +1,17 @@
 # fretwire
 
-An independent, from-scratch **Linux editor for the Line 6 HX Stomp, HX Stomp XL, Helix Floor and
-Helix LT**, written in Rust.
+An independent, from-scratch **Linux editor for Line 6's HX family** — Helix Floor, LT and Rack,
+HX Stomp and HX Stomp XL, HX Effects, and the POD Go — written in Rust. How far each one is
+proven on real hardware is in [Devices](#devices); the Rack is recognised but nobody has plugged
+one in yet.
 
 **[fretwire.org](https://fretwire.org)** — screenshots, supported devices, and the FAQ.
 
-fretwire talks to the pedal over its `MI_00` USB control interface (VID `0x0E41` / PID `0x4246`).
-The wire protocol was recovered by **observing USB traffic to and from the device**; the model,
-preset, and control **data is not included** — fretwire reads it at runtime from a copy you import
-from your own HX Edit installation (see [The reference data](#the-reference-data)).
+fretwire talks to the pedal over its `MI_00` USB control interface (vendor id `0x0E41`, one product
+id per device). The wire protocol was recovered by **observing USB traffic to and from the
+device**; the model, preset, and control **data is not included** — fretwire reads it at runtime
+from a copy you import from your own HX Edit (or POD Go Edit) installation (see
+[The reference data](#the-reference-data)).
 
 ![The fretwire editor connected to an HX Stomp: preset list, signal chain, and the parameter panel for the selected block](docs/screenshots/editor.png)
 
@@ -223,7 +226,7 @@ to the GUI, the daemon and the CLI, which all claim the device the same way.
 
 ## Talking to a real device
 
-Linux's default `uaccess` tags only `/dev/snd/*`, not the HX Stomp's raw vendor USB node, so without
+Linux's default `uaccess` tags only `/dev/snd/*`, not the pedal's raw vendor USB node, so without
 a udev rule every live command needs root. **The `.deb` and `.rpm` install the rule for you** — for
 an AppImage or a source build, do it once:
 
@@ -283,7 +286,8 @@ detect` saying `Helix Rack: present (untested device)` is itself the report we a
 
 The wire protocol edits by raw parameter index, so the tool works with **no** Line 6 data at all —
 you just get numeric indices instead of names. To get model/param names, the DSP meter, and control
-ranges, import the reference data from **your own** HX Edit installation. Nothing is redistributed:
+ranges, import the reference data from **your own** HX Edit installation (POD Go Edit for a POD
+Go, which indexes its own symbol table). Nothing is redistributed:
 the data goes Line 6 → you → the tool, and never through us.
 
 The GUI asks for it on first run. From the CLI:

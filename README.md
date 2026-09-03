@@ -43,7 +43,7 @@ Grab a package from [Releases](https://github.com/john-baxter-dev/fretwire/relea
 |--------|------|
 | Debian, Ubuntu, Kubuntu, Mint | `fretwire_<version>_amd64.deb` — `sudo apt install ./fretwire_*.deb` |
 | Fedora, openSUSE              | `fretwire-<version>.x86_64.rpm` — `sudo dnf install ./fretwire-*.rpm` |
-| Arch, CachyOS, EndeavourOS    | the AUR package (`packaging/PKGBUILD`) |
+| Arch, CachyOS, EndeavourOS    | `packaging/PKGBUILD` — copy it out of the tree and `makepkg -si` (an AUR listing is coming) |
 | anything else                 | `fretwire-<version>_amd64.AppImage` — `chmod +x`, run it |
 
 The `.deb` and `.rpm` pull in WebKitGTK themselves, install the **udev rule** for you, and ship both

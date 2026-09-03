@@ -35,8 +35,8 @@
       "appimage"
     ],
     "category": "Music",
-    "shortDescription": "Editor for the Line 6 HX Stomp",
-    "longDescription": "An independent editor for the Line 6 HX Stomp on Linux. Browse and edit presets, blocks, parameters and snapshots over the pedal's USB control interface. Ships no Line 6 data — the model catalogue is imported from your own HX Edit installation on first run.",
+    "shortDescription": "Editor for Line 6 HX, Helix and POD Go devices",
+    "longDescription": "An independent Linux editor for Line 6's HX family — Helix, HX Stomp, HX Effects and POD Go. Browse and edit presets, blocks, parameters and snapshots over the pedal's USB control interface. Ships no Line 6 data — the model catalogue is imported from your own HX Edit or POD Go Edit installation on first run.",
     "licenseFile": "../../LICENSE-MIT",
     "icon": [
       "icons/32x32.png",

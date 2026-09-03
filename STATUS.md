@@ -2,6 +2,14 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**The Arch package builds (2026-09-02).** `packaging/PKGBUILD` had never been run. It now has:
+`makepkg` on CachyOS against the `v0.4.0` tag tarball produced a working
+`fretwire-0.4.0-1-x86_64.pkg.tar.zst` (both binaries, udev rule, desktop entry, icon, licences),
+the packaged CLI detected the HX Stomp, `sha256sums` is real, and `packaging/.SRCINFO` is
+generated and tracked. Descriptions in the PKGBUILD, its desktop entry and `tauri.conf.json`
+(the `.deb`/`.rpm` text) now name the HX family rather than the Stomp alone. Not yet on the AUR:
+that needs an account and a push (ROADMAP Phase 8 has the steps).
+
 **Update check (2026-09-02).** The first thing in fretwire that touches the network, so it is
 built to stay small: `fretwire_core::update` sends one `HEAD` to GitHub's `releases/latest` with
 redirects off and reads the tag out of `Location` (no API, no JSON, a User-Agent of the bare word

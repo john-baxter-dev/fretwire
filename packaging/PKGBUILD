@@ -1,18 +1,17 @@
 # Maintainer: John Baxter <john-baxter-dev@proton.me>
 #
 # Arch package for fretwire — builds from a release tag. Ships no Line 6 data: the app imports the
-# model catalogue from the user's own HX Edit installation on first run (`fretwire import-data`, or
-# the GUI's first-run screen).
+# model catalogue from the user's own HX Edit (or POD Go Edit) installation on first run
+# (`fretwire import-data`, or the GUI's first-run screen).
 #
-# STATUS: written but NEVER BUILT OR PUBLISHED — see ROADMAP.md "Phase 8" for the checklist.
-# Publishing to the AUR: validate with `makepkg -si` from a copy outside the repo, run `updpkgsums`
-# (the sha256 below is still SKIP), then `makepkg --printsrcinfo > .SRCINFO` and push to
-# ssh://aur@aur.archlinux.org/fretwire.git.
+# Per release: bump pkgver, reset pkgrel=1, `updpkgsums`, `makepkg --printsrcinfo > .SRCINFO`,
+# then commit + push to ssh://aur@aur.archlinux.org/fretwire.git. Validate with `makepkg -si`
+# from a copy outside this repo (makepkg litters src/ and pkg/).
 
 pkgname=fretwire
-pkgver=0.2.0
+pkgver=0.4.0
 pkgrel=1
-pkgdesc="Independent editor for the Line 6 HX Stomp and Helix Floor"
+pkgdesc="Independent editor for Line 6 HX, Helix and POD Go devices"
 arch=('x86_64')
 url="https://github.com/john-baxter-dev/fretwire"
 license=('MIT' 'Apache-2.0')
@@ -20,7 +19,7 @@ depends=('webkit2gtk-4.1' 'gtk3')
 makedepends=('cargo' 'npm' 'pkgconf')
 optdepends=('p7zip: unpack an HX Edit installer during `fretwire import-data`')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('d6d38c4a4ad3c22b3e3ae60667921a9b1d9bb610bf30af98982c75b4a7760fed')
 
 prepare() {
   cd "$pkgname-$pkgver"
@@ -64,8 +63,8 @@ package() {
 [Desktop Entry]
 Type=Application
 Name=fretwire
-GenericName=HX Stomp Editor
-Comment=Edit presets on a Line 6 HX Stomp
+GenericName=Line 6 HX Editor
+Comment=Edit presets on a Line 6 HX Stomp, Helix or POD Go
 Exec=fretwire-gui
 Icon=fretwire
 Categories=AudioVideo;Audio;Music;

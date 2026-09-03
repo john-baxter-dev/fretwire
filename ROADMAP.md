@@ -485,16 +485,20 @@ guessing has already cost a power cycle): see section B of `captures/_RUNBOOK-hx
       auto-updater**: only the AppImage could replace itself, a self-rewriting `.deb`/`.rpm` fights
       apt/dnf, and signed-artifact plumbing is a trust surface this project does not need. The
       native answer to "automatic" is the AUR / Flathub items below.
-- [ ] **TODO — publish to the AUR.** `packaging/PKGBUILD` is written but **not published or even
-      built once**. Needs, in order:
-      1. Local validation: copy it out of the tree (`makepkg` litters `src/`/`pkg/`), `updpkgsums`
-         (needs `pacman-contrib`), then `makepkg -si`. This is the one package an Arch box can test
-         end to end — the tag tarball, `npm ci`, both binaries, `check()`, the udev rule.
-      2. Replace `sha256sums=('SKIP')` with the real hash (`updpkgsums` rewrites it). Publishing
-         with `SKIP` means a tampered tarball can't be detected.
-      3. Publish: AUR account + SSH key → `git clone ssh://aur@aur.archlinux.org/fretwire.git` →
-         copy the PKGBUILD → `makepkg --printsrcinfo > .SRCINFO` (mandatory, push is rejected
-         without it) → commit → push. Check the name is free first.
+- [ ] **Publish to the AUR** — the package now **builds and runs** (2026-09-02, first time): `makepkg`
+      from a copy of `packaging/PKGBUILD` on CachyOS against the `v0.4.0` tag tarball — `cargo fetch
+      --locked`, `npm ci`, the frontend build, both binaries in release, the offline `check()` suite,
+      and a 4.6 MB `fretwire-0.4.0-1-x86_64.pkg.tar.zst` holding `fretwire`, `fretwire-gui`, the udev
+      rule, a desktop entry, the icon and both licences. The packaged CLI detected the HX Stomp on
+      the bench; the GUI links against the system WebKitGTK with nothing missing. `sha256sums` is
+      the real hash (`updpkgsums`), and the generated `packaging/.SRCINFO` is tracked beside it.
+      Caveats: the dependency check was skipped here (`makepkg -d`) because this box's rustup is
+      from rustup.rs, which pacman cannot see providing `cargo`; a real Arch user's `rustup` package
+      does. `check()` lists the crates the *tagged* tree has — add `fretwire-commands` when the
+      pkgver moves to 0.5.0. Left to do, in order:
+      1. `sudo pacman -U` the built package once, to see the udev rule and desktop entry land.
+      2. Publish: AUR account + SSH key → `git clone ssh://aur@aur.archlinux.org/fretwire.git` →
+         copy `PKGBUILD` + `.SRCINFO` → commit → push. Check the name is free first.
       Per release afterwards: bump `pkgver`, reset `pkgrel=1`, `updpkgsums`, regenerate `.SRCINFO`.
 - [ ] Flathub — deferred. Needs a broad `--device=all` for USB, can't install a udev rule, and the
       sandbox complicates pointing at an HX Edit installer on the host. Revisit once there are users.

@@ -2,6 +2,88 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**MCP server (2026-09-02).** `fretwire-mcp` — the third consumer the command-layer lift was for
+(ROADMAP Phase 10, survey in `docs/serve-mode.md`). A stdio server on the official `rmcp` SDK
+with a **curated** surface rather than the 70 commands: 14 read tools, +10 with `--allow-writes`
+(edit-buffer changes: parameters, bypass, blocks, snapshots, preset changes, undo), +1 with
+`--allow-save` (flash); an ungated tool is not listed at all. Results are text — a preset as its
+blocks in signal order with values as HX Edit displays them, a diff as the lines that changed —
+and `param_set` takes display units back ("6.5", "450 ms", an enum's label, on/off): the DTO's
+format rules run backwards, with the unit picking the rule where a param switches by magnitude.
+The offline half decodes fretwire export files through the catalog into the same DTO the live
+path uses, so one summarizer serves both; the live half wraps `fretwire-commands` directly, so
+history, heartbeat and the safety rules are the GUI's. Out of `default-members` like the other
+front ends (`cargo test -p fretwire-mcp`; a CI job runs it). Verified over stdio: handshake,
+tool lists per gate, the offline tools on a fixture export (names, units, a diff), and a live
+read-only session against the HX Stomp (connect, read with params, list, disconnect cleanly), and
+confirmed the same day from Claude Code itself (`claude mcp add`, writes enabled). Not
+built: the in-daemon HTTP transport (needs a second seat on the single-editor lease), a
+`model_params` tool, `.hxb` input.
+
+**Serve mode binds beyond loopback with a token (2026-09-02).** Phase 10's last blocking item.
+Loopback stays tokenless; any wider `--bind` now requires a bearer token instead of being
+refused — generated once (32 bytes of `/dev/urandom`, hex) into
+`~/.local/share/fretwire/serve-token` (0600, beside the data dir), overridable with `--token` /
+`FRETWIRE_SERVE_TOKEN` / `--token-file`, and printed at startup as the link to open,
+`http://<host>:8317/#token=…`. The fragment never reaches the server or a Referer; `serve.js`
+reads it once, keeps it per origin, strips it from the address bar, sends it as
+`Authorization: Bearer` on invokes and `?token=` on the event socket, and puts up a paste box when
+the daemon's marker says a token is needed and none is stored (or on a 401 / WebSocket close
+4401 — a rotated token gets asked for, not silently failed). Constant-time compare. With a token
+the `Host` rule relaxes to "our port" and `Origin` must equal `Host`: a rebinding page lands on its
+own origin with no token and gets a 401, so the token is the defense and the daemon needn't guess
+which names the user types. Decided with the user: the link is the credential (no login page) and
+**no TLS to start** — a LAN bind assumes a trusted network, and the SSH tunnel, a VPN, or a TLS
+proxy cover the rest. Probed live: 401/200 by token, Host and Origin rules, socket close 4401,
+file generation and reuse, the env var, and an unchanged tokenless loopback — and confirmed on the
+LAN the same day (a wide bind, the printed link opened from another machine, editor up with no
+prompt). `docs/serve-mode.md` §4.
+
+**Serve mode: files cross the seam as bytes (2026-09-02).** Every file command took a path on
+the *serving* machine, which under Tauri was also the user's machine and under serve is a Pi
+across the room. Five `_inline` variants in `fretwire-commands` carry the file in the call
+instead — `ir_upload_inline` (WAV as base64 + name) / `ir_export_inline` (`{name, wav_base64}`),
+`export_setlists_inline` (`{count, json}`, same sweep/progress/cancel), `backup_show_inline` and
+`restore_preset_inline` (the export's text) — sharing their bodies with the path pair so the
+parsing, the 48 kHz rule and the error text are identical; the dispatcher is now 70 arms and the
+`/invoke` body cap went from axum's 2 MB to 64 MB (a restore sends the whole export back). The
+UI branches on a new `INLINE_FILES` (`IS_SERVE || IS_MOCK`) through `lib/files.js`: in a browser
+IRs upload from and download to *your* machine and a preset export is a download, with a
+serve-only checkbox to save on the daemon's disk instead (a backup that lives with the rig).
+Data import stays server-side by design (`fretwire import-data` over SSH; the installer is
+~1 GB) and is the one flow that still reaches `pickPath()` under serve. The mock implements the pair for real (a
+genuine WAV out, the header read on the way in; its export files parse back), so `npm run dev`
+walks the same UI path — 163 UI tests (+29), all Rust suites green, and the new arms probed live
+through the daemon with curl (a 5 MB body clears the cap). Survey: `docs/serve-mode.md` §3.
+
+**Serve mode works on loopback (2026-09-01).** `fretwire-serve` (ROADMAP Phase 10, survey in
+`docs/serve-mode.md`) serves the same built frontend the GUI embeds, answers its `invoke()` calls
+on `POST /invoke/{command}` via the new `fretwire_commands::dispatch` (an explicit 65-arm match,
+offline-tested, accepting the frontend's camelCase argument names like Tauri does), and pushes the
+three events over a WebSocket at `/events`. The UI's `ipc.js` gained the third transport
+(`lib/serve.js`), selected by a `window.__FRETWIRE_SERVE__` marker the daemon injects into
+`index.html` — one dist runs under Tauri, serve, and the browser mock. Safety posture: loopback
+bind only (a non-loopback `--bind` is refused; SSH tunnel for remote), `Host`/`Origin` checked on
+every non-static request, JSON Content-Type required on invokes, and a single-editor lease (a
+second concurrent browser gets WS close 4409 / HTTP 409, released on disconnect — the clipboards
+and undo history are single-editor state). Verified end-to-end on loopback with curl + a
+WebSocket lease script and clean SIGTERM teardown, and live browser-to-pedal the same day
+(connect, edits, footswitch follow). The non-loopback token flow followed on 2026-09-02.
+
+**Command layer lifted out of fretwire-tauri (2026-08-31).** The whole command surface —
+`AppState`, the 65 command bodies, the DTOs and the keepalive heartbeat — now lives in the new
+transport-neutral **`fretwire-commands`** crate (in `default-members`, so the offline suite covers
+it), the first step of serve mode (`docs/serve-mode.md`, ROADMAP Phase 10). `fretwire-tauri` keeps
+65 one-line `#[tauri::command]` wrappers plus a `TauriSink` newtype; the three events
+(`device-pushes` / `device-lost` / `backup-progress`) go through an `EventSink` trait, with each
+event's name and JSON payload defined once in `fretwire_commands::events::Event` so a second
+transport cannot drift from what `App.svelte` expects. Behavior-identical by construction — the
+heartbeat moved byte-for-byte (its lock/emit ordering and `LOST_AFTER_BEATS` logic are
+load-bearing), and the wrappers keep the exact signatures so Tauri derives the same camelCase wire
+argument names. Verified offline (build + full suite + UI tests) and live on the HX Stomp
+(2026-09-01): connect, edits, and pedal-side footswitch bypass following in the GUI — the
+`device-pushes` path through the new sink.
+
 ## GUI direction change (2026-07-05): migrating to Tauri
 The iced GUI is capped by its renderer: it's on tiny-skia (wgpu is ruled out by EGL/dmabuf driver
 issues here) and tiny-skia **can't stroke paths**, so the routing UI can't draw wires/branches. A
@@ -4251,3 +4333,42 @@ the two backup presets that used to refuse convert. **All 135 of the owner's pre
 `tests/pgb_to_wire.rs` pins the converted slot shape against the capture's (model index and
 enabled flag aside — different model, same shape). `docs/pod-go.md`: the looper leaves the
 unknowns list; the capture asks are all delivered, only hardware tests remain. 339 tests.
+
+## Sixty-ninth round (2026-09-01) — **the Helix Rack, and the firmware-2.82 id split**
+
+The user found a Helix Rack PID online: `0x4242`. It is a real id and it is the **wrong one** for
+any unit this editor could talk to.
+
+The Linux kernel's Line 6 rate quirk (`sound/usb/format.c`,
+`line6_parse_audio_format_rates_quirk`) lists the family twice over: `0x4241` "Helix", `0x4242`
+"Helix Rack", `0x4244` "Helix LT" — and then `0x4248` "Helix **>= fw 2.82**", `0x4249` "Helix Rack
+>= fw 2.82", `0x424A` "Helix LT >= fw 2.82". The three original Helix units changed product id at
+firmware 2.82.
+
+We can check that table without owning a Rack, because **we have measured two of its three new
+ids**: the Floor answered on `0x4248` (a contributor's descriptor, fw 3.82) and the LT on `0x424A`
+(read off a physical unit, 2026-08-18). Both endpoints of the new-id row are ours and both agree,
+so the value between them is what a current Rack presents.
+
+So the table gains **`0x4249`, `Support::Untested`** — the tier's literal definition (only the USB
+ids are known) and the only entry that got here without a person: no owner, no capture, no `lsusb`
+from a real unit. Every field is `None`, and that is deliberate rather than lazy. The Rack is a
+Floor in a 19" box and near-certainly stamps the same `P21`, which is exactly why it is not written
+down: a guessed code would make `by_model_code("P21")` ambiguous and would let a Rack pass
+`session::handshake`'s identity check on a string nobody has read off one. Left `None`, it takes
+the "accept any `P##`" path instead, which is what an unobserved device should get.
+
+The pre-2.82 ids are **not** listed, `0x4242` included. The protocol here was recovered from
+firmware 3.x; the Floor's `0x4241` and the LT's `0x4244` are absent for the same reason, and
+listing only the Rack's old id would be the odd one out. `no_pre_282_helix_id_is_listed` pins that
+as a decision rather than an oversight.
+
+Also in: the udev rule (`4249`), the README device table (the "not recognised yet" row becomes a
+real one, with the `0x4242` caveat and an ask for Rack owners), and a
+`devices_are_listed_in_descending_order_of_evidence` test — the table was already sorted by tier
+and `Transport::open` relies on it, but only the Verified/not-Verified boundary was checked. 365
+tests.
+
+**Still open:** everything about the Rack. `fretwire detect` printing `Helix Rack: present
+(untested device)` would be the whole of the report we need to move it to `Reported`; an `lsusb`
+saying `4242` instead would tell us the unit predates fw 2.82 and reopen the question above.

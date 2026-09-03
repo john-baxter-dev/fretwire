@@ -107,7 +107,7 @@ fn param_kind(v: &ParamValue) -> &'static str {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct ParamDto {
     /// Wire selector (edit target key 28) — pass back to `set_param`.
     pub index: usize,
@@ -149,7 +149,7 @@ pub struct ParamDto {
     pub default: Option<f64>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct SegStopDto {
     pub value: f64,
     pub label: String,
@@ -158,7 +158,7 @@ pub struct SegStopDto {
 /// Display recipe for a continuous param — see [`fretwire_core::editor::NumFormat`]. The panel
 /// applies `scale` and `offset`, picks the first rule bracketing the result, multiplies by its
 /// `mult`, and fills the printf-ish `template`.
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct NumFormatDto {
     pub scale: f64,
     /// Added after `scale`; non-zero only for the bipolar controls (pan: ×200 − 100).
@@ -166,7 +166,7 @@ pub struct NumFormatDto {
     pub rules: Vec<FormatRuleDto>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct FormatRuleDto {
     /// `null` for an unbounded end — JSON has no infinity.
     pub lo: Option<f64>,
@@ -221,7 +221,7 @@ impl From<&EditorParam> for ParamDto {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct BlockDto {
     /// Wire slot — global across DSPs (`dsp * 20 + index`), and the edit address.
     pub slot: i64,
@@ -320,7 +320,7 @@ pub struct DspDto {
     pub dsp_load: f64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct PresetDto {
     pub name: Option<String>,
     pub index: Option<i64>,
@@ -636,6 +636,24 @@ impl From<&'static fretwire_core::fretwire_usb::Device> for DetectedDeviceDto {
             caveat: d.support.caveat().map(str::to_string),
         }
     }
+}
+
+/// An IR as a file, for the frontend to save itself (`ir_export_inline`).
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct IrFileDto {
+    /// The name stored in the slot — the natural file stem.
+    pub name: String,
+    /// The 32-bit float, 48 kHz mono WAV, base64 (standard alphabet, padded).
+    pub wav_base64: String,
+}
+
+/// An export file handed back instead of written (`export_setlists_inline`).
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct BackupFileDto {
+    /// Presets in the file — what `export_setlists` returns on its own.
+    pub count: i64,
+    /// The file's text, exactly what the path variant would have written.
+    pub json: String,
 }
 
 /// One user IR slot, as the IR panel renders it.

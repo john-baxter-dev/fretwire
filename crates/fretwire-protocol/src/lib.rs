@@ -36,6 +36,23 @@ pub const PID_HELIX_FLOOR: u16 = 0x4248;
 /// The unit identifies itself as `P21` — the Floor's model code — and every read path
 /// reconciles against it unchanged. See `docs/helix-lt.md`.
 pub const PID_HELIX_LT: u16 = 0x424A;
+/// USB Product ID for the Helix Rack. **Not read off a unit** — it comes from the Linux kernel's
+/// Line 6 rate quirk (`sound/usb/format.c`, `line6_parse_audio_format_rates_quirk`), whose table
+/// labels it `/* Line6 Helix Rack >= fw 2.82 */`.
+///
+/// That "`>= fw 2.82`" is the whole reason this is `0x4249` and not the `0x4242` a search turns up
+/// first. The three original Helix units changed product id at firmware 2.82 — the same table
+/// carries `0x4241` "Helix", `0x4242` "Helix Rack" and `0x4244` "Helix LT" for the old ids, and
+/// `0x4248`, `0x4249`, `0x424A` for the new ones — and **we have measured two of the three new
+/// ones on real hardware**: the Floor answered on `0x4248` (fw 3.82) and the LT on `0x424A`. Both
+/// endpoints of the kernel's new-id row check out, so the value between them is the one a Rack on
+/// any firmware fretwire has ever spoken to will present.
+///
+/// The pre-2.82 ids are deliberately **not** in [`DEVICES`], this device's `0x4242` included: the
+/// protocol here was recovered from firmware 3.x, no pre-2.82 unit of any model is listed (the
+/// Floor's `0x4241` and the LT's `0x4244` are absent for exactly the same reason), and listing one
+/// would claim a firmware generation nobody has pointed this editor at.
+pub const PID_HELIX_RACK: u16 = 0x4249;
 /// USB Product ID for the HX Effects, read off a contributor's unit with `lsusb`
 /// (2026-08-22, issue #10): `ID 0e41:4245 Line6, Inc. HX Effects`.
 ///
@@ -171,6 +188,11 @@ pub struct Device {
 /// line arrived first and made it findable, and an owner has since said it works. That report is
 /// the whole of the evidence — no capture, no session, no panel readings — so every other field is
 /// still empty.
+///
+/// The **Helix Rack** is the table's only [`Support::Untested`] entry and the only one that got
+/// here without a single person: its id was read out of the Linux kernel's Line 6 quirk table (see
+/// [`PID_HELIX_RACK`]), corroborated by our own measurements of the two ids either side of it. No
+/// owner has ever run fretwire against one, so it is listed last, opened last, and warns loudly.
 pub const DEVICES: &[Device] = &[
     Device {
         pid: PID_HX_STOMP,
@@ -358,6 +380,28 @@ pub const DEVICES: &[Device] = &[
         // It is still `Reported` rather than `Untested`: "a user has this working" is real
         // information about the protocol, confirmed by outcome. [2026-08-24 owner report]
         support: Support::Reported,
+    },
+    Device {
+        pid: PID_HELIX_RACK,
+        name: "Helix Rack",
+        // Empty across the board, and this one is emptier than it looks. The Rack is a Floor in a
+        // 19" box — same DSPs, same setlists, near-certainly the same `P21` — and that is exactly
+        // why none of it is written down here. A guessed `P21` would make `by_model_code` ambiguous
+        // and would let a Rack pass the handshake's identity check on a code nobody has read off
+        // one; leaving it `None` sends `session::handshake` down its "accept any P##" path, which
+        // is what an unobserved device should get. If it does report `P21`, it joins the Floor's
+        // data class and these fields can be filled in from a single session.
+        model_code: None,
+        preset_device_id: None,
+        dsps: None,
+        snapshots: None,
+        setlists: None,
+        setlist_size: None,
+        presets_per_bank: None,
+        // The tier's literal definition: only the USB IDs are known, and here even those are
+        // second-hand. Below the HX Effects, which at least has an owner saying it works.
+        // [2026-09-01 — the Linux kernel's quirk table, see `PID_HELIX_RACK`]
+        support: Support::Untested,
     },
 ];
 

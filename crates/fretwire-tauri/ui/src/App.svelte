@@ -1,5 +1,6 @@
 <script>
-  import { invoke, listen, IS_MOCK } from "./lib/ipc.js";
+  import { invoke, listen, IS_MOCK, IS_SERVE, INLINE_FILES } from "./lib/ipc.js";
+  import { base64ToBytes, bytesToBase64, pickFile, saveFile } from "./lib/files.js";
   import { onMount } from "svelte";
   import Chain from "./lib/Chain.svelte";
   import ParamPanel from "./lib/ParamPanel.svelte";
@@ -34,6 +35,16 @@
       dataStatus = { present: false, dir: "", files: 0 };
     }
     dataReady = dataStatus.present;
+    // Under fretwire-serve the backend outlives the page, so a reload can land on a live device
+    // session (it survives editor disconnects for a few minutes). Re-attach instead of showing a
+    // disconnected view over a session that's still open — `connect` is an idempotent re-read,
+    // not a second handshake, and the undo history rides along. Under Tauri and the mock a fresh
+    // page always answers false here, so nothing changes for them.
+    try {
+      if (await invoke("is_connected")) await connect();
+    } catch {
+      /* the disconnected view is the honest fallback */
+    }
   });
 
   let status = $state("Ready — WebKitGTK webview is painting.");
@@ -87,12 +98,14 @@
   let saveAsDlg = $state(null); // { slot, name }
   let renameDlg = $state(null); // { name }
   let deleteDlg = $state(null); // slot number
-  let exportDlg = $state(null); // { path, all }
+  let exportDlg = $state(null); // { path, all, onServer } — onServer: a serve-mode export to the daemon's disk
   // True from pressing Cancel until the sweep unwinds — the file is still written, holding what
   // was read up to that point, so the finished toast has to say which of the two happened.
   let exportCancelling = $state(false);
   let backupProgress = $state(null); // { done, total, name } while a backup sweep runs
-  let restoreDlg = $state(null); // { path, entries, index, slot } — entries load from the file
+  // { path | json+fileName, entries, index, slot } — entries load from the file, which is a path
+  // for the backend to open or (INLINE_FILES) the file's text carried in the invoke.
+  let restoreDlg = $state(null);
   let snapRenameDlg = $state(null); // { index, name }
   // Clear preset: empty the chain, reset the snapshot names. Edit buffer only and one undo entry,
   // but it throws away a whole preset's work in a click, so it confirms first.
@@ -628,13 +641,18 @@
   // "Export", not "Backup": this captures presets and nothing else. A device backup in HX Edit's
   // sense also carries global settings and IRs — both readable now, neither in this file — and a
   // file that called itself a backup would be trusted to make a wiped pedal whole. It wouldn't.
+  const exportDefault = `fretwire-presets-${new Date().toISOString().slice(0, 10)}.json`;
   const onExport = () =>
     (exportDlg = {
-      path: `~/fretwire-presets-${new Date().toISOString().slice(0, 10)}.json`,
+      // In a browser the file is a download and this is just its name.
+      path: INLINE_FILES ? exportDefault : `~/${exportDefault}`,
       all: false,
+      onServer: false,
     });
+  const exportInline = $derived(INLINE_FILES && !exportDlg?.onServer);
   async function confirmExport() {
     const path = exportDlg.path.trim();
+    const inline = exportInline;
     // Whatever setlist you are looking at, not whichever one the device happens to sit in — the
     // sidebar shows one list and the button used to export bank 0 regardless.
     const banks = exportDlg.all ? setlists.map((_, i) => i) : [viewBank];
@@ -643,9 +661,19 @@
     exportCancelling = false;
     backupProgress = { done: 0, total: 0, name: "starting…" };
     try {
-      const count = await invoke("export_setlists", { path, banks });
+      let count;
+      let where;
+      if (inline) {
+        const file = await invoke("export_setlists_inline", { banks });
+        count = file.count;
+        where = path.split(/[\\/]/).pop() || exportDefault;
+        saveFile(where, new Blob([file.json], { type: "application/json" }));
+      } else {
+        count = await invoke("export_setlists", { path, banks });
+        where = path;
+      }
       const how = exportCancelling ? "Cancelled —" : "Exported";
-      toast(`${how} ${count} presets to ${path}`, exportCancelling ? "warn" : "info");
+      toast(`${how} ${count} presets to ${where}`, exportCancelling ? "warn" : "info");
       status = `${how} ${count} presets.`;
     } catch (e) {
       toast("export: " + e);
@@ -664,27 +692,44 @@
     }
   }
 
-  const onRestore = () => (restoreDlg = { path: "~/", entries: null, index: null, slot: null });
+  const onRestore = () =>
+    (restoreDlg = { path: "~/", json: null, fileName: null, entries: null, index: null, slot: null });
   // What the chosen restore target currently holds — overwriting must be a visible choice.
   const restoreTarget = $derived(
     restoreDlg?.slot != null ? presets.find((p) => p.index === restoreDlg.slot) : null,
   );
   async function loadBackupEntries() {
     try {
-      const entries = await invoke("backup_show", { path: restoreDlg.path.trim() });
-      restoreDlg = { ...restoreDlg, entries, index: null, slot: null, bank: null };
+      let entries;
+      let picked = {};
+      if (INLINE_FILES) {
+        const file = await pickFile({ accept: ".json,application/json" });
+        if (!file) return;
+        const json = await file.text();
+        entries = await invoke("backup_show_inline", { json });
+        picked = { json, fileName: file.name };
+      } else {
+        entries = await invoke("backup_show", { path: restoreDlg.path.trim() });
+      }
+      restoreDlg = { ...restoreDlg, ...picked, entries, index: null, slot: null, bank: null };
     } catch (e) {
       toast("restore: " + e);
     }
   }
   async function confirmRestore() {
-    const { path, index, slot, bank } = restoreDlg;
+    const { path, json, index, slot, bank } = restoreDlg;
     restoreDlg = null;
     if (index == null || slot == null) return;
     selectedSlot = null;
     // The entry's own bank, so a preset exported from USER 1 goes back to USER 1 rather than
-    // whichever list bank 0 happens to be.
-    await apply(invoke("restore_preset", { path: path.trim(), index, slot, bank: bank ?? 0 }));
+    // whichever list bank 0 happens to be. The file goes back with the choice when it was the
+    // browser's: the backend keeps nothing between the listing and the restore.
+    const target = { index, slot, bank: bank ?? 0 };
+    await apply(
+      json != null
+        ? invoke("restore_preset_inline", { json, ...target })
+        : invoke("restore_preset", { path: path.trim(), ...target }),
+    );
     await refreshPresets();
     activeSnapshot = preset?.active_snapshot ?? 0;
     status = `Restored to slot ${slot}.`;
@@ -988,25 +1033,33 @@
     refreshIrs();
   }
 
+  // `path` is null in a browser: the WAV comes back inline and is saved as a download.
   const onIrExport = (slot, path) =>
-    irCall(
-      async () => {
+    irCall(async () => {
+      if (path == null) {
+        const file = await invoke("ir_export_inline", { slot });
+        const name = `${file.name.trim() || `IR${String(slot + 1).padStart(3, "0")}`}.wav`;
+        saveFile(name, new Blob([base64ToBytes(file.wav_base64)], { type: "audio/wav" }));
+        toast(`Exported "${file.name}" — downloading ${name}`, "info");
+      } else {
         const name = await invoke("ir_export", { slot, path });
         toast(`Exported "${name}" to ${path}`, "info");
-        return null;
-      },
-    );
+      }
+      return null;
+    });
 
+  // The job names a `path` (Tauri) or carries the `file` (a browser) — see IrPanel.startUpload.
   const onIrUpload = (job) =>
     irCall(async () => {
-      const slots = await invoke("ir_upload", {
-        slot: job.slot,
-        path: job.path,
-        name: job.name.trim(),
-        overwrite: job.overwrite,
-        force: job.force,
-      });
-      toast(`Uploaded "${job.name.trim()}" to IR ${String(job.slot + 1).padStart(3, "0")}`, "info");
+      const name = job.name.trim();
+      const target = { slot: job.slot, name, overwrite: job.overwrite, force: job.force };
+      const slots = job.file
+        ? await invoke("ir_upload_inline", {
+            ...target,
+            wavBase64: bytesToBase64(await job.file.arrayBuffer()),
+          })
+        : await invoke("ir_upload", { ...target, path: job.path });
+      toast(`Uploaded "${name}" to IR ${String(job.slot + 1).padStart(3, "0")}`, "info");
       return slots;
     });
 
@@ -1294,9 +1347,26 @@
     oncancel={() => (exportDlg = null)}
   >
     <label class="dlg-field">
-      Export file
+      {exportInline ? "Download as" : "Export file"}
       <input type="text" bind:value={exportDlg.path} use:autofocus />
     </label>
+    <!-- Serve mode only: the daemon's disk is a real destination too (a backup that lives with
+         the rig, cron-able), just not the default one. -->
+    {#if IS_SERVE}
+      <label class="dlg-check">
+        <input
+          type="checkbox"
+          checked={exportDlg.onServer}
+          onchange={(e) =>
+            (exportDlg = {
+              ...exportDlg,
+              onServer: e.currentTarget.checked,
+              path: e.currentTarget.checked ? `~/${exportDefault}` : exportDefault,
+            })}
+        />
+        Save on the machine running fretwire-serve instead of downloading
+      </label>
+    {/if}
     <!-- Only worth asking on a device that has more than one list. -->
     {#if setlists.length > 1}
       <div class="dlg-field">
@@ -1333,13 +1403,25 @@
     onconfirm={confirmRestore}
     oncancel={() => (restoreDlg = null)}
   >
-    <label class="dlg-field">
-      Backup file
-      <span class="dlg-row">
-        <input type="text" bind:value={restoreDlg.path} use:autofocus />
-        <button type="button" class="dlg-btn" onclick={loadBackupEntries}>Load</button>
-      </span>
-    </label>
+    {#if INLINE_FILES}
+      <div class="dlg-field">
+        Backup file
+        <span class="dlg-row">
+          <span class="dlg-filename">{restoreDlg.fileName ?? "No file chosen"}</span>
+          <button type="button" class="dlg-btn" onclick={loadBackupEntries} use:autofocus>
+            Choose file…
+          </button>
+        </span>
+      </div>
+    {:else}
+      <label class="dlg-field">
+        Backup file
+        <span class="dlg-row">
+          <input type="text" bind:value={restoreDlg.path} use:autofocus />
+          <button type="button" class="dlg-btn" onclick={loadBackupEntries}>Load</button>
+        </span>
+      </label>
+    {/if}
     {#if restoreDlg.entries}
       <div class="dlg-cols">
         <div class="dlg-col">
@@ -1389,7 +1471,10 @@
         </p>
       {/if}
     {:else}
-      <p class="dlg-text">Enter the backup file's path and press <b>Load</b> to list its presets.</p>
+      <p class="dlg-text">
+        {#if INLINE_FILES}Choose an export file to list its presets.{:else}Enter the backup file's
+          path and press <b>Load</b> to list its presets.{/if}
+      </p>
     {/if}
   </Dialog>
 {/if}
@@ -1822,9 +1907,17 @@
     display: flex;
     gap: 6px;
   }
-  .dlg-row input {
+  .dlg-row input,
+  .dlg-filename {
     flex: 1;
     min-width: 0;
+  }
+  .dlg-filename {
+    align-self: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: 0.8;
   }
   .dlg-btn {
     font: inherit;

@@ -106,3 +106,20 @@ jobs:
       # and its DTO tests went unrun. They need dist/, which the frontend build above provides.
       - name: Test
         run: cargo test --locked --verbose -p fretwire-tauri
+
+  mcp:
+    name: build & test (MCP server)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+
+      # fretwire-mcp is out of `default-members` (it pulls the MCP SDK's tree), so the root job
+      # never builds it. No system deps: stdio only, pure-Rust USB.
+      - name: Clippy check
+        run: cargo clippy --locked --all-targets -p fretwire-mcp -- -D warnings
+      - name: Test
+        run: cargo test --locked --verbose -p fretwire-mcp

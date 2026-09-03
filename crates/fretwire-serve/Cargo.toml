@@ -1,0 +1,27 @@
+[package]
+name = "fretwire-serve"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Serve the fretwire editor over HTTP to a browser — for headless machines (docs/serve-mode.md)."
+
+# Like fretwire-tauri, this crate is a workspace member but NOT in `default-members`: it embeds
+# the built frontend (../fretwire-tauri/dist), and a built frontend must never become a
+# prerequisite for a plain `cargo build`/`cargo test` at the root.
+[[bin]]
+name = "fretwire-serve"
+path = "src/main.rs"
+
+[dependencies]
+fretwire-commands = { path = "../fretwire-commands" }
+fretwire-core = { path = "../fretwire-core" }
+axum = { version = "0.8", features = ["ws"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "time"] }
+# Embeds dist/ in release builds (single binary to scp onto a Pi); reads it from disk in debug.
+rust-embed = "8"
+serde = { workspace = true }
+serde_json = { workspace = true }
+# `env`: the token may come from FRETWIRE_SERVE_TOKEN (a systemd unit's Environment=), off argv.
+clap = { workspace = true, features = ["env"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

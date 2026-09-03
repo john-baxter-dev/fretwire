@@ -16,6 +16,8 @@
 // feels stateful. Reload the page to reset. Trigger live-follow pushes by hand from the devtools
 // console via `window.fretwireMock` (see the bottom of this file).
 
+import { base64ToBytes, bytesToBase64 } from "../lib/files.js";
+
 const LATENCY_MS = 30; // a touch of fake IPC latency, to surface races the real backend would
 
 // ---------------------------------------------------------------------------------------------
@@ -492,6 +494,98 @@ const hexEncode = (str) =>
 const hexDecode = (hex) =>
   new TextDecoder().decode(new Uint8Array(hex.match(/.{2}/g)?.map((h) => parseInt(h, 16)) ?? []));
 
+async function sweepBackup(banks) {
+  exportCancelled = false;
+  const entries = [];
+  const lists = banks.map((b) => [b, bankOf(b)]);
+  const total = lists.reduce((n, [, l]) => n + l.length, 0);
+  let done = 0;
+  outer: for (const [bank, list] of lists) {
+    for (const p of list) {
+      await sleep(120); // the real sweep takes ~a second per preset; make the progress UI visible
+      done++;
+      entries.push({
+        bank,
+        index: p.index,
+        name: p.name,
+        raw_hex: hexEncode(JSON.stringify({
+          name: p.name, snapshot_names: p.snapshot_names, active_snapshot: p.active_snapshot,
+          slots: p.slots, nodePos: p.nodePos, dspCount: p.dspCount,
+          deviceModel: p.deviceModel, buildStamp: p.buildStamp,
+        })),
+      });
+      emit("backup-progress", {
+        done, total, bank, setlist: setlistNames()[bank] ?? "Presets", name: p.name,
+      });
+      // Checked after the entry is kept, like the real sweep: a cancelled export still holds
+      // everything read up to the moment it was called off.
+      if (exportCancelled) break outer;
+    }
+  }
+  lastBackup = {
+    format: "fretwire-backup", version: 2,
+    device: `${DEVICES[deviceMode].name} (mock)`,
+    setlists: banks.map((b) => ({ bank: b, name: setlistNames()[b] ?? "Presets" })),
+    presets: entries,
+  };
+  return lastBackup;
+}
+
+// The file as the UI hands it back — its text. Only the mock's own files parse, since their
+// "raw" is the mock state and not a preset stream; that is the honest limit of a mock.
+function parseBackup(json) {
+  let file;
+  try {
+    file = JSON.parse(json);
+  } catch (e) {
+    throw new Error(`not a fretwire export file: ${e.message}`);
+  }
+  if (file?.format !== "fretwire-backup" || !Array.isArray(file.presets)) {
+    throw new Error("not a fretwire export file");
+  }
+  return file;
+}
+
+const backupEntries = (backup) =>
+  backup.presets.map((p) => ({
+    index: p.index,
+    name: p.name,
+    bank: p.bank ?? 0,
+    setlist: backup.setlists?.find((s) => s.bank === (p.bank ?? 0))?.name ?? null,
+  }));
+
+function restoreFrom(backup, index, slot, bank) {
+  const entry = backup.presets.find((p) => p.index === index && (p.bank ?? 0) === bank);
+  if (!entry) throw new Error(`export file has no preset at bank ${bank} slot ${index}`);
+  let state;
+  try {
+    state = JSON.parse(hexDecode(entry.raw_hex));
+  } catch {
+    throw new Error("mock backend: only files exported by the mock itself can be restored here");
+  }
+  // Files from before the sweep recorded the DSP layout take the current preset's, as the real
+  // restore takes the device's.
+  const restored = {
+    name: state.name, index: slot, active_snapshot: state.active_snapshot ?? 0,
+    snapshot_names: state.snapshot_names ?? [], slots: state.slots, nodePos: state.nodePos ?? {},
+    dspCount: state.dspCount ?? current.dspCount,
+    deviceModel: state.deviceModel ?? current.deviceModel,
+    buildStamp: state.buildStamp ?? current.buildStamp,
+  };
+  const list = bankOf(currentBank);
+  const at = list.findIndex((p) => p.index === slot);
+  if (at >= 0) list[at] = restored;
+  else {
+    list.push(restored);
+    list.sort((a, b) => a.index - b.index);
+  }
+  // Like Session::restore_preset: the device ends up on the restored slot, history reset.
+  current = restored;
+  clearHistory();
+  seedHistory();
+  return toDto(current);
+}
+
 
 // ---------------------------------------------------------------------------------------------
 // Edit history — mirrors the real backend: a labeled timeline of full-state snapshots with a
@@ -789,6 +883,48 @@ function irCheckSlot(slot) {
   }
 }
 
+// A real (if silent) WAV for `ir_export_inline`: 32-bit float mono, the device's format, so what
+// the browser downloads opens in an audio editor. 44-byte canonical header.
+function silentWav(samples, rate = 48000) {
+  const data = samples * 4;
+  const buf = new ArrayBuffer(44 + data);
+  const v = new DataView(buf);
+  const tag = (at, str) => [...str].forEach((c, i) => v.setUint8(at + i, c.charCodeAt(0)));
+  tag(0, "RIFF"); v.setUint32(4, 36 + data, true); tag(8, "WAVE");
+  tag(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 3, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 4, true); v.setUint16(32, 4, true);
+  v.setUint16(34, 32, true);
+  tag(36, "data"); v.setUint32(40, data, true);
+  return new Uint8Array(buf);
+}
+
+// The sample rate a WAV declares, read off its header — the real backend's parser does the same
+// before refusing a 44.1 kHz file. Throws for anything that is not a WAV at all.
+function wavRate(bytes) {
+  const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const tag = (at) => String.fromCharCode(...bytes.subarray(at, at + 4));
+  if (bytes.length < 44 || tag(0) !== "RIFF" || tag(8) !== "WAVE") throw new Error("not a WAV file");
+  return v.getUint32(24, true);
+}
+
+// The rate check both IR uploads share; the message is the real backend's, word for word.
+function irCheckRate(rate, force) {
+  if (rate !== 48000 && !force) {
+    throw new Error(`that file is ${rate} Hz and the device runs at 48000 Hz. Nothing here resamples, so it would play short and bright — convert it first`);
+  }
+}
+
+// A fake but stable digest, so re-uploading the same thing twice reports the same hash.
+function irStash(slot, name, seed) {
+  const digest = [...seed].reduce((a, c) => (a * 33 + c.charCodeAt(0)) >>> 0, 5381);
+  irStore.set(slot, {
+    name: (name ?? "").slice(0, 31),
+    samples: 2048,
+    checksum: digest,
+    md5: digest.toString(16).padStart(8, "0").repeat(4),
+  });
+}
+
 // The mock pedal's globals. Only the ids fretwire has identified are named; `raw` stands in for the
 // unnamed majority that answer and have never been explained, so the panel's read-only tier is
 // exercised too. FS7/FS8 Function are XL-only on real hardware; they are here because the panel
@@ -982,17 +1118,33 @@ const HANDLERS = {
     if (held && !overwrite) {
       throw new Error(`IR slot ${slot} already holds "${held.name || "(unnamed)"}" — pass overwrite to replace it`);
     }
-    if (/44100|44\.1/.test(path) && !force) {
-      throw new Error("that file is 44100 Hz and the device runs at 48000 Hz. Nothing here resamples, so it would play short and bright — convert it first");
+    // A browser can't read the path, so the rate is guessed from its name.
+    irCheckRate(/44100|44\.1/.test(path) ? 44100 : 48000, force);
+    irStash(slot, name, path);
+    return irDirectory();
+  },
+  // The inline pair: the file travels in the call. The export is a genuine WAV and the upload
+  // reads the header of what it is given, so the browser flows are exercised end to end.
+  ir_export_inline: ({ slot }) => {
+    irCheckSlot(slot);
+    const held = irStore.get(slot);
+    if (!held) throw new Error(`IR slot ${slot} is empty`);
+    return { name: held.name, wav_base64: bytesToBase64(silentWav(held.samples)) };
+  },
+  ir_upload_inline: ({ slot, wavBase64, name, overwrite, force }) => {
+    irCheckSlot(slot);
+    const held = irStore.get(slot);
+    if (held && !overwrite) {
+      throw new Error(`IR slot ${slot} already holds "${held.name || "(unnamed)"}" — pass overwrite to replace it`);
     }
-    // A fake but stable digest, so re-uploading the same path twice reports the same hash.
-    const digest = [...path].reduce((a, c) => (a * 33 + c.charCodeAt(0)) >>> 0, 5381);
-    irStore.set(slot, {
-      name: (name ?? "").slice(0, 31),
-      samples: 2048,
-      checksum: digest,
-      md5: digest.toString(16).padStart(8, "0").repeat(4),
-    });
+    let bytes;
+    try {
+      bytes = base64ToBytes(wavBase64);
+    } catch (e) {
+      throw new Error(`wav_base64: ${e.message ?? e}`);
+    }
+    irCheckRate(wavRate(bytes), force);
+    irStash(slot, name, wavBase64);
     return irDirectory();
   },
   ir_delete: ({ slot }) => {
@@ -1377,50 +1529,18 @@ const HANDLERS = {
   // ---- export / import ------------------------------------------------------------------------
   // The real backend sweeps the device and writes a `fretwire-backup` JSON file at `path`. The mock
   // mirrors the file *shape* exactly (its "raw" is hex of the mock preset state instead of a
-  // MessagePack stream), triggers a browser download of it, and keeps it in memory so
-  // backup_show/restore_preset work in the same session — a browser can't read arbitrary paths.
-  // Walks whichever setlists it is given, as the real sweep does.
+  // MessagePack stream) and keeps it in memory so the path-taking backup_show/restore_preset work
+  // in the same session — a browser can't read arbitrary paths. The `_inline` variants below are
+  // what the UI actually uses in a browser: the file goes out as a download and comes back as
+  // text. Walks whichever setlists it is given, as the real sweep does.
   export_setlists: async ({ path, banks }) => {
-    exportCancelled = false;
-    const entries = [];
-    const lists = banks.map((b) => [b, bankOf(b)]);
-    const total = lists.reduce((n, [, l]) => n + l.length, 0);
-    let done = 0;
-    outer: for (const [bank, list] of lists) {
-      for (const p of list) {
-        await sleep(120); // the real sweep takes ~a second per preset; make the progress UI visible
-        done++;
-        entries.push({
-          bank,
-          index: p.index,
-          name: p.name,
-          raw_hex: hexEncode(JSON.stringify({
-            name: p.name, snapshot_names: p.snapshot_names, active_snapshot: p.active_snapshot,
-            slots: p.slots, nodePos: p.nodePos,
-          })),
-        });
-        emit("backup-progress", {
-          done, total, bank, setlist: setlistNames()[bank] ?? "Presets", name: p.name,
-        });
-        // Checked after the entry is kept, like the real sweep: a cancelled export still holds
-        // everything read up to the moment it was called off.
-        if (exportCancelled) break outer;
-      }
-    }
-    lastBackup = {
-      format: "fretwire-backup", version: 2,
-      device: `${DEVICES[deviceMode].name} (mock)`,
-      setlists: banks.map((b) => ({ bank: b, name: setlistNames()[b] ?? "Presets" })),
-      presets: entries,
-    };
-    // Offer the file as a download, named like the requested path.
-    const blob = new Blob([JSON.stringify(lastBackup, null, 2)], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = path.split("/").pop() || "fretwire-presets.json";
-    a.click();
-    URL.revokeObjectURL(a.href);
-    return entries.length;
+    await sweepBackup(banks);
+    console.info(`[fretwire mock] would write ${path}`);
+    return lastBackup.presets.length;
+  },
+  export_setlists_inline: async ({ banks }) => {
+    await sweepBackup(banks);
+    return { count: lastBackup.presets.length, json: JSON.stringify(lastBackup, null, 2) };
   },
   cancel_export: () => {
     exportCancelled = true;
@@ -1428,35 +1548,15 @@ const HANDLERS = {
   backup_show: ({ path }) => {
     if (!lastBackup)
       throw new Error(`mock backend: nothing exported this session — run Export… first (a browser can't read ${path})`);
-    return lastBackup.presets.map((p) => ({
-      index: p.index,
-      name: p.name,
-      bank: p.bank ?? 0,
-      setlist: lastBackup.setlists?.find((s) => s.bank === (p.bank ?? 0))?.name ?? null,
-    }));
+    return backupEntries(lastBackup);
   },
+  backup_show_inline: ({ json }) => backupEntries(parseBackup(json)),
   restore_preset: ({ index, slot, bank = 0 }) => {
     if (!lastBackup) throw new Error("mock backend: nothing exported this session — run Export… first");
-    const entry = lastBackup.presets.find((p) => p.index === index && (p.bank ?? 0) === bank);
-    if (!entry) throw new Error(`export file has no preset at bank ${bank} slot ${index}`);
-    const state = JSON.parse(hexDecode(entry.raw_hex));
-    const restored = {
-      name: state.name, index: slot, active_snapshot: state.active_snapshot ?? 0,
-      snapshot_names: state.snapshot_names ?? [], slots: state.slots, nodePos: state.nodePos,
-    };
-    const list = bankOf(currentBank);
-    const at = list.findIndex((p) => p.index === slot);
-    if (at >= 0) list[at] = restored;
-    else {
-      list.push(restored);
-      list.sort((a, b) => a.index - b.index);
-    }
-    // Like Session::restore_preset: the device ends up on the restored slot, history reset.
-    current = restored;
-    clearHistory();
-    seedHistory();
-    return toDto(current);
+    return restoreFrom(lastBackup, index, slot, bank);
   },
+  restore_preset_inline: ({ json, index, slot, bank = 0 }) =>
+    restoreFrom(parseBackup(json), index, slot, bank),
   split_types: () => clone(SPLIT_TYPES),
   categories: () => {
     const ids = [...new Set(CATALOG.map((m) => m.category))].sort((a, b) => a - b);

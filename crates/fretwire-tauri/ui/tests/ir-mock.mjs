@@ -68,6 +68,31 @@ const long = "x".repeat(60);
 after = await mock.invoke("ir_upload", { slot: 9, path: "/x/a.wav", name: long, overwrite: false, force: false });
 ok(after.find((s) => s.index === 9).name.length === 31, "a long name is cut to 31");
 
+// --- the inline pair (a browser's files travel in the call) ---
+const file = await mock.invoke("ir_export_inline", { slot: 0 });
+ok(file.name === "G12-65 212 C Hi-Gn 421+57", "inline export carries the stored name");
+const wav = Buffer.from(file.wav_base64, "base64");
+ok(wav.subarray(0, 4).toString() === "RIFF" && wav.subarray(8, 12).toString() === "WAVE", "inline export is a WAV");
+ok(wav.readUInt32LE(24) === 48000, "inline export declares 48 kHz");
+ok(wav.length === 44 + 2048 * 4, `inline export is 2048 float32 samples, got ${wav.length} bytes`);
+await throws(() => mock.invoke("ir_export_inline", { slot: 2 }), "empty", "inline export of an empty slot fails");
+
+const b64 = (bytes) => Buffer.from(bytes).toString("base64");
+after = await mock.invoke("ir_upload_inline", { slot: 2, wavBase64: file.wav_base64, name: "roundtrip", overwrite: false, force: false });
+ok(after.find((s) => s.index === 2)?.name === "roundtrip", "an exported WAV uploads back inline");
+await throws(() => mock.invoke("ir_upload_inline", { slot: 2, wavBase64: file.wav_base64, name: "x", overwrite: false, force: false }),
+  "already holds", "inline upload to an occupied slot needs overwrite");
+const wav441 = Buffer.from(wav);
+wav441.writeUInt32LE(44100, 24);
+await throws(() => mock.invoke("ir_upload_inline", { slot: 4, wavBase64: b64(wav441), name: "x", overwrite: false, force: false }),
+  "44100 Hz", "inline upload reads the rate off the header");
+after = await mock.invoke("ir_upload_inline", { slot: 4, wavBase64: b64(wav441), name: "forced441", overwrite: false, force: true });
+ok(after.find((s) => s.index === 4)?.name === "forced441", "force accepts the 44.1 kHz header");
+await throws(() => mock.invoke("ir_upload_inline", { slot: 5, wavBase64: b64(Buffer.from("not a wav at all, definitely not forty-four bytes")), name: "x", overwrite: false, force: false }),
+  "not a WAV", "inline upload refuses a non-WAV");
+await throws(() => mock.invoke("ir_upload_inline", { slot: 5, wavBase64: "@@@", name: "x", overwrite: false, force: false }),
+  "wav_base64", "inline upload names a garbled payload");
+
 // --- preset numbering ---
 // The store in lib/numbering.svelte.js matches these two literals exactly and ignores anything
 // else, so a mismatch here would silently leave the toggle on its default instead of failing.

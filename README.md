@@ -23,8 +23,11 @@ from your own HX Edit installation (see [The reference data](#the-reference-data
 | `crates/fretwire-protocol` | `MI_00` wire message types + codec |
 | `crates/fretwire-usb`      | USB transport via `nusb` |
 | `crates/fretwire-core`     | device session API |
+| `crates/fretwire-commands` | transport-neutral editor command layer (shared by the GUI and serve mode) |
 | `crates/fretwire-cli`      | `fretwire` command-line driver |
 | `crates/fretwire-tauri`    | the graphical editor — Tauri (WebKitGTK) + Svelte |
+| `crates/fretwire-serve`    | the same editor served over HTTP, for headless machines |
+| `crates/fretwire-mcp`      | an MCP server: a curated tool surface for AI assistants |
 | `captures/`                | per-capture action notes + small preset-stream fixtures used by the tests |
 | `docs/`, `ROADMAP.md`      | protocol notes, preset format, safety, and the plan |
 
@@ -142,6 +145,67 @@ full command surface: a setlist, the model catalog, split routing, and simulated
 the hardware. `fretwireMock.needsData()` then reload shows the first-run import screen.
 See `crates/fretwire-tauri/ui/README.md`.
 
+### Headless: serve mode
+
+For a machine with no display — a Raspberry Pi with the pedal plugged in — `fretwire-serve` runs
+the same editor as a small HTTP daemon and you open it in a browser instead of a window. It shares
+the built frontend with the GUI, so build that first:
+
+```
+cd crates/fretwire-tauri/ui && npm install && npm run build && cd ../../..
+cargo run -p fretwire-serve            # → http://127.0.0.1:8317/
+```
+
+A release build embeds the frontend, so the deliverable is one static binary to copy over.
+
+**It binds loopback by default** — this is write access to your rig. The zero-setup way in from
+another machine is a tunnel: `ssh -L 8317:127.0.0.1:8317 <host>`, then open
+`http://127.0.0.1:8317/` locally. To bind wider (`--bind 0.0.0.0:8317`) the daemon requires a
+token: it generates one on first use, keeps it in `~/.local/share/fretwire/serve-token`, and
+prints the link to open — `http://<host>:8317/#token=…`. The link is the credential; the page
+remembers it, so you paste it once per browser. Traffic is plain HTTP, so do this on a network you
+trust (home Wi-Fi); elsewhere use the tunnel, a VPN such as Tailscale or WireGuard, or a TLS proxy
+in front. `--token` / `FRETWIRE_SERVE_TOKEN` set the token explicitly (for a systemd unit).
+
+Requests with an unexpected `Host`/`Origin` are refused (DNS rebinding reaches a local server from
+any web page your browser visits), and a second concurrent browser is refused — the editor is
+single-seat. The device session survives a tab refresh or a network blip (your undo history with
+it) and the page re-attaches to it automatically on reload; after **5 minutes with no editor
+connected** the daemon closes it cleanly and the pedal is standalone again. Details in
+`docs/serve-mode.md`.
+
+Files are yours, not the daemon's: in the browser, IRs upload from and download to the machine you
+are sitting at, and a preset export is a download (with an option to save it on the daemon's disk
+instead, for a backup that lives with the rig). The one exception is the first-run data import —
+the HX Edit installer is about a gigabyte, so that names a path on the daemon's machine, and
+`fretwire import-data` over SSH is the easy way to do it.
+
+### AI assistants: the MCP server
+
+`fretwire-mcp` exposes the editor to anything that speaks the Model Context Protocol over stdio —
+Claude Code, Claude Desktop and the like. Not the whole command surface: a curated set of tools
+that answer in plain text (a preset as a listing of its blocks and settings, a diff as the lines
+that changed), because that is what an assistant reasons over. Half of them need no pedal: they
+read fretwire export files and the model catalog.
+
+```
+cargo build --release -p fretwire-mcp
+claude mcp add fretwire -- target/release/fretwire-mcp            # Claude Code
+```
+
+It is **read-only unless told otherwise**. `--allow-writes` adds the tools that change the pedal's
+edit buffer (parameters, bypass, blocks, snapshots, preset changes, undo) — audible immediately,
+gone on a preset change or power cycle. `--allow-save` adds the one tool that writes flash.
+Ungated tools are not merely refused, they are not listed, so an assistant cannot be talked into a
+write you did not enable. Firmware and flash traffic never appear, as everywhere in fretwire.
+Export your presets first (`backup_export`, or the editor's Export) before letting anything edit
+them.
+
+One pedal, one session at a time: each Claude Code session starts its own `fretwire-mcp`, and
+whichever one connects first holds the USB interface — a second session's `device_connect` gets
+"Device or resource busy" until the first runs `device_disconnect` (or exits). The same applies
+to the GUI, the daemon and the CLI, which all claim the device the same way.
+
 ## Talking to a real device
 
 Linux's default `uaccess` tags only `/dev/snd/*`, not the HX Stomp's raw vendor USB node, so without
@@ -161,7 +225,7 @@ cargo run -p fretwire-cli -- detect       # HX Stomp: present
 cargo run -p fretwire-cli -- pull         # read the loaded preset (non-destructive)
 ```
 
-The rule covers the HX Stomp (`0x4246`), the Helix Floor (`0x4248`), the Helix LT (`0x424a`), the HX Stomp XL (`0x4253`), the HX Effects (`0x4245`) and the POD Go (`0x4247`).
+The rule covers the HX Stomp (`0x4246`), the Helix Floor (`0x4248`), the Helix LT (`0x424a`), the HX Stomp XL (`0x4253`), the HX Effects (`0x4245`), the POD Go (`0x4247`) and the Helix Rack (`0x4249`).
 
 **Headless (SSH, a Raspberry Pi, a daemon):** the rule's `uaccess` grant is seat-based, so it only
 covers a local desktop session. The rule also grants the `plugdev` group for exactly this case —
@@ -177,7 +241,7 @@ covers a local desktop session. The rule also grants the `plugdev` group for exa
 | HX Stomp XL | `0x4253` | **reported working** — an owner runs it, reads `01A`-`32D` (32 banks of 4) off its screen, and its handshake identifies it as `P36`. Two preset streams off one (issue #13) settle one DSP, four snapshots, eight footswitches and a 13-entry controller table; they are reads, so no edit builder has been checked against an XL and its setlist count is still unknown |
 | HX Effects  | `0x4245` | **reported working** — an owner runs it and reports it works; that report is the whole of what we hold. Its `lsusb` line arrived first (issue #10), so `detect` finds one and the udev rule covers it. No capture and no logged session, and it is effects-only, so none of its preset geometry is assumed from a Stomp |
 | POD Go      | `0x4247` | **verified** — an owner's captures, `.pgb` backup and hardware reports (issue #15) filled in every field: our edit builders reproduce its parameter, bypass, model-swap and footswitch-assignment bytes exactly, and they have driven one from the editor in both directions ([`docs/pod-go.md`](docs/pod-go.md)). It identifies as `P34`, has two setlists (`Factory`/`User`, 128 slots each, numbered `01A`-`32D`), and indexes its own symbol table, so it needs POD Go Edit's reference data imported, not HX Edit's. Its fixed chain means add/move/delete are not mapped |
-| Helix Rack  | — | **not recognised yet** — we don't know its PID, so `fretwire detect` won't see one |
+| Helix Rack  | `0x4249` | **untested** — recognised and covered by the udev rule, but nobody has run fretwire against one. The PID is the Linux kernel's Line 6 quirk table, not a reading off a unit; the two ids either side of it there are the Floor's `0x4248` and the LT's `0x424a`, which we did measure. Nothing else about the Rack is assumed — not even the Floor's `P21`. **On firmware older than 2.82 a Rack enumerates as `0x4242` instead** and is not listed, as no pre-2.82 Helix is |
 
 An unverified device logs a caveat when opened, and is only picked after a verified one. Nothing in
 the device table is guessed: a field we have not seen is `None`, and the editor falls back rather
@@ -186,8 +250,8 @@ than assuming it matches a sibling.
 ### Adding a device
 
 The whole HX family shares the `MI_00` control protocol, so a new one is mostly a matter of knowing
-it exists. If you have a Helix Rack and would like it supported, the one thing we cannot get
-without you is its USB product ID:
+it exists. If you have a device the table doesn't list, the one thing we cannot get without you is
+its USB product ID:
 
 ```sh
 lsusb -d 0e41:            # e.g. Bus 001 Device 007: ID 0e41:42xx Line 6 ...
@@ -195,6 +259,10 @@ lsusb -d 0e41:            # e.g. Bus 001 Device 007: ID 0e41:42xx Line 6 ...
 
 Open an issue with that line. Adding it is a table entry plus a udev rule; it would start as
 **untested**, and become **verified** once someone captures HX Edit talking to one.
+
+**Helix Rack owners:** the entry is already there and we would like to hear either way — `fretwire
+detect` saying `Helix Rack: present (untested device)` is itself the report we are missing, and
+`lsusb -d 0e41:` saying `4242` instead would tell us the unit predates firmware 2.82.
 
 ## The reference data
 

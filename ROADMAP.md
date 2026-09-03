@@ -577,6 +577,16 @@ real session.
       cabs), so nothing is inherited from the Stomp.
       **Still open:** everything else — the report carries no capture and no panel readings. One
       `pull` from an owner would settle its model code and preset geometry.
+- [x] **Helix Rack — PID `0x4249`, `Untested` (2026-09-01).** The table's only entry added without
+      a person behind it. The id is the Linux kernel's Line 6 rate quirk, which labels it
+      "Helix Rack >= fw 2.82"; the same table's `0x4248` "Helix >= fw 2.82" and `0x424A` "Helix LT
+      >= fw 2.82" are the two ids we *did* measure on hardware, so the value between them is
+      corroborated at both ends. Every field is `None` — not even the Floor's `P21`, though the
+      Rack is a Floor in a rack box, because a guessed code would make `by_model_code` ambiguous.
+      The **pre-2.82 ids are deliberately absent** (`0x4241` Helix, `0x4242` Helix Rack, `0x4244`
+      Helix LT): this protocol was recovered from firmware 3.x.
+      **Still open:** everything. `fretwire detect` naming one is the entire report needed to move
+      it to `Reported`.
 - [x] **Global settings — op 24 reads, op 25 writes, 27 ids named (2026-08-22, and eight Ins/Outs
       ids from an HX Stomp XL owner on 2026-08-23).** The namespace is
       flat and numbered; a 601-id sweep costs 1.4 s, so `settings-dump` / `settings-diff` maps it
@@ -676,19 +686,37 @@ transport seam with two implementations behind it (Tauri, and the browser mock),
 runs in a plain remote browser via `npm run dev`, and of 61 commands only 2 touch `AppHandle`,
 for 3 event names total.
 
-- [ ] Lift `commands.rs` + `dto.rs` out of `fretwire-tauri` into a transport-neutral crate;
-      `fretwire-tauri` keeps 61 one-line `#[tauri::command]` wrappers. Mechanical, but it is the
-      bulk of the diff. `spawn_heartbeat` needs an event sink in place of its `AppHandle`.
-- [ ] `fretwire-serve`: static `dist/` + `POST /invoke/<command>` + a WebSocket for
-      `device-pushes` / `device-lost` / `backup-progress`. Separate crate, out of `default-members`
-      like `fretwire-tauri`, so a built frontend never becomes a prerequisite for `cargo build`.
-      Embed `dist/` → one static binary to copy onto a Pi.
-- [ ] **The file picker.** `pickPath()` opens a native dialog; over a network the paths that matter
-      are the *server's*. First-run import, backup/restore and IR export all need it. Wants a small
-      server-side directory browser — the only piece here that is design rather than plumbing.
-- [ ] **Auth, before it binds anywhere but loopback.** Default `127.0.0.1`, explicit flag to go
-      wider, check the `Origin` header (DNS rebinding reaches a loopback server from any page the
-      browser visits), token for the non-loopback case. This is write access to someone's rig.
+- [x] Lift `commands.rs` + `dto.rs` out of `fretwire-tauri` into a transport-neutral crate — DONE
+      (2026-08-31): **`fretwire-commands`**, in `default-members` so the offline suite covers it.
+      `fretwire-tauri` keeps 65 one-line `#[tauri::command]` wrappers (the surface had grown from
+      61) plus a `TauriSink`; `spawn_heartbeat` and `export_setlists` take an
+      `events::EventSink`, and each event's name + JSON payload live once in `events::Event`.
+- [x] `fretwire-serve` — DONE (2026-09-01): axum + embedded `dist/` (rust-embed; one static
+      binary in release), `POST /invoke/{command}` through `fretwire_commands::dispatch` (offline-
+      tested, camelCase args like Tauri's), a WebSocket at `/events` for the three events, clean
+      SIGINT/SIGTERM session teardown, and a **single-editor lease** (second browser → close 4409 /
+      HTTP 409; released on disconnect). Out of `default-members` like `fretwire-tauri`. The UI's
+      `ipc.js` picked up the third transport (`serve.js`), selected by a marker the daemon injects
+      into `index.html` — the same dist runs under Tauri, serve, and the mock.
+- [x] **Client-side files** — DONE (2026-09-02): five `_inline` command variants
+      (`ir_upload`/`ir_export`, `export_setlists`/`backup_show`/`restore_preset`) carry the file
+      in the invoke — base64 for the WAV, the text for an export — sharing their bodies with the
+      path pair; the UI picks by `INLINE_FILES` (serve or the mock) via `lib/files.js`, so in a
+      browser IRs and exports are uploads/downloads and the export dialog can still target the
+      daemon's disk. Data import stays server-side permanently (`fretwire import-data` over SSH —
+      the installer is ~1 GB); that is the one flow still reaching `pickPath()` under serve, and the
+      server-side directory browser is a nice-to-have for it. See `docs/serve-mode.md` §3.
+- [x] **Auth for non-loopback** — DONE (2026-09-02). Loopback needs nothing (only local
+      processes reach it); any wider `--bind` requires a bearer token, generated once into
+      `~/.local/share/fretwire/serve-token` (0600; or `--token` / `FRETWIRE_SERVE_TOKEN`) and
+      printed at startup inside the link to open — `#token=…`, a fragment, so it never reaches
+      logs or a Referer. The page keeps it per origin, sends it as `Authorization: Bearer` on
+      invokes and as a query parameter on the event socket (browser JS can't set handshake
+      headers), and asks for it on a 401 / close 4401. With a token the `Host` rule relaxes to
+      "our port" and `Origin` must equal `Host` (a rebinding page lands on its own origin with no
+      token); without one the 2026-09-01 loopback rule stands. No TLS to start, by decision: a
+      LAN bind assumes a trusted network, and the SSH tunnel, a VPN, or a TLS proxy cover the
+      rest. See `docs/serve-mode.md` §4.
 - [x] **A `GROUP=` udev rule** — DONE (2026-08-26), with the arm64 CLI item in Phase 8: every rule
       line now grants `GROUP="plugdev"` alongside `uaccess`, `install-udev` creates the group and
       prints the `usermod` step, and the test asserts both grants per line.
@@ -698,7 +726,13 @@ for 3 event names total.
       this has never been tested here.
 - [ ] The arm64 **serve** artifact, once the crate exists (the arm64 CLI shipped independently —
       Phase 8).
-- [ ] **MCP server — a third consumer of the same lift.** Asked for independently on 2026-08-23,
+- [x] **MCP server — a third consumer of the same lift.** DONE (2026-09-02): `fretwire-mcp`, a
+      stdio server on the official `rmcp` SDK — 14 read tools (offline export-file and catalog
+      tools, live reads), +10 edit-buffer tools behind `--allow-writes`, +`preset_save` behind
+      `--allow-save`; ungated tools are unlisted. Text results in HX Edit's display units, set
+      the same way. Left open: the in-daemon HTTP transport (needs a second seat on the lease),
+      `model_params`, `.hxb` input. See `docs/serve-mode.md`. The original case:
+      asked for independently on 2026-08-23,
       the same day as serve mode, which is the strongest argument for doing the lift at all. The
       requester's guess that the CLI is a poor fit is correct and measurable: ~60 live subcommands
       each call `Session::connect()`, so it's one handshake and teardown per invocation with no

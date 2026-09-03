@@ -1,0 +1,25 @@
+[package]
+name = "fretwire-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "An MCP server for the fretwire editor — a curated tool surface over fretwire-commands for AI assistants (docs/serve-mode.md, 'A second consumer: MCP')."
+
+# A workspace member but NOT in `default-members`, like fretwire-serve: it pulls the MCP SDK's dep
+# tree, which the offline suite has no use for. Build/test it explicitly: `cargo test -p fretwire-mcp`.
+[[bin]]
+name = "fretwire-mcp"
+path = "src/main.rs"
+
+[dependencies]
+fretwire-commands = { path = "../fretwire-commands" }
+fretwire-core = { path = "../fretwire-core" }
+# The official Rust MCP SDK. Server over stdio only — no HTTP, no TLS backend.
+rmcp = { version = "3.2", default-features = false, features = ["server", "macros", "schemars", "transport-io"] }
+schemars = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std"] }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

@@ -22,7 +22,8 @@ since the daemon must not open a browser on the Pi). The version in the GUI head
 About dialog. Verified: 9 unit tests including a local fake GitHub (HEAD, redirect not followed,
 UA checked), the CLI against fake servers for newer / equal / pinned-off / dead, one real probe to
 GitHub (TLS via rustls, resolved `v0.4.0`), the three commands through `fretwire-serve` with curl,
-and the mock contract in the UI suite (174 tests, +11).
+and the mock contract in the UI suite (174 tests, +11). The GUI itself (ask bar, About dialog)
+was launched against a scratch data dir the same day and looked right.
 
 **MCP server (2026-09-02).** `fretwire-mcp` — the third consumer the command-layer lift was for
 (ROADMAP Phase 10, survey in `docs/serve-mode.md`). A stdio server on the official `rmcp` SDK

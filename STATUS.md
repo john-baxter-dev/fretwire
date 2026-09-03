@@ -4372,3 +4372,41 @@ tests.
 **Still open:** everything about the Rack. `fretwire detect` printing `Helix Rack: present
 (untested device)` would be the whole of the report we need to move it to `Reported`; an `lsusb`
 saying `4242` instead would tell us the unit predates fw 2.82 and reopen the question above.
+
+## Seventieth round (2026-09-02) — first POD Go hardware round: restore works, the move was our abort (issue #15)
+
+The owner ran the two hardware asks. **`fretwire restore` worked** — the first fretwire write ever
+completed on a POD Go. **`fretwire move 1 3` did not**, and the usbmon capture they attached shows
+why: the chunked writer's slow-credit guard (22 ms, calibrated on Helix Floor logs) fired on chunk
+2 of 7. The pedal had credited both chunks, at 19.6 and 26.1 ms — the same ~25 ms it takes to
+start a preset stream or ack an op 78 (its metadata ops answer in 1–2 ms). The POD Go is slower
+per preset-touching exchange than a Floor is when healthy, not falling behind; the restore only passed because its chunk-2 credit landed
+under the line. `Session::slow_credit` now turns that guard off on the POD Go (the silence guard
+stays), and `docs/pod-go.md` carries the timing table.
+
+Three GUI reports in the same post:
+
+- **Add into an empty slot was refused** — round 67's blanket op-39 refusal took the GUI's only way
+  of filling an emptied slot with it. Re-read the owner's 2026-08-28 experiments: op 39 filled
+  slots 1..=8 reliably (they built whole chains), and slots 9 and 10 were the `-306` / crash-on-
+  preset-change cases. `add_block` now sends op 39 for 1..=8 and refuses 9 and 10 with a message
+  that says why. POD Go Edit's own fill has still not been captured — asked for.
+- **IR names only after "Show empty slots"** — the op-13 directory lists nothing on this pedal,
+  the per-slot scan works. `ir_directory` falls back to the scan on a POD Go and `ir_commit` logs
+  the op-13 reply at debug, so one `RUST_LOG=debug fretwire ir-list` will show what the pedal
+  actually answers.
+- **No names in the IR block's `IR Select`** — not a POD Go thing: the parameter has no labels in
+  the reference data on any device, so the panel showed a 0..127 slider. It is now a dropdown
+  labelled from the IR directory (`001  name`, zero-based on the wire like the IR ops, shown
+  from 1 like the pedal), and the GUI reads the directory the first time an IR block is selected.
+  The wire index being the IR ops' zero-based slot is one sample deep (the owner's preset: index
+  6, seven IRs loaded) — [hypothesis] until an owner confirms the names line up.
+- **Live follow (footswitch/knob → GUI) stopped working** between the 2026-08-26 build and
+  `1d7ca66`. Diffed every function on the push path between the two commits: none changed, and
+  this build's HX Stomp session drains 78 idle mirrors in 6 s of `fretwire watch`. Not
+  reproducible from the diff; asked for a `FRETWIRE_TRACE_STATUS=1 fretwire watch` log.
+
+Also: `tools/pcap-frames.py` reads Linux usbmon captures (link type 220) as well as USBPcap, and
+prints a per-frame delta — the owner captures fretwire on Linux now, and the old parser returned
+0 frames for it. A misplaced test module in `fretwire-commands` moved to the end of the file
+(clippy's `items_after_test_module`). 365 tests, clippy clean.

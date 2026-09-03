@@ -1310,19 +1310,6 @@ fn numbering_word(flat: bool) -> &'static str {
     if flat { "flat" } else { "banked" }
 }
 
-#[cfg(test)]
-mod numbering_tests {
-    use super::numbering_word;
-
-    /// Pinned against `ui/src/lib/numbering.svelte.js`, which compares against these two literals,
-    /// and against the mock backend's `device_numbering` (checked in `ui/tests/ir-mock.mjs`).
-    #[test]
-    fn the_words_the_ui_matches_on() {
-        assert_eq!(numbering_word(true), "flat");
-        assert_eq!(numbering_word(false), "banked");
-    }
-}
-
 // ---- device settings (globals) ----
 //
 // These are **not** preset edits: they change the pedal itself, take effect immediately and have no
@@ -1536,4 +1523,17 @@ pub async fn ir_rename(state: &AppState, slot: i64, name: String) -> R<Vec<IrSlo
         Ok(s.ir_directory()?.iter().map(IrSlotDto::from).collect())
     })
     .await
+}
+
+#[cfg(test)]
+mod numbering_tests {
+    use super::numbering_word;
+
+    /// Pinned against `ui/src/lib/numbering.svelte.js`, which compares against these two literals,
+    /// and against the mock backend's `device_numbering` (checked in `ui/tests/ir-mock.mjs`).
+    #[test]
+    fn the_words_the_ui_matches_on() {
+        assert_eq!(numbering_word(true), "flat");
+        assert_eq!(numbering_word(false), "banked");
+    }
 }

@@ -121,8 +121,52 @@ and 537/627 POD Go symbols where stripping alone got 372.
   spelling has been measured being accepted. Sending a device its own bytes back is the same
   bet the HX restore path proved out on hardware, but on a POD Go it awaits a live test.
 - **Preset key `12`** (`Array[128]`).
-- No write of any kind has yet been confirmed **on POD Go hardware by fretwire itself** — every
-  reconciliation so far is against captures of POD Go Edit doing the writing.
+- **The op-13 IR directory reply.** On this pedal it lists nothing — the owner's IR panel was
+  empty until the per-slot scan ran, and "Refresh" (op 13 again) emptied it (2026-09-02). Whether
+  the pedal answers in a shape `fretwire_data::ir::parse_directory` does not read, or reports a
+  genuinely empty directory, needs the bytes: `RUST_LOG=debug fretwire ir-list` now logs the
+  reply. Until then `Session::ir_directory` falls back to the scan on a POD Go.
+- **Why the GUI stopped following the pedal.** Footswitch bypasses and knob turns mirrored into
+  the editor on 2026-08-26 (commit `3a71263`) and did not on 2026-09-02 (`1d7ca66`); nothing on
+  the push path — `poll_events`, `parse_status_push`, the heartbeat, `handlePushes` — changed
+  between those builds, and the same build's HX Stomp session drains its status channel normally.
+  Needs `RUST_LOG=debug FRETWIRE_TRACE_STATUS=1 fretwire watch --secs 30` while a footswitch and
+  a knob are touched: that says whether the pushes reach the host at all.
+- What POD Go Edit sends to **fill an empty slot** (see "The fixed chain").
+- **Only one write has completed on POD Go hardware by fretwire itself** — the owner's
+  `fretwire restore` (2026-09-02). Every other reconciliation is against captures of POD Go Edit
+  doing the writing, and the op-78 + op-21 move has yet to finish a run (see the next section).
+
+## The write path, live: the POD Go credits at ~25 ms  [solid — 2026-09-02, usbmon capture]
+
+The first `fretwire move` on POD Go hardware (`move 1 3`, stock preset) was aborted by fretwire,
+not by the pedal: the chunked writer's slow-credit guard fired on chunk 2 of 7 (`sent=1024
+total=3347 first_credit_ms=18 credit_ms=25`). The owner's usbmon capture shows what the guard
+was reading:
+
+| exchange | POD Go turnaround |
+|---|---|
+| read-open (op 76), read-prepare (op 24), read-info (op 23) replies | 1.0–1.7 ms |
+| stream-start (op 22) chunk #0 | 25.4 ms |
+| begin-structural (op 78) ack | 25.6 ms |
+| write chunk 1 credit | 19.6 ms |
+| write chunk 2 credit | 26.1 ms |
+
+Every credit arrived; the pedal never went quiet. Metadata ops answer in a millisecond or two;
+anything that touches the preset document — streaming it out, opening a structural edit, taking
+a chunk of it back in — takes ~20–26 ms on this pedal. The Helix Floor's healthy credits run
+1–3 ms and its pre-wedge ones 28–94, so the 22 ms line that separates those two cleanly on a
+Floor lands inside the POD Go's ordinary band. The owner's `fretwire restore`, the same chunked write, completed
+because its chunk-2 credit happened to land under 22 ms.
+
+So the slow-credit guard is now Helix-only (`Session::slow_credit`); the silence guard, which
+needs no threshold, stays on for every device. No POD Go has wedged, and there is no POD Go
+slow-credit signature to calibrate against until one does. The op-78 + op-21 rewrite itself is
+still awaiting its first completed run on the pedal — the abort came before chunk 3, so the
+"accepts its own class spellings" question above is still open.
+
+The capture was Linux usbmon (link type 220), which `tools/pcap-frames.py` now reads alongside
+USBPcap, with a per-frame delta so timings like these are one command away.
 
 ## The write path is the same too  [solid — 2026-08-26 captures]
 
@@ -236,10 +280,18 @@ op 40 gets rejected (`code=-19`) and then **wedges the pedal** — preset switch
 until a reboot (owner-measured on fw 2.01; an earlier state of the same pedal accepted the same
 swap and produced presets it then mishandled). A rejection that corrupts device state is not a
 safe probe, so `Session::swap_model` refuses wah→non-wah and volume→non-volume swaps client-side
-before anything is sent. The EQ and FX loop blocks swap freely (owner-verified). Op 39 (add) is
-likewise erratic here — sometimes `-306`, sometimes accepted into states the pedal mishandles —
-and POD Go Edit has no add at all, so fretwire refuses it too; an emptied slot is re-filled with
-a swap.
+before anything is sent. The EQ and FX loop blocks swap freely (owner-verified).
+
+**Op 39 (add) is slot-dependent.** POD Go Edit has no add of its own — an emptied slot is
+re-filled by picking a model — but op 39 is how the owner fills empty slots from fretwire, and in
+**slots 1..=8 it holds up**: they built whole chains that way and the pedal loads them reliably
+(2026-08-28). **Slots 9 and 10** — where the HX keeps its bounding nodes — are the hazard: `-306`
+on 2026-08-28, and on 2026-08-26 an add there was accepted and the pedal crashed at the next preset
+change. So `Session::add_block` sends op 39 for slots 1..=8 and refuses 9 and 10 client-side
+(2026-09-02; it refused every add between 2026-08-31 and then, which took the GUI's only way of
+filling an empty slot with it — owner report). What POD Go Edit itself sends when a model is
+picked for an empty slot has **not** been captured; that would settle whether 9 and 10 are
+reachable by the native path.
 
 ## The wire slot array  [solid — read from the 2026-08-27 capture's preset]
 
@@ -271,8 +323,9 @@ The owner captured POD Go Edit's two structural verbs, and neither is the HX's o
 - **Set a block to empty** is bare **op 28** `{98: slot}` — the exact op and shape our
   `delete_block` already sends (ours prefixes the op-78 marker, as HX Edit does; POD Go Edit
   skips it).
-- **There is no add.** POD Go Edit cannot add or delete blocks, only empty a slot and swap; see
-  "The fixed chain" for why fretwire refuses op 39 here too.
+- **There is no add verb.** POD Go Edit cannot add or delete blocks, only empty a slot and
+  re-fill it — with what op, uncaptured. fretwire fills empties with op 39 where the owner has
+  shown it works (slots 1..=8); see "The fixed chain".
 
 The op-21 blob also exposed POD Go Edit's serializer habits, pinned in the move tests: it
 re-spells the EQ as class `1` and the FX loop as class `8` where the device reads back `23`/`9`
@@ -328,10 +381,15 @@ What the POD Go's tones do differently (each reconciled, not assumed):
 ### What would still help
 
 Every capture ask was delivered (move + set-to-empty, the second IR preset, and the looper —
-they produced everything in the sections above). What's left needs the pedal, not Wireshark:
+they produced everything in the sections above), and the first hardware round (2026-09-02)
+answered one of its two asks: **restore works**. The move aborted on our side (see "The write
+path, live") and needs a second run. Three logs and one capture would close what's open:
 
-- **A live fretwire `move` on the POD Go** — our rewrite is byte-verified against POD Go Edit's,
-  but ours sends the device's own class/IR spellings where POD Go Edit re-spells them, and the
-  pedal accepting its own read-back forms via op 21 is still [hypothesis]. Recoverable if wrong:
-  the write is edit-buffer only, and a same-slot `goto` reloads from flash.
-- **A restore of a converted preset**, same caveat and same recovery.
+- **`fretwire move 1 3` again**, on a build with the Helix-only guard. Same recovery as before:
+  edit-buffer only, a same-slot `goto` reloads from flash.
+- **`RUST_LOG=debug FRETWIRE_TRACE_STATUS=1 fretwire watch --secs 30`**, pressing a footswitch
+  and turning a knob while it runs — for the GUI's lost live-follow.
+- **`RUST_LOG=debug fretwire ir-list`** — the op-13 reply, so the IR directory can be decoded
+  rather than scanned around.
+- **A POD Go Edit capture of picking a model for an empty slot** — the native fill, and whether
+  slots 9 and 10 are reachable.

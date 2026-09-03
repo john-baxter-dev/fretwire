@@ -920,15 +920,25 @@ impl Session {
         paired_index: i64,
     ) -> crate::Result<()> {
         if self.device().pid == fretwire_protocol::PID_POD_GO {
-            // POD Go Edit has no add: the chain is fixed at ten slots, filled by swapping what a
-            // slot holds. Sent anyway, op 39 is erratic on this pedal — sometimes rejected
-            // (`code=-306`), sometimes accepted into chain states the pedal then mishandles
-            // (issue #15, owner experiments, 2026-08-31) — so it is refused here.
-            return Err(fretwire_data::Error::Stream(format!(
-                "the POD Go has no add-block operation — its chain is a fixed ten slots. \
-                 Swap the model in slot {slot} instead"
-            ))
-            .into());
+            // POD Go Edit has no add of its own — its chain is ten fixed slots, and an emptied one
+            // is re-filled by picking a model — but op 39 is how the owner filled empty slots from
+            // fretwire, and it holds up in slots 1..=8: they built whole chains that way and the
+            // pedal loads them reliably (issue #15, 2026-08-28). Slots 9 and 10 are where the HX
+            // keeps its bounding nodes, and there op 39 is the coin flip: `-306` on 2026-08-28,
+            // and on 2026-08-26 an accepted add that crashed the pedal at the next preset change.
+            // Refused for those two before anything is sent; the pedal's own refusals elsewhere
+            // surface as errors, and are recoverable (a same-slot goto reloads from flash).
+            // What POD Go Edit sends to fill an empty slot has not been captured, so this is the
+            // measured path rather than the native one — see docs/pod-go.md.
+            if !(1..=8).contains(&slot) {
+                return Err(fretwire_data::Error::Stream(format!(
+                    "the POD Go accepts a new block in slots 1 to 8 only; adding into slot {slot} \
+                     is refused by the pedal or, worse, accepted and then crashes it at the next \
+                     preset change (owner-measured, 2026-08-26 and 2026-08-28). Move a block out \
+                     of slots 1-8 first, or swap the model in an occupied slot"
+                ))
+                .into());
+            }
         }
         let txn = self.bump_txn();
         let body = edit::add_block(slot, model_index, -1, txn);
@@ -963,6 +973,14 @@ impl Session {
             .into());
         }
         self.add_block(slot, model_index, paired_index)
+    }
+
+    /// Whether the chunked-write slow-credit guard applies to this device — `Some(())` where its
+    /// threshold was measured (the Helix family, whose Floor is the pedal that wedges), `None` on
+    /// the POD Go, whose ordinary credits are slower than that threshold. See `SLOW_CREDIT` in
+    /// [`Self::send_chunked_tlv`] for the measurements. [solid — 2026-09-02, issue #15]
+    fn slow_credit(&self) -> Option<()> {
+        (self.device().pid != fretwire_protocol::PID_POD_GO).then_some(())
     }
 
     /// Write a whole preset blob to the device's **edit buffer** (op 21) — the general structural
@@ -1116,9 +1134,22 @@ impl Session {
         /// Only non-final chunks count. A slow credit on the **last** chunk is normal and means
         /// nothing — it is the device committing the preset, and it runs 2–195 ms on writes that
         /// complete perfectly. The `n + 1 < chunks` guard at the call site is what keeps that out.
+        ///
+        /// **Helix-family only.** The number is the Floor's, and the POD Go's healthy credits sit
+        /// on the wrong side of it: its first live `fretwire move` (issue #15, 2026-09-02 usbmon
+        /// capture) drew credits at **19.6 ms and 26.1 ms** for chunks 1 and 2 of 7, the second of
+        /// which tripped this guard and aborted a write the pedal was keeping up with fine — the
+        /// same session's stream-start chunk #0 and op-78 ack took 25.4 and 25.6 ms (its metadata
+        /// ops answer in 1–2 ms), so ~20–26 ms is simply that pedal's turnaround for anything that
+        /// touches the preset document. The owner's
+        /// `fretwire restore`, the same chunked write, completed on a chunk-2 credit that happened
+        /// to land under 22 ms. No POD Go has ever wedged; until one does there is no slow-credit
+        /// signature to calibrate against, so [`Self::slow_credit`] turns this guard off there and
+        /// leaves the silence guard, which needs no threshold, as the backstop.
         const SLOW_CREDIT: std::time::Duration = std::time::Duration::from_millis(22);
 
         let (src, dst) = channel::EDIT;
+        let slow_credit = self.slow_credit().map(|_| SLOW_CREDIT);
         self.transport.drain();
         // arg stays at the channel cursor for the whole transfer (the capture barely advances it,
         // and small edits via `send_edit` don't advance per frame). LIVE: advance per chunk if the
@@ -1268,7 +1299,7 @@ impl Session {
             // A credit that arrived, but late. The device is still answering and has not gone
             // quiet, so this is not the silence guard's case — it is the window in which the
             // device can still be rescued, if it can be rescued at all.
-            slow = if real > 0 && credit_ms > SLOW_CREDIT {
+            slow = if real > 0 && slow_credit.is_some_and(|limit| credit_ms > limit) {
                 slow + 1
             } else {
                 0
@@ -3948,8 +3979,22 @@ impl Session {
     /// records it returns carry the **MD5 of each slot's stored bytes**, which a per-slot select
     /// does not. One round trip instead of 128, so this is the listing; [`Self::ir_scan`] is for
     /// when the empty slots matter too.
+    ///
+    /// **On a POD Go the op-13 reply lists nothing** — the owner's IR panel came up empty until
+    /// the per-slot scan ran, and a refresh emptied it again (issue #15, 2026-09-02). Whether the
+    /// pedal answers with a shape [`fretwire_data::ir::parse_directory`] does not read or with a
+    /// genuinely empty directory is not yet known: the reply has never been captured, which is
+    /// why [`Self::ir_commit`] logs it. Until it is, an empty directory on that pedal falls back to
+    /// the scan, which its owner has seen work.
     pub fn ir_directory(&mut self) -> crate::Result<Vec<fretwire_data::ir::IrSlot>> {
-        self.in_ir_session(Self::ir_commit)
+        let dir = self.in_ir_session(Self::ir_commit)?;
+        if dir.is_empty() && self.device().pid == fretwire_protocol::PID_POD_GO {
+            tracing::info!(
+                "the IR directory (op 13) listed nothing on a POD Go — scanning the slots instead"
+            );
+            return self.ir_scan();
+        }
+        Ok(dir)
     }
 
     /// Every IR slot's metadata, empty ones included, one op-12 select at a time. **Reads only.**
@@ -4250,10 +4295,20 @@ impl Session {
     fn ir_commit(&mut self) -> crate::Result<Vec<fretwire_data::ir::IrSlot>> {
         let txn = self.bump_txn();
         let ack = self.ir_request(cmd::OPEN, fretwire_protocol::edit::ir_commit(txn), txn)?;
-        Ok(Self::ir_reply_payload(&ack)
+        let payload = Self::ir_reply_payload(&ack);
+        let dir = payload
             .as_ref()
             .map(fretwire_data::ir::parse_directory)
-            .unwrap_or_default())
+            .unwrap_or_default();
+        // The whole reply, so a `RUST_LOG=debug` log from a pedal whose directory parses to
+        // nothing (the POD Go, so far) carries the bytes needed to read it.
+        tracing::debug!(
+            records = dir.len(),
+            body = ?ack.body,
+            ?payload,
+            "IR directory reply (op 13)"
+        );
+        Ok(dir)
     }
 
     /// Reject a slot index the device does not have, before anything is sent.

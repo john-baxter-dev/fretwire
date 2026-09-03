@@ -28,6 +28,9 @@
     // Every parameter the preset has under a controller, and how many footswitch positions this
     // device has. Both come straight from the preset — see `PresetDto`.
     assignments = [],
+    // The pedal's IR directory, as the IR panel lists it (`{index, display_name, used}`), for
+    // naming the IR block's `IR Select` choices. Empty until the parent has read it.
+    irSlots = [],
     footswitchCount = 0,
     onBypassSwitch,
     onSwitchLabel,
@@ -229,6 +232,25 @@
   // params index tables in the firmware, and the device does not range-check: the old fallback span
   // (0..=127) let a 0..=3 head selector be set to 77, which hung the pedal hard enough to drop it
   // off USB. A value we can't bound is one we have no business sending.
+  // The IR block's `IR Select` is a bare slot number on the wire — the same zero-based index the IR
+  // ops use, shown from 1 in the pedal's menus like the IR panel does — and the reference data has
+  // no labels for it, so without this it is a slider from 0 to 127 and the user has to know which
+  // number holds which file. Named from the directory the parent read; slots it hasn't heard of
+  // still get their number, so an IR the list doesn't cover is never unreachable.
+  const isIrSelect = (p) =>
+    p.name === "IR Select" && /^HD2_ImpulseResponse/.test(block?.symbolic_id ?? "");
+  const irLabel = (i) => {
+    const num = String(i + 1).padStart(3, "0");
+    const slot = irSlots.find((s) => s.index === i);
+    if (!slot) return num;
+    return slot.used ? `${num}  ${slot.display_name}` : `${num}  (empty)`;
+  };
+  const irChoices = (p) => {
+    const lo = p.min ?? 0;
+    const hi = p.max ?? 127;
+    return Array.from({ length: Math.max(0, hi - lo + 1) }, (_, k) => lo + k);
+  };
+
   function control(p) {
     // A block carrying *several* values past the end of its symbol's param list. The lone trailing
     // value (`Trails`, a legacy cab's mic index) is reachable through the extras addressing and
@@ -565,7 +587,15 @@
               onclick={() => (openAssign = openAssign === k ? null : k)}>{asg ? asg.source_name : "\u21e2"}</button
             >
           </span>
-          {#if c === "enum"}
+          {#if isIrSelect(p)}
+            <select
+              value={p.value}
+              onchange={(e) => onEnum(block.slot, paired, p.index, Number(e.currentTarget.value))}
+              title={irSlots.length ? "The pedal's IR slots, by number and name" : "IR slot number — names appear once the IR list has been read (IRs… in the toolbar)"}
+            >
+              {#each irChoices(p) as i (i)}<option value={i}>{irLabel(i)}</option>{/each}
+            </select>
+          {:else if c === "enum"}
             <!-- The option's value is the wire value, which starts at `enum_base` and not at 0 —
                  `Note Sync` labels 1..=19. Offsetting here keeps read and write on the same entry;
                  indexing the list from 0 displayed one note past the pedal and wrote one short of

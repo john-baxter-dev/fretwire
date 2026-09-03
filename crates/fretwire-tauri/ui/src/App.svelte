@@ -1028,6 +1028,22 @@
   const refreshIrs = () => irCall(() => invoke("ir_list"));
   const scanIrs = () => irCall(() => invoke("ir_scan"));
 
+  // Read the IR directory the first time an IR block is selected, so its `IR Select` shows names
+  // rather than bare slot numbers. Once per connection: a directory that comes back empty is an
+  // answer too, and re-asking on every click would put a listing round trip behind each selection.
+  let irListed = $state(false);
+  $effect(() => {
+    if (!connected) {
+      irListed = false;
+      return;
+    }
+    const sym = selectedBlock?.symbolic_id ?? "";
+    if (!irListed && !irBusy && irSlots.length === 0 && sym.startsWith("HD2_ImpulseResponse")) {
+      irListed = true;
+      refreshIrs();
+    }
+  });
+
   function openIrs() {
     showIrs = true;
     refreshIrs();
@@ -1257,6 +1273,7 @@
             {blockClip}
             assignments={preset?.assignments ?? []}
             footswitchCount={preset?.footswitch_count ?? 0}
+            {irSlots}
             {onBypassSwitch}
             {onSwitchLabel}
             {onSwitchColor}

@@ -89,7 +89,7 @@ jobs:
           body_path: docs/release-notes/${{ github.ref_name }}.md
 
   cli:
-    name: static CLI (musl, ${{ matrix.arch }})
+    name: static binaries (musl, ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -107,19 +107,44 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
 
-      # `nusb` is pure Rust with no libusb to link, so the CLI builds fully static — one binary
-      # per arch that runs on any distro, no matter its glibc.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: crates/fretwire-tauri/ui/package-lock.json
+
+      # fretwire-serve embeds the built frontend (a release build is one file to scp onto a Pi),
+      # and its build.rs refuses to compile without it.
+      - name: Build the frontend
+        working-directory: crates/fretwire-tauri/ui
+        run: |
+          npm ci
+          npm run build
+
+      # `nusb` is pure Rust with no libusb to link, so these build fully static — one binary per
+      # arch that runs on any distro, no matter its glibc. The one C in the tree is `ring` (TLS
+      # for the update check), which apt's musl-gcc compiles. The daemon and the MCP server ride
+      # along because the headless Pi is where they run.
       - name: Build
         run: |
           sudo apt-get update && sudo apt-get install -y musl-tools
-          cargo build --release --locked --target ${{ matrix.target }} -p fretwire-cli
+          cargo build --release --locked --target ${{ matrix.target }} \
+            -p fretwire-cli -p fretwire-serve -p fretwire-mcp
 
       - name: Package
         run: |
           mkdir -p dist
+          bin=target/${{ matrix.target }}/release
           tar -czf dist/fretwire-cli-${{ matrix.arch }}-linux-musl.tar.gz \
-            -C target/${{ matrix.target }}/release fretwire \
+            -C "$bin" fretwire \
             -C "$GITHUB_WORKSPACE" packaging/70-hxstomp.rules README.md LICENSE-MIT LICENSE-APACHE
+          tar -czf dist/fretwire-serve-${{ matrix.arch }}-linux-musl.tar.gz \
+            -C "$bin" fretwire-serve \
+            -C "$GITHUB_WORKSPACE" packaging/70-hxstomp.rules docs/serve-mode.md LICENSE-MIT LICENSE-APACHE
+          tar -czf dist/fretwire-mcp-${{ matrix.arch }}-linux-musl.tar.gz \
+            -C "$bin" fretwire-mcp \
+            -C "$GITHUB_WORKSPACE" LICENSE-MIT LICENSE-APACHE
+          ls -la dist
 
       - uses: actions/upload-artifact@v5
         with:

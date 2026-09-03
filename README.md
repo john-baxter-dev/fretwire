@@ -174,7 +174,10 @@ cd crates/fretwire-tauri/ui && npm install && npm run build && cd ../../..
 cargo run -p fretwire-serve            # → http://127.0.0.1:8317/
 ```
 
-A release build embeds the frontend, so the deliverable is one static binary to copy over.
+A release build embeds the frontend, so the deliverable is one static binary to copy over — and
+[Releases](https://github.com/john-baxter-dev/fretwire/releases) ship it prebuilt as
+`fretwire-serve-<arch>-linux-musl.tar.gz`, x86-64 and arm64, alongside the CLI and the MCP server
+(`fretwire-mcp-<arch>-linux-musl.tar.gz`). Static, so they run on a Pi OS or any other distro as is.
 
 **It binds loopback by default** — this is write access to your rig. The zero-setup way in from
 another machine is a tunnel: `ssh -L 8317:127.0.0.1:8317 <host>`, then open
@@ -207,9 +210,12 @@ that changed), because that is what an assistant reasons over. Half of them need
 read fretwire export files and the model catalog.
 
 ```
-cargo build --release -p fretwire-mcp
+cargo build --release -p fretwire-mcp                             # or the release tarball:
 claude mcp add fretwire -- target/release/fretwire-mcp            # Claude Code
 ```
+
+Releases ship it prebuilt too (`fretwire-mcp-<arch>-linux-musl.tar.gz`); point `claude mcp add`
+at the unpacked binary instead.
 
 It is **read-only unless told otherwise**. `--allow-writes` adds the tools that change the pedal's
 edit buffer (parameters, bypass, blocks, snapshots, preset changes, undo) — audible immediately,

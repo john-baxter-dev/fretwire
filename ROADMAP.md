@@ -508,7 +508,9 @@ guessing has already cost a power cycle): see section B of `captures/_RUNBOOK-hx
       flags — a CachyOS-built one carries `-march=native` and must not be shipped). **AUR
       registration is closed** to new accounts (bot spam, 2026-09), so the release asset is the
       Arch channel until it reopens. Left to do:
-      1. Watch the first real run, on the `v0.5.0` tag.
+      1. Watch the first real run, on the `v0.5.0` tag — which is also the first run of the musl
+         job with `fretwire-serve` and `fretwire-mcp` added to it (2026-09-02: the daemon embeds
+         the frontend, so that job now builds it too; rehearsed in an `ubuntu:22.04` container).
       2. Publish when registration reopens: AUR account + SSH key → `git clone ssh://aur@aur.archlinux.org/fretwire.git` →
          copy `PKGBUILD` + `.SRCINFO` → commit → push. Check the name is free first.
       Per release afterwards: bump `pkgver`, reset `pkgrel=1`, `updpkgsums`, regenerate `.SRCINFO`.

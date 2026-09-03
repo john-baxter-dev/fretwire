@@ -12,7 +12,9 @@ closed to new accounts right now, so instead an **`arch` job in `release.yml`** 
 in the stock `archlinux:base-devel` container on every tag, installs it, smoke-tests it and
 attaches it to the release — rehearsed in podman before any tag: the first run exposed that
 makepkg's `lto` option breaks linking `ring` (the update check's TLS), fixed with
-`options=('!lto')`, and the second passed end to end. Its first real run is the `v0.5.0` tag.
+`options=('!lto')`, and the second passed end to end. Its first real run is the `v0.5.0` tag. The same tag is the first to ship
+**static `fretwire-serve` and `fretwire-mcp` tarballs** (x86-64 and arm64) from the musl job,
+which now builds the frontend first because the daemon embeds it.
 
 **Update check (2026-09-02).** The first thing in fretwire that touches the network, so it is
 built to stay small: `fretwire_core::update` sends one `HEAD` to GitHub's `releases/latest` with

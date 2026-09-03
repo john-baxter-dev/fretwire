@@ -7,8 +7,12 @@ _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in 
 `fretwire-0.4.0-1-x86_64.pkg.tar.zst` (both binaries, udev rule, desktop entry, icon, licences),
 the packaged CLI detected the HX Stomp, `sha256sums` is real, and `packaging/.SRCINFO` is
 generated and tracked. Descriptions in the PKGBUILD, its desktop entry and `tauri.conf.json`
-(the `.deb`/`.rpm` text) now name the HX family rather than the Stomp alone. Not yet on the AUR:
-that needs an account and a push (ROADMAP Phase 8 has the steps).
+(the `.deb`/`.rpm` text) now name the HX family rather than the Stomp alone. AUR registration is
+closed to new accounts right now, so instead an **`arch` job in `release.yml`** builds the package
+in the stock `archlinux:base-devel` container on every tag, installs it, smoke-tests it and
+attaches it to the release — rehearsed in podman before any tag: the first run exposed that
+makepkg's `lto` option breaks linking `ring` (the update check's TLS), fixed with
+`options=('!lto')`, and the second passed end to end. Its first real run is the `v0.5.0` tag.
 
 **Update check (2026-09-02).** The first thing in fretwire that touches the network, so it is
 built to stay small: `fretwire_core::update` sends one `HEAD` to GitHub's `releases/latest` with

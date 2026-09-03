@@ -495,9 +495,21 @@ guessing has already cost a power cycle): see section B of `captures/_RUNBOOK-hx
       Caveats: the dependency check was skipped here (`makepkg -d`) because this box's rustup is
       from rustup.rs, which pacman cannot see providing `cargo`; a real Arch user's `rustup` package
       does. `check()` lists the crates the *tagged* tree has — add `fretwire-commands` when the
-      pkgver moves to 0.5.0. Left to do, in order:
-      1. `sudo pacman -U` the built package once, to see the udev rule and desktop entry land.
-      2. Publish: AUR account + SSH key → `git clone ssh://aur@aur.archlinux.org/fretwire.git` →
+      pkgver moves to 0.5.0.
+      **CI builds it now** (same day): an `arch` job in `release.yml` runs makepkg in the
+      `archlinux:base-devel` container from a `git archive` of the checkout (the tag tarball does
+      not exist yet when the job runs, so the checksum is skipped there and the AUR copy keeps the
+      real one), refuses a tag whose version differs from `pkgver`, installs the result with
+      `pacman -U`, checks the udev rule, desktop entry and the GUI's shared libraries, and attaches
+      `fretwire-<ver>-1-x86_64.pkg.tar.zst` to the release. Rehearsed in podman on the stock image
+      before the first tag: the first run failed to link `ring` — makepkg's `lto` option puts
+      `-flto=auto` into CFLAGS and rust-lld cannot read GCC LTO bitcode — so the PKGBUILD carries
+      `options=('!lto')`; the second run passed end to end (a 6.9 MB package with generic x86-64
+      flags — a CachyOS-built one carries `-march=native` and must not be shipped). **AUR
+      registration is closed** to new accounts (bot spam, 2026-09), so the release asset is the
+      Arch channel until it reopens. Left to do:
+      1. Watch the first real run, on the `v0.5.0` tag.
+      2. Publish when registration reopens: AUR account + SSH key → `git clone ssh://aur@aur.archlinux.org/fretwire.git` →
          copy `PKGBUILD` + `.SRCINFO` → commit → push. Check the name is free first.
       Per release afterwards: bump `pkgver`, reset `pkgrel=1`, `updpkgsums`, regenerate `.SRCINFO`.
 - [ ] Flathub — deferred. Needs a broad `--device=all` for USB, can't install a udev rule, and the

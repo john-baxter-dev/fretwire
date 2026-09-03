@@ -43,10 +43,10 @@ Grab a package from [Releases](https://github.com/john-baxter-dev/fretwire/relea
 |--------|------|
 | Debian, Ubuntu, Kubuntu, Mint | `fretwire_<version>_amd64.deb` — `sudo apt install ./fretwire_*.deb` |
 | Fedora, openSUSE              | `fretwire-<version>.x86_64.rpm` — `sudo dnf install ./fretwire-*.rpm` |
-| Arch, CachyOS, EndeavourOS    | `packaging/PKGBUILD` — copy it out of the tree and `makepkg -si` (an AUR listing is coming) |
+| Arch, CachyOS, EndeavourOS    | `fretwire-<version>-1-x86_64.pkg.tar.zst` — `sudo pacman -U ./fretwire-*.pkg.tar.zst` (built by `makepkg` from `packaging/PKGBUILD`; an AUR listing will follow when registration reopens) |
 | anything else                 | `fretwire-<version>_amd64.AppImage` — `chmod +x`, run it |
 
-The `.deb` and `.rpm` pull in WebKitGTK themselves, install the **udev rule** for you, and ship both
+The `.deb`, `.rpm` and Arch package pull in WebKitGTK themselves, install the **udev rule** for you, and ship both
 the GUI (`fretwire-gui`) and the CLI (`fretwire`). **Unplug and replug the pedal after installing** —
 that's when the new udev rule takes effect.
 

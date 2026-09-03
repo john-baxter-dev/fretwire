@@ -16,6 +16,10 @@ arch=('x86_64')
 url="https://github.com/john-baxter-dev/fretwire"
 license=('MIT' 'Apache-2.0')
 depends=('webkit2gtk-4.1' 'gtk3')
+# makepkg's `lto` option puts `-flto=auto` into CFLAGS, so the C in `ring` (TLS for the update
+# check) comes out as GCC LTO bitcode that rust-lld cannot link: "undefined symbol:
+# ring_core_0_17_14__LIMBS_window5_split_window". Rust does its own LTO from Cargo.toml.
+options=('!lto')
 makedepends=('cargo' 'npm' 'pkgconf')
 optdepends=('p7zip: unpack an HX Edit installer during `fretwire import-data`')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")

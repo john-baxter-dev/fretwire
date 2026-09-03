@@ -83,8 +83,8 @@ jobs:
           files: dist/*
           fail_on_unmatched_files: true
           # The release body comes from a file in the tree, so it is reviewable in a diff and the
-          # published notes cannot drift from the tag. Both jobs point at the same file: whichever
-          # finishes first creates the release, the other updates it with identical text. A tag
+          # published notes cannot drift from the tag. Every job points at the same file: whichever
+          # finishes first creates the release, the others update it with identical text. A tag
           # with no matching file fails the step rather than publishing an empty release.
           body_path: docs/release-notes/${{ github.ref_name }}.md
 
@@ -133,7 +133,90 @@ jobs:
           files: dist/*
           fail_on_unmatched_files: true
           # The release body comes from a file in the tree, so it is reviewable in a diff and the
-          # published notes cannot drift from the tag. Both jobs point at the same file: whichever
-          # finishes first creates the release, the other updates it with identical text. A tag
+          # published notes cannot drift from the tag. Every job points at the same file: whichever
+          # finishes first creates the release, the others update it with identical text. A tag
           # with no matching file fails the step rather than publishing an empty release.
+          body_path: docs/release-notes/${{ github.ref_name }}.md
+
+  arch:
+    name: Arch package (makepkg)
+    runs-on: ubuntu-24.04
+    # makepkg is Arch's own tool, so this runs inside an Arch container. Besides producing the
+    # `.pkg.tar.zst` an Arch user installs with `pacman -U`, it is the check that
+    # `packaging/PKGBUILD` still builds at all — the file sat unbuilt for six weeks once (ROADMAP
+    # Phase 8), and it is what goes to the AUR once an account exists. The plain image builds with
+    # Arch's generic x86-64 flags; a package built on a CachyOS box would carry `-march=native`.
+    container: archlinux:base-devel
+    steps:
+      # git before checkout: without it actions/checkout falls back to a tarball with no `.git`,
+      # and the tarball step below needs `git archive`.
+      - name: System dependencies
+        run: |
+          pacman -Sy --noconfirm archlinux-keyring
+          pacman -Su --noconfirm --needed git sudo rustup npm webkit2gtk-4.1 gtk3 pkgconf
+
+      - uses: actions/checkout@v5
+
+      - name: Build with makepkg
+        run: |
+          set -eu
+          pkgver=$(sed -n 's/^pkgver=//p' packaging/PKGBUILD)
+          case "$GITHUB_REF" in
+            refs/tags/v*)
+              tag=${GITHUB_REF_NAME#v}
+              if [ "$pkgver" != "$tag" ]; then
+                echo "::error::packaging/PKGBUILD says pkgver=$pkgver but the tag is v$tag — bump it"
+                exit 1
+              fi ;;
+          esac
+
+          # makepkg refuses to run as root, so the build happens as a throwaway user with its own
+          # home (rustup installs the toolchain there) and its own build directory.
+          useradd -m builder
+          build=/home/builder/build
+          mkdir -p "$build"
+          cp packaging/PKGBUILD "$build/"
+
+          # The PKGBUILD's source is the tag's tarball on GitHub, which does not exist until the
+          # tag is pushed — and whose bytes differ from what `git archive` produces here anyway.
+          # So build from this checkout: a tarball under the filename makepkg expects (it then
+          # skips the download) with the checksum skipped, since that hash belongs to the
+          # published tarball. The AUR copy keeps the real hash (`updpkgsums` after the tag).
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git archive --format=tar.gz --prefix="fretwire-$pkgver/" \
+            -o "$build/fretwire-$pkgver.tar.gz" HEAD
+          chown -R builder:builder "$build"
+          echo 'PACKAGER="John Baxter <john-baxter-dev@proton.me>"' >> /etc/makepkg.conf
+
+          sudo -H -u builder rustup default stable
+          cd "$build"
+          sudo -H -u builder makepkg --noconfirm --skipchecksums
+          # Only the package itself: Arch's default `debug` option also splits off a
+          # `fretwire-debug` package, which is nothing a release needs to carry.
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp ./fretwire-[0-9]*.pkg.tar.zst "$GITHUB_WORKSPACE/dist/"
+          ls -la "$GITHUB_WORKSPACE/dist"
+
+      # Install it the way a user would and check what landed: both binaries, the udev rule, the
+      # desktop entry, and a GUI that resolves every shared library on a stock Arch.
+      - name: Install and smoke-test
+        run: |
+          set -eu
+          pacman -U --noconfirm dist/*.pkg.tar.zst
+          fretwire --version
+          test -f /usr/lib/udev/rules.d/70-hxstomp.rules
+          test -f /usr/share/applications/fretwire.desktop
+          ! ldd /usr/bin/fretwire-gui | grep "not found"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: arch-package
+          path: dist/*
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
           body_path: docs/release-notes/${{ github.ref_name }}.md

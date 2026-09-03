@@ -21,6 +21,7 @@ fretwire-usb = { path = "../fretwire-usb" }
 thiserror.workspace = true
 tracing.workspace = true
 serde_json.workspace = true
+ureq = { version = "3.4", default-features = false, features = ["rustls"] }
 
 [dev-dependencies]
 # Tests build synthetic preset streams (see tests/multi_dsp_editor.rs) rather than shipping a

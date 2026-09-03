@@ -59,6 +59,21 @@ into real model and parameter names.
 Want to see the interface before installing anything? The whole UI runs in a browser against a
 [mock device](#no-hardware-no-rust) — no pedal, no Rust, no packages.
 
+### Updates
+
+fretwire never updates itself — your package manager (or a fresh download) does that. What it
+can do, **if you say yes**, is look once a day for a newer release and show a small
+"v0.5.0 available" badge in the header, linking to the release page with the right instruction
+for how you installed it (a `.deb`/`.rpm`, the AppImage, `cargo install`, or a checkout).
+
+The check is one `HEAD` request to `github.com` for the latest release tag; nothing about you or
+your rig goes with it, and a failed or offline check is silent. It is opt-in: the first-run screen
+asks, an existing install asks once in the editor, and the answer lives in the About dialog (click
+the version in the header) or in `~/.local/share/fretwire/update-check.json`. Set
+`FRETWIRE_NO_UPDATE_CHECK=1` to pin it off regardless. `fretwire check-update` runs the same check
+from the terminal (`--auto on|off` sets the daily preference — handy on a headless
+[serve-mode](docs/serve-mode.md) box, where the check runs on the daemon).
+
 ## Build from source
 
 Needs **Rust 1.96 or newer** (`rustup update` if your distro's toolchain is older).

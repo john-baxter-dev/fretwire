@@ -1,5 +1,6 @@
-//! The Tauri binding of the command surface: 65 one-line `#[tauri::command]` wrappers over
-//! `fretwire_commands`, plus [`TauriSink`] carrying its events onto the webview. The command
+//! The Tauri binding of the command surface: one-line `#[tauri::command]` wrappers over every
+//! `fretwire_commands` command, plus [`TauriSink`] carrying its events onto the webview and the
+//! one desktop-only command (`open_url`) that has no place in a daemon. The command
 //! bodies, `AppState`, the DTOs and the heartbeat all live in `fretwire-commands` so a second
 //! transport (`fretwire-serve`, see `docs/serve-mode.md`) can consume them unchanged.
 //!
@@ -11,6 +12,7 @@ use fretwire_commands::R;
 use fretwire_commands::dto::{
     BackupFileDto, CategoryDto, DataStatusDto, DetectedDeviceDto, ImportResultDto, IrFileDto,
     IrSlotDto, ModelChoiceDto, PresetDto, PresetListItem, SettingDto, SplitTypeDto,
+    UpdateStatusDto,
 };
 use fretwire_commands::events::{Event, EventSink};
 use tauri::{Emitter, State};
@@ -48,6 +50,44 @@ pub fn data_status() -> DataStatusDto {
 #[tauri::command]
 pub async fn import_data(source: String) -> R<ImportResultDto> {
     fretwire_commands::import_data(source).await
+}
+
+// ---- update check ----
+
+#[tauri::command]
+pub fn update_status() -> UpdateStatusDto {
+    fretwire_commands::update_status()
+}
+
+#[tauri::command]
+pub async fn update_check(force: bool) -> R<UpdateStatusDto> {
+    fretwire_commands::update_check(force).await
+}
+
+#[tauri::command]
+pub async fn update_pref(enabled: bool) -> R<UpdateStatusDto> {
+    fretwire_commands::update_pref(enabled).await
+}
+
+/// Open the release page in the user's browser. Tauri-only on purpose — it is not in
+/// `fretwire-commands`, because under serve mode the "backend" is a daemon on another machine
+/// and a browser must not open over there; the frontend uses a plain link in that case.
+///
+/// Restricted to this project's release pages: the webview is the only caller, but a command
+/// that hands arbitrary strings to `xdg-open` is a wider door than the feature needs.
+#[tauri::command]
+pub fn open_url(url: String) -> R<()> {
+    const ALLOWED: &str = "https://github.com/john-baxter-dev/fretwire/releases";
+    if !url.starts_with(ALLOWED) {
+        return Err(format!(
+            "refusing to open {url}: not a fretwire release page"
+        ));
+    }
+    std::process::Command::new("xdg-open")
+        .arg(&url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("xdg-open: {e}"))
 }
 
 // ---- connection ----

@@ -128,6 +128,10 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::data_status,
+            commands::update_status,
+            commands::update_check,
+            commands::update_pref,
+            commands::open_url,
             commands::device_numbering,
             commands::settings_read,
             commands::settings_write,

@@ -122,6 +122,15 @@ enum Command {
     /// directory of already-extracted files (e.g. an install's `res/` folder, which needs no 7z).
     /// We redistribute nothing — the data goes Line 6 → user → tool.
     ImportData { source: String },
+    /// Ask GitHub whether a newer fretwire release exists (one HEAD request; nothing is installed).
+    ///
+    /// The GUI runs the same check once a day when you have opted in; this is the explicit form.
+    /// `--auto` sets that opt-in without opening the GUI — handy on a headless fretwire-serve box.
+    CheckUpdate {
+        /// Turn the GUI's/daemon's daily check on or off.
+        #[arg(long, value_name = "on|off")]
+        auto: Option<OnOff>,
+    },
     /// Install the udev rule granting your user access to the pedal's USB node.
     ///
     /// Without it every live command needs root.
@@ -1496,6 +1505,7 @@ fn main() -> Result<()> {
             );
         }
         Command::ImportData { source } => import_data(&source)?,
+        Command::CheckUpdate { auto } => check_update(auto)?,
         Command::InstallUdev { print } => {
             if print {
                 print!("{UDEV_RULE}");
@@ -1624,6 +1634,43 @@ fn print_udev_manual() {
 /// Import Line 6's reference data into the local data dir from a **user-supplied** source (an HX
 /// Edit installer, or a directory of already-extracted files). The mechanics live in
 /// `fretwire_core::import` so the GUI's first-run screen can offer the same thing; this just prints.
+fn check_update(auto: Option<OnOff>) -> Result<()> {
+    use fretwire_core::update;
+    if let Some(pref) = auto {
+        let on = matches!(pref, OnOff::On);
+        update::set_enabled(on)?;
+        println!(
+            "daily update check {} ({})",
+            if on { "enabled" } else { "disabled" },
+            update::prefs_path().display()
+        );
+    }
+    let s = update::check(true)?;
+    if s.available {
+        println!(
+            "fretwire {} is available (this is {}): {}",
+            s.latest.as_deref().unwrap_or("?"),
+            s.current,
+            s.url.as_deref().unwrap_or("")
+        );
+        println!("  {} — {}", s.install.label(), s.install.instruction());
+    } else {
+        println!(
+            "fretwire {} is the latest release (this is {}, {})",
+            s.latest.as_deref().unwrap_or("?"),
+            s.current,
+            s.install.label()
+        );
+    }
+    if s.locked {
+        println!(
+            "  (the daily check is pinned off by ${})",
+            update::ENV_DISABLE
+        );
+    }
+    Ok(())
+}
+
 fn import_data(source: &str) -> Result<()> {
     let summary = fretwire_core::import::import_from(std::path::Path::new(source))?;
     println!(

@@ -21,6 +21,9 @@ use serde_json::Value;
 /// Every command the dispatcher answers — the serve-side registry, one name per match arm.
 pub const COMMAND_NAMES: &[&str] = &[
     "data_status",
+    "update_status",
+    "update_check",
+    "update_pref",
     "device_numbering",
     "settings_read",
     "settings_write",
@@ -158,6 +161,10 @@ pub async fn dispatch(
         // ---- reference data / connection ----
         "data_status" => ok(c::data_status()),
         "import_data" => ok(c::import_data(a.req("source")?).await?),
+        // ---- update check ----
+        "update_status" => ok(c::update_status()),
+        "update_check" => ok(c::update_check(a.opt("force")?.unwrap_or(false)).await?),
+        "update_pref" => ok(c::update_pref(a.req("enabled")?).await?),
         "detect" => ok(c::detect().await?),
         "is_connected" => ok(c::is_connected(state)),
         "connect" => ok(c::connect(state).await?),
@@ -376,7 +383,7 @@ mod tests {
     /// pinned by `connect_is_matched_without_running`.
     #[tokio::test]
     async fn every_name_dispatches() {
-        assert_eq!(COMMAND_NAMES.len(), 70, "the surface was 70 commands");
+        assert_eq!(COMMAND_NAMES.len(), 73, "the surface was 73 commands");
         for name in COMMAND_NAMES {
             if *name == "connect" {
                 continue;

@@ -302,6 +302,16 @@ anyone builds a server for it.
 
 ## Two deployment facts specific to this setup
 
+### The update check runs on the daemon (2026-09-02)
+
+The optional once-a-day release check (`fretwire_core::update`, README "Updates") is a backend
+command like any other, so under serve mode it is the *daemon* that asks GitHub and the daemon's
+preference file (`update-check.json` beside `serve-token`) that holds the answer — which is right,
+since the daemon is what needs updating. The browser shows the same ask bar and badge, worded to
+say the request comes from the machine running fretwire-serve, and the release link is a plain
+anchor (Tauri's `open_url` is not in the dispatcher: a daemon must not `xdg-open` on the Pi). On
+a headless box, `fretwire check-update --auto on|off` sets the preference without a browser.
+
 ### The udev rule does not work headless — RESOLVED 2026-08-26
 
 *(Recorded here because this is where it was found; it blocked the **arm64 CLI** in ROADMAP Phase 8

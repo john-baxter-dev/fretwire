@@ -842,6 +842,26 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // flip it with `fretwireMock.needsData()` to exercise the import screen.
 let dataPresent = true;
 
+// The update check. The preference starts unanswered so `npm run dev` walks the ask bar, and
+// the "latest release" is one patch past the mock's own version so the badge is visible.
+const MOCK_VERSION = "0.4.0";
+const MOCK_LATEST = MOCK_VERSION.replace(/\d+$/, (n) => String(Number(n) + 1));
+let updatePref = null; // null = not asked
+let updateLatest = null;
+let updateCheckedAt = null;
+const updateDto = () => ({
+  current: MOCK_VERSION,
+  latest: updateLatest,
+  available: updateLatest != null && updateLatest !== MOCK_VERSION,
+  url: updateLatest ? `https://github.com/john-baxter-dev/fretwire/releases/tag/v${updateLatest}` : null,
+  enabled: updatePref,
+  locked: false,
+  checked_at: updateCheckedAt,
+  install: "source",
+  install_label: "built from a checkout",
+  instruction: "Pull the repository and rebuild.",
+});
+
 
 // ---------------------------------------------------------------------------------------------
 // The user IR store. Mirrors the device's rules rather than a convenient subset, because those
@@ -1159,6 +1179,21 @@ const HANDLERS = {
     // Renaming leaves the samples — and so the hash — untouched, as the device does.
     held.name = (name ?? "").slice(0, 31);
     return irDirectory();
+  },
+
+  update_status: () => updateDto(),
+  update_check: async ({ force = false } = {}) => {
+    // Mirrors fretwire_core::update::check — the automatic form only probes when opted in and
+    // not already checked; a forced one always does.
+    if (!force && (updatePref !== true || updateCheckedAt != null)) return updateDto();
+    await sleep(300); // the real one is a round trip to github.com
+    updateLatest = MOCK_LATEST;
+    updateCheckedAt = Math.floor(Date.now() / 1000);
+    return updateDto();
+  },
+  update_pref: ({ enabled }) => {
+    updatePref = !!enabled;
+    return updateDto();
   },
 
   data_status: () => ({

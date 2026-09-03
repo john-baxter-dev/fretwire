@@ -23,6 +23,7 @@ pub mod events;
 use crate::dto::{
     BackupFileDto, CategoryDto, DataStatusDto, DetectedDeviceDto, ImportResultDto, IrFileDto,
     IrSlotDto, ModelChoiceDto, PresetDto, PresetListItem, SettingDto, SplitTypeDto,
+    UpdateStatusDto,
 };
 use crate::events::{Event, EventSink};
 use base64::Engine as _;
@@ -278,6 +279,39 @@ pub async fn import_data(source: String) -> R<ImportResultDto> {
     tokio::task::spawn_blocking(move || {
         fretwire_core::import::import_from(std::path::Path::new(&source))
             .map(ImportResultDto::from)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("task error: {e}"))?
+}
+
+// ---- update check ----
+
+/// What the update check knows, from its file alone: the preference (or that it has not been
+/// asked), the last result, and how this binary was installed. No network.
+pub fn update_status() -> UpdateStatusDto {
+    fretwire_core::update::status().into()
+}
+
+/// Run the check. `force` is an explicit "check now" — it probes regardless of the preference and
+/// the daily interval and reports a failure. Without it this is the automatic startup check: it
+/// only reaches out when the user has opted in and a day has passed, and otherwise answers from
+/// the file. The request runs off the caller's thread; the timeout is the module's.
+pub async fn update_check(force: bool) -> R<UpdateStatusDto> {
+    tokio::task::spawn_blocking(move || {
+        fretwire_core::update::check(force)
+            .map(UpdateStatusDto::from)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("task error: {e}"))?
+}
+
+/// Record the user's answer to "check for new versions once a day?".
+pub async fn update_pref(enabled: bool) -> R<UpdateStatusDto> {
+    tokio::task::spawn_blocking(move || {
+        fretwire_core::update::set_enabled(enabled)
+            .map(UpdateStatusDto::from)
             .map_err(|e| e.to_string())
     })
     .await

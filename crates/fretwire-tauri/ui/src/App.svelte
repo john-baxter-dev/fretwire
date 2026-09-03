@@ -35,6 +35,7 @@
       dataStatus = { present: false, dir: "", files: 0 };
     }
     dataReady = dataStatus.present;
+    if (dataReady) updateStartup();
     // Under fretwire-serve the backend outlives the page, so a reload can land on a live device
     // session (it survives editor disconnects for a few minutes). Re-attach instead of showing a
     // disconnected view over a session that's still open — `connect` is an idempotent re-read,
@@ -80,6 +81,70 @@
   // Tracked optimistically: the device applies a snapshot switch but the read-back's active-snapshot
   // field lags, so we set this on click and sync it only when a preset is loaded/switched.
   let activeSnapshot = $state(null);
+
+  // ---- update check (fretwire_core::update) ----
+  // `update` is the last UpdateStatusDto. The startup path never shows an error: the automatic
+  // check is opt-in, once a day, and offline is silence. The ask bar appears once, while the
+  // preference is unanswered (an install that predates the question, or a skipped first run);
+  // the About dialog is where it can be changed and where "Check now" lives.
+  let update = $state(null);
+  let updateAsk = $state(false);
+  let updateDlg = $state(false);
+  let updateBusy = $state(false);
+  let updateErr = $state(null);
+  async function updateStartup() {
+    try {
+      update = await invoke("update_status");
+    } catch {
+      return; // an older backend without the command — nothing to show
+    }
+    if (update.enabled == null && !update.locked) {
+      updateAsk = true;
+      return;
+    }
+    if (update.enabled) {
+      try {
+        update = await invoke("update_check", { force: false });
+      } catch {
+        /* offline, or GitHub is down — the automatic check stays silent */
+      }
+    }
+  }
+  async function updateAnswer(enabled) {
+    updateAsk = false;
+    try {
+      update = await invoke("update_pref", { enabled });
+    } catch (e) {
+      toast("update check: " + e);
+      return;
+    }
+    if (enabled) await updateStartup();
+  }
+  async function updateNow() {
+    updateBusy = true;
+    updateErr = null;
+    try {
+      update = await invoke("update_check", { force: true });
+    } catch (e) {
+      updateErr = String(e);
+    } finally {
+      updateBusy = false;
+    }
+  }
+  // The release page: a real link in a browser (serve, mock), `xdg-open` via the backend under
+  // Tauri, whose webview does not open external links itself.
+  async function openRelease(e) {
+    if (IS_SERVE || IS_MOCK) return;
+    e.preventDefault();
+    try {
+      await invoke("open_url", { url: update.url });
+    } catch (err) {
+      toast("open: " + err);
+    }
+  }
+  const updateChecked = $derived(
+    update?.checked_at ? new Date(update.checked_at * 1000).toLocaleString() : null,
+  );
 
   // ---- toasts (errors) & in-app dialogs (replacing native prompt/confirm) ----
   let toasts = $state([]);
@@ -1096,11 +1161,13 @@
     onready={(r) => {
       dataStatus = { ...dataStatus, present: true, files: r.copied };
       dataReady = true;
+      updateStartup();
       status = `Imported ${r.copied} reference file(s) — model names are available.`;
       statusErr = false;
     }}
     onskip={() => {
       dataReady = true;
+      updateStartup();
       status = "No reference data — blocks and parameters show numeric indices.";
       statusErr = false;
     }}
@@ -1110,6 +1177,19 @@
 {#if dataReady}
 <header>
   <h1>fretwire</h1>
+  <button class="ver" onclick={() => (updateDlg = true)} title="Version and the update check">
+    v{update?.current ?? "…"}
+  </button>
+  {#if update?.available}
+    <a
+      class="newver"
+      href={update.url}
+      target="_blank"
+      rel="noreferrer"
+      onclick={openRelease}
+      title={`${update.install_label}: ${update.instruction}`}
+    >v{update.latest} available</a>
+  {/if}
   <span class="spacer"></span>
   {#if IS_MOCK}
     <!-- Mock builds only: which unit to pretend to be. Never present in a real Tauri build. -->
@@ -1158,6 +1238,18 @@
     <button onclick={connect}>Connect</button>
   {/if}
 </header>
+
+{#if updateAsk}
+  <div class="askbar">
+    <span>
+      Check for new fretwire versions once a day? One request to github.com for the latest
+      release tag{IS_SERVE ? ", from the machine running fretwire-serve" : ""}; nothing about
+      you is sent, and nothing is downloaded or installed for you.
+    </span>
+    <button onclick={() => updateAnswer(true)}>Yes</button>
+    <button class="secondary" onclick={() => updateAnswer(false)}>No</button>
+  </div>
+{/if}
 
 <div class="status" class:err={statusErr}>{status}</div>
 
@@ -1289,6 +1381,59 @@
     <p class="hint">Click <b>Connect</b> to open a session and read the current preset from the HX Stomp.</p>
   {/if}
 </main>
+{/if}
+
+{#if updateDlg && update}
+  <Dialog
+    title="About fretwire"
+    confirmLabel="Close"
+    width={460}
+    onconfirm={() => (updateDlg = false)}
+    oncancel={() => (updateDlg = false)}
+  >
+    <div class="about">
+      <p>
+        fretwire <b>{update.current}</b> — {update.install_label}{IS_SERVE
+          ? " (the fretwire-serve daemon)"
+          : ""}
+      </p>
+      <label class="about-check">
+        <input
+          type="checkbox"
+          checked={update.enabled === true}
+          disabled={update.locked}
+          onchange={(e) => updateAnswer(e.currentTarget.checked)}
+        />
+        Check for new versions once a day
+      </label>
+      <p class="dim">
+        {#if update.locked}Pinned off by <code>$FRETWIRE_NO_UPDATE_CHECK</code>.{/if}
+        One request to github.com for the latest release tag; nothing about you or your rig is
+        sent, and fretwire never downloads or installs anything itself.
+      </p>
+      <div class="about-row">
+        <button type="button" class="secondary" disabled={updateBusy} onclick={updateNow}>
+          {updateBusy ? "Checking…" : "Check now"}
+        </button>
+        {#if update.latest}
+          <span class="dim">
+            {update.available ? `v${update.latest} is available` : `v${update.latest} is the latest release`}{updateChecked
+              ? ` · checked ${updateChecked}`
+              : ""}
+          </span>
+        {/if}
+      </div>
+      {#if update.available}
+        <p>
+          <a href={update.url} target="_blank" rel="noreferrer" onclick={openRelease}>Open the release page</a>
+          — {update.instruction}
+        </p>
+      {/if}
+      {#if updateErr}
+        <p class="about-err">{updateErr}</p>
+      {/if}
+    </div>
+  </Dialog>
 {/if}
 
 {#if saveAsDlg}
@@ -1651,6 +1796,74 @@
   }
   .spacer {
     flex: 1;
+  }
+  .ver {
+    font: inherit;
+    font-size: 12px;
+    background: none;
+    border: 0;
+    padding: 2px 6px;
+    color: #6b7280;
+    cursor: pointer;
+  }
+  .ver:hover {
+    color: #b9c0cc;
+  }
+  .newver {
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: #2b4a2e;
+    color: #b6f0bd;
+    text-decoration: none;
+  }
+  .newver:hover {
+    background: #356a3a;
+  }
+  .askbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    background: #23272f;
+    border-bottom: 1px solid #2a2e37;
+    color: #b9c0cc;
+    font-size: 13px;
+  }
+  .askbar span {
+    flex: 1;
+  }
+  .about p {
+    margin: 0 0 10px;
+  }
+  .about .dim {
+    color: #8b93a1;
+    font-size: 12.5px;
+  }
+  .about code {
+    background: #23272f;
+    border-radius: 4px;
+    padding: 1px 4px;
+  }
+  .about-check {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin: 0 0 8px;
+    cursor: pointer;
+  }
+  .about-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin: 0 0 10px;
+  }
+  .about a {
+    color: #7fb4ff;
+  }
+  .about-err {
+    color: #ff8a8a;
+    white-space: pre-wrap;
   }
   /* Mock-only device switch. Deliberately understated and dashed — it must never read as a real
      control of the hardware. */

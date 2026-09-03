@@ -2,6 +2,28 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Update check (2026-09-02).** The first thing in fretwire that touches the network, so it is
+built to stay small: `fretwire_core::update` sends one `HEAD` to GitHub's `releases/latest` with
+redirects off and reads the tag out of `Location` (no API, no JSON, a User-Agent of the bare word
+`fretwire`), compares it to the workspace version — **strictly** newer, so a checkout ahead of the
+last tag stays quiet — and remembers the answer in `~/.local/share/fretwire/update-check.json`
+(beside `serve-token`; `$FRETWIRE_DATA_DIR` moves it). **Opt-in**: `enabled` is unset until the
+user answers, the first-run screen asks with a checkbox, an existing install gets a one-time ask
+bar in the editor, and `FRETWIRE_NO_UPDATE_CHECK=1` pins it off. The automatic form only probes
+when opted in and a day has passed, and swallows every failure; the explicit forms (`fretwire
+check-update [--auto on|off]`, the About dialog's "Check now") report one. It **only reports** —
+the notice links the release page with an instruction chosen from how this binary was installed
+(`APPIMAGE` set → AppImage; `/usr/bin` → package; `~/.cargo/bin` → cargo; a `target/` path →
+checkout) — because a self-replacing `.deb`/`.rpm` would fight apt/dnf and signed-artifact plumbing
+is a trust surface the project does not need (ROADMAP Phase 8). Three transport-neutral commands
+(`update_status` / `update_check` / `update_pref`; the dispatcher is 73 arms) plus a Tauri-only
+`open_url` (`xdg-open`, restricted to our release pages — under serve the link is a plain anchor,
+since the daemon must not open a browser on the Pi). The version in the GUI header opens the
+About dialog. Verified: 9 unit tests including a local fake GitHub (HEAD, redirect not followed,
+UA checked), the CLI against fake servers for newer / equal / pinned-off / dead, one real probe to
+GitHub (TLS via rustls, resolved `v0.4.0`), the three commands through `fretwire-serve` with curl,
+and the mock contract in the UI suite (174 tests, +11).
+
 **MCP server (2026-09-02).** `fretwire-mcp` — the third consumer the command-layer lift was for
 (ROADMAP Phase 10, survey in `docs/serve-mode.md`). A stdio server on the official `rmcp` SDK
 with a **curated** surface rather than the 70 commands: 14 read tools, +10 with `--allow-writes`

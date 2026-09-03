@@ -12,6 +12,19 @@
   let busy = $state(false);
   let error = $state(null);
   let warning = $state(null);
+  // The one other thing asked once: whether to look for new releases. fretwire otherwise never
+  // touches the network, so it is a question, not a default — see fretwire_core::update.
+  let checkUpdates = $state(true);
+
+  // Recorded before either exit, so the editor behind this screen starts with an answer. A
+  // failure to write it just means the editor asks again.
+  async function recordUpdatePref() {
+    try {
+      await invoke("update_pref", { enabled: checkUpdates });
+    } catch {
+      /* asked again in the editor */
+    }
+  }
 
   const INSTALLER_FILTERS = [
     { name: "HX Edit installer", extensions: ["exe", "msi", "pkg", "dmg"] },
@@ -36,6 +49,7 @@
           result.missing.length > 1 ? "were" : "was"
         } missing. Model names and parameter ordering may be incomplete.`;
       }
+      await recordUpdatePref();
       onready?.(result);
     } catch (e) {
       error = String(e);
@@ -81,7 +95,15 @@
     {/if}
 
     <div class="foot">
-      <button class="link" disabled={busy} onclick={() => onskip?.()}>
+      <label class="check">
+        <input type="checkbox" bind:checked={checkUpdates} disabled={busy} />
+        <span>
+          Check for new fretwire versions once a day
+          <small>One request to github.com for the latest release tag; nothing about you is sent,
+            and nothing is ever downloaded or installed for you.</small>
+        </span>
+      </label>
+      <button class="link" disabled={busy} onclick={async () => { await recordUpdatePref(); onskip?.(); }}>
         Skip — use the editor without model names
       </button>
     </div>
@@ -172,6 +194,24 @@
     margin-top: 20px;
     padding-top: 14px;
     border-top: 1px solid #2b3038;
+  }
+  .check {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    margin: 0 0 14px;
+    font-size: 13px;
+    color: #b9c0cc;
+    cursor: pointer;
+  }
+  .check input {
+    margin: 3px 0 0;
+  }
+  .check small {
+    display: block;
+    margin-top: 2px;
+    font-size: 11.5px;
+    color: #8b93a1;
   }
   .link {
     font: inherit;

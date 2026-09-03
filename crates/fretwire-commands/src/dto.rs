@@ -594,6 +594,48 @@ impl From<fretwire_core::import::DataStatus> for DataStatusDto {
     }
 }
 
+/// The update check's state — see `fretwire_core::update`. Nothing here is a download; it tells
+/// the user a newer release exists and what to do about it for the way this binary was installed.
+#[derive(Serialize)]
+pub struct UpdateStatusDto {
+    /// The running version.
+    pub current: String,
+    /// The newest release known (this probe or the cached one); `null` until a probe succeeds.
+    pub latest: Option<String>,
+    /// `latest` is strictly newer than `current`.
+    pub available: bool,
+    /// The release page, when one is newer.
+    pub url: Option<String>,
+    /// The user's answer to "check once a day?"; `null` = not asked yet.
+    pub enabled: Option<bool>,
+    /// `FRETWIRE_NO_UPDATE_CHECK` pins it off — the preference is read-only.
+    pub locked: bool,
+    /// Unix seconds of the last completed probe.
+    pub checked_at: Option<i64>,
+    /// `appimage` / `package` / `cargo` / `source` / `unknown`.
+    pub install: String,
+    pub install_label: String,
+    /// What updating means for that install kind.
+    pub instruction: String,
+}
+
+impl From<fretwire_core::update::Status> for UpdateStatusDto {
+    fn from(s: fretwire_core::update::Status) -> Self {
+        UpdateStatusDto {
+            current: s.current,
+            latest: s.latest,
+            available: s.available,
+            url: s.url,
+            enabled: s.enabled,
+            locked: s.locked,
+            checked_at: s.checked_at.map(|t| t as i64),
+            install: s.install.as_str().to_string(),
+            install_label: s.install.label().to_string(),
+            instruction: s.install.instruction().to_string(),
+        }
+    }
+}
+
 /// The outcome of a first-run import.
 #[derive(Serialize)]
 pub struct ImportResultDto {

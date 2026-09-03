@@ -477,6 +477,14 @@ guessing has already cost a power cycle): see section B of `captures/_RUNBOOK-hx
 - [x] Packaging: `.deb`/`.rpm`/AppImage via `tauri build` (deb/rpm install the udev rule and ship the
       CLI), static musl CLI, GitHub Release on a `v*` tag. README + license/trademark notes.
       (2026-07-21)
+- [x] **Update check** (`fretwire_core::update`, 2026-09-02) — opt-in, once a day, one `HEAD` to
+      `releases/latest` (the redirect names the tag; no API, no version in the User-Agent). Badge
+      in the GUI header + an About dialog, the first-run checkbox, a one-time ask bar for installs
+      that predate the question, `fretwire check-update [--auto on|off]`, and
+      `FRETWIRE_NO_UPDATE_CHECK=1`. Runs on the daemon under serve mode. **Deliberately not an
+      auto-updater**: only the AppImage could replace itself, a self-rewriting `.deb`/`.rpm` fights
+      apt/dnf, and signed-artifact plumbing is a trust surface this project does not need. The
+      native answer to "automatic" is the AUR / Flathub items below.
 - [ ] **TODO — publish to the AUR.** `packaging/PKGBUILD` is written but **not published or even
       built once**. Needs, in order:
       1. Local validation: copy it out of the tree (`makepkg` litters `src/`/`pkg/`), `updpkgsums`

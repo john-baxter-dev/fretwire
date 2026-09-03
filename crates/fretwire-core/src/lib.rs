@@ -31,6 +31,7 @@ pub mod backup;
 pub mod editor;
 pub mod import;
 pub mod session;
+pub mod update;
 
 pub use editor::{Catalog, EditorBlock, EditorParam, EditorPreset, ModelChoice};
 pub use session::Session;

@@ -23,6 +23,17 @@ enum OnOff {
     Off,
 }
 
+/// A plain on/off switch with no pedal semantics attached (settings, not bypass).
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum Toggle {
+    /// Enable.
+    #[value(alias = "true", alias = "1")]
+    On,
+    /// Disable.
+    #[value(alias = "false", alias = "0")]
+    Off,
+}
+
 /// Which end of a controller assignment's travel is being set.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
 enum TravelEnd {
@@ -129,7 +140,7 @@ enum Command {
     CheckUpdate {
         /// Turn the GUI's/daemon's daily check on or off.
         #[arg(long, value_name = "on|off")]
-        auto: Option<OnOff>,
+        auto: Option<Toggle>,
     },
     /// Install the udev rule granting your user access to the pedal's USB node.
     ///
@@ -1634,10 +1645,10 @@ fn print_udev_manual() {
 /// Import Line 6's reference data into the local data dir from a **user-supplied** source (an HX
 /// Edit installer, or a directory of already-extracted files). The mechanics live in
 /// `fretwire_core::import` so the GUI's first-run screen can offer the same thing; this just prints.
-fn check_update(auto: Option<OnOff>) -> Result<()> {
+fn check_update(auto: Option<Toggle>) -> Result<()> {
     use fretwire_core::update;
     if let Some(pref) = auto {
-        let on = matches!(pref, OnOff::On);
+        let on = matches!(pref, Toggle::On);
         update::set_enabled(on)?;
         println!(
             "daily update check {} ({})",

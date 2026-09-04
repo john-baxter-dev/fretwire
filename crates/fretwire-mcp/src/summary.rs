@@ -273,18 +273,7 @@ pub fn block_params(b: &BlockDto) -> String {
             return;
         }
         out.push_str(heading);
-        for p in params {
-            out.push_str(&format!("  [{}] {} = {}", p.index, p.name, param_value(p)));
-            if !p.enum_labels.is_empty() {
-                out.push_str(&format!("   options: {}", p.enum_labels.join(" | ")));
-            } else if let Some(r) = param_range(p) {
-                out.push_str(&format!("   range: {r}"));
-            }
-            if !p.settable {
-                out.push_str("   (read-only)");
-            }
-            out.push('\n');
-        }
+        out.push_str(&param_lines(params));
     };
     section(&mut out, "Parameters:\n", &b.params);
     section(
@@ -293,6 +282,40 @@ pub fn block_params(b: &BlockDto) -> String {
         &b.paired_params,
     );
     out.trim_end().to_string()
+}
+
+/// One line per parameter — index, name, value, then its options or range — the shape both
+/// `block_params` (a live block) and `model_params` (a model at its defaults) hand back. A
+/// tempo-sync group is named as such, since the three are one control on the pedal.
+pub fn param_lines(params: &[ParamDto]) -> String {
+    let mut out = String::new();
+    for p in params {
+        out.push_str(&format!("  [{}] {} = {}", p.index, p.name, param_value(p)));
+        if !p.enum_labels.is_empty() {
+            out.push_str(&format!("   options: {}", p.enum_labels.join(" | ")));
+        } else if let Some(r) = param_range(p) {
+            out.push_str(&format!("   range: {r}"));
+        }
+        if !p.settable {
+            out.push_str("   (read-only)");
+        }
+        if let Some(s) = &p.sync {
+            let governed = params
+                .iter()
+                .find(|q| q.index == s.governed)
+                .map(|q| q.name.as_str())
+                .unwrap_or("?");
+            out.push_str(&match s.role {
+                "governed" => format!(
+                    "   (tempo sync: switch [{}], note value [{}])",
+                    s.tempo, s.note
+                ),
+                _ => format!("   (tempo sync for {governed})"),
+            });
+        }
+        out.push('\n');
+    }
+    out
 }
 
 /// What differs between two presets, slot by slot: blocks added, removed or swapped, bypass

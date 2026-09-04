@@ -96,8 +96,14 @@ pub struct CatalogModelsArgs {
 
 #[derive(Deserialize, JsonSchema)]
 pub struct BackupListArgs {
-    /// Path to a fretwire export file (.json, written by the editor's Export or `fretwire backup`). `~/` is expanded.
+    /// Path to a fretwire export or device backup (.json, written by the editor or `fretwire backup-device`), or an HX Edit / POD Go Edit backup (.hxb / .pgb). `~/` is expanded.
     pub path: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct ModelParamsArgs {
+    /// Model index, as catalog_models lists it (what block_add and block_swap take).
+    pub index: i64,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -286,11 +292,43 @@ impl Fretwire {
         .await
     }
 
-    /// The presets in a fretwire export file, with the setlist and slot each came from. Needs
-    /// no pedal.
+    /// One model's parameters at their defaults — names, ranges, options, tempo-sync groups —
+    /// before it is on the pedal: what a block of it would take. Needs no pedal.
+    #[tool(annotations(read_only_hint = true))]
+    async fn model_params(&self, Parameters(a): Parameters<ModelParamsArgs>) -> R {
+        self.catalog_call(move |cat| {
+            let (name, variant, params) = cat
+                .model_params(a.index)
+                .ok_or_else(|| format!("no model at index {} — see catalog_models", a.index))?;
+            let dtos: Vec<ParamDto> = params.iter().map(ParamDto::from).collect();
+            let mut out = name;
+            if let Some(v) = variant {
+                out.push_str(&format!(" ({v})"));
+            }
+            out.push_str(&format!(
+                " — index {}, {} parameters at their defaults:\n",
+                a.index,
+                dtos.len()
+            ));
+            out.push_str(&summary::param_lines(&dtos));
+            Ok(out.trim_end().to_string())
+        })
+        .await
+    }
+
+    /// The presets in a fretwire export or device backup, with the setlist and slot each came
+    /// from — or in an HX Edit / POD Go Edit backup (.hxb / .pgb), names only. Needs no pedal.
     #[tool(annotations(read_only_hint = true))]
     async fn backup_list(&self, Parameters(a): Parameters<BackupListArgs>) -> R {
         tokio::task::spawn_blocking(move || {
+            if let Some((device, items)) = offline::hxb_list(&a.path)? {
+                return Ok(format!(
+                    "{device} — HX Edit backup, {} preset(s) (names only; convert with \
+                     `fretwire hxb-convert` to describe them)\n{}",
+                    items.len(),
+                    summary::preset_list(&items)
+                ));
+            }
             let b = offline::read_backup(&a.path)?;
             let items: Vec<_> = b
                 .presets

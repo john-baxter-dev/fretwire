@@ -459,7 +459,10 @@ guessing has already cost a power cycle): see section B of `captures/_RUNBOOK-hx
       (`change_amp_drive_rename_..._name_sticks_change_doesnt`) proved a pending param edit didn't
       persist. `edit::rename_preset`, `Session::rename_preset`, CLI `rename`, GUI **Rename…** field
       (no confirm, HX Edit semantics). Byte-exact-tested. *Pending live test.*
-- [ ] Copy/paste/duplicate **blocks** (read a block's content, `add_block` + `set_value`s).
+- [x] Copy/paste **blocks** — landed with 0.2.0 (`copy_block` / `paste_block` / `clipboard_block`:
+      a `BlockClip` of model, pairing, bypass and typed param values, rebuilt in an empty slot by
+      `add_block_at` + the sets; **Copy** / **Paste** in the block panel). This line had gone
+      stale; noticed 2026-09-03. "Duplicate" is Copy then Paste into an empty slot.
 - [x] **`.hxb` backup reading** (2026-07-26) — `fretwire_data::hxb` parses HX Edit's own backup
       container (AF6L header + concatenated raw zlib streams): globals, 128 IR slots, the model-usage
       table and the 8 setlists. CLI `show-backup <file.hxb> [--presets]`. Reading only — the presets
@@ -768,11 +771,15 @@ for 3 event names total.
 - [ ] The arm64 **serve** artifact, once the crate exists (the arm64 CLI shipped independently —
       Phase 8).
 - [x] **MCP server — a third consumer of the same lift.** DONE (2026-09-02): `fretwire-mcp`, a
-      stdio server on the official `rmcp` SDK — 14 read tools (offline export-file and catalog
+      stdio server on the official `rmcp` SDK — 15 read tools (offline export-file and catalog
       tools, live reads), +10 edit-buffer tools behind `--allow-writes`, +`preset_save` behind
       `--allow-save`; ungated tools are unlisted. Text results in HX Edit's display units, set
-      the same way. Left open: the in-daemon HTTP transport (needs a second seat on the lease),
-      `model_params`, `.hxb` input. See `docs/serve-mode.md`. The original case:
+      the same way. 2026-09-03: `model_params` (a model's parameters at their defaults, with
+      ranges, options and tempo-sync groups, before it is on the pedal — `Catalog::model_params`)
+      and `.hxb`/`.pgb` input for `backup_list` (names and slots straight from the container;
+      `backup_describe`/`_diff` on one say to `hxb-convert` first, since a tone needs a donor
+      stream to become a preset). Left open: the in-daemon HTTP transport (needs a second seat
+      on the lease). See `docs/serve-mode.md`. The original case:
       asked for independently on 2026-08-23,
       the same day as serve mode, which is the strongest argument for doing the lift at all. The
       requester's guess that the CLI is a poor fit is correct and measurable: ~60 live subcommands

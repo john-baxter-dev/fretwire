@@ -210,7 +210,7 @@ already falls back where it matters.
 ## A second consumer: MCP — landed 2026-09-02 (`crates/fretwire-mcp`)
 
 **What was built.** A stdio MCP server over `fretwire-commands`, on the official `rmcp` SDK.
-The surface is exactly the shape argued for below: **14 read tools**, +10 with `--allow-writes`,
+The surface is exactly the shape argued for below: **15 read tools**, +10 with `--allow-writes`,
 +1 (`preset_save`) with `--allow-save`; ungated tools are absent from `tools/list`, not refused.
 Results are text, not DTOs — `summary.rs` renders a preset as its blocks in signal order with
 values the way HX Edit displays them (the DTO's format rules run forwards for display and
@@ -227,9 +227,12 @@ directly, so the edit history, the heartbeat and every safety rule are the GUI's
 **Not done, by choice:** the streamable-HTTP transport inside `fretwire-serve` (one process
 owning the pedal, human in the browser while the assistant edits). It needs a second seat on the
 single-editor lease and a "preset changed" broadcast for host-originated edits; the stdio binary
-opens its own session and cannot run beside the GUI or daemon. Also open: a `model_params` tool
-(a model's parameters before it is in a preset — needs a catalog accessor), and HX Edit `.hxb`
-files, whose tones are JSON rather than preset streams.
+opens its own session and cannot run beside the GUI or daemon. Closed 2026-09-03: `model_params`
+(the catalog accessor is `Catalog::model_params` — a model's params at their `.models` defaults,
+named, ranged and sync-linked exactly as a block of it would be) and `.hxb`/`.pgb` files for
+`backup_list`, which reads names and slots straight from the container; `backup_describe` and
+`backup_diff` on one point at `fretwire hxb-convert`, because a tone is JSON and becoming a preset
+stream needs a donor from the same device.
 
 The survey that led here, kept as the rationale:
 

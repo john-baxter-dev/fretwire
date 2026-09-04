@@ -890,6 +890,40 @@ impl Catalog {
         })
     }
 
+    /// A model's parameters at their **defaults**, named and described as a block of it would be
+    /// — what a front end can show about a model before it is added, with no device. `index` is
+    /// the `Helix.sym` index [`ModelChoice::index`] carries. `None` for an index the table does
+    /// not have.
+    ///
+    /// Everything here is the same data a loaded block's params carry ([`ParamMeta`], the
+    /// tempo-sync links); the values are `.models` defaults, or zero where a model gives none.
+    /// The trailing extra a block sends beyond its symbol's list (`Trails`) is not listed — it is
+    /// not in the symbol table, and it is not a model parameter.
+    pub fn model_params(
+        &self,
+        index: i64,
+    ) -> Option<(String, Option<&'static str>, Vec<EditorParam>)> {
+        let (symbol, order) = self.symbols.by_index(usize::try_from(index).ok()?)?;
+        let (base, variant) = split_variant(symbol);
+        let (name, category) = self.resolve_name(Some(symbol));
+        let meta = self.param_meta.get(base);
+        let values: Vec<ParamValue> = order
+            .iter()
+            .map(|sym| {
+                let m = meta.and_then(|m| m.get(sym));
+                let default = m.and_then(|m| m.default).unwrap_or(0.0);
+                match m.and_then(|m| m.value_type) {
+                    Some(0) => ParamValue::Int(default.round() as i64),
+                    Some(2) => ParamValue::Bool(default != 0.0),
+                    _ => ParamValue::Float(default as f32),
+                }
+            })
+            .collect();
+        let mut params = name_params(&values, Some(order), meta, category);
+        self.link_sync(&mut params, Some(base));
+        Some((name, variant, params))
+    }
+
     /// Mark the members of every tempo-sync group of `model` in `params` — see [`SyncLink`].
     /// A group whose three symbols are not all present in this block (a variant that dropped
     /// one, or no reference data) is left alone: three rows shown is the fallback, not a wrong
@@ -2133,6 +2167,37 @@ mod tests {
     fn dev_catalog() -> Catalog {
         Catalog::from_data_dir(&crate::data_dir())
             .expect("load reference data (run `fretwire import-data`)")
+    }
+
+    /// A model described before it exists on the pedal: its params at their defaults, with the
+    /// same names, ranges and sync links a block of it would carry.
+    #[test]
+    fn model_params_describe_a_model_offline() {
+        let cat = dev_catalog();
+        let simple = cat
+            .models_in_category(9, Some("Mono"))
+            .into_iter()
+            .find(|m| m.name == "Simple Delay")
+            .expect("a Simple Delay in the delay category");
+        let (name, variant, params) = cat.model_params(simple.index).expect("described");
+        assert_eq!(name, "Simple Delay");
+        assert_eq!(variant, Some("Mono"));
+        let time = params
+            .iter()
+            .find(|p| p.name == "Time")
+            .expect("a Time param");
+        assert!(time.meta.max.is_some(), "ranges come from .models");
+        assert_eq!(time.meta.sync.map(|s| s.role), Some(SyncRole::Governed));
+        let note = params
+            .iter()
+            .find(|p| p.name == "SyncSelect1")
+            .expect("the note value");
+        assert_eq!(note.display_name(), "Note Sync");
+        assert!(
+            !note.meta.enum_labels.is_empty(),
+            "labels come from HelixControls"
+        );
+        assert!(cat.model_params(-1).is_none() && cat.model_params(1 << 20).is_none());
     }
 
     /// The shipped catalog's grouping, end to end: every `.models` model that carries a sync pair

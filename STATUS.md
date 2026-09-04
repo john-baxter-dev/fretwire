@@ -2,6 +2,17 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**MCP leftovers closed (2026-09-03).** The two tools the MCP round left open. `model_params`
+describes a model before it is on the pedal — its parameters at their `.models` defaults with
+names, ranges, options and tempo-sync groups, through a new `Catalog::model_params` that builds the
+same `EditorParam`s a block of it would carry (so the sync links and the display rules are the
+block's). `backup_list` reads HX Edit / POD Go Edit `.hxb`/`.pgb` containers directly (device,
+setlists, names, slots — the Floor backup lists 363); `backup_describe`/`_diff` on one explain that
+a tone needs `hxb-convert` and a donor stream first. Verified over stdio: 15 read tools listed, a
+Simple Delay rendered with its `Time` annotated as tempo-synced by switch 5 and note 4, a v3 device
+backup listed with its IR and setting counts, the Floor `.hxb` listed and refused for describe with
+the guidance. Also: the roadmap's "copy/paste blocks" line was stale — it landed with 0.2.0.
+
 **Tempo sync is one control (2026-09-03).** The last open half of issue #5. The roadmap had it
 blocked on evidence — nothing in the shipped data seemed to say *which* knob a `TempoSync{n}` /
 `SyncSelect{n}` pair governs — and told the next reader to look in `HX_ModelCatalog.json` before
@@ -4603,3 +4614,26 @@ Tests: `sync_group_tests` on a hand-written catalog excerpt (the shape, and that
 three from any side and refuses a partial group), a data-gated test that every group in the real
 file names params its model has and that a Simple Delay's governs `Time`, and `sync-mock.mjs`
 (+9, 200 UI tests). 380 Rust tests, clippy clean.
+
+## Seventy-fourth round (2026-09-03) — MCP: `model_params`, `.hxb` listing, and a stale roadmap line
+
+- **`Catalog::model_params(index)`** — the accessor the MCP note said it needed. Takes the
+  `Helix.sym` index `catalog_models` lists, and returns the model's name, variant and its params
+  as `EditorParam`s at their `.models` defaults, built by the same `name_params` + `link_sync` path
+  a loaded block goes through, so ranges, labels, formats and tempo-sync links are identical to
+  what `block_params` shows for a real block. The trailing extra (`Trails`) is not listed: it is
+  not a model parameter. Data-gated test on a Simple Delay (name, variant, `Time` governed, the
+  note value labelled from `HelixControls.json`).
+- **`summary::param_lines`** — the per-parameter rendering, lifted out of `block_params` so the
+  two tools print the same shape; it now names a tempo-sync group on each of its three lines
+  (`(tempo sync: switch [5], note value [4])` on the governed one, `(tempo sync for Time)` on the
+  other two), which is how an assistant learns that "Time" and "Note Sync" are one control.
+- **`.hxb`/`.pgb` for `backup_list`** — `offline::hxb_list` detects the `AF6L` magic and lists
+  device, setlists, names and slots from the container, no catalog needed. `read_backup` on such a
+  file now says what it is and how to convert it rather than "not JSON". Verified on the Floor
+  backup (363 presets) over stdio.
+- **Stale line.** ROADMAP's "Copy/paste/duplicate blocks" was unchecked; `copy_block` /
+  `paste_block` / `clipboard_block` and the panel's Copy / Paste buttons landed in 0.2.0.
+  Checked, with the note.
+
+15 read tools. 381 Rust tests, clippy clean.

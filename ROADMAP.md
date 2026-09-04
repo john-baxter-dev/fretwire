@@ -394,14 +394,27 @@ guessing has already cost a power cycle): see section B of `captures/_RUNBOOK-hx
       to the loaded read and without moving the panel: **126 presets in 10.7 s** on a Stomp. Falls
       back to the old sweep if the device refuses op 4 (untried on a Floor), and for the odd slot that
       answers `104: nil`. See `docs/protocol.md`.
-- [ ] **Full device backup** — the thing "Backup" used to imply and does not deliver. A restore that
-      makes a wiped pedal whole needs three parts, and we have one:
-      **presets** (done — setlist export above), **global / I/O settings** (op 25's id space is
-      barely mapped — see below), and **IRs** (op 9/12 transaction only partly decoded — see below).
-      Gated on those two, in that order; the naming stays honest until all three land, because a file
-      called a backup gets trusted as one. `fretwire_data::hxb` already reads HX Edit's own `.hxb`,
-      which is the reference for what a real one contains — and a plausible import path once the
-      `tone` JSON → wire blob conversion exists.
+- [x] **Full device backup** — DONE (2026-09-03, verified live on an HX Stomp). The three parts
+      a wiped pedal needs back — **presets** (the setlist export), **the user IR store** and
+      **the global settings** — in one `fretwire-backup` file at format **version 3** (a
+      presets-only export stays version 2, so older builds keep reading it). Settings are stored
+      **typed** (`bool`/`int`/`f32`, as op 24 answered) so a restore sends each back in the type
+      the device holds; every id that answers is recorded, but a restore **writes only the
+      identified ids** — the settings panel's rule. `Session::backup_device` /
+      `Session::restore_device`; CLI `backup-device` and `restore-device` (a dry run unless
+      `--yes`; `--no-presets/--no-irs/--no-settings`; `--force` for a file from another model);
+      GUI **Back up device to file…** / **Restore device from file…** in the sidebar's ⋯ menu,
+      with a report of what was written; six new commands on all three transports.
+      **A restore writes only what differs**: a preset whose *document* matches (op 4 read, compared
+      as the writable blob — the raw stream's envelope carries the txn counter and differs run to
+      run), an IR whose stored MD5 matches, a setting at the same value — all left alone, so
+      restoring a fresh backup onto its own pedal writes nothing. Measured: 118 of 126 presets,
+      the IR and all 53 settings matched; the 8 that wrote were virgin "New Preset" slots that
+      answer nil to op 4 (fixed to select-and-compare), and once saved they carry snapshot 0's
+      in-use flag, so they compare different by that one boolean on every later restore — noted
+      in the code, harmless. A settings-only restore put a nudged MIDI Thru back with one write.
+      `fretwire_data::hxb` still reads HX Edit's own `.hxb`; converting one into this format is
+      `hxb-convert`, presets only.
       > **Done (2026-08-22).** Decoding op 25 bought one small thing early: **preset numbering**.
       > Whether the pedal writes `01A` or `000` is a global, and it is **confirmed absent from every
       > stream we already read** — flipping it on a live Stomp left the browse listing and the

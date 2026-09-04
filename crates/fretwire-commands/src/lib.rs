@@ -21,9 +21,9 @@ pub mod dto;
 pub mod events;
 
 use crate::dto::{
-    BackupFileDto, CategoryDto, DataStatusDto, DetectedDeviceDto, ImportResultDto, IrFileDto,
-    IrSlotDto, ModelChoiceDto, PresetDto, PresetListItem, SettingDto, SplitTypeDto,
-    UpdateStatusDto,
+    BackupFileDto, BackupInfoDto, BackupSummaryDto, CategoryDto, DataStatusDto, DetectedDeviceDto,
+    ImportResultDto, IrFileDto, IrSlotDto, ModelChoiceDto, PresetDto, PresetListItem,
+    RestoreReportDto, SettingDto, SplitTypeDto, UpdateStatusDto,
 };
 use crate::events::{Event, EventSink};
 use base64::Engine as _;
@@ -988,8 +988,183 @@ pub async fn export_setlists_inline(
     sweep_setlists(state, sink, banks, |backup| {
         Ok(BackupFileDto {
             count: backup.presets.len() as i64,
+            irs: 0,
+            settings: 0,
             json: backup.to_json(),
         })
+    })
+    .await
+}
+
+// ---- whole-device backup and restore ----
+//
+// The export above is presets only. These carry the other two parts of what a wiped pedal needs
+// back — the user IR store and the global settings — in the same file (format version 3), and
+// restore all three. `Session::backup_device` / `Session::restore_device` do the work; the
+// commands add the progress events, the cancel flag, and the two file conventions (a path on the
+// serving machine, or the text across the seam).
+
+/// Back up the device to `path`: every setlist in `banks`, plus the IRs and settings when asked.
+/// **Reads only.** Progress as `backup-progress` events; `cancel_export` stops it, and the file
+/// keeps what was read.
+pub async fn backup_device(
+    state: &AppState,
+    sink: impl EventSink,
+    path: String,
+    banks: Vec<i64>,
+    irs: bool,
+    settings: bool,
+) -> R<BackupSummaryDto> {
+    let target = backup_path(&path);
+    sweep_device(state, sink, banks, irs, settings, move |backup| {
+        std::fs::write(&target, backup.to_json()).map_err(|e| {
+            fretwire_core::Error::Backup(format!("writing {}: {e}", target.display()))
+        })?;
+        Ok(BackupSummaryDto {
+            presets: backup.presets.len() as i64,
+            irs: backup.irs.len() as i64,
+            settings: backup.settings.len() as i64,
+        })
+    })
+    .await
+}
+
+/// [`backup_device`] with the file handed back as text (serve mode's download).
+pub async fn backup_device_inline(
+    state: &AppState,
+    sink: impl EventSink,
+    banks: Vec<i64>,
+    irs: bool,
+    settings: bool,
+) -> R<BackupFileDto> {
+    sweep_device(state, sink, banks, irs, settings, |backup| {
+        Ok(BackupFileDto {
+            count: backup.presets.len() as i64,
+            irs: backup.irs.len() as i64,
+            settings: backup.settings.len() as i64,
+            json: backup.to_json(),
+        })
+    })
+    .await
+}
+
+async fn sweep_device<T, F>(
+    state: &AppState,
+    sink: impl EventSink,
+    banks: Vec<i64>,
+    irs: bool,
+    settings: bool,
+    finish: F,
+) -> R<T>
+where
+    T: Send + 'static,
+    F: FnOnce(Backup) -> fretwire_core::Result<T> + Send + 'static,
+{
+    let cancel = state.cancel_export.clone();
+    cancel.store(false, Ordering::Relaxed);
+    run(state, move |s| {
+        let backup = s.backup_device(&banks, irs, settings, |p| {
+            sink.emit(progress_event(&p));
+            !cancel.load(Ordering::Relaxed)
+        })?;
+        finish(backup)
+    })
+    .await
+}
+
+fn progress_event(p: &fretwire_core::ExportProgress) -> Event {
+    Event::BackupProgress {
+        done: p.done,
+        total: p.total,
+        stage: p.stage,
+        bank: p.bank,
+        setlist: p.setlist.to_string(),
+        name: p.name.to_string(),
+    }
+}
+
+/// What a backup file holds — device, counts per part — so the restore dialog can say what it is
+/// about to write before anything is written. Pure file I/O.
+pub async fn backup_info(path: String) -> R<BackupInfoDto> {
+    tokio::task::spawn_blocking(move || {
+        let target = backup_path(&path);
+        let text = std::fs::read_to_string(&target)
+            .map_err(|e| format!("reading {}: {e}", target.display()))?;
+        let backup = Backup::from_json(&text).map_err(|e| e.to_string())?;
+        Ok(BackupInfoDto::from(&backup))
+    })
+    .await
+    .map_err(|e| format!("task error: {e}"))?
+}
+
+/// [`backup_info`] for a file the frontend holds.
+pub async fn backup_info_inline(json: String) -> R<BackupInfoDto> {
+    tokio::task::spawn_blocking(move || {
+        let backup = Backup::from_json(&json).map_err(|e| e.to_string())?;
+        Ok(BackupInfoDto::from(&backup))
+    })
+    .await
+    .map_err(|e| format!("task error: {e}"))?
+}
+
+/// Restore a device backup from `path` — **overwrites flash**: every preset in the file into its
+/// slot, every IR into its slot, every identified setting — each part only if asked. Items the
+/// device already holds are left alone. Refuses a file from a different device model. Progress as
+/// `backup-progress` events; `cancel_export` stops it after the current item.
+pub async fn restore_device(
+    state: &AppState,
+    sink: impl EventSink,
+    path: String,
+    presets: bool,
+    irs: bool,
+    settings: bool,
+) -> R<RestoreReportDto> {
+    let target = backup_path(&path);
+    let text = tokio::task::spawn_blocking(move || {
+        std::fs::read_to_string(&target).map_err(|e| format!("reading {}: {e}", target.display()))
+    })
+    .await
+    .map_err(|e| format!("task error: {e}"))??;
+    restore_device_from(state, sink, text, presets, irs, settings).await
+}
+
+/// [`restore_device`] from a file the frontend holds.
+pub async fn restore_device_inline(
+    state: &AppState,
+    sink: impl EventSink,
+    json: String,
+    presets: bool,
+    irs: bool,
+    settings: bool,
+) -> R<RestoreReportDto> {
+    restore_device_from(state, sink, json, presets, irs, settings).await
+}
+
+async fn restore_device_from(
+    state: &AppState,
+    sink: impl EventSink,
+    json: String,
+    presets: bool,
+    irs: bool,
+    settings: bool,
+) -> R<RestoreReportDto> {
+    use fretwire_core::backup::RestoreParts;
+    let cancel = state.cancel_export.clone();
+    cancel.store(false, Ordering::Relaxed);
+    run(state, move |s| {
+        let backup = Backup::from_json(&json)?;
+        let parts = RestoreParts {
+            presets,
+            irs,
+            settings,
+        };
+        // The GUI has no `force`: a file from another model is refused, and the CLI is where an
+        // owner who knows better goes.
+        let report = s.restore_device(&backup, parts, false, |p| {
+            sink.emit(progress_event(&p));
+            !cancel.load(Ordering::Relaxed)
+        })?;
+        Ok(RestoreReportDto::from(&report))
     })
     .await
 }
@@ -1014,6 +1189,7 @@ where
             sink.emit(Event::BackupProgress {
                 done: p.done,
                 total: p.total,
+                stage: p.stage,
                 bank: p.bank,
                 setlist: p.setlist.to_string(),
                 name: p.name.to_string(),
@@ -1359,7 +1535,7 @@ pub async fn settings_read(state: &AppState, all: bool) -> R<Vec<SettingDto>> {
     use fretwire_core::fretwire_protocol::settings;
     run(state, move |s| {
         let found = if all {
-            s.scan_settings(0..=SETTINGS_MAX_ID)
+            s.scan_settings(0..=settings::SCAN_MAX_ID)
         } else {
             // Ask for exactly the ids we can name, rather than sweeping and filtering: an
             // unimplemented id on some other device is then simply absent, not an error.
@@ -1410,10 +1586,6 @@ pub async fn settings_write(state: &AppState, id: i64, value: f64) -> R<SettingD
     })
     .await
 }
-
-/// Top of the answering id space on an HX Stomp — 226 is the highest that responds, and the sweep
-/// is cheap enough (~0.8 ms a read) that rounding up costs nothing.
-const SETTINGS_MAX_ID: i64 = 260;
 
 // ---- user IR slots ----
 //

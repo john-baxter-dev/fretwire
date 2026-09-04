@@ -2,6 +2,30 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Full device backup (2026-09-03).** The thing "Backup" used to promise and the export did not
+deliver: one file with every preset, the user IR store and the global settings, and a restore that
+puts all three back. Format **version 3** of the same `fretwire-backup` JSON (`settings` typed as
+the device answered them, `irs` as raw blobs; a presets-only export is still written as version 2
+so older builds read it). `Session::backup_device` chains the setlist sweep, an IR export per
+populated slot and a settings scan; `Session::restore_device` writes **only what differs** — a
+preset is compared as its writable blob (the raw stream's envelope carries the txn counter, and
+two exports of one untouched slot differ there), an IR by the directory's stored MD5, a setting by
+value — and writes only **identified** settings, the panel's rule. A preset or IR write failure
+stops the restore; a refused setting is reported and the rest go on. CLI `backup-device` /
+`restore-device` (dry run without `--yes`), GUI **Back up device to file…** / **Restore device
+from file…** with a report dialog, six commands on all three transports (the dispatcher is 79
+arms), `backup-show` lists the new sections, the MCP `backup_list` names them. **Verified live on
+the HX Stomp:** a backup of 126 presets, 1 IR and 154 settings (166 ids answer, 12 as nil, which
+is not a value and is not stored); a restore of that file onto the same pedal matched 118 presets,
+the IR and all 53 settings, and wrote 8 — the virgin "New Preset" slots that answer nil to op 4,
+now compared by selecting them as the export did; and a settings-only restore put a nudged MIDI
+Thru back with exactly one write. One corner stays: a virgin slot, once saved, carries snapshot
+0's in-use flag, so it compares different by that boolean on every later restore and is rewritten
+— idempotent, noted in the code. (A nudged BPM also came back, but not by the restore: Tempo
+Select was per-preset, and the preset walk reset it — a test that proved nothing, which is why
+MIDI Thru was the second try.) 377 Rust tests, 191 UI tests, clippy clean. See the seventy-second
+round.
+
 **The Arch package builds (2026-09-02).** `packaging/PKGBUILD` had never been run. It now has:
 `makepkg` on CachyOS against the `v0.4.0` tag tarball produced a working
 `fretwire-0.4.0-1-x86_64.pkg.tar.zst` (both binaries, udev rule, desktop entry, icon, licences),
@@ -4480,3 +4504,48 @@ the second fretwire write to complete on a POD Go. Three things from the rest of
 
 Still wanted from the owner: that GUI log, `RUST_LOG=debug fretwire ir-list` for the op-13 bytes,
 and the POD Go Edit capture of filling an empty slot (offered). 374 tests, clippy clean.
+
+## Seventy-second round (2026-09-03) — **full device backup: presets, IRs and settings in one file, restored by difference**
+
+Issue #5's reporter listed what the export leaves out — IRs, Global EQ, global settings — and the
+roadmap had held the "Backup" name back until all three could be delivered. The IR store and the
+settings namespace were both decoded on 2026-08-22; nothing had put them in a file.
+
+- **Format version 3.** The `fretwire-backup` JSON gains `settings` (`{id, type, value, name?}`,
+  typed `bool`/`int`/`f32` exactly as op 24 answered — the device refuses a wrong-typed write with
+  `-3`, so the type is what makes a restore possible without a read first) and `irs`
+  (`{slot, name, raw_hex}`, the little-endian `f32` blob). A file with neither is still written
+  as **version 2**, so every released build keeps reading a presets-only export. Every answering
+  id is recorded, named or not; a restore writes only the identified ones.
+- **Restore by difference.** `restore_device` compares before writing: a preset as the writable
+  blob (`parse → to_blob`), because the raw stream's envelope carries the transaction counter
+  and two exports of one untouched slot differ at byte 12 whenever the sessions' request
+  sequences drift — 26 of 126 did, none in the document; an IR by the directory's stored MD5
+  against `stored_md5` of the file's blob; a setting by value after a type check. So a fresh
+  backup restored onto its own pedal writes nothing, and a pedal that lost one setlist gets that
+  setlist and nothing else. A preset or IR write that fails **stops** the restore (both are
+  chunked flash transfers whose failure is a wedged state machine); a refused setting is reported
+  and the rest continue. The file's device must match unless `--force`.
+- **Measured on the HX Stomp.** `backup-device`: 126 presets, 1 IR, 154 settings in 715 KB. The
+  first `restore-device --yes` of that file: 118 presets, the IR and 53 settings matched; **8
+  presets wrote** — slots 102, 105, 108, 110, 111, 121, 122, 124, the virgin "New Preset" slots
+  that answer **nil to op 4** (the export had walked to them; the restore had not). Fixed: a nil
+  answer now selects the slot and reads it confirmed, as the export does, before comparing. The
+  second run wrote the same 8 again, for a different reason: `diff-stream` shows one path,
+  `/10/10[0]/0: false -> true` — **saving a preset flips its active snapshot's in-use flag**, so a
+  slot backed up virgin and written once differs from the file by that boolean for good. Left as
+  is and noted: rewriting it is idempotent, and masking a real field to avoid a harmless write
+  would be the wrong trade. A settings-only restore (`--no-presets --no-irs`) after
+  `setting-set 10 1` wrote exactly one setting and MIDI Thru read back Off. (The BPM test before
+  it was void: Tempo Select is per-preset on this pedal and the preset walk had already put the
+  tempo back, so the restore rightly found nothing to write.)
+- **Surface.** CLI `backup-device <out> [--bank N] [--no-irs] [--no-settings]`,
+  `restore-device <file> [--yes] [--no-presets] [--no-irs] [--no-settings] [--force]` (a dry run
+  prints the plan), `backup-show` lists IRs and settings with the identified ones named. Commands
+  `backup_device`/`_inline`, `backup_info`/`_inline`, `restore_device`/`_inline` (79 arms); the
+  `backup-progress` event carries a `stage`. GUI: two ⋯-menu items, a backup dialog (IRs and
+  settings as checkboxes), a restore dialog that loads the file's counts first and refuses a
+  different device by name, a report dialog, and the progress card titled for the job. Mock
+  backend implements the pair (+17 UI tests, 191). MCP `backup_list` reports the extra sections.
+
+377 tests, clippy clean.

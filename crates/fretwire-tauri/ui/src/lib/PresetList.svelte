@@ -22,6 +22,9 @@
     onRename,
     onExport,
     onRestore,
+    // Whole-device backup and restore — presets, IRs and global settings in one file.
+    onBackupDevice,
+    onRestoreDevice,
     onCopyPreset,
     onPastePreset,
     // Empty the loaded preset (edit buffer only — App.svelte confirms first).
@@ -108,6 +111,9 @@
           <button role="menuitem" onclick={() => run(onRename)}>Rename preset…</button>
           <button role="menuitem" onclick={() => run(onExport)}>Export presets to file…</button>
           <button role="menuitem" onclick={() => run(onRestore)}>Restore preset from file…</button>
+          <div class="sep" role="separator"></div>
+          <button role="menuitem" onclick={() => run(onBackupDevice)}>Back up device to file…</button>
+          <button role="menuitem" onclick={() => run(onRestoreDevice)}>Restore device from file…</button>
           <div class="sep" role="separator"></div>
           <button
             role="menuitem"

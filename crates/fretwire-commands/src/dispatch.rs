@@ -84,6 +84,12 @@ pub const COMMAND_NAMES: &[&str] = &[
     "export_setlists_inline",
     "backup_show_inline",
     "restore_preset_inline",
+    "backup_device",
+    "backup_device_inline",
+    "backup_info",
+    "backup_info_inline",
+    "restore_device",
+    "restore_device_inline",
     "split_types",
     "categories",
     "models_in_category",
@@ -305,6 +311,43 @@ pub async fn dispatch(
             ok(c::export_setlists_inline(state, sink, a.req("banks")?).await?)
         }
         "backup_show_inline" => ok(c::backup_show_inline(a.req("json")?).await?),
+        "backup_device" => ok(c::backup_device(
+            state,
+            sink,
+            a.req("path")?,
+            a.req("banks")?,
+            a.req("irs")?,
+            a.req("settings")?,
+        )
+        .await?),
+        "backup_device_inline" => ok(c::backup_device_inline(
+            state,
+            sink,
+            a.req("banks")?,
+            a.req("irs")?,
+            a.req("settings")?,
+        )
+        .await?),
+        "backup_info" => ok(c::backup_info(a.req("path")?).await?),
+        "backup_info_inline" => ok(c::backup_info_inline(a.req("json")?).await?),
+        "restore_device" => ok(c::restore_device(
+            state,
+            sink,
+            a.req("path")?,
+            a.req("presets")?,
+            a.req("irs")?,
+            a.req("settings")?,
+        )
+        .await?),
+        "restore_device_inline" => ok(c::restore_device_inline(
+            state,
+            sink,
+            a.req("json")?,
+            a.req("presets")?,
+            a.req("irs")?,
+            a.req("settings")?,
+        )
+        .await?),
         "restore_preset_inline" => ok(c::restore_preset_inline(
             state,
             a.req("json")?,
@@ -383,7 +426,7 @@ mod tests {
     /// pinned by `connect_is_matched_without_running`.
     #[tokio::test]
     async fn every_name_dispatches() {
-        assert_eq!(COMMAND_NAMES.len(), 73, "the surface was 73 commands");
+        assert_eq!(COMMAND_NAMES.len(), 79, "the surface was 79 commands");
         for name in COMMAND_NAMES {
             if *name == "connect" {
                 continue;
@@ -480,6 +523,7 @@ mod tests {
                 name: "Clean".into(),
                 raw: vec![1, 2, 3],
             }],
+            ..Default::default()
         };
         let v = call(
             "backup_show_inline",

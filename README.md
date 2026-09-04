@@ -223,7 +223,8 @@ gone on a preset change or power cycle. `--allow-save` adds the one tool that wr
 Ungated tools are not merely refused, they are not listed, so an assistant cannot be talked into a
 write you did not enable. Firmware and flash traffic never appear, as everywhere in fretwire.
 Export your presets first (`backup_export`, or the editor's Export) before letting anything edit
-them.
+them — or take a full device backup (`fretwire backup-device`, or **Back up device to file…** in
+the editor), which carries the IRs and global settings too and restores all three.
 
 One pedal, one session at a time: each Claude Code session starts its own `fretwire-mcp`, and
 whichever one connects first holds the USB interface — a second session's `device_connect` gets

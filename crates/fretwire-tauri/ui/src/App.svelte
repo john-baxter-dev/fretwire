@@ -171,6 +171,17 @@
   // { path | json+fileName, entries, index, slot } — entries load from the file, which is a path
   // for the backend to open or (INLINE_FILES) the file's text carried in the invoke.
   let restoreDlg = $state(null);
+  // Whole-device backup: { path, irs, settings, onServer } — every setlist, plus the IR store and
+  // the global settings unless unticked. The export dialog above is presets only.
+  let backupDlg = $state(null);
+  // Whole-device restore: { path | json+fileName, info, presets, irs, settings }. `info` is what
+  // the file holds (backup_info), loaded before anything can be confirmed.
+  let restoreDevDlg = $state(null);
+  // What a device restore did, shown when it finishes — counts and every failure by name.
+  let restoreReport = $state(null);
+  // Which sweep the progress card is for: "export", "backup" or "restore" — the title and the
+  // cancel wording differ.
+  let progressKind = $state("export");
   let snapRenameDlg = $state(null); // { index, name }
   // Clear preset: empty the chain, reset the snapshot names. Edit buffer only and one undo entry,
   // but it throws away a whole preset's work in a click, so it confirms first.
@@ -292,7 +303,7 @@
       const tag = e.target?.tagName;
       if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
       if ((e.key === "Delete" || e.key === "Backspace") && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        if (saveAsDlg || renameDlg || deleteDlg || exportDlg || restoreDlg || snapRenameDlg || clearDlg) return;
+        if (saveAsDlg || renameDlg || deleteDlg || exportDlg || restoreDlg || backupDlg || restoreDevDlg || restoreReport || snapRenameDlg || clearDlg) return;
         // Routing nodes (split/mixer) have no model to delete — only real blocks answer this.
         if (selectedBlock?.model_index != null) {
           e.preventDefault();
@@ -301,7 +312,7 @@
         return;
       }
       if (e.key === " " && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        if (saveAsDlg || renameDlg || deleteDlg || exportDlg || restoreDlg || snapRenameDlg || clearDlg) return;
+        if (saveAsDlg || renameDlg || deleteDlg || exportDlg || restoreDlg || backupDlg || restoreDevDlg || restoreReport || snapRenameDlg || clearDlg) return;
         const b = selectedBlock;
         if (b && (b.bypassed === true || b.bypassed === false)) {
           e.preventDefault(); // also keeps Space from "clicking" a focused button
@@ -703,9 +714,8 @@
   }
 
   // ---- export / import ----
-  // "Export", not "Backup": this captures presets and nothing else. A device backup in HX Edit's
-  // sense also carries global settings and IRs — both readable now, neither in this file — and a
-  // file that called itself a backup would be trusted to make a wiped pedal whole. It wouldn't.
+  // "Export", not "Backup": this captures presets and nothing else. The device backup — presets,
+  // global settings and IRs, what makes a wiped pedal whole — is the pair of dialogs further down.
   const exportDefault = `fretwire-presets-${new Date().toISOString().slice(0, 10)}.json`;
   const onExport = () =>
     (exportDlg = {
@@ -724,6 +734,7 @@
     exportDlg = null;
     if (!path) return;
     exportCancelling = false;
+    progressKind = "export";
     backupProgress = { done: 0, total: 0, name: "starting…" };
     try {
       let count;
@@ -798,6 +809,113 @@
     await refreshPresets();
     activeSnapshot = preset?.active_snapshot ?? 0;
     status = `Restored to slot ${slot}.`;
+  }
+
+  // ---- whole-device backup / restore ----
+  // The three things a wiped pedal needs back — every preset, the IR store, the global settings —
+  // in one file (format v3). Same sweep as the export for the presets, then the IRs and a
+  // settings scan; `restore_device` writes only what the pedal does not already hold.
+  const backupDefault = `fretwire-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  const onBackupDevice = () =>
+    (backupDlg = {
+      path: INLINE_FILES ? backupDefault : `~/${backupDefault}`,
+      irs: true,
+      settings: true,
+      onServer: false,
+    });
+  const backupInline = $derived(INLINE_FILES && !backupDlg?.onServer);
+  async function confirmBackupDevice() {
+    const { path, irs, settings } = backupDlg;
+    const inline = backupInline;
+    const banks = setlists.map((_, i) => i);
+    backupDlg = null;
+    if (!path.trim()) return;
+    exportCancelling = false;
+    progressKind = "backup";
+    backupProgress = { done: 0, total: 0, name: "starting…" };
+    try {
+      let counts;
+      let where;
+      if (inline) {
+        const file = await invoke("backup_device_inline", { banks, irs, settings });
+        counts = { presets: file.count, irs: file.irs, settings: file.settings };
+        where = path.trim().split(/[\\/]/).pop() || backupDefault;
+        saveFile(where, new Blob([file.json], { type: "application/json" }));
+      } else {
+        counts = await invoke("backup_device", { path: path.trim(), banks, irs, settings });
+        where = path.trim();
+      }
+      const what = `${counts.presets} presets, ${counts.irs} IRs, ${counts.settings} settings`;
+      const how = exportCancelling ? "Cancelled —" : "Backed up";
+      toast(`${how} ${what} to ${where}`, exportCancelling ? "warn" : "info");
+      status = `${how} ${what}.`;
+    } catch (e) {
+      toast("backup: " + e);
+    } finally {
+      backupProgress = null;
+      exportCancelling = false;
+    }
+    await refreshPreset();
+  }
+
+  const onRestoreDevice = () =>
+    (restoreDevDlg = { path: "~/", json: null, fileName: null, info: null, presets: true, irs: true, settings: true });
+  // The pedal this session is talking to, for the file's device tag to be checked against. The
+  // backend refuses a mismatch too; saying so before the button is pressed is the courtesy.
+  const connectedName = $derived(preset?.device_name ?? preset?.device_model ?? null);
+  const restoreDevMismatch = $derived(
+    !!(restoreDevDlg?.info && connectedName && restoreDevDlg.info.device !== connectedName),
+  );
+  const restoreDevNothing = $derived(
+    !restoreDevDlg?.info ||
+      !(
+        (restoreDevDlg.presets && restoreDevDlg.info.presets) ||
+        (restoreDevDlg.irs && restoreDevDlg.info.irs) ||
+        (restoreDevDlg.settings && restoreDevDlg.info.settings)
+      ),
+  );
+  async function loadBackupInfo() {
+    try {
+      let info;
+      let picked = {};
+      if (INLINE_FILES) {
+        const file = await pickFile({ accept: ".json,application/json" });
+        if (!file) return;
+        const json = await file.text();
+        info = await invoke("backup_info_inline", { json });
+        picked = { json, fileName: file.name };
+      } else {
+        info = await invoke("backup_info", { path: restoreDevDlg.path.trim() });
+      }
+      restoreDevDlg = { ...restoreDevDlg, ...picked, info };
+    } catch (e) {
+      toast("restore: " + e);
+    }
+  }
+  async function confirmRestoreDevice() {
+    const { path, json, presets: doPresets, irs, settings } = restoreDevDlg;
+    restoreDevDlg = null;
+    selectedSlot = null;
+    exportCancelling = false;
+    progressKind = "restore";
+    backupProgress = { done: 0, total: 0, name: "starting…" };
+    try {
+      const args = { presets: doPresets, irs, settings };
+      restoreReport =
+        json != null
+          ? await invoke("restore_device_inline", { json, ...args })
+          : await invoke("restore_device", { path: path.trim(), ...args });
+    } catch (e) {
+      toast("restore: " + e);
+    } finally {
+      backupProgress = null;
+      exportCancelling = false;
+    }
+    // Whatever was written, the device's state is new: presets, position, settings, IRs.
+    await refreshPreset();
+    await refreshPresets();
+    activeSnapshot = preset?.active_snapshot ?? 0;
+    status = "Device restore finished.";
   }
 
   async function detect() {
@@ -1256,7 +1374,7 @@
 <main>
   {#if preset}
     <div class="workspace">
-      <PresetList {presets} currentIndex={preset.index} dirty={preset.dirty} {setlists} {viewBank} currentBank={presetBank} writeBlocked={foreignSetlist} {onPickSetlist} {onGoto} {onSave} {onSaveAs} {onRename} {onExport} {onRestore} {onCopyPreset} {onPastePreset} {onClearPreset} {onRevertPreset} {presetClip} onNumbering={setNumberingMode} />
+      <PresetList {presets} currentIndex={preset.index} dirty={preset.dirty} {setlists} {viewBank} currentBank={presetBank} writeBlocked={foreignSetlist} {onPickSetlist} {onGoto} {onSave} {onSaveAs} {onRename} {onExport} {onRestore} {onBackupDevice} {onRestoreDevice} {onCopyPreset} {onPastePreset} {onClearPreset} {onRevertPreset} {presetClip} onNumbering={setNumberingMode} />
       <div class="content">
         <div class="meta">
           <span>
@@ -1549,8 +1667,8 @@
       from flash. You can cancel partway; the file keeps what was read.
     </p>
     <p class="dlg-text">
-      <b>Presets only.</b> Global settings and IRs are not in the file, so this is not a full
-      device backup.
+      <b>Presets only.</b> Global settings and IRs are not in the file — for those, use
+      <b>Back up device to file…</b> in the same menu.
     </p>
   </Dialog>
 {/if}
@@ -1641,11 +1759,171 @@
   </Dialog>
 {/if}
 
+{#if backupDlg}
+  <Dialog
+    title="Back up device"
+    confirmLabel="Start backup"
+    width={460}
+    onconfirm={confirmBackupDevice}
+    oncancel={() => (backupDlg = null)}
+  >
+    <label class="dlg-field">
+      {backupInline ? "Download as" : "Backup file"}
+      <input type="text" bind:value={backupDlg.path} use:autofocus />
+    </label>
+    {#if IS_SERVE}
+      <label class="dlg-check">
+        <input
+          type="checkbox"
+          checked={backupDlg.onServer}
+          onchange={(e) =>
+            (backupDlg = {
+              ...backupDlg,
+              onServer: e.currentTarget.checked,
+              path: e.currentTarget.checked ? `~/${backupDefault}` : backupDefault,
+            })}
+        />
+        Save on the machine running fretwire-serve instead of downloading
+      </label>
+    {/if}
+    <div class="dlg-field">
+      What goes in the file
+      <label class="dlg-check">
+        <input type="checkbox" checked disabled />
+        Every preset{#if setlists.length > 1} in all {setlists.length} setlists{/if}
+      </label>
+      <label class="dlg-check">
+        <input type="checkbox" checked={backupDlg.irs} onchange={(e) => (backupDlg = { ...backupDlg, irs: e.currentTarget.checked })} />
+        The user IR store
+      </label>
+      <label class="dlg-check">
+        <input type="checkbox" checked={backupDlg.settings} onchange={(e) => (backupDlg = { ...backupDlg, settings: e.currentTarget.checked })} />
+        Global settings
+      </label>
+    </div>
+    <p class="dlg-text">
+      Reads everything to the file — nothing on the device is written. The pedal may step through
+      presets it cannot read in place (audio follows along), and unsaved edits to the current preset
+      are reloaded from flash. You can cancel partway; the file keeps what was read.
+    </p>
+  </Dialog>
+{/if}
+
+{#if restoreDevDlg}
+  <Dialog
+    title="Restore device"
+    confirmLabel="Restore device"
+    confirmDisabled={restoreDevNothing || restoreDevMismatch}
+    danger
+    width={520}
+    onconfirm={confirmRestoreDevice}
+    oncancel={() => (restoreDevDlg = null)}
+  >
+    {#if INLINE_FILES}
+      <div class="dlg-field">
+        Backup file
+        <span class="dlg-row">
+          <span class="dlg-filename">{restoreDevDlg.fileName ?? "No file chosen"}</span>
+          <button type="button" class="dlg-btn" onclick={loadBackupInfo} use:autofocus>
+            Choose file…
+          </button>
+        </span>
+      </div>
+    {:else}
+      <label class="dlg-field">
+        Backup file
+        <span class="dlg-row">
+          <input type="text" bind:value={restoreDevDlg.path} use:autofocus />
+          <button type="button" class="dlg-btn" onclick={loadBackupInfo}>Load</button>
+        </span>
+      </label>
+    {/if}
+    {#if restoreDevDlg.info}
+      {@const info = restoreDevDlg.info}
+      <p class="dlg-text">
+        From a <b>{info.device}</b>: {info.presets} presets{#if info.setlists.length > 1} in {info.setlists.length} setlists{/if},
+        {info.irs} IRs, {info.settings} settings.
+      </p>
+      {#if restoreDevMismatch}
+        <p class="dlg-warn">
+          This is a <b>{connectedName}</b>. A file from a different device is not restored here — its
+          presets may not fit and its setting ids may mean something else. The command line has a
+          <b>--force</b> for owners who know better.
+        </p>
+      {:else}
+        <div class="dlg-field">
+          What to restore
+          <label class="dlg-check">
+            <input type="checkbox" checked={restoreDevDlg.presets} disabled={!info.presets} onchange={(e) => (restoreDevDlg = { ...restoreDevDlg, presets: e.currentTarget.checked })} />
+            Presets — each to the slot it came from{#if !info.presets} (none in the file){/if}
+          </label>
+          <label class="dlg-check">
+            <input type="checkbox" checked={restoreDevDlg.irs} disabled={!info.irs} onchange={(e) => (restoreDevDlg = { ...restoreDevDlg, irs: e.currentTarget.checked })} />
+            IRs — each to its slot{#if !info.irs} (none in the file){/if}
+          </label>
+          <label class="dlg-check">
+            <input type="checkbox" checked={restoreDevDlg.settings} disabled={!info.settings} onchange={(e) => (restoreDevDlg = { ...restoreDevDlg, settings: e.currentTarget.checked })} />
+            Global settings — the ones fretwire has identified{#if !info.settings} (none in the file){/if}
+          </label>
+        </div>
+        <p class="dlg-warn">
+          <b>Overwrites the device.</b> Every chosen preset slot, IR slot and setting in the file is
+          written over what the pedal holds now — except where the pedal already holds the same
+          thing, which is left alone. There is no undo for a flash write.
+        </p>
+      {/if}
+    {:else}
+      <p class="dlg-text">
+        {#if INLINE_FILES}Choose a backup file to see what it holds.{:else}Enter the backup file's
+          path and press <b>Load</b> to see what it holds.{/if}
+      </p>
+    {/if}
+  </Dialog>
+{/if}
+
+{#if restoreReport}
+  {@const r = restoreReport}
+  <Dialog
+    title="Device restored"
+    confirmLabel="OK"
+    width={520}
+    onconfirm={() => (restoreReport = null)}
+    oncancel={() => (restoreReport = null)}
+  >
+    <p class="dlg-text">
+      Presets: <b>{r.presets_written}</b> written, {r.presets_unchanged} already matched.<br />
+      IRs: <b>{r.irs_written}</b> written, {r.irs_unchanged} already matched.<br />
+      Settings: <b>{r.settings_written}</b> written, {r.settings_unchanged} already matched{#if r.settings_skipped.length}, {r.settings_skipped.length} not written{/if}.
+    </p>
+    {#if r.failures.length}
+      <p class="dlg-warn"><b>{r.failures.length} failed:</b></p>
+      <ul class="dlg-list">
+        {#each r.failures as f}<li>{f}</li>{/each}
+      </ul>
+    {/if}
+    {#if r.skipped.length}
+      <p class="dlg-text dim">{r.skipped.length} item(s) were not attempted: {r.skipped[0]}{#if r.skipped.length > 1}, …{/if}</p>
+    {/if}
+    {#if r.settings_skipped.length && !r.failures.length}
+      <p class="dlg-text dim">
+        Settings not written are ids nobody has identified yet, or ones this pedal holds in another
+        type — recorded in the file, never sent.
+      </p>
+    {/if}
+  </Dialog>
+{/if}
+
 {#if backupProgress}
   <div class="bk-overlay">
     <div class="bk-card">
       <div class="bk-title">
-        {exportCancelling ? "Finishing up…" : "Exporting presets…"}
+        {exportCancelling
+          ? "Finishing up…"
+          : progressKind === "backup"
+            ? "Backing up device…"
+            : progressKind === "restore"
+              ? "Restoring device…"
+              : "Exporting presets…"}
       </div>
       <div class="bk-bar">
         <div
@@ -1655,13 +1933,13 @@
       </div>
       <div class="bk-line">
         {backupProgress.done}/{backupProgress.total || "…"}
-        {#if backupProgress.setlist && setlists.length > 1}— {backupProgress.setlist}{/if}
+        {#if backupProgress.setlist && (setlists.length > 1 || backupProgress.stage === "irs" || backupProgress.stage === "settings")}— {backupProgress.setlist}{/if}
         — {backupProgress.name}
       </div>
       <!-- All eight of a Floor's setlists is 1024 presets and the better part of an hour. An
            un-cancellable modal over that is not a reasonable thing to put in front of someone. -->
       <button type="button" class="bk-cancel" disabled={exportCancelling} onclick={cancelExport}>
-        {exportCancelling ? "Stopping after this preset…" : "Cancel"}
+        {exportCancelling ? "Stopping after this one…" : "Cancel"}
       </button>
     </div>
   </div>
@@ -2129,6 +2407,13 @@
     color: #e0a83f;
     font-size: 13px;
     margin: 10px 0 0;
+  }
+  .dlg-list {
+    margin: 0.2rem 0 0.4rem 1.2rem;
+    padding: 0;
+    font-size: 0.85rem;
+    max-height: 9rem;
+    overflow: auto;
   }
   .dlg-warn b {
     color: #ffd27a;

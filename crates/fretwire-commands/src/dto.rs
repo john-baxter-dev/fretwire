@@ -689,13 +689,113 @@ pub struct IrFileDto {
     pub wav_base64: String,
 }
 
-/// An export file handed back instead of written (`export_setlists_inline`).
+/// An export file handed back instead of written (`export_setlists_inline`,
+/// `backup_device_inline`).
 #[derive(serde::Serialize, Clone, Debug)]
 pub struct BackupFileDto {
     /// Presets in the file — what `export_setlists` returns on its own.
     pub count: i64,
+    /// IRs in the file. Always `0` from a presets-only export.
+    pub irs: i64,
+    /// Global settings in the file. Always `0` from a presets-only export.
+    pub settings: i64,
     /// The file's text, exactly what the path variant would have written.
     pub json: String,
+}
+
+/// What a device backup wrote (`backup_device`) — the counts, so the toast can say them.
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct BackupSummaryDto {
+    pub presets: i64,
+    pub irs: i64,
+    pub settings: i64,
+}
+
+/// What a backup file holds, before anything is restored from it (`backup_info`).
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct BackupInfoDto {
+    /// The pedal the file came off, as the sweep recorded it — the restore refuses a different
+    /// one, so the dialog compares it with the connected device's name first.
+    pub device: String,
+    pub version: i64,
+    pub presets: i64,
+    pub irs: i64,
+    pub settings: i64,
+    /// Setlist names the file recorded, in bank order.
+    pub setlists: Vec<String>,
+}
+
+impl From<&fretwire_core::backup::Backup> for BackupInfoDto {
+    fn from(b: &fretwire_core::backup::Backup) -> Self {
+        Self {
+            device: b.device.clone(),
+            version: b.version(),
+            presets: b.presets.len() as i64,
+            irs: b.irs.len() as i64,
+            settings: b.settings.len() as i64,
+            setlists: b.setlists.iter().map(|(_, n)| n.clone()).collect(),
+        }
+    }
+}
+
+/// What a device restore did (`restore_device`): counts per part, and every failure and skip by
+/// name, so the dialog that follows can be honest about what is and is not back.
+#[derive(serde::Serialize, Clone, Debug, Default)]
+pub struct RestoreReportDto {
+    pub presets_written: i64,
+    pub presets_unchanged: i64,
+    pub irs_written: i64,
+    pub irs_unchanged: i64,
+    pub settings_written: i64,
+    pub settings_unchanged: i64,
+    /// Settings the restore would not write, `"<id>: <why>"` — unidentified ids, mostly.
+    pub settings_skipped: Vec<String>,
+    /// Anything that failed, `"<what>: <error>"`, across all three parts.
+    pub failures: Vec<String>,
+    /// Items not attempted because the restore stopped early (a preset or IR write failed, or it
+    /// was cancelled), `"<what>: <why>"`.
+    pub skipped: Vec<String>,
+}
+
+impl From<&fretwire_core::backup::RestoreReport> for RestoreReportDto {
+    fn from(r: &fretwire_core::backup::RestoreReport) -> Self {
+        use fretwire_core::backup::{RestoreOutcome, RestoreReport};
+        let mut d = RestoreReportDto {
+            presets_written: RestoreReport::written(&r.presets) as i64,
+            presets_unchanged: RestoreReport::unchanged(&r.presets) as i64,
+            irs_written: RestoreReport::written(&r.irs) as i64,
+            irs_unchanged: RestoreReport::unchanged(&r.irs) as i64,
+            settings_written: RestoreReport::written(&r.settings) as i64,
+            settings_unchanged: RestoreReport::unchanged(&r.settings) as i64,
+            ..Default::default()
+        };
+        for ((bank, index), o) in &r.presets {
+            if let RestoreOutcome::Skipped(why) = o {
+                d.skipped.push(format!("preset {bank}:{index}: {why}"));
+            }
+        }
+        for (slot, o) in &r.irs {
+            if let RestoreOutcome::Skipped(why) = o {
+                d.skipped.push(format!("IR slot {slot}: {why}"));
+            }
+        }
+        for (id, o) in &r.settings {
+            if let RestoreOutcome::Skipped(why) = o {
+                // A setting skipped for its own reason is a different thing from one not reached.
+                if why.starts_with("stopped") || why == "cancelled" {
+                    d.skipped.push(format!("setting {id}: {why}"));
+                } else {
+                    d.settings_skipped.push(format!("{id}: {why}"));
+                }
+            }
+        }
+        d.failures = r
+            .failures()
+            .into_iter()
+            .map(|(what, e)| format!("{what}: {e}"))
+            .collect();
+        d
+    }
 }
 
 /// One user IR slot, as the IR panel renders it.

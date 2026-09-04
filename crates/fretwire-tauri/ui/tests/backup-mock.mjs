@@ -38,5 +38,55 @@ const restored = await mock.invoke("restore_preset_inline", { json: file.json, i
 ok(restored.name === from.name && restored.index === target, `inline restore lands "${from.name}" in slot ${target}`);
 await throws(() => mock.invoke("restore_preset_inline", { json: file.json, index: 999, slot: target, bank: 0 }), "no preset at", "a missing entry is named");
 
+// ---- whole-device backup and restore (format v3) ----
+// The same sweep with the IR store and the global settings behind it, and a restore that writes
+// only what the pedal does not already hold.
+const irsBefore = await mock.invoke("ir_list");
+const settingsBefore = await mock.invoke("settings_read", { all: false });
+const stages = [];
+const off2 = await mock.listen("backup-progress", (e) => stages.push(e.payload.stage));
+const dev = await mock.invoke("backup_device_inline", { banks: [0], irs: true, settings: true });
+off2();
+ok(dev.count === list.length && dev.irs === irsBefore.length && dev.settings > settingsBefore.length,
+  `device backup counts presets, IRs and every answering setting (${dev.count}/${dev.irs}/${dev.settings})`);
+ok(stages.includes("presets") && stages.includes("irs") && stages.at(-1) === "settings", "progress names its stage, settings last");
+const devFile = JSON.parse(dev.json);
+ok(devFile.version === 3 && Array.isArray(devFile.irs) && Array.isArray(devFile.settings), "a device backup is a version-3 file");
+ok(devFile.settings.every((s) => ["bool", "int", "f32"].includes(s.type)), "settings are typed");
+const info = await mock.invoke("backup_info_inline", { json: dev.json });
+ok(info.presets === dev.count && info.irs === dev.irs && info.settings === dev.settings && info.version === 3, "backup_info reads the counts back");
+ok(info.device === restored.device_name, "the file names the device it came off");
+
+// A presets-only export is still version 2, so an older build reads it.
+ok(parsed.version === 2 && !("irs" in parsed), "a presets-only export stays version 2");
+
+// Restoring a fresh backup onto the same pedal writes nothing.
+const same = await mock.invoke("restore_device_inline", { json: dev.json, presets: true, irs: true, settings: true });
+ok(same.presets_written === 0 && same.presets_unchanged === dev.count, `nothing to write for presets (${same.presets_written}/${same.presets_unchanged})`);
+ok(same.irs_written === 0 && same.irs_unchanged === dev.irs, "nothing to write for IRs");
+ok(same.settings_written === 0 && same.settings_unchanged === settingsBefore.length, `nothing to write for settings (${same.settings_unchanged})`);
+ok(same.settings_skipped.length === dev.settings - settingsBefore.length && same.settings_skipped[0].includes("not an identified"), "unidentified settings are skipped, never written");
+ok(same.failures.length === 0 && same.skipped.length === 0, "no failures, nothing left unattempted");
+
+// Change one setting and delete one IR; the restore puts exactly those back.
+const tempo = settingsBefore.find((s) => s.id === 16);
+await mock.invoke("settings_write", { id: 16, value: tempo.value + 7 });
+await mock.invoke("ir_delete", { slot: irsBefore[0].index });
+const fixed = await mock.invoke("restore_device_inline", { json: dev.json, presets: true, irs: true, settings: true });
+ok(fixed.settings_written === 1 && fixed.irs_written === 1 && fixed.presets_written === 0, `one setting and one IR written (${fixed.settings_written}/${fixed.irs_written}/${fixed.presets_written})`);
+const after = await mock.invoke("settings_read", { all: false });
+ok(after.find((s) => s.id === 16).value === tempo.value, "the setting is back at its backed-up value");
+ok((await mock.invoke("ir_list")).length === irsBefore.length, "the IR is back");
+
+// Parts can be left out.
+await mock.invoke("settings_write", { id: 16, value: tempo.value + 7 });
+const partial = await mock.invoke("restore_device_inline", { json: dev.json, presets: false, irs: false, settings: false });
+ok(partial.settings_written === 0 && partial.settings_unchanged === 0 && partial.presets_unchanged === 0, "nothing chosen, nothing touched");
+await mock.invoke("settings_write", { id: 16, value: tempo.value });
+
+// A file from another device is refused before anything is written.
+const foreign = JSON.stringify({ ...devFile, device: "Some Other Pedal" });
+await throws(() => mock.invoke("restore_device_inline", { json: foreign, presets: true, irs: true, settings: true }), "came off a", "a foreign file is refused");
+
 console.log(`backup: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

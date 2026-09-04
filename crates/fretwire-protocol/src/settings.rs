@@ -648,6 +648,11 @@ pub fn default_of(id: i64) -> Option<f64> {
     })
 }
 
+/// Top of the id space a full scan covers. 226 is the highest id that answers on an HX Stomp, and
+/// a read costs ~0.8 ms, so rounding up to 260 costs nothing and leaves room for a pedal with a
+/// few more.
+pub const SCAN_MAX_ID: i64 = 260;
+
 /// The identified setting for `id`, if we have one.
 pub fn by_id(id: i64) -> Option<&'static Setting> {
     SETTINGS.iter().find(|s| s.id == id)

@@ -307,8 +307,15 @@ impl Fretwire {
                     name: p.name.clone(),
                 })
                 .collect();
+            // A device backup (format v3) carries the IR store and the global settings too;
+            // say so, since these tools read only the presets out of it.
+            let extra = if b.is_presets_only() {
+                String::new()
+            } else {
+                format!(", {} IR(s), {} setting(s)", b.irs.len(), b.settings.len())
+            };
             Ok(format!(
-                "{} — {} preset(s)\n{}",
+                "{} — {} preset(s){extra}\n{}",
                 b.device,
                 items.len(),
                 summary::preset_list(&items)

@@ -312,6 +312,52 @@ enum Command {
         #[arg(long)]
         all: bool,
     },
+    /// Back up the whole device to a file: every setlist's presets, the user IR store and the
+    /// global settings. Reads only.
+    ///
+    /// This is what `export-setlist` is not — the three things HX Edit's own backup carries, and
+    /// what `restore-device` needs to make a wiped pedal whole. The pedal steps through any preset
+    /// the in-place read (op 4) cannot answer, and is put back afterwards. The file is the same
+    /// `fretwire-backup` JSON as an export, at format version 3; `backup-show` lists all of it.
+    BackupDevice {
+        out: String,
+        /// Only this setlist's presets (see `setlists`); every setlist by default.
+        #[arg(long)]
+        bank: Option<i64>,
+        /// Leave the IRs out.
+        #[arg(long)]
+        no_irs: bool,
+        /// Leave the global settings out.
+        #[arg(long)]
+        no_settings: bool,
+    },
+    /// ⚠ PERSISTENT WRITE. Restore a device backup: every preset to its slot, every IR to its
+    /// slot, every identified global setting.
+    ///
+    /// Without `--yes` this only says what it would write. Anything the device already holds —
+    /// a preset whose document matches, an IR whose stored MD5 matches, a setting at the same
+    /// value — is left alone, so restoring a fresh backup onto its own pedal writes nothing.
+    /// Settings nobody has identified are recorded in the file but never written. A preset or IR
+    /// write that fails stops the restore; the report says where.
+    RestoreDevice {
+        backup: String,
+        /// Actually write. Without it the plan is printed and nothing is sent.
+        #[arg(long)]
+        yes: bool,
+        /// Skip the presets.
+        #[arg(long)]
+        no_presets: bool,
+        /// Skip the IRs.
+        #[arg(long)]
+        no_irs: bool,
+        /// Skip the global settings.
+        #[arg(long)]
+        no_settings: bool,
+        /// Restore a file that came off a different device model. Its presets may not fit and
+        /// its setting ids may mean something else here.
+        #[arg(long)]
+        force: bool,
+    },
     /// ⚠ PERSISTENT WRITE. Restore one preset from an export file into a setlist slot.
     Restore {
         backup: String,
@@ -808,6 +854,7 @@ fn main() -> Result<()> {
                     .map(|s| (s.bank as i64, s.name.clone()))
                     .collect(),
                 presets,
+                ..Default::default()
             };
             std::fs::write(&out, export.to_json())?;
             println!(
@@ -1124,7 +1171,14 @@ fn main() -> Result<()> {
         Command::BackupShow { backup: path } => {
             let backup =
                 fretwire_core::backup::Backup::from_json(&std::fs::read_to_string(&path)?)?;
-            println!("{} — {} presets:", backup.device, backup.presets.len());
+            println!(
+                "{} — format v{}: {} presets, {} IRs, {} settings",
+                backup.device,
+                backup.version(),
+                backup.presets.len(),
+                backup.irs.len(),
+                backup.settings.len()
+            );
             for bank in backup.banks() {
                 // A v1 file records no setlist names, and multi-setlist files are the only ones
                 // where the heading earns its line.
@@ -1133,6 +1187,176 @@ fn main() -> Result<()> {
                 for p in backup.presets.iter().filter(|p| p.bank == bank) {
                     println!("    [{:>3}] {}  ({} bytes)", p.index, p.name, p.raw.len());
                 }
+            }
+            if !backup.irs.is_empty() {
+                println!("  IRs:");
+                for ir in &backup.irs {
+                    println!(
+                        "    [{:>3}] {}  ({} samples)",
+                        ir.slot,
+                        if ir.name.is_empty() {
+                            "(unnamed)"
+                        } else {
+                            &ir.name
+                        },
+                        ir.blob.len() / 4
+                    );
+                }
+            }
+            if !backup.settings.is_empty() {
+                use fretwire_core::fretwire_protocol::settings::by_id;
+                let named = backup
+                    .settings
+                    .iter()
+                    .filter(|s| by_id(s.id).is_some())
+                    .count();
+                println!("  Settings ({named} identified — the ones a restore writes):");
+                for s in &backup.settings {
+                    let label = by_id(s.id).map_or(String::new(), |d| format!("  {}", d.name));
+                    println!(
+                        "    {:>3} = {} [{}]{label}",
+                        s.id,
+                        s.value,
+                        s.value.type_name()
+                    );
+                }
+            }
+        }
+        Command::BackupDevice {
+            out,
+            bank,
+            no_irs,
+            no_settings,
+        } => {
+            let mut s = fretwire_core::Session::connect()?;
+            let names = s.device().setlist_names();
+            let banks: Vec<i64> = match bank {
+                Some(b) => vec![b],
+                None => (0..names.len() as i64).collect(),
+            };
+            println!(
+                "backing up {}{}{}…",
+                banks
+                    .iter()
+                    .map(|b| names.get(*b as usize).copied().unwrap_or("Presets"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                if no_irs { "" } else { ", the IRs" },
+                if no_settings {
+                    ""
+                } else {
+                    ", the global settings"
+                }
+            );
+            let backup = s.backup_device(&banks, !no_irs, !no_settings, |p| {
+                println!("  [{:>4}/{}] {}: {}", p.done, p.total, p.setlist, p.name);
+                true
+            })?;
+            std::fs::write(&out, backup.to_json())?;
+            println!(
+                "wrote {out}: {} presets, {} IRs, {} settings (format v{})",
+                backup.presets.len(),
+                backup.irs.len(),
+                backup.settings.len(),
+                backup.version()
+            );
+        }
+        Command::RestoreDevice {
+            backup: path,
+            yes,
+            no_presets,
+            no_irs,
+            no_settings,
+            force,
+        } => {
+            use fretwire_core::backup::{RestoreOutcome, RestoreParts};
+            let backup =
+                fretwire_core::backup::Backup::from_json(&std::fs::read_to_string(&path)?)?;
+            let parts = RestoreParts {
+                presets: !no_presets,
+                irs: !no_irs,
+                settings: !no_settings,
+            };
+            let identified = backup
+                .settings
+                .iter()
+                .filter(|s| fretwire_core::fretwire_protocol::settings::is_writable(s.id))
+                .count();
+            println!(
+                "{path}: from a {} — {} presets, {} IRs, {} settings ({identified} identified)",
+                backup.device,
+                backup.presets.len(),
+                backup.irs.len(),
+                backup.settings.len()
+            );
+            let plan = [
+                (
+                    parts.presets && !backup.presets.is_empty(),
+                    format!(
+                        "{} presets, each to its own setlist slot",
+                        backup.presets.len()
+                    ),
+                ),
+                (
+                    parts.irs && !backup.irs.is_empty(),
+                    format!("{} IRs, each to its own slot", backup.irs.len()),
+                ),
+                (
+                    parts.settings && !backup.settings.is_empty(),
+                    format!("{identified} identified settings"),
+                ),
+            ];
+            println!("would write, where the device does not already hold it:");
+            for (_, line) in plan.iter().filter(|(on, _)| *on) {
+                println!("  - {line}");
+            }
+            if !yes {
+                println!("dry run — pass --yes to write.");
+                return Ok(());
+            }
+            let mut s = fretwire_core::Session::connect()?;
+            eprintln!(
+                "⚠  PERSISTENT WRITE: restoring {path} onto the {}.",
+                s.device().name
+            );
+            let report = s.restore_device(&backup, parts, force, |p| {
+                println!("  [{:>4}/{}] {}: {}", p.done, p.total, p.setlist, p.name);
+                true
+            })?;
+            fn count<K>(items: &[(K, RestoreOutcome)]) -> (usize, usize) {
+                use fretwire_core::backup::RestoreReport;
+                (
+                    RestoreReport::written(items),
+                    RestoreReport::unchanged(items),
+                )
+            }
+            let (pw, pu) = count(&report.presets);
+            let (iw, iu) = count(&report.irs);
+            let (sw, su) = count(&report.settings);
+            println!("presets: {pw} written, {pu} already matched");
+            println!("IRs: {iw} written, {iu} already matched");
+            println!("settings: {sw} written, {su} already matched");
+            for (id, o) in &report.settings {
+                if let RestoreOutcome::Skipped(why) = o {
+                    println!("  setting {id} skipped: {why}");
+                }
+            }
+            for ((bank, index), o) in &report.presets {
+                if let RestoreOutcome::Skipped(why) = o {
+                    println!("  preset {bank}:{index} skipped: {why}");
+                }
+            }
+            for (slot, o) in &report.irs {
+                if let RestoreOutcome::Skipped(why) = o {
+                    println!("  IR slot {slot} skipped: {why}");
+                }
+            }
+            let failures = report.failures();
+            for (what, e) in &failures {
+                println!("  FAILED {what}: {e}");
+            }
+            if !failures.is_empty() {
+                anyhow::bail!("{} item(s) failed — see above", failures.len());
             }
         }
         Command::Restore {

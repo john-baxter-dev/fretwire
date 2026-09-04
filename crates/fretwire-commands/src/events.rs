@@ -21,6 +21,8 @@ pub enum Event {
     BackupProgress {
         done: usize,
         total: usize,
+        /// `"presets"`, `"irs"` or `"settings"` — which part of the device the item belongs to.
+        stage: &'static str,
         bank: i64,
         setlist: String,
         name: String,
@@ -47,11 +49,12 @@ impl Event {
             Event::BackupProgress {
                 done,
                 total,
+                stage,
                 bank,
                 setlist,
                 name,
             } => serde_json::json!({
-                "done": done, "total": total,
+                "done": done, "total": total, "stage": stage,
                 "bank": bank, "setlist": setlist, "name": name,
             }),
         }

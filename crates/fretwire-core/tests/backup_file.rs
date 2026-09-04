@@ -28,6 +28,7 @@ fn real_stream_round_trips_and_is_restore_ready() {
             name: "DIRTY MADS".into(),
             raw: raw.clone(),
         }],
+        ..Default::default()
     };
 
     let restored = Backup::from_json(&backup.to_json()).unwrap();

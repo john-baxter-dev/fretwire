@@ -181,6 +181,16 @@ fn reject_hint(op: Option<i64>, code: i64) -> String {
 
 /// A setlist's name from the device table, falling back to the generic label for a bank the table
 /// doesn't name — a device whose setlists we haven't confirmed (the XL) reports one unnamed list.
+/// Whether two raw preset streams hold the same document — what an op-21 write would send —
+/// ignoring the envelope around it. See `Session::restore_device`.
+fn same_document(a: &[u8], b: &[u8]) -> bool {
+    use fretwire_data::stream::PresetStream;
+    match (PresetStream::parse(a), PresetStream::parse(b)) {
+        (Ok(a), Ok(b)) => a.to_blob() == b.to_blob(),
+        _ => false,
+    }
+}
+
 fn setlist_name(names: &'static [&'static str], bank: i64) -> &'static str {
     usize::try_from(bank)
         .ok()
@@ -196,10 +206,13 @@ fn setlist_name(names: &'static [&'static str], bank: i64) -> &'static str {
 /// bar reads continuously across all eight of a Floor's rather than restarting eight times.
 #[derive(Debug, Clone, Copy)]
 pub struct ExportProgress<'a> {
-    /// Presets read so far, including this one.
+    /// Items read (or written) so far, including this one.
     pub done: usize,
-    /// Presets in the whole sweep, across every setlist requested.
+    /// Items in the whole job — every preset across every setlist requested, plus each IR and
+    /// one tick for the settings when the sweep covers those.
     pub total: usize,
+    /// Which part of the device this item belongs to: `"presets"`, `"irs"` or `"settings"`.
+    pub stage: &'static str,
     /// The setlist this preset came from.
     pub bank: i64,
     /// That setlist's name, as the device reports it (`"Presets"` when the device has just one).
@@ -3357,6 +3370,7 @@ impl Session {
                 if !progress(ExportProgress {
                     done,
                     total,
+                    stage: "presets",
                     bank,
                     setlist,
                     name: &name,
@@ -3388,7 +3402,365 @@ impl Session {
                 .map(|(b, _)| (*b, setlist_name(names, *b).to_string()))
                 .collect(),
             presets,
+            ..Default::default()
         })
+    }
+
+    /// Back up the device: the presets of `banks` (see [`Self::export_setlists`]), then every
+    /// populated user IR slot when `irs` is set, then every global setting that answers when
+    /// `settings` is set. **Reads only.** The three parts are what HX Edit's own backup carries,
+    /// and what a wiped pedal needs back — see [`Self::restore_device`].
+    ///
+    /// `progress` is called once per preset, once per IR and once for the settings, with `total`
+    /// covering the whole job; returning `false` stops the sweep, and the file keeps what was read
+    /// (the presets read so far, and no IRs or settings if it stopped before them).
+    pub fn backup_device(
+        &mut self,
+        banks: &[i64],
+        irs: bool,
+        settings: bool,
+        mut progress: impl FnMut(ExportProgress) -> bool,
+    ) -> crate::Result<crate::backup::Backup> {
+        // The IR directory first, so the total is the whole job from the first tick: one request,
+        // and it names the slots the IR pass reads.
+        let ir_slots: Vec<fretwire_data::ir::IrSlot> = if irs {
+            self.ir_directory()?
+                .into_iter()
+                .filter(|i| i.is_used())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let extra = ir_slots.len() + usize::from(settings);
+        let mut cancelled = false;
+        let mut backup = if banks.is_empty() {
+            crate::backup::Backup {
+                device: self.device().name.into(),
+                ..Default::default()
+            }
+        } else {
+            self.export_setlists(banks, |p| {
+                let go = progress(ExportProgress {
+                    total: p.total + extra,
+                    ..p
+                });
+                cancelled |= !go;
+                go
+            })?
+        };
+        if cancelled {
+            return Ok(backup);
+        }
+        let mut done = backup.presets.len();
+        let total = done + extra;
+
+        for info in &ir_slots {
+            let Some((info, blob)) = self.ir_export(info.index)? else {
+                // The directory said it was used; a slot emptied between the two reads is not
+                // worth failing the backup over.
+                tracing::warn!(
+                    slot = info.index,
+                    "IR slot emptied between the listing and the read"
+                );
+                continue;
+            };
+            backup.irs.push(crate::backup::BackupIr {
+                slot: info.index,
+                name: info.name.clone(),
+                blob,
+            });
+            done += 1;
+            if !progress(ExportProgress {
+                done,
+                total,
+                stage: "irs",
+                bank: 0,
+                setlist: "IRs",
+                name: &info.name,
+            }) {
+                return Ok(backup);
+            }
+        }
+
+        if settings {
+            for (id, v) in self.scan_settings(0..=fretwire_protocol::settings::SCAN_MAX_ID) {
+                match crate::backup::SettingValue::from_rmpv(&v) {
+                    Some(value) => backup
+                        .settings
+                        .push(crate::backup::BackupSetting { id, value }),
+                    // Twelve ids on a Stomp answer with a nil — an id that exists and holds
+                    // nothing — and nothing has ever answered with another type. Neither is a
+                    // value the file could write back. [166 answer, 154 carry a value — 2026-09-03]
+                    None if v.is_nil() => tracing::debug!(id, "setting answered nil — not stored"),
+                    None => {
+                        tracing::warn!(id, value = %v, "setting holds a type the backup cannot carry")
+                    }
+                }
+            }
+            done += 1;
+            progress(ExportProgress {
+                done,
+                total,
+                stage: "settings",
+                bank: 0,
+                setlist: "Settings",
+                name: "global settings",
+            });
+        }
+        Ok(backup)
+    }
+
+    /// Restore a device backup: every preset the file holds into its own setlist slot, every IR
+    /// into its slot, and every **identified** global setting — each part only if its flag in
+    /// `parts` is set. **Overwrites flash**, slot by slot.
+    ///
+    /// Nothing is written that the device already holds: a preset whose stored stream reads back
+    /// byte-identical (op 4), an IR whose stored MD5 matches, a setting whose value matches — each
+    /// is reported `Unchanged` and skipped, so a restore onto a pedal that lost one setlist writes
+    /// that setlist and leaves the rest alone.
+    ///
+    /// Settings that nobody has identified are `Skipped`, never written — the same rule the
+    /// settings panel keeps, because an unidentified id is the one thing here whose effect nobody
+    /// can predict. A setting the device holds in a different type than the file is skipped too.
+    ///
+    /// The file's device must be this device unless `force` — a Stomp's setting ids and preset
+    /// shape are not a Floor's. A preset or IR write failure **stops the restore** (the remaining
+    /// items are reported `Skipped`), because both are chunked flash transfers whose failure mode
+    /// is a wedged transfer state machine, and pressing on would compound it. A refused setting
+    /// is reported and the rest continue.
+    ///
+    /// `progress` is called once per item, as in [`Self::backup_device`]; returning `false` stops
+    /// after the current item.
+    pub fn restore_device(
+        &mut self,
+        backup: &crate::backup::Backup,
+        parts: crate::backup::RestoreParts,
+        force: bool,
+        mut progress: impl FnMut(ExportProgress) -> bool,
+    ) -> crate::Result<crate::backup::RestoreReport> {
+        use crate::backup::{RestoreOutcome, RestoreReport};
+        let me = self.device().name;
+        if backup.device != me && !force {
+            return Err(crate::Error::Backup(format!(
+                "this file came off a {} and this is a {me} — its settings and presets are that \
+                 pedal's shape; pass force to restore anyway",
+                backup.device
+            )));
+        }
+        let names = self.device().setlist_names();
+        let presets: Vec<&crate::backup::BackupPreset> = if parts.presets {
+            backup.presets.iter().collect()
+        } else {
+            Vec::new()
+        };
+        let irs: Vec<&crate::backup::BackupIr> = if parts.irs {
+            backup.irs.iter().collect()
+        } else {
+            Vec::new()
+        };
+        let settings: Vec<&crate::backup::BackupSetting> = if parts.settings {
+            backup.settings.iter().collect()
+        } else {
+            Vec::new()
+        };
+        let total = presets.len() + irs.len() + usize::from(!settings.is_empty());
+        let mut done = 0usize;
+        let mut report = RestoreReport::default();
+        let mut stopped: Option<String> = None;
+
+        // Where the user was, to put them back: every preset write walks the pedal to its slot.
+        let start = if presets.is_empty() {
+            None
+        } else {
+            self.read_preset_confirmed()?.1
+        };
+        for p in &presets {
+            let key = (p.bank, p.index);
+            if let Some(why) = &stopped {
+                report
+                    .presets
+                    .push((key, RestoreOutcome::Skipped(why.clone())));
+                continue;
+            }
+            // Compare before writing: op 4 reads the slot in place, so a slot that still holds
+            // the file's preset costs one read and no flash write. The comparison is on the
+            // writable blob, not the raw stream — the stream's envelope carries the transaction
+            // counter, and two exports of one untouched slot differ there (byte 12) whenever the
+            // sessions' request sequences drift apart. [measured — two bank-0 exports on an HX
+            // Stomp, 2026-09-03: 26 slots differed in the raw, none in the document.] A slot the
+            // device answers nil for is read the way the export read it — selected, then read
+            // confirmed — since the write would select it anyway; the first live restore wrote
+            // eight untouched "New Preset" slots for want of this. A device without op 4 simply
+            // writes.
+            //
+            // One corner stays: saving a preset flips its active snapshot's in-use flag (key
+            // `10/10[n]/0`) on, so a slot backed up while virgin (in-use false) and written once
+            // compares different from then on — by that one boolean — and is rewritten on every
+            // later restore. Harmless and idempotent; it is the same "New Preset" either way.
+            // [measured — the same eight slots, 2026-09-03]
+            let unchanged = match self.read_preset_at(p.bank, p.index) {
+                Ok(Some(raw)) => same_document(&raw, &p.raw),
+                Ok(None) => {
+                    self.goto_preset(p.bank, p.index)?;
+                    match self.read_preset_confirmed() {
+                        Ok((raw, _)) => same_document(&raw, &p.raw),
+                        Err(_) => false,
+                    }
+                }
+                Err(_) => false,
+            };
+            let outcome = if unchanged {
+                RestoreOutcome::Unchanged
+            } else {
+                match self.restore_preset(&p.raw, p.bank, p.index, &p.name) {
+                    Ok(_) => RestoreOutcome::Written,
+                    Err(e) => {
+                        stopped = Some(format!(
+                            "stopped after preset {}:{} failed",
+                            p.bank, p.index
+                        ));
+                        RestoreOutcome::Failed(e.to_string())
+                    }
+                }
+            };
+            tracing::info!(bank = p.bank, index = p.index, name = %p.name, ?outcome, "restore preset");
+            report.presets.push((key, outcome));
+            done += 1;
+            if !progress(ExportProgress {
+                done,
+                total,
+                stage: "presets",
+                bank: p.bank,
+                setlist: setlist_name(names, p.bank),
+                name: &p.name,
+            }) && stopped.is_none()
+            {
+                stopped = Some("cancelled".into());
+            }
+        }
+        if let Some(start) = start
+            && stopped.is_none()
+        {
+            self.goto_preset(start.bank, start.index)?;
+        }
+
+        // The directory carries each stored slot's MD5, which is what says whether a slot already
+        // holds the file's bytes without streaming a megabyte back.
+        let stored: std::collections::HashMap<i64, String> = if irs.is_empty() || stopped.is_some()
+        {
+            Default::default()
+        } else {
+            self.ir_directory()?
+                .into_iter()
+                .filter_map(|i| Some((i.index, i.md5?)))
+                .collect()
+        };
+        for ir in &irs {
+            if let Some(why) = &stopped {
+                report
+                    .irs
+                    .push((ir.slot, RestoreOutcome::Skipped(why.clone())));
+                continue;
+            }
+            let want = fretwire_data::ir::stored_md5(&ir.blob, ir.blob.len() / 4);
+            let outcome = if stored.get(&ir.slot) == Some(&want) {
+                RestoreOutcome::Unchanged
+            } else {
+                match self.ir_upload(ir.slot, &ir.name, &ir.blob, true) {
+                    Ok(_) => RestoreOutcome::Written,
+                    Err(e) => {
+                        stopped = Some(format!("stopped after IR slot {} failed", ir.slot));
+                        RestoreOutcome::Failed(e.to_string())
+                    }
+                }
+            };
+            tracing::info!(slot = ir.slot, name = %ir.name, ?outcome, "restore IR");
+            report.irs.push((ir.slot, outcome));
+            done += 1;
+            if !progress(ExportProgress {
+                done,
+                total,
+                stage: "irs",
+                bank: 0,
+                setlist: "IRs",
+                name: &ir.name,
+            }) && stopped.is_none()
+            {
+                stopped = Some("cancelled".into());
+            }
+        }
+
+        for s in &settings {
+            if let Some(why) = &stopped {
+                report
+                    .settings
+                    .push((s.id, RestoreOutcome::Skipped(why.clone())));
+                continue;
+            }
+            report.settings.push((s.id, self.restore_setting(s)));
+        }
+        if !settings.is_empty() {
+            done += 1;
+            progress(ExportProgress {
+                done,
+                total,
+                stage: "settings",
+                bank: 0,
+                setlist: "Settings",
+                name: "global settings",
+            });
+        }
+
+        // Whatever was written, the editing context is gone.
+        self.last_raw = None;
+        self.clear_history();
+        Ok(report)
+    }
+
+    /// One setting of a restore: write it if it is identified, the device holds it in the same
+    /// type, and the value differs. See [`Self::restore_device`].
+    fn restore_setting(
+        &mut self,
+        s: &crate::backup::BackupSetting,
+    ) -> crate::backup::RestoreOutcome {
+        use crate::backup::{RestoreOutcome, SettingValue};
+        if !fretwire_protocol::settings::is_writable(s.id) {
+            return RestoreOutcome::Skipped("not an identified setting".into());
+        }
+        let current = match self.read_setting(s.id) {
+            Ok(Some(v)) => v,
+            Ok(None) => return RestoreOutcome::Skipped("the device does not implement it".into()),
+            Err(e) => return RestoreOutcome::Failed(format!("reading it first: {e}")),
+        };
+        let Some(held) = SettingValue::from_rmpv(&current) else {
+            return RestoreOutcome::Skipped(format!(
+                "the device holds {current}, which cannot be compared"
+            ));
+        };
+        if !held.same_type(s.value) {
+            return RestoreOutcome::Skipped(format!(
+                "the device holds it as {}, the file as {}",
+                held.type_name(),
+                s.value.type_name()
+            ));
+        }
+        if held == s.value {
+            return RestoreOutcome::Unchanged;
+        }
+        let txn = self.bump_txn();
+        if let Err(e) = self.send_edit(edit::set_setting_value(s.id, s.value.to_rmpv(), txn)) {
+            return RestoreOutcome::Failed(e.to_string());
+        }
+        match self.read_setting(s.id) {
+            Ok(Some(v)) if SettingValue::from_rmpv(&v) == Some(s.value) => RestoreOutcome::Written,
+            Ok(Some(v)) => {
+                RestoreOutcome::Failed(format!("wrote {} but the device reports {v}", s.value))
+            }
+            Ok(None) => {
+                RestoreOutcome::Failed("wrote it, but the device reports no value back".into())
+            }
+            Err(e) => RestoreOutcome::Failed(format!("reading it back: {e}")),
+        }
     }
 
     /// Restore one backed-up preset into `slot` of setlist `bank`: select the slot, replay the

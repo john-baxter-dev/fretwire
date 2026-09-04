@@ -10,9 +10,9 @@
 
 use fretwire_commands::R;
 use fretwire_commands::dto::{
-    BackupFileDto, CategoryDto, DataStatusDto, DetectedDeviceDto, ImportResultDto, IrFileDto,
-    IrSlotDto, ModelChoiceDto, PresetDto, PresetListItem, SettingDto, SplitTypeDto,
-    UpdateStatusDto,
+    BackupFileDto, BackupInfoDto, BackupSummaryDto, CategoryDto, DataStatusDto, DetectedDeviceDto,
+    ImportResultDto, IrFileDto, IrSlotDto, ModelChoiceDto, PresetDto, PresetListItem,
+    RestoreReportDto, SettingDto, SplitTypeDto, UpdateStatusDto,
 };
 use fretwire_commands::events::{Event, EventSink};
 use tauri::{Emitter, State};
@@ -455,6 +455,64 @@ pub async fn restore_preset_inline(
     bank: i64,
 ) -> R<PresetDto> {
     fretwire_commands::restore_preset_inline(&state, json, index, slot, bank).await
+}
+
+#[tauri::command]
+pub async fn backup_device(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+    banks: Vec<i64>,
+    irs: bool,
+    settings: bool,
+) -> R<BackupSummaryDto> {
+    fretwire_commands::backup_device(&state, TauriSink(app), path, banks, irs, settings).await
+}
+
+#[tauri::command]
+pub async fn backup_device_inline(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    banks: Vec<i64>,
+    irs: bool,
+    settings: bool,
+) -> R<BackupFileDto> {
+    fretwire_commands::backup_device_inline(&state, TauriSink(app), banks, irs, settings).await
+}
+
+#[tauri::command]
+pub async fn backup_info(path: String) -> R<BackupInfoDto> {
+    fretwire_commands::backup_info(path).await
+}
+
+#[tauri::command]
+pub async fn backup_info_inline(json: String) -> R<BackupInfoDto> {
+    fretwire_commands::backup_info_inline(json).await
+}
+
+#[tauri::command]
+pub async fn restore_device(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+    presets: bool,
+    irs: bool,
+    settings: bool,
+) -> R<RestoreReportDto> {
+    fretwire_commands::restore_device(&state, TauriSink(app), path, presets, irs, settings).await
+}
+
+#[tauri::command]
+pub async fn restore_device_inline(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    json: String,
+    presets: bool,
+    irs: bool,
+    settings: bool,
+) -> R<RestoreReportDto> {
+    fretwire_commands::restore_device_inline(&state, TauriSink(app), json, presets, irs, settings)
+        .await
 }
 
 // ---- clipboards ----

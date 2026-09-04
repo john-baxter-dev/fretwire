@@ -494,41 +494,149 @@ const hexEncode = (str) =>
 const hexDecode = (hex) =>
   new TextDecoder().decode(new Uint8Array(hex.match(/.{2}/g)?.map((h) => parseInt(h, 16)) ?? []));
 
-async function sweepBackup(banks) {
+// A preset's "raw" in a mock file: the mock state, hex-encoded, standing in for the stream.
+const presetRaw = (p) =>
+  hexEncode(JSON.stringify({
+    name: p.name, snapshot_names: p.snapshot_names, active_snapshot: p.active_snapshot,
+    slots: p.slots, nodePos: p.nodePos, dspCount: p.dspCount,
+    deviceModel: p.deviceModel, buildStamp: p.buildStamp,
+  }));
+// A setting as a v3 file records it: typed, so a restore sends it back in the type held.
+const settingEntry = (id, d) => ({
+  id,
+  type: d.kind === "flag" ? "bool" : d.kind === "choice" ? "int" : "f32",
+  value: d.kind === "flag" ? !!d.v : d.v,
+  name: d.name,
+});
+// An IR's "raw" in a mock file: the mock has no samples, so the stored digest stands in for the
+// blob; what matters to the restore is that the same file restores to the same hash.
+const irRaw = (held) => hexEncode(`${held.md5}:${held.name}`);
+
+// Walks whichever setlists it is given, as the real sweep does; with `irs`/`settings` set it is
+// `backup_device`, and the file is version 3 with those two sections.
+async function sweepBackup(banks, { irs = false, settings = false } = {}) {
   exportCancelled = false;
   const entries = [];
   const lists = banks.map((b) => [b, bankOf(b)]);
-  const total = lists.reduce((n, [, l]) => n + l.length, 0);
+  const irSlots = irs ? [...irStore.keys()].sort((a, b) => a - b) : [];
+  const total = lists.reduce((n, [, l]) => n + l.length, 0) + irSlots.length + (settings ? 1 : 0);
   let done = 0;
   outer: for (const [bank, list] of lists) {
     for (const p of list) {
       await sleep(120); // the real sweep takes ~a second per preset; make the progress UI visible
       done++;
-      entries.push({
-        bank,
-        index: p.index,
-        name: p.name,
-        raw_hex: hexEncode(JSON.stringify({
-          name: p.name, snapshot_names: p.snapshot_names, active_snapshot: p.active_snapshot,
-          slots: p.slots, nodePos: p.nodePos, dspCount: p.dspCount,
-          deviceModel: p.deviceModel, buildStamp: p.buildStamp,
-        })),
-      });
+      entries.push({ bank, index: p.index, name: p.name, raw_hex: presetRaw(p) });
       emit("backup-progress", {
-        done, total, bank, setlist: setlistNames()[bank] ?? "Presets", name: p.name,
+        done, total, stage: "presets", bank, setlist: setlistNames()[bank] ?? "Presets", name: p.name,
       });
       // Checked after the entry is kept, like the real sweep: a cancelled export still holds
       // everything read up to the moment it was called off.
       if (exportCancelled) break outer;
     }
   }
-  lastBackup = {
-    format: "fretwire-backup", version: 2,
-    device: `${DEVICES[deviceMode].name} (mock)`,
+  const file = {
+    format: "fretwire-backup", version: irs || settings ? 3 : 2,
+    device: DEVICES[deviceMode].name,
     setlists: banks.map((b) => ({ bank: b, name: setlistNames()[b] ?? "Presets" })),
     presets: entries,
   };
+  if (irs || settings) {
+    file.irs = [];
+    file.settings = [];
+    if (!exportCancelled) {
+      for (const slot of irSlots) {
+        await sleep(60);
+        const held = irStore.get(slot);
+        file.irs.push({ slot, name: held.name, raw_hex: irRaw(held) });
+        done++;
+        emit("backup-progress", { done, total, stage: "irs", bank: 0, setlist: "IRs", name: held.name || "(unnamed)" });
+        if (exportCancelled) break;
+      }
+    }
+    if (settings && !exportCancelled) {
+      for (const [id, d] of [...SETTINGS.entries()].sort((a, b) => a[0] - b[0])) file.settings.push(settingEntry(id, d));
+      // The unidentified ids answer too and are recorded; a restore never writes them.
+      for (const id of RAW_IDS) file.settings.push({ id, type: "int", value: id % 3 });
+      done++;
+      emit("backup-progress", { done, total, stage: "settings", bank: 0, setlist: "Settings", name: "global settings" });
+    }
+  }
+  lastBackup = file;
   return lastBackup;
+}
+
+const backupInfo = (file) => ({
+  device: file.device,
+  version: file.version ?? 1,
+  presets: file.presets.length,
+  irs: file.irs?.length ?? 0,
+  settings: file.settings?.length ?? 0,
+  setlists: (file.setlists ?? []).map((s) => s.name),
+});
+
+// Like Session::restore_device: each part only when asked, nothing written that the pedal already
+// holds, unidentified settings skipped. The mock cannot fail a write, so `failures` stays empty.
+async function restoreDevice(file, { presets = true, irs = true, settings = true }) {
+  if (file.device !== DEVICES[deviceMode].name) {
+    throw new Error(`this file came off a ${file.device} and this is a ${DEVICES[deviceMode].name} — pass force to restore anyway`);
+  }
+  const r = {
+    presets_written: 0, presets_unchanged: 0, irs_written: 0, irs_unchanged: 0,
+    settings_written: 0, settings_unchanged: 0, settings_skipped: [], failures: [], skipped: [],
+  };
+  const total = (presets ? file.presets.length : 0) + (irs ? file.irs?.length ?? 0 : 0) + (settings && file.settings?.length ? 1 : 0);
+  let done = 0;
+  if (presets) {
+    for (const e of file.presets) {
+      await sleep(60);
+      const bank = e.bank ?? 0;
+      const list = bankOf(bank);
+      const at = list.findIndex((p) => p.index === e.index);
+      if (at >= 0 && presetRaw(list[at]) === e.raw_hex) r.presets_unchanged++;
+      else {
+        let state;
+        try { state = JSON.parse(hexDecode(e.raw_hex)); }
+        catch { throw new Error("mock backend: only files made by the mock itself can be restored here"); }
+        const restored = { ...state, index: e.index, nodePos: state.nodePos ?? {} };
+        if (at >= 0) list[at] = restored;
+        else { list.push(restored); list.sort((a, b) => a.index - b.index); }
+        if (bank === currentBank && current.index === e.index) current = restored;
+        r.presets_written++;
+      }
+      done++;
+      emit("backup-progress", { done, total, stage: "presets", bank, setlist: setlistNames()[bank] ?? "Presets", name: e.name });
+    }
+  }
+  if (irs) {
+    for (const ir of file.irs ?? []) {
+      await sleep(60);
+      const held = irStore.get(ir.slot);
+      if (held && irRaw(held) === ir.raw_hex) r.irs_unchanged++;
+      else {
+        const [md5] = hexDecode(ir.raw_hex).split(":");
+        irStore.set(ir.slot, { name: ir.name, samples: 2048, checksum: parseInt(md5.slice(0, 8), 16) >>> 0, md5 });
+        r.irs_written++;
+      }
+      done++;
+      emit("backup-progress", { done, total, stage: "irs", bank: 0, setlist: "IRs", name: ir.name || "(unnamed)" });
+    }
+  }
+  if (settings && file.settings?.length) {
+    for (const s of file.settings) {
+      const d = SETTINGS.get(s.id);
+      if (!d) { r.settings_skipped.push(`${s.id}: not an identified setting`); continue; }
+      const held = settingEntry(s.id, d);
+      if (held.type !== s.type) { r.settings_skipped.push(`${s.id}: the device holds it as ${held.type}, the file as ${s.type}`); continue; }
+      if (held.value === s.value) { r.settings_unchanged++; continue; }
+      d.v = s.type === "bool" ? !!s.value : s.value;
+      r.settings_written++;
+    }
+    done++;
+    emit("backup-progress", { done, total, stage: "settings", bank: 0, setlist: "Settings", name: "global settings" });
+  }
+  clearHistory();
+  seedHistory();
+  return r;
 }
 
 // The file as the UI hands it back — its text. Only the mock's own files parse, since their
@@ -763,6 +871,7 @@ function toDto(p) {
   const occupied = allEditSlots(p).filter((i) => p.slots[i]?.kind === "effect");
   return {
     name: p.name, index: p.index, bank: currentBank, device_model: p.deviceModel, build_stamp: p.buildStamp,
+    device_name: DEVICES[deviceMode].name,
     // Flat fields mirror DSP 0, exactly like the real PresetDto, so a single-DSP UI still works.
     split: d0.split, dsp_load: dsps.reduce((s, v) => s + v.dsp_load, 0),
     split_pos: d0.split_pos, mixer_pos: d0.mixer_pos,
@@ -1592,6 +1701,30 @@ const HANDLERS = {
   },
   restore_preset_inline: ({ json, index, slot, bank = 0 }) =>
     restoreFrom(parseBackup(json), index, slot, bank),
+  // ---- whole-device backup / restore ----
+  backup_device: async ({ path, banks, irs, settings }) => {
+    await sweepBackup(banks, { irs, settings });
+    console.info(`[fretwire mock] would write ${path}`);
+    return { presets: lastBackup.presets.length, irs: lastBackup.irs.length, settings: lastBackup.settings.length };
+  },
+  backup_device_inline: async ({ banks, irs, settings }) => {
+    await sweepBackup(banks, { irs, settings });
+    return {
+      count: lastBackup.presets.length, irs: lastBackup.irs.length, settings: lastBackup.settings.length,
+      json: JSON.stringify(lastBackup, null, 2),
+    };
+  },
+  backup_info: ({ path }) => {
+    if (!lastBackup)
+      throw new Error(`mock backend: nothing backed up this session — run Back up device… first (a browser can't read ${path})`);
+    return backupInfo(lastBackup);
+  },
+  backup_info_inline: ({ json }) => backupInfo(parseBackup(json)),
+  restore_device: (args) => {
+    if (!lastBackup) throw new Error("mock backend: nothing backed up this session — run Back up device… first");
+    return restoreDevice(lastBackup, args);
+  },
+  restore_device_inline: ({ json, ...args }) => restoreDevice(parseBackup(json), args),
   split_types: () => clone(SPLIT_TYPES),
   categories: () => {
     const ids = [...new Set(CATALOG.map((m) => m.category))].sort((a, b) => a - b);

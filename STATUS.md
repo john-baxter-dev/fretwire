@@ -4447,3 +4447,36 @@ Also: `tools/pcap-frames.py` reads Linux usbmon captures (link type 220) as well
 prints a per-frame delta — the owner captures fretwire on Linux now, and the old parser returned
 0 frames for it. A misplaced test module in `fretwire-commands` moved to the end of the file
 (clippy's `items_after_test_module`). 365 tests, clippy clean.
+
+## Seventy-first round (2026-09-03) — the move works; IR numbering, an over-correction on slots 9–10, and a bisect that names a version bump (issue #15)
+
+The owner's second hardware round. **`fretwire move 1 3` works** on the Helix-only credit guard —
+the second fretwire write to complete on a POD Go. Three things from the rest of the post:
+
+- **`IR Select` was off by one, as flagged.** The wire value is **one-based**: the parameter's
+  range starts at 1 (the owner's dropdown opened at `002` with its scrollbar at the top, which is
+  `min + 1` under the old label), and value 6 is the IR the panel lists as 006 — directory index 5.
+  The label now shows the value itself and names it from `index - 1`; the choices default to
+  1..=128. [solid — owner-read on seven loaded IRs, 2026-09-03] The same screenshot showed the
+  select grown to its longest option and running under the next parameter's label; it is now sized
+  to its cell and clips, and the open list still shows the full names.
+- **Slots 9 and 10 are valid add targets** — the owner's correction to round 70's refusal. The
+  `-306` of 2026-08-28 was a slot-9 add into a chain with none of the mandated blocks, and the
+  2026-08-26 crash was an add into slot **11**, past the chain. `add_block` on a POD Go now refuses
+  only slots outside 1..=10; occupancy, mandated blocks included, is `add_block_at`'s empty-slot
+  check, which the owner has been adding through (1–8 confirmed). `docs/pod-go.md` rewritten to
+  match, with the two misreadings recorded.
+- **Live follow: the pushes reach the host.** `fretwire watch` prints them; the GUI does not show
+  them. The owner's `git bisect` named `8c33c5c` as first bad, with its parent good — and that
+  commit is the 0.4.0 version bump: `Cargo.toml`, `Cargo.lock`, a release-notes file. Nothing in it
+  runs, so the bisect is either measuring something intermittent or a step built against a stale
+  `ui/dist` (the GUI embeds whatever `dist/` holds when the crate rebuilds). Walked the GUI-only
+  path again: the heartbeat, `push_dtos`, the `device-pushes` name and payload through the
+  serve-mode `EventSink` refactor, and the frontend's `handlePushes` — all intact, and the six
+  device reads the GUI does at connect that `watch` does not (`setlists`, `device_numbering` via
+  op 24, `settings_read`, …) are the same on every device. Not reproducible from code. The ask is
+  now the GUI's own stderr with `RUST_LOG=debug FRETWIRE_TRACE_STATUS=1`, which logs each drained
+  frame and any failed emit.
+
+Still wanted from the owner: that GUI log, `RUST_LOG=debug fretwire ir-list` for the op-13 bytes,
+and the POD Go Edit capture of filling an empty slot (offered). 374 tests, clippy clean.

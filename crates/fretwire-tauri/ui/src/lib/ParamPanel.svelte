@@ -232,22 +232,25 @@
   // params index tables in the firmware, and the device does not range-check: the old fallback span
   // (0..=127) let a 0..=3 head selector be set to 77, which hung the pedal hard enough to drop it
   // off USB. A value we can't bound is one we have no business sending.
-  // The IR block's `IR Select` is a bare slot number on the wire — the same zero-based index the IR
-  // ops use, shown from 1 in the pedal's menus like the IR panel does — and the reference data has
-  // no labels for it, so without this it is a slider from 0 to 127 and the user has to know which
-  // number holds which file. Named from the directory the parent read; slots it hasn't heard of
-  // still get their number, so an IR the list doesn't cover is never unreachable.
+  // The IR block's `IR Select` is a bare slot number on the wire, and it is **one-based**: the
+  // parameter's range starts at 1, and value 6 is the IR the panel lists as 006 — the directory
+  // record at zero-based index 5. (Shown as `index + 1` at first, off the guess that the wire
+  // counted from 0 like the IR ops do; the owner of a POD Go with seven IRs loaded read the names
+  // one row out, 2026-09-03.) The reference data has no labels for it, so without this it is a
+  // slider and the user has to know which number holds which file. Named from the directory the
+  // parent read; slots it hasn't heard of still get their number, so an IR the list doesn't cover
+  // is never unreachable.
   const isIrSelect = (p) =>
     p.name === "IR Select" && /^HD2_ImpulseResponse/.test(block?.symbolic_id ?? "");
   const irLabel = (i) => {
-    const num = String(i + 1).padStart(3, "0");
-    const slot = irSlots.find((s) => s.index === i);
+    const num = String(i).padStart(3, "0");
+    const slot = irSlots.find((s) => s.index === i - 1);
     if (!slot) return num;
     return slot.used ? `${num}  ${slot.display_name}` : `${num}  (empty)`;
   };
   const irChoices = (p) => {
-    const lo = p.min ?? 0;
-    const hi = p.max ?? 127;
+    const lo = p.min ?? 1;
+    const hi = p.max ?? 128;
     return Array.from({ length: Math.max(0, hi - lo + 1) }, (_, k) => lo + k);
   };
 
@@ -588,7 +591,12 @@
             >
           </span>
           {#if isIrSelect(p)}
+            <!-- Sized to its cell, not to its longest option: an IR name is as wide as its author
+                 made it, and a select that grows to fit one runs under the next parameter's label
+                 (owner screenshot, 2026-09-03). The closed control clips; the open list is the
+                 browser's own popup and shows the full names. -->
             <select
+              class="irsel"
               value={p.value}
               onchange={(e) => onEnum(block.slot, paired, p.index, Number(e.currentTarget.value))}
               title={irSlots.length ? "The pedal's IR slots, by number and name" : "IR slot number — names appear once the IR list has been read (IRs… in the toolbar)"}
@@ -1047,6 +1055,14 @@
     border: 1px solid #3a4150;
     border-radius: 6px;
     padding: 4px 8px;
+  }
+  select.irsel {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .switch {
     display: flex;

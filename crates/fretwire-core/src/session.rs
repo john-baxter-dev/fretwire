@@ -921,21 +921,20 @@ impl Session {
     ) -> crate::Result<()> {
         if self.device().pid == fretwire_protocol::PID_POD_GO {
             // POD Go Edit has no add of its own — its chain is ten fixed slots, and an emptied one
-            // is re-filled by picking a model — but op 39 is how the owner filled empty slots from
-            // fretwire, and it holds up in slots 1..=8: they built whole chains that way and the
-            // pedal loads them reliably (issue #15, 2026-08-28). Slots 9 and 10 are where the HX
-            // keeps its bounding nodes, and there op 39 is the coin flip: `-306` on 2026-08-28,
-            // and on 2026-08-26 an accepted add that crashed the pedal at the next preset change.
-            // Refused for those two before anything is sent; the pedal's own refusals elsewhere
-            // surface as errors, and are recoverable (a same-slot goto reloads from flash).
-            // What POD Go Edit sends to fill an empty slot has not been captured, so this is the
+            // is re-filled by picking a model — but op 39 is how the owner fills empty slots from
+            // fretwire, and any of the ten takes it (issue #15, 2026-09-03: "9 and 10 are valid
+            // targets"; a `-306` on slot 9 came from a chain with none of the mandated blocks in
+            // it, and the crash of 2026-08-26 was an add into slot **11**, past the chain). So the
+            // guard is the chain's edge, not a slot inside it; occupancy — including the wah,
+            // volume, amp and cab slots — is `add_block_at`'s check, and the pedal's own refusals
+            // surface as errors and are recoverable (a same-slot goto reloads from flash). What
+            // POD Go Edit sends to fill an empty slot has not been captured, so this is the
             // measured path rather than the native one — see docs/pod-go.md.
-            if !(1..=8).contains(&slot) {
+            if !(1..=10).contains(&slot) {
                 return Err(fretwire_data::Error::Stream(format!(
-                    "the POD Go accepts a new block in slots 1 to 8 only; adding into slot {slot} \
-                     is refused by the pedal or, worse, accepted and then crashes it at the next \
-                     preset change (owner-measured, 2026-08-26 and 2026-08-28). Move a block out \
-                     of slots 1-8 first, or swap the model in an occupied slot"
+                    "the POD Go's chain is slots 1 to 10; adding into slot {slot} is past its \
+                     end, and the one time that was sent the pedal crashed at the next preset \
+                     change (owner-measured, 2026-08-26)"
                 ))
                 .into());
             }

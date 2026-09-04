@@ -1074,8 +1074,8 @@ Key `102` is the switch index, **zero-based**, so the one-based argument the CLI
 not the wire's — that much is `[solid]`, confirmed across three switches.
 
 `65` is the switch type — `true` momentary, `false` latching — mirroring layout-entry key `12`:
-writing that key through op 21 flipped `65` to `true` and back on the next op-33 read
-[solid — live HX Stomp 2026-09-03, `fretwire switch-type`]. `109` label and `66` colour were
+writing that key through op 21 flipped `65` to `true` and back on the next op-33 read, and the
+switch then behaved momentary under a foot [solid — live HX Stomp 2026-09-03, `fretwire switch-type`]. `109` label and `66` colour were
 settled the same way on 2026-08-27 (below). `67` is the switch's bindings. Before any of that
 was measured, all four were `[hypothesis]`, and the note that follows is from then: `109`
 carries a *name* elsewhere in this protocol (it is the IR name), which is a suggestive analogy and

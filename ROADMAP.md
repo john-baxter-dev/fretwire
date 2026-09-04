@@ -351,7 +351,8 @@ guessing has already cost a power cycle): see section B of `captures/_RUNBOOK-hx
         assignment itself — and as of 2026-09-03 not needed for the switch record either: the
         **type (latching / momentary)** joined the label and colour on the op-21 document path
         (layout key `12`; `Session::set_switch_momentary`, CLI `switch-type`, a Latching /
-        Momentary pair in the GUI's switch editor). Op 33's `65` mirrors it, confirmed live.
+        Momentary pair in the GUI's switch editor). Op 33's `65` mirrors it, and the switch
+        behaves momentary under a foot — both confirmed live.
 
 - [x] **Tempo-sync as one control** (issue #5) — DONE (2026-09-03). HX Edit and the pedal both
       fold `TempoSync{n}` / `SyncSelect{n}` into the time knob, and now so does fretwire: the

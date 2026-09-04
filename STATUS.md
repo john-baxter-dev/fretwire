@@ -10,8 +10,9 @@ document route: `PresetStream::set_switch_momentary`, `Session::set_switch_momen
 latching|momentary`, and a Latching / Momentary pair beside the label and swatches in the GUI's
 switch editor; `momentary` is on the block DTO. Confirmed live: FS1 on the current preset read
 `65: false`, the write flipped op 33's `65` to `true`, the write back flipped it to `false` — which
-promotes op 33's `65` from [hypothesis] to [solid]. Whether the pedal *behaves* momentary
-afterwards is a foot-on-switch check nobody has done yet. See the seventy-fifth round.
+promotes op 33's `65` from [hypothesis] to [solid]. And the pedal *behaves* momentary: FS1
+held the Bucket Brigade flipped only while the foot was down (owner's check, same day). See the
+seventy-fifth round.
 
 **MCP leftovers closed (2026-09-03).** The two tools the MCP round left open. `model_params`
 describes a model before it is on the pedal — its parameters at their `.models` defaults with
@@ -4669,8 +4670,8 @@ without anyone flipping it.
   command on Tauri, serve and the dispatcher (80 arms); the CLI's `switch-type`; the GUI's
   switch editor gains a Latching / Momentary pair (mock backend follows; the ✎ editor sits on
   the block panel, so the control is where the label and colour already are).
-- **Not measured:** the pedal's behaviour with a foot on the switch after the write. The
-  document is the same one a `.hxb` restore or HX Edit would write, so there is no reason to
-  expect otherwise, but "the flag reads back" and "the switch holds" are two different claims.
+- **Behaviour confirmed.** With FS1 set momentary from the CLI, the pedal's own switch held the
+  Bucket Brigade flipped only while the foot was down and released it on lift — the owner's
+  check, the same day. So both claims stand: the flag reads back, and the switch holds.
 
 381 Rust tests, 200 UI tests, clippy clean.

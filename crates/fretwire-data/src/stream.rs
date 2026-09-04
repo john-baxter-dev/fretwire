@@ -360,6 +360,16 @@ impl PresetStream {
         })
     }
 
+    /// Set a footswitch's **type** — layout entry key `12`, `true` for momentary (the block is
+    /// bypassed/enabled only while the switch is held), `false` for latching. No gate: the key is
+    /// always present on a binding entry. Same per-binding shape as [`Self::set_switch_label`],
+    /// and `false` when the switch has no bindings.
+    pub fn set_switch_momentary(&mut self, switch: usize, momentary: bool) -> bool {
+        self.for_switch_bindings(switch, |entry| {
+            set_map_key(entry, 12, Value::from(momentary))
+        })
+    }
+
     /// Apply `write` to every binding entry on layout position `switch` (preset key `3 → 8`).
     /// `false` when the position is absent, unbound (`nil`) or empty.
     fn for_switch_bindings(&mut self, switch: usize, mut write: impl FnMut(&mut Value)) -> bool {
@@ -855,6 +865,7 @@ impl PresetStream {
                     paired_index: b.paired_ref,
                     user_label: pb.and_then(|p| p.user_label.clone()),
                     custom_color: pb.and_then(|p| p.custom_color),
+                    momentary: pb.is_some_and(|p| p.momentary),
                     bypassed: b.bypassed,
                     params: b.params.clone(),
                     paired_params: b.paired_params.clone(),
@@ -917,6 +928,7 @@ impl PresetStream {
             paired_index: None,
             user_label: None,
             custom_color: None,
+            momentary: false,
             bypassed,
             params,
             paired_params: Vec::new(),
@@ -964,6 +976,7 @@ impl PresetStream {
             paired_index: None,
             user_label: None,
             custom_color: None,
+            momentary: false,
             bypassed: None,
             params,
             paired_params: Vec::new(),
@@ -1132,6 +1145,10 @@ impl PresetStream {
                 let custom_color = map_get(node, 16)
                     .filter(|_| map_get(node, 15).and_then(Value::as_bool) == Some(true))
                     .and_then(Value::as_i64);
+                // Key 12: the switch type, `true` for momentary (hold), `false` for latching —
+                // what a tone calls `@fs_momentary`, and the one key of the entry with no gate.
+                // [solid as storage — the `.hxb` conversion reproduces the device's bytes with it]
+                let momentary = map_get(node, 12).and_then(Value::as_bool).unwrap_or(false);
                 // Footswitch = layout position + 1 (FS1 = pos 0); empty positions leave that switch
                 // unbound (→ global tap/tuner). Proven by an FS1↔FS2 swap diff + an FS1-bind diff.
                 Some(PathBlock {
@@ -1139,6 +1156,7 @@ impl PresetStream {
                     model_id,
                     user_label,
                     custom_color,
+                    momentary,
                     slot,
                     node_kind,
                     footswitch: pos_index as i64 + 1,
@@ -1446,6 +1464,8 @@ pub struct LoadedBlock {
     pub user_label: Option<String>,
     /// Custom footswitch LED colour (a palette index), if one is set on the block's switch.
     pub custom_color: Option<i64>,
+    /// Whether the block's switch is momentary (hold) rather than latching (layout key `12`).
+    pub momentary: bool,
     /// Bypass state (content key `10` = enabled; `bypassed = !enabled`).
     pub bypassed: Option<bool>,
     /// Ordered parameter values, in the model's `Helix.sym` order.
@@ -1476,6 +1496,8 @@ pub struct PathBlock {
     pub user_label: Option<String>,
     /// Custom LED colour (key `… → 16`, gated by `15`), a palette index, if any.
     pub custom_color: Option<i64>,
+    /// Switch type (key `… → 12`): `true` momentary (hold), `false` latching.
+    pub momentary: bool,
     /// Index into the block-slots array (`0 → 22`) this entry refers to (key `… → 11 → 8`).
     pub slot: Option<i64>,
     /// Node type (`… → 11 → 0`): 1 = DSP block, 2 = controller/footswitch node.

@@ -13,6 +13,13 @@ use clap::{Parser, Subcommand, ValueEnum};
 /// A plain `bool` positional can't express this: clap reads a bare `bool` as a flag, and the old
 /// hand-rolled parser treated *any* unrecognised word — and a missing argument — as `off`, so a
 /// typo silently did the opposite of what was asked.
+/// A footswitch's type, as the pedal's assign screen names the two.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum SwitchType {
+    Latching,
+    Momentary,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum OnOff {
     /// Engage bypass: the block goes OFF, as on the pedal.
@@ -499,6 +506,9 @@ enum Command {
     /// palette index, not RGB. Zero-based switch; op-21 path, edit-buffer only, like
     /// `switch-label`.
     SwitchColor { switch: i64, color: Option<i64> },
+    /// Set a footswitch's type: latching (a press toggles) or momentary (held = toggled). Layout
+    /// key 12, op 33's 65. Zero-based switch; op-21 path, edit-buffer only, like `switch-label`.
+    SwitchType { switch: i64, kind: SwitchType },
     /// Put a parameter under a controller (op 37).
     ///
     /// `source` is the controller ordinal: 0 none (removes it), 1-2 expression pedals,
@@ -1689,6 +1699,17 @@ fn main() -> Result<()> {
             match rec {
                 Some(v) => println!("FS{} {what} (op 33 answers {v})", switch + 1),
                 None => println!("FS{} {what} (op 33: no decodable reply)", switch + 1),
+            }
+        }
+        Command::SwitchType { switch, kind } => {
+            let mut s = fretwire_core::Session::connect()?;
+            let momentary = kind == SwitchType::Momentary;
+            s.set_switch_momentary(switch as usize, momentary)?;
+            let rec = s.read_switch(switch + 1)?;
+            let what = if momentary { "momentary" } else { "latching" };
+            match rec {
+                Some(v) => println!("FS{} set {what} (op 33 answers {v})", switch + 1),
+                None => println!("FS{} set {what} (op 33: no decodable reply)", switch + 1),
             }
         }
         Command::AssignParam {

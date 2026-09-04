@@ -2,6 +2,17 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Footswitch type — latching or momentary (2026-09-03).** The one field of the switch record
+that could be read but not written. It is layout-entry key `12` (`@fs_momentary` in a tone, no
+gate), on every binding of the switch like the label and colour, so it takes the same op-21
+document route: `PresetStream::set_switch_momentary`, `Session::set_switch_momentary`,
+`set_switch_momentary` on all three transports (80 arms), CLI `switch-type <switch>
+latching|momentary`, and a Latching / Momentary pair beside the label and swatches in the GUI's
+switch editor; `momentary` is on the block DTO. Confirmed live: FS1 on the current preset read
+`65: false`, the write flipped op 33's `65` to `true`, the write back flipped it to `false` — which
+promotes op 33's `65` from [hypothesis] to [solid]. Whether the pedal *behaves* momentary
+afterwards is a foot-on-switch check nobody has done yet. See the seventy-fifth round.
+
 **MCP leftovers closed (2026-09-03).** The two tools the MCP round left open. `model_params`
 describes a model before it is on the pedal — its parameters at their `.models` defaults with
 names, ranges, options and tempo-sync groups, through a new `Catalog::model_params` that builds the
@@ -4637,3 +4648,29 @@ file names params its model has and that a Simple Delay's governs `Time`, and `s
   Checked, with the note.
 
 15 read tools. 381 Rust tests, clippy clean.
+
+## Seventy-fifth round (2026-09-03) — **switch type: latching / momentary, through the document like the label**
+
+Asked directly: what about latch versus hold? Read, yes — `footswitch_layout` had been walking
+past key `12` since the label work; written, no. The `.hxb` conversion had already pinned the key
+as storage (round 61: a Floor's eight bindings, momentary flags included, reproduced the device's
+bytes), and op 33 had been answering `65: false` on every untouched switch since 2026-08-22
+without anyone flipping it.
+
+- **Key `12`, no gate.** The label and colour are value-plus-gate pairs (`14`/`13`, `16`/`15`);
+  the type is a bare bool, present on every binding entry. `set_switch_momentary` writes it to
+  every binding of the switch through `for_switch_bindings`, the same as the other two, and
+  refuses an unbound switch for the same reason.
+- **Measured.** `fretwire switch-type 0 momentary` on the current preset (FS1 carries a Bucket
+  Brigade): op 33 answered `65: true`; `switch-type 0 latching`: `65: false`. That is the key's
+  first observed movement, so `65` is `[solid]` now, and the protocol note that had all four of
+  op 33's fields as hypotheses is rewritten to say which was settled when.
+- **Surface.** `momentary` on `PathBlock`, `LoadedBlock`, `EditorBlock` and `BlockDto`; the
+  command on Tauri, serve and the dispatcher (80 arms); the CLI's `switch-type`; the GUI's
+  switch editor gains a Latching / Momentary pair (mock backend follows; the ✎ editor sits on
+  the block panel, so the control is where the label and colour already are).
+- **Not measured:** the pedal's behaviour with a foot on the switch after the write. The
+  document is the same one a `.hxb` restore or HX Edit would write, so there is no reason to
+  expect otherwise, but "the flag reads back" and "the switch holds" are two different claims.
+
+381 Rust tests, 200 UI tests, clippy clean.

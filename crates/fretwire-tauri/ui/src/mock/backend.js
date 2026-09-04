@@ -808,6 +808,7 @@ const EDIT_LABELS = {
   assign_bypass: (a) => `FS${a.switch + 1} → ${slotName(a.slot)}`,
   set_switch_label: (a) => (a.label ? `FS${a.switch + 1} label “${a.label}”` : `FS${a.switch + 1} label cleared`),
   set_switch_color: (a) => (a.color != null ? `FS${a.switch + 1} colour ${a.color}` : `FS${a.switch + 1} colour cleared`),
+  set_switch_momentary: (a) => `FS${a.switch + 1} ${a.momentary ? "momentary" : "latching"}`,
   unassign_bypass: (a) => `${slotName(a.slot)} off FS${a.switch + 1}`,
   assign_param: (a) => (a.source === 0 ? "Unassign parameter" : `${sourceName(a.source)} → parameter`),
   set_assign_travel: (a) => `${a.max ? "Max" : "Min"} ${a.value}`,
@@ -823,6 +824,7 @@ function blockDto(p, slot, e) {
   return {
     slot, dsp: dspOf(slot), row: isRowB(slot) ? 1 : 0,
     model_name: e.model_name, user_label: e.user_label, custom_color: e.custom_color ?? null,
+    momentary: e.momentary ?? false,
     symbolic_id: e.symbolic_id,
     model_index: e.modelIndex,
     category: e.category, bypassed: e.bypassed, variant: e.variant, is_controller: false,
@@ -1379,6 +1381,12 @@ const HANDLERS = {
     const e = Object.values(current.slots).find((b) => b?.footswitch === sw + 1);
     if (!e) throw new Error(`switch ${sw} has no bindings — bind a block first`);
     e.custom_color = color ?? null;
+    return toDto(current);
+  },
+  set_switch_momentary: ({ switch: sw, momentary }) => {
+    const bound = Object.values(current.slots).filter((b) => b?.footswitch === sw + 1);
+    if (!bound.length) throw new Error(`switch ${sw} has no bindings — bind a block first`);
+    for (const e of bound) e.momentary = !!momentary;
     return toDto(current);
   },
   assign_param: ({ slot, paramIndex, source, paired }) => {

@@ -736,6 +736,21 @@ pub async fn set_switch_color(state: &AppState, switch: i64, color: Option<i64>)
     .await
 }
 
+/// Set a footswitch's type: momentary (hold) or latching. Same op-21 route as the label.
+pub async fn set_switch_momentary(state: &AppState, switch: i64, momentary: bool) -> R<PresetDto> {
+    let undo = format!(
+        "FS{} {}",
+        switch + 1,
+        if momentary { "momentary" } else { "latching" }
+    );
+    returning_edit(
+        state,
+        move |_| undo,
+        move |s| s.set_switch_momentary(switch as usize, momentary),
+    )
+    .await
+}
+
 /// Put a parameter under controller `source`, or remove it with source 0.
 ///
 /// **The device does not range-check `source`** — an ordinal past the end of the controller table

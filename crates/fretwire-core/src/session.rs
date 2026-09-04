@@ -2197,6 +2197,17 @@ impl Session {
         self.edit_switch(switch, |ps| ps.set_switch_color(switch, color))
     }
 
+    /// Set a footswitch's **type**: momentary (the bypass follows the switch while it is held)
+    /// or latching. Layout-entry key `12`, the tones' `@fs_momentary`; op 33 mirrors it as `65`.
+    /// Same route and constraints as [`Self::set_switch_label`].
+    pub fn set_switch_momentary(
+        &mut self,
+        switch: usize,
+        momentary: bool,
+    ) -> crate::Result<EditorPreset> {
+        self.edit_switch(switch, |ps| ps.set_switch_momentary(switch, momentary))
+    }
+
     fn edit_switch(
         &mut self,
         switch: usize,

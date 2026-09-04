@@ -66,6 +66,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "unassign_bypass",
     "set_switch_label",
     "set_switch_color",
+    "set_switch_momentary",
     "revert_preset",
     "assign_param",
     "set_assign_travel",
@@ -259,6 +260,9 @@ pub async fn dispatch(
         "set_switch_label" => {
             ok(c::set_switch_label(state, a.req("switch")?, a.opt("label")?).await?)
         }
+        "set_switch_momentary" => {
+            ok(c::set_switch_momentary(state, a.req("switch")?, a.req("momentary")?).await?)
+        }
         "set_switch_color" => {
             ok(c::set_switch_color(state, a.req("switch")?, a.opt("color")?).await?)
         }
@@ -426,7 +430,7 @@ mod tests {
     /// pinned by `connect_is_matched_without_running`.
     #[tokio::test]
     async fn every_name_dispatches() {
-        assert_eq!(COMMAND_NAMES.len(), 79, "the surface was 79 commands");
+        assert_eq!(COMMAND_NAMES.len(), 80, "the surface was 80 commands");
         for name in COMMAND_NAMES {
             if *name == "connect" {
                 continue;

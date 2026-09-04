@@ -1073,7 +1073,11 @@ the whole preset.
 Key `102` is the switch index, **zero-based**, so the one-based argument the CLI takes is ours and
 not the wire's — that much is `[solid]`, confirmed across three switches.
 
-Everything else is `[hypothesis]`: `65` momentary, `109` label, `66` colour, `67` assignments. `109`
+`65` is the switch type — `true` momentary, `false` latching — mirroring layout-entry key `12`:
+writing that key through op 21 flipped `65` to `true` and back on the next op-33 read
+[solid — live HX Stomp 2026-09-03, `fretwire switch-type`]. `109` label and `66` colour were
+settled the same way on 2026-08-27 (below). `67` is the switch's bindings. Before any of that
+was measured, all four were `[hypothesis]`, and the note that follows is from then: `109`
 carries a *name* elsewhere in this protocol (it is the IR name), which is a suggestive analogy and
 not an observation. **An HX Stomp cannot set a custom switch label from its own panel** — that is an
 HX Edit feature — so if `109` is the label, this device may never move it on its own, and the key
@@ -1136,8 +1140,10 @@ label and colour are fully live-editable, and `Session::{set_switch_label,set_sw
 
 Ops **58-62** — momentary/latching, custom switch label, LED colour — are documented by `tonepush`
 and untried here. Since 2026-08-27 they are also *unnecessary for storage*: the label and colour
-live in the document (see above) and can be written through the op-21 path, so these ops matter
-only as the incremental edit route. Op **64** sets a *parameter's* MIDI CC, which is a different
+live in the document (see above) and can be written through the op-21 path, and since 2026-09-03
+so can the switch type (layout key `12`, `Session::set_switch_momentary`, CLI `switch-type`, the
+Latching / Momentary pair in the GUI's switch editor), so these ops matter only as the
+incremental edit route. Op **64** sets a *parameter's* MIDI CC, which is a different
 mechanism from a bypass's (that rides op 37 with `95: 5`). None of them are needed for the
 assignment itself.
 

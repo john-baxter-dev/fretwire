@@ -35,6 +35,7 @@
     onBypassSwitch,
     onSwitchLabel,
     onSwitchColor,
+    onSwitchType,
     onAssignParam,
     onAssignTravel,
   } = $props();
@@ -512,6 +513,12 @@
             onclick={() => onSwitchColor(block.footswitch, null)}>×</button
           >
         </span>
+        <!-- Latching: a press toggles. Momentary: the block flips only while the switch is held.
+             Layout key 12 on every binding of the switch, like the label and colour. -->
+        <span class="fstype" role="group" aria-label="Switch type">
+          <button class="act" class:sel={!block.momentary} onclick={() => block.momentary && onSwitchType(block.footswitch, false)}>Latching</button>
+          <button class="act" class:sel={block.momentary} onclick={() => !block.momentary && onSwitchType(block.footswitch, true)}>Momentary</button>
+        </span>
       </div>
     {/if}
 
@@ -962,6 +969,11 @@
   }
   /* The assign affordance stays quiet until a parameter is actually assigned: every row carries
      one, and a row of bright badges would read as "these are all controlled". */
+  .fstype .act.sel {
+    background: #3a6ea5;
+    border-color: #3a6ea5;
+    color: #fff;
+  }
   /* The tempo-sync switch, folded onto the knob it governs. */
   .syncbtn {
     font: inherit;

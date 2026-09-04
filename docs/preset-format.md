@@ -110,7 +110,7 @@ split topologies and all 106 parameter values agree.
 | `global.@topologyN` | DSP group key `21` |
 | `footswitch.dspN.blockM` | key `3 → 8`, transposed: `@fs_index` − 1 is the array position |
 | `@fs_label` / `@fs_ledcolor` / `@fs_enabled` | `11 → 5` (NUL-terminated) / `11 → 6` / `11 → 7` |
-| `@fs_customlabel` / `@fs_momentary` | `14` (NUL-terminated, `13` says whether there is one) / `12` |
+| `@fs_customlabel` / `@fs_momentary` | `14` (NUL-terminated, `13` says whether there is one) / `12` (no gate; written live via op 21 and mirrored by op 33's `65` — [solid 2026-09-03]) |
 | `@fs_customcolor` | `16`, a palette index, with `15` saying whether there is one |
 | `snapshotN.@name` / `@tempo` / `@valid` | snapshot keys `4` (NUL-terminated) / `5` / `0` |
 | `snapshotN.@pedalstate` / `@ledcolor` / `@custom_name` | snapshot keys `11` / `12` / `14` |

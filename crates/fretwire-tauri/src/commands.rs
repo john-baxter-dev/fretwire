@@ -314,6 +314,15 @@ pub async fn set_switch_label(
 }
 
 #[tauri::command]
+pub async fn set_switch_momentary(
+    state: State<'_, AppState>,
+    switch: i64,
+    momentary: bool,
+) -> R<PresetDto> {
+    fretwire_commands::set_switch_momentary(&state, switch, momentary).await
+}
+
+#[tauri::command]
 pub async fn set_switch_color(
     state: State<'_, AppState>,
     switch: i64,

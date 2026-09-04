@@ -548,6 +548,8 @@
     apply(invoke("set_switch_label", { switch: oneBased - 1, label }));
   const onSwitchColor = (oneBased, color) =>
     apply(invoke("set_switch_color", { switch: oneBased - 1, color }));
+  const onSwitchType = (oneBased, momentary) =>
+    apply(invoke("set_switch_momentary", { switch: oneBased - 1, momentary }));
   const onAssignParam = (slot, paired, index, source) =>
     apply(invoke("assign_param", { slot, paired, paramIndex: index, source }));
   const onAssignTravel = (slot, paired, index, max, value) =>
@@ -1487,6 +1489,7 @@
             {onBypassSwitch}
             {onSwitchLabel}
             {onSwitchColor}
+            {onSwitchType}
             {onAssignParam}
             {onAssignTravel}
           />

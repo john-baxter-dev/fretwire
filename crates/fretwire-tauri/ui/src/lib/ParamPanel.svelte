@@ -254,6 +254,17 @@
     return Array.from({ length: Math.max(0, hi - lo + 1) }, (_, k) => lo + k);
   };
 
+  // The governed member of a tempo-sync group, resolved: whether the switch is on and the note
+  // param to show while it is. `null` for every other param — including the switch and the note
+  // themselves, which have no rows.
+  function syncOf(p) {
+    if (!p.sync || p.sync.role !== "governed") return null;
+    const tempo = params.find((q) => q.index === p.sync.tempo);
+    const note = params.find((q) => q.index === p.sync.note);
+    if (!tempo || !note) return null;
+    return { on: tempo.value >= 0.5, tempoIndex: tempo.index, note };
+  }
+
   function control(p) {
     // A block carrying *several* values past the end of its symbol's param list. The lone trailing
     // value (`Trails`, a legacy cab's mic index) is reachable through the extras addressing and
@@ -578,9 +589,21 @@
         {@const k = key(paired, p)}
         {@const c = control(p)}
         {@const asg = assignmentFor(paired, p.index)}
+        {@const sync = syncOf(p)}
+        <!-- A tempo-sync group is one control here, as in HX Edit and on the pedal: the
+             `Tempo Sync` switch and the `Note Sync` value have no rows of their own; the knob
+             they govern carries the switch, and shows the note value while it is on. -->
+        {#if !(p.sync && p.sync.role !== "governed")}
         <div class="ctrl" class:assigned={!!asg}>
           <span class="cap">
             {p.name}
+            {#if sync}
+              <button
+                class="syncbtn"
+                class:on={sync.on}
+                title={sync.on ? "Synced to tempo — click for a free value" : "Sync to the tempo (note values)"}
+                onclick={() => onEnum(block.slot, paired, sync.tempoIndex, sync.on ? 0 : 1)}>♩</button>
+            {/if}
             <button
               class="asgbtn"
               class:on={!!asg}
@@ -590,7 +613,13 @@
               onclick={() => (openAssign = openAssign === k ? null : k)}>{asg ? asg.source_name : "\u21e2"}</button
             >
           </span>
-          {#if isIrSelect(p)}
+          {#if sync?.on}
+            <!-- The note value in place of the knob, written to the `SyncSelect` param — the
+                 same list and the same `enum_base` offset the plain enum branch uses. -->
+            <select value={sync.note.value} onchange={(e) => onEnum(block.slot, paired, sync.note.index, Number(e.currentTarget.value))}>
+              {#each sync.note.enum_labels as lbl, i}<option value={i + (sync.note.enum_base ?? 0)}>{lbl}</option>{/each}
+            </select>
+          {:else if isIrSelect(p)}
             <!-- Sized to its cell, not to its longest option: an IR name is as wide as its author
                  made it, and a select that grows to fit one runs under the next parameter's label
                  (owner screenshot, 2026-09-03). The closed control clips; the open list is the
@@ -732,6 +761,7 @@
             </div>
           {/if}
         </div>
+        {/if}
       {/each}
     </div>
     {#if showMic}
@@ -932,6 +962,24 @@
   }
   /* The assign affordance stays quiet until a parameter is actually assigned: every row carries
      one, and a row of bright badges would read as "these are all controlled". */
+  /* The tempo-sync switch, folded onto the knob it governs. */
+  .syncbtn {
+    font: inherit;
+    font-size: 0.85rem;
+    line-height: 1;
+    padding: 0 0.3rem;
+    margin-left: 0.25rem;
+    border: 1px solid #555;
+    border-radius: 4px;
+    background: transparent;
+    color: #9aa3b2;
+    cursor: pointer;
+  }
+  .syncbtn.on {
+    background: #3a6ea5;
+    border-color: #3a6ea5;
+    color: #fff;
+  }
   .asgbtn {
     flex: none;
     border: 1px solid #33405a;

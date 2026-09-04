@@ -69,17 +69,56 @@ pub struct Catalog {
     /// that [`category_name`] speaks — the catalog calls Distortion 1 and Amp 11, where the model
     /// table calls them 3 and 1. Joining on id would silently mispaint every block.
     category_colors: std::collections::HashMap<String, u32>,
+    /// Model `symbolicID` → its tempo-sync groups as `[tempo, note, governed]` param symbols,
+    /// from `HX_ModelCatalog.json`'s nested param lists. See [`SyncLink`].
+    sync_groups: std::collections::HashMap<String, Vec<[String; 3]>>,
 }
 
 /// Synthetic picker category: every amp paired with its suggested cab (HX Edit's "Amp+Cab" list).
 /// Not a real model-table category id — [`Catalog::models_in_category`] special-cases it.
 pub const CATEGORY_AMP_CAB: i64 = 100;
 
+/// Which member of a tempo-sync group a parameter is. See [`SyncLink`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncRole {
+    /// The `TempoSync{n}` switch: on, and the governed knob becomes a note-value selector.
+    Tempo,
+    /// The `SyncSelect{n}` note value (`1/4`, `1/8 Dotted`, …) — HX Edit's "Note Sync".
+    Note,
+    /// The time/rate/speed parameter the pair governs.
+    Governed,
+}
+
+/// A tempo-sync group: the switch, the note value, and the parameter they take over — three
+/// params of one block that HX Edit and the pedal both show as **one control**. Every member
+/// carries the same three indices and its own role, so a front end can render the group from any
+/// of them: hide the switch and the note, and put both on the governed knob.
+///
+/// **Which knob a pair governs is stated, not guessed.** `HX_ModelCatalog.json` lists each
+/// model's params in HX Edit's display order, and a sync group is a **nested list** —
+/// `[{"TempoSync1": null}, {"SyncSelect1": "Note Sync"}, {"Speed": null}]` — the pair followed by
+/// the one param it governs. Every nested list in the file has exactly that shape (159 groups
+/// over 144 models, 15 of them with two; not one exception), which is what the roadmap had asked
+/// for before folding the three rows into one. [solid — the shipped catalog, read 2026-09-03]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyncLink {
+    pub role: SyncRole,
+    /// Param index of the `TempoSync{n}` switch.
+    pub tempo: usize,
+    /// Param index of the `SyncSelect{n}` note value.
+    pub note: usize,
+    /// Param index of the parameter the pair governs.
+    pub governed: usize,
+}
+
 /// UI metadata for one parameter, distilled from a `.models` `Param`: its numeric range and the
 /// `displayType` hint (`"generic_knob"`, `"volume"`, `"off_on"`, `"sync_note"`, …) that tells the
 /// editor which control to render. All optional — switches and enums carry non-numeric bounds.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ParamMeta {
+    /// The tempo-sync group this param belongs to, if any. Set per block from the catalog's
+    /// grouping (see [`SyncLink`]) rather than per model, since it names param indices.
+    pub sync: Option<SyncLink>,
     /// The param's **display** name from `.models` (`"Note Sync"`), where it differs from the
     /// `symbolicID` we address it by (`"SyncSelect1"`). Most params name themselves the same way
     /// and this stays `None`; the ones that don't were showing raw symbols in the editor.
@@ -576,6 +615,87 @@ struct RawData {
     models: Vec<(String, Vec<u8>)>,
 }
 
+/// [`Catalog::link_sync`]'s body: mark each group's three members in `params`.
+fn link_sync_groups(params: &mut [EditorParam], groups: &[[String; 3]]) {
+    for [tempo_sym, note_sym, governed_sym] in groups {
+        let find = |sym: &str| params.iter().position(|p| p.name == sym);
+        let (Some(tempo), Some(note), Some(governed)) =
+            (find(tempo_sym), find(note_sym), find(governed_sym))
+        else {
+            continue;
+        };
+        for (i, role) in [
+            (tempo, SyncRole::Tempo),
+            (note, SyncRole::Note),
+            (governed, SyncRole::Governed),
+        ] {
+            params[i].meta.sync = Some(SyncLink {
+                role,
+                tempo,
+                note,
+                governed,
+            });
+        }
+    }
+}
+
+/// Pull every model's tempo-sync groups out of `HX_ModelCatalog.json` — see [`SyncLink`] for the
+/// shape. Keyed by the model's `id`, which is its `.models` `symbolicID` (checked: every one of
+/// the 106 sync-carrying ids is in the `.models` files). Best-effort like the colours: no file,
+/// no groups, three rows.
+fn sync_groups_from(bytes: &[u8]) -> std::collections::HashMap<String, Vec<[String; 3]>> {
+    let mut out = std::collections::HashMap::new();
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return out;
+    };
+    fn walk(v: &serde_json::Value, out: &mut std::collections::HashMap<String, Vec<[String; 3]>>) {
+        match v {
+            serde_json::Value::Object(m) => {
+                if let (
+                    Some(serde_json::Value::String(id)),
+                    Some(serde_json::Value::Array(params)),
+                ) = (m.get("id"), m.get("params"))
+                {
+                    let groups: Vec<[String; 3]> = params
+                        .iter()
+                        .filter_map(|e| {
+                            let list = e.as_array()?;
+                            // Each entry is a one-key object, `{symbol: display-name-or-null}`.
+                            let syms: Vec<&str> = list
+                                .iter()
+                                .filter_map(|o| o.as_object()?.keys().next().map(String::as_str))
+                                .collect();
+                            match syms.as_slice() {
+                                [t, n, g]
+                                    if t.starts_with("TempoSync")
+                                        && n.starts_with("SyncSelect") =>
+                                {
+                                    Some([t.to_string(), n.to_string(), g.to_string()])
+                                }
+                                _ => None,
+                            }
+                        })
+                        .collect();
+                    if !groups.is_empty() {
+                        out.insert(id.clone(), groups);
+                    }
+                }
+                for x in m.values() {
+                    walk(x, out);
+                }
+            }
+            serde_json::Value::Array(a) => {
+                for x in a {
+                    walk(x, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    walk(&v, &mut out);
+    out
+}
+
 /// Pull category name → `0xRRGGBB` out of `HX_ModelCatalog.json`.
 ///
 /// The file nests categories under several keys and repeats the shape for subcategories, so this
@@ -766,7 +886,18 @@ impl Catalog {
             param_meta: param_meta_from(&raw.models, &raw.controls),
             cab_links: cab_links_from(&raw.models),
             category_colors: category_colors_from(&raw.catalog_json),
+            sync_groups: sync_groups_from(&raw.catalog_json),
         })
+    }
+
+    /// Mark the members of every tempo-sync group of `model` in `params` — see [`SyncLink`].
+    /// A group whose three symbols are not all present in this block (a variant that dropped
+    /// one, or no reference data) is left alone: three rows shown is the fallback, not a wrong
+    /// fold.
+    fn link_sync(&self, params: &mut [EditorParam], model: Option<&str>) {
+        if let Some(groups) = model.and_then(|m| self.sync_groups.get(m)) {
+            link_sync_groups(params, groups);
+        }
     }
 
     /// The colour HX Edit paints category `id`, as `0xRRGGBB`.
@@ -1102,7 +1233,8 @@ impl Catalog {
         };
         let (model_name, category) = self.resolve_name(sym.map(|(s, _)| s));
         let meta = symbolic_id.as_deref().and_then(|s| self.param_meta.get(s));
-        let params = name_params(&b.params, sym.map(|(_, p)| p), meta, category);
+        let mut params = name_params(&b.params, sym.map(|(_, p)| p), meta, category);
+        self.link_sync(&mut params, symbolic_id.as_deref());
 
         // Paired cab/IR (amp+cab blocks): resolve its name + name its param group too.
         let paired_sym = b
@@ -1263,6 +1395,8 @@ fn param_meta_from(
                         .zip(format.as_ref())
                         .and_then(|(ctl, fmt)| ctl.raw_step(fmt));
                     let meta = ParamMeta {
+                        // Per block, not per model — it names param indices. See `link_sync`.
+                        sync: None,
                         // Only when it actually differs, so `display_name()` can fall through to
                         // the symbol and the common case costs no allocation.
                         label: p.name.clone().filter(|n| *n != p.symbolic_id),
@@ -1846,6 +1980,69 @@ fn name_params(
         .collect()
 }
 
+// The catalog's sync grouping, on a hand-written excerpt — no reference data needed.
+#[cfg(test)]
+mod sync_group_tests {
+    use super::*;
+
+    const EXCERPT: &str = r#"{"categories":[{"name":"Mod","subcategories":[{"models":[
+        {"id":"HD2_TremoloOpticalTrem","name":"Optical Trem","params":[
+            [{"TempoSync1":null},{"SyncSelect1":"Note Sync"},{"Speed":null}],{"Intensity":null},{"Level":null}]},
+        {"id":"HD2_Chorus70sChorus","name":"70s Chorus","params":[
+            [{"TempoSync1":null},{"SyncSelect1":"Note Sync (Chorus)"},{"ChorusIntensity":null}],
+            [{"TempoSync2":null},{"SyncSelect2":"Note Sync (Vibrato)"},{"VibratoRate":null}],{"Mix":null}]},
+        {"id":"HD2_GateHardGate","name":"Hard Gate","params":[{"Threshold":null},{"Decay":null}]}
+    ]}]}]}"#;
+
+    #[test]
+    fn nested_lists_are_the_groups() {
+        let g = sync_groups_from(EXCERPT.as_bytes());
+        assert_eq!(g.len(), 2, "a model with no nested list has no entry");
+        assert_eq!(
+            g["HD2_TremoloOpticalTrem"],
+            vec![[
+                "TempoSync1".to_string(),
+                "SyncSelect1".into(),
+                "Speed".into()
+            ]]
+        );
+        assert_eq!(g["HD2_Chorus70sChorus"].len(), 2);
+        assert_eq!(g["HD2_Chorus70sChorus"][1][2], "VibratoRate");
+        assert!(sync_groups_from(b"not json").is_empty());
+    }
+
+    #[test]
+    fn link_marks_all_three_members_from_any_side() {
+        let groups = sync_groups_from(EXCERPT.as_bytes());
+        let trem = &groups["HD2_TremoloOpticalTrem"];
+        let order: Vec<String> = ["Speed", "Intensity", "TempoSync1", "SyncSelect1", "Level"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let values = vec![ParamValue::Float(0.5); 5];
+        let mut params = name_params(&values, Some(&order), None, Some(6));
+        link_sync_groups(&mut params, trem);
+        let link = |i: usize| params[i].meta.sync.expect("linked");
+        assert_eq!(link(0).role, SyncRole::Governed);
+        assert_eq!(link(2).role, SyncRole::Tempo);
+        assert_eq!(link(3).role, SyncRole::Note);
+        for i in [0, 2, 3] {
+            assert_eq!((link(i).tempo, link(i).note, link(i).governed), (2, 3, 0));
+        }
+        assert!(params[1].meta.sync.is_none() && params[4].meta.sync.is_none());
+
+        // A block missing one of the three (no such variant exists, but a foreign preset could
+        // carry one) keeps three plain rows rather than a fold that points at nothing.
+        let short: Vec<String> = ["Speed", "TempoSync1"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let mut params = name_params(&values[..2], Some(&short), None, Some(6));
+        link_sync_groups(&mut params, trem);
+        assert!(params.iter().all(|p| p.meta.sync.is_none()));
+    }
+}
+
 // Pure naming tests — no reference data needed, so they always run.
 #[cfg(test)]
 mod trailing_extra_tests {
@@ -1936,6 +2133,39 @@ mod tests {
     fn dev_catalog() -> Catalog {
         Catalog::from_data_dir(&crate::data_dir())
             .expect("load reference data (run `fretwire import-data`)")
+    }
+
+    /// The shipped catalog's grouping, end to end: every `.models` model that carries a sync pair
+    /// gets a group, and the group names a param the model actually has.
+    #[test]
+    fn every_sync_pair_in_the_catalog_governs_a_real_param() {
+        let cat = dev_catalog();
+        assert!(
+            cat.sync_groups.len() >= 100,
+            "{} models with groups",
+            cat.sync_groups.len()
+        );
+        for (model, groups) in &cat.sync_groups {
+            let Some(meta) = cat.param_meta.get(model) else {
+                panic!("{model} has sync groups but no .models entry");
+            };
+            for [t, n, g] in groups {
+                for sym in [t, n, g] {
+                    assert!(
+                        meta.contains_key(sym),
+                        "{model}: {sym} is not one of its params"
+                    );
+                }
+            }
+        }
+        // The one everybody knows: a Simple Delay's TempoSync1/SyncSelect1 take over Time.
+        let simple = cat
+            .sync_groups
+            .iter()
+            .find(|(m, _)| m.contains("SimpleDelay"))
+            .map(|(_, g)| g.clone())
+            .expect("a simple delay");
+        assert_eq!(simple[0][2], "Time");
     }
 
     /// Snapshot names are 1-based on the pedal's screen and 0-based in the preset — the off-by-one

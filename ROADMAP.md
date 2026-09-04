@@ -350,23 +350,25 @@ guessing has already cost a power cycle): see section B of `captures/_RUNBOOK-hx
         parameter's MIDI CC) are documented by `tonepush` and untried here. Not needed for the
         assignment itself.
 
-- [ ] **Tempo-sync as one control** (issue #5) — HX Edit and the pedal both fold `TempoSync{n}` /
-      `SyncSelect{n}` into the time knob: switch sync on and the knob becomes a note-value selector
-      (`1/4`, `1/8 Dotted`, …). We list all three as separate rows instead. Everything needed to
-      *render* it is already in hand — `sync_note` is a discrete control with its 19 labels, and the
-      dropdown works today.
-      **Blocked on evidence, not effort:** nothing in the shipped data says *which* param a sync pair
-      governs. Checked and refuted 2026-08-21 — position doesn't encode it (`Level` immediately
-      precedes `SyncSelect1` in 57 models), and `assign` is amp-knob ordering, not this (Dual Delay
-      assigns 3/4/5/6 against syncs 1/2; several sync-bearing models have no `assign` at all). 107
-      models carry a sync pair and 14 carry two, so a name heuristic would be guessing on ~14 models
-      where guessing wrong silently reassigns a control. Look in `HelixModelDefs.bin` or
-      `HX_ModelCatalog.json` for a stated grouping before writing UI.
-      Available now without any of that: hide `Note Sync` while `Tempo Sync` is off — that pairing
-      *is* unambiguous, being the same ordinal.
+- [x] **Tempo-sync as one control** (issue #5) — DONE (2026-09-03). HX Edit and the pedal both
+      fold `TempoSync{n}` / `SyncSelect{n}` into the time knob, and now so does fretwire: the
+      switch and the note rows are gone from the panel, the governed knob carries a ♩ toggle, and
+      while it is on the knob's cell shows the note-value dropdown (`1/4`, `1/8 Dotted`, …) written
+      to the `SyncSelect` param. The wire stays three params; the fold is a rendering rule on a
+      `sync` link the DTO carries.
+      **The evidence this was blocked on was in `HX_ModelCatalog.json` all along.** Its per-model
+      `params` list is HX Edit's display order, and a sync group is a **nested list** —
+      `[{"TempoSync1": null}, {"SyncSelect1": "Note Sync"}, {"Speed": null}]` — the pair followed
+      by the one param it governs. Every nested list in the file has exactly that shape: 159
+      groups over 144 models (15 with two), no exceptions, all 106 sync-carrying model ids present
+      in the `.models` files. `Catalog` reads it beside the category colours; `build_block` links
+      the three by symbol, so the wire order (a Bucket Brigade's `SyncSelect1` sits *before* its
+      `TempoSync1`) never matters. Seen live on a preset holding a Bucket Brigade, a Harmonic
+      Tremolo and a two-group 70s Chorus (Chorus Rate and Vibrato Rate each with their own pair).
+      Without the reference data there is no grouping and the three rows show as before.
       (The note *values* were off by one until 2026-08-21 — a discrete control's labels span the
       param's `min..=max`, and `sync_note` starts at 1. Fixed for every enum, issue #8; see STATUS
-      "thirty-first round". Unrelated to the grouping question above.)
+      "thirty-first round".)
 
 ## Phase 7 — Preset & device management
 - [x] **Setlist export** — BUILT (2026-07-07; multi-setlist, cancellable and renamed 2026-08-20;

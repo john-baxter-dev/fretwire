@@ -147,6 +147,22 @@ pub struct ParamDto {
     pub step: Option<f64>,
     /// The model's default value, in stored units — what a double-click on the control resets to.
     pub default: Option<f64>,
+    /// The tempo-sync group this param belongs to, when it does — the switch, the note value
+    /// and the knob they govern are one control in HX Edit and on the pedal, and the panel
+    /// renders them as one: the switch and the note rows are hidden, and the governed knob
+    /// carries the switch and, while it is on, shows the note value instead of the knob. See
+    /// [`fretwire_core::editor::SyncLink`].
+    pub sync: Option<SyncDto>,
+}
+
+/// See [`fretwire_core::editor::SyncLink`]. `role` is `"tempo"`, `"note"` or `"governed"`; the
+/// three indices are the group's members, the same on each.
+#[derive(Serialize, Default, Clone)]
+pub struct SyncDto {
+    pub role: &'static str,
+    pub tempo: usize,
+    pub note: usize,
+    pub governed: usize,
 }
 
 #[derive(Serialize, Default)]
@@ -203,6 +219,16 @@ impl From<&EditorParam> for ParamDto {
             extra_index: p.extra_index,
             step: fin_opt(p.meta.step),
             default: fin_opt(p.meta.default),
+            sync: p.meta.sync.map(|s| SyncDto {
+                role: match s.role {
+                    fretwire_core::editor::SyncRole::Tempo => "tempo",
+                    fretwire_core::editor::SyncRole::Note => "note",
+                    fretwire_core::editor::SyncRole::Governed => "governed",
+                },
+                tempo: s.tempo,
+                note: s.note,
+                governed: s.governed,
+            }),
             format: p.meta.format.as_ref().map(|f| NumFormatDto {
                 scale: f.scale,
                 offset: f.offset,

@@ -24,6 +24,15 @@ const LATENCY_MS = 30; // a touch of fake IPC latency, to surface races the real
 // Parameter factories — build ParamDto-shaped objects. `value_type`: 0 = enum, 1 = float, 2 = bool
 // (matches `.models` valueType). `index` is the wire selector (unique within a block).
 // ---------------------------------------------------------------------------------------------
+// Link a tempo-sync group — the switch at `tempo`, the note value at `note`, the knob they take
+// over at `governed` — the way the real backend does from HX_ModelCatalog.json's grouping.
+const withSync = (params, tempo, note, governed) => {
+  for (const [index, role] of [[tempo, "tempo"], [note, "note"], [governed, "governed"]]) {
+    params.find((p) => p.index === index).sync = { role, tempo, note, governed };
+  }
+  return params;
+};
+
 const P = {
   float: (index, name, value, min = 0, max = 10) => ({
     index, name, value, kind: "float", min, max, value_type: 1, display_type: null, enum_labels: [], stops: [], extra_index: null,
@@ -79,13 +88,15 @@ const PARAMS = {
   dynamics: () => [P.float(0, "Threshold", -48, -96, 0), P.float(1, "Decay", 30, 0, 100), P.float(2, "Level", 0, -12, 12)],
   distortion: () => [P.float(0, "Drive", 5), P.float(1, "Tone", 5), P.float(2, "Level", 5)],
   // Note Sync carries the real control's 1-based range, so the enum offset stays exercised here.
-  delay: () => [
+  // The three are one tempo-sync group, as the real DTO links them from the catalog: the panel
+  // shows one control on Time. See ParamMeta::sync.
+  delay: () => withSync([
     P.float(0, "Time", 380, 1, 2000), P.float(1, "Feedback", 30, 0, 100), P.float(2, "Mix", 25, 0, 100),
     P.bool(3, "Tempo Sync", false),
     P.enum(4, "Note Sync", 6, ["1/1", "1/2 Dotted", "1/2", "1/2 Triplet", "1/4 Dotted", "1/4", "1/4 Triplet",
       "1/8 Dotted", "1/8", "1/8 Triplet", "1/16 Dotted", "1/16", "1/16 Triplet"], 1),
     P.bool(5, "Trails", true, 0),
-  ],
+  ], 3, 4, 0),
   modulation: () => [P.float(0, "Speed", 3), P.float(1, "Depth", 5), P.float(2, "Mix", 50, 0, 100)],
   eq: () => [P.float(0, "Low", 0, -12, 12), P.float(1, "Mid", 0, -12, 12), P.float(2, "High", 0, -12, 12)],
   wah: () => [P.float(0, "Position", 5), P.float(1, "Mix", 100, 0, 100)],

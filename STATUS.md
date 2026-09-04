@@ -2,6 +2,21 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Tempo sync is one control (2026-09-03).** The last open half of issue #5. The roadmap had it
+blocked on evidence — nothing in the shipped data seemed to say *which* knob a `TempoSync{n}` /
+`SyncSelect{n}` pair governs — and told the next reader to look in `HX_ModelCatalog.json` before
+writing UI. It is there: the catalog's per-model `params` list nests each pair with the one param it
+governs, `[{"TempoSync1": null}, {"SyncSelect1": "Note Sync"}, {"Speed": null}]`, and every nested
+list in the file has that exact shape (159 groups, 144 models, 15 with two, none odd). `Catalog`
+now reads those groups and `build_block` marks the three params of each with a `SyncLink` (role +
+the three indices); the DTO carries it as `sync`; the panel hides the switch and the note rows and
+puts a ♩ toggle on the governed knob, whose cell becomes the note dropdown while sync is on. Three
+params on the wire, one control on screen — as HX Edit and the pedal show it. Seen live through
+serve mode on the current preset: Bucket Brigade (Time ← 7/6), Harmonic Tremolo (Speed ← 9/8) and a
+two-group 70s Chorus (Chorus Rate ← 8/7, Vibrato Rate ← 10/9). Pure tests on a catalog excerpt, a
+data-gated test that every group in the real file names params its model has, a mock contract
+test (+9, 200 UI tests). See the seventy-third round.
+
 **Full device backup (2026-09-03).** The thing "Backup" used to promise and the export did not
 deliver: one file with every preset, the user IR store and the global settings, and a restore that
 puts all three back. Format **version 3** of the same `fretwire-backup` JSON (`settings` typed as
@@ -4549,3 +4564,42 @@ settings namespace were both decoded on 2026-08-22; nothing had put them in a fi
   backend implements the pair (+17 UI tests, 191). MCP `backup_list` reports the extra sections.
 
 377 tests, clippy clean.
+
+## Seventy-third round (2026-09-03) — **tempo sync as one control: the grouping was in the catalog**
+
+The roadmap's tempo-sync item had been blocked on one fact since 2026-08-21: which parameter a
+`TempoSync{n}` / `SyncSelect{n}` pair governs. Position had been refuted, `assign` had been
+refuted, and a name heuristic would have guessed on the fourteen two-pair models. The item ended
+with "look in `HelixModelDefs.bin` or `HX_ModelCatalog.json` for a stated grouping before writing
+UI". Looked.
+
+- **`HX_ModelCatalog.json` states it.** Each model's `params` is a list of one-key objects in HX
+  Edit's display order, `{symbol: display-name-or-null}`, and a sync group is a **nested list**
+  of three: `[{"TempoSync1": null}, {"SyncSelect1": "Note Sync (Chorus)"}, {"ChorusIntensity":
+  null}]`. Counted over the whole file: 725 models, 159 nested lists, every one of them
+  `(TempoSync, SyncSelect, governed)` in that order — 129 models with one, 15 with two, zero
+  lists of any other shape. The 106 distinct sync-carrying ids are all present as `.models`
+  `symbolicID`s. What the pairs govern: `Time` ×56, `Speed` ×48, `Rate` ×21, then the two-pair
+  models' `SlowSpeed`/`FastSpeed`, `ChorusIntensity`/`VibratoRate`, `TimeA`/`TimeB`,
+  `Left Time`/`Right Time`, `First`/`Last`, `ShiftTime`/`ReturnTime`, `LFO`. `HelixModelDefs.bin`
+  was not needed; the roadmap's other guess, the `.models` files, carry the pair but not the
+  target.
+- **Implementation.** `sync_groups_from` reads the catalog beside `category_colors_from` (same
+  best-effort posture: no file, no fold). `Catalog::build_block` links each group's three params
+  **by symbol** into a `SyncLink { role, tempo, note, governed }` on `ParamMeta.sync` — per block,
+  since it names indices — and a group missing a member is left as three rows rather than a fold
+  that points at nothing. `ParamDto.sync` carries it. The panel: a param with role `tempo` or
+  `note` renders no row; the governed one gets a ♩ button (writes the switch's own index through
+  the ordinary enum path) and, while the switch is on, the note-value `<select>` in place of its
+  knob (same labels, same `enum_base` offset as the plain enum branch — the issue-#8 lesson).
+  Footswitch assignment on the hidden switch is not offered, as HX Edit does not offer it.
+- **Seen live.** Through `fretwire-serve` on the pedal's current preset: Bucket Brigade
+  (`Time` governed by tempo 7 / note 6 — the wire order has the note *before* the switch, which is
+  why linking is by symbol), Harmonic Tremolo (`Speed` ← 9/8), and a two-group 70s Chorus
+  (`Chorus Rate` ← 8/7, `Vibrato Rate` ← 10/9). Not yet clicked through by hand in the GUI; the
+  mock exercises the same DTO shape.
+
+Tests: `sync_group_tests` on a hand-written catalog excerpt (the shape, and that linking marks all
+three from any side and refuses a partial group), a data-gated test that every group in the real
+file names params its model has and that a Simple Delay's governs `Time`, and `sync-mock.mjs`
+(+9, 200 UI tests). 380 Rust tests, clippy clean.

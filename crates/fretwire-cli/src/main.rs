@@ -486,6 +486,20 @@ enum Command {
         #[arg(long = "set", value_parser = parse_kv)]
         set: Vec<(i64, rmpv::Value)>,
     },
+    /// Send an arbitrary op on the browse side (the IR / favorites / user-default channel).
+    /// **Probe only** — same cautions as `probe-edit`.
+    ///
+    /// `--set key=value` builds the target map; `--nil` sends a nil target (op 112, the favorites
+    /// list, takes that). Known reads: `--op 112 --nil`, `--op 113 --set 118=0`,
+    /// `--op 109 --set 64=<model> --set 106=false`.
+    ProbeBrowse {
+        #[arg(long)]
+        op: i64,
+        #[arg(long = "set", value_parser = parse_kv)]
+        set: Vec<(i64, rmpv::Value)>,
+        #[arg(long)]
+        nil: bool,
+    },
     /// Ask the device what a footswitch carries (op 33). The number is **one-based**: 1 = FS1.
     ReadSwitch { switch: i64 },
     /// Ask the device what drives one parameter (op 36).
@@ -1675,6 +1689,24 @@ fn main() -> Result<()> {
                 Ok(Some(v)) => println!("  accepted: {v}"),
                 Ok(None) => println!("  accepted, empty reply"),
                 Err(e) => println!("  refused: {e}"),
+            }
+        }
+        Command::ProbeBrowse { op, set, nil } => {
+            let mut s = fretwire_core::Session::connect()?;
+            let target: Option<Vec<(rmpv::Value, rmpv::Value)>> = if nil {
+                None
+            } else {
+                Some(
+                    set.into_iter()
+                        .map(|(k, v)| (rmpv::Value::from(k), v))
+                        .collect(),
+                )
+            };
+            println!("op {op} target {target:?}");
+            match s.browse_probe(op, target) {
+                Ok(Some(v)) => println!("  reply: {v}"),
+                Ok(None) => println!("  accepted, empty reply"),
+                Err(e) => println!("  error: {e}"),
             }
         }
         Command::ReadSwitch { switch } => {

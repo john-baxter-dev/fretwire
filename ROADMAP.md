@@ -484,8 +484,9 @@ guessing has already cost a power cycle): see section B of `captures/_RUNBOOK-hx
       write turns up — capture HX Edit restoring a backup to find out; (3) the star icon: a block
       matches a favorite when model + values do (the pedal's own rule, per the reporter), or ask
       op 45 and compare. Delete and rename ops still uncaptured. **User Defaults**: op 109 per
-      model, nil when none saved [hypothesis] — needs the owner to save one on the pedal, then
-      `op 109` for that model live to see the record, and a capture of HX Edit restoring one.
+      (model, composite, cab kind), nil when none saved [solid, live] — the read is done; a backup
+      sweeps the 1162 triples (37 s, so behind a flag or a progress bar) and stores the non-nil
+      records; the write is unknown and needs a capture of HX Edit restoring one.
 - [ ] **Settings via op 85** (2026-09-04). One request returns every global, grouped
       DSP/EQ/System/Tuner/L6Link — the same ids the op-24 sweep reads (checked live), so this is
       a speed and structure improvement, not coverage: the backup's settings phase could be one

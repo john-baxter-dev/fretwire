@@ -2,6 +2,13 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**User default read confirmed live (2026-09-04, later).** The owner saved a user default for the
+US Princess on the pedal; `probe-browse --op 109` (new: the IR probe with a free target, for the
+browse-side ops) answered nil for the amp alone and with a legacy cab, and the full record for the
+amp with a mic'd cab — the form the block had when saved. Op 109 is [solid]: user default by
+(model, composite, cab kind), nil = none. The favorites list and record read from fretwire too
+(ops 112/113, same probe). `docs/protocol.md` has the table.
+
 **Favorites found on the wire and in the file (2026-09-04, evening).** The owner captured HX Edit
 saving a favorite and taking a backup on the Stomp. `show-backup --sections` on the new `.hxb` did
 what it was built for the same day: two tags it had never seen, `F000` and `F001` — **one section

@@ -4535,6 +4535,43 @@ impl Session {
         })
     }
 
+    /// **Probe**: send `op_id` with an arbitrary target on the browse side — the channel and
+    /// session the IR family, the favorites ops (112/113) and the user-default read (op 109) share —
+    /// and return whatever comes back, refusals included.
+    ///
+    /// `target` is the op's key-101 map; `None` sends `101: nil`, which is what op 112 takes. Same
+    /// warning as [`Self::ir_probe`]: an unmapped opcode can do anything.
+    pub fn browse_probe(
+        &mut self,
+        op_id: i64,
+        target: Option<Vec<(fretwire_data::rmpv::Value, fretwire_data::rmpv::Value)>>,
+    ) -> crate::Result<Option<fretwire_data::rmpv::Value>> {
+        use fretwire_data::rmpv::Value;
+        self.in_ir_session(|s| {
+            let txn = s.bump_txn();
+            let body = Value::Map(vec![
+                (Value::from(102), Value::from(txn)),
+                (Value::from(100), Value::from(op_id)),
+                (
+                    Value::from(101),
+                    target.map(Value::Map).unwrap_or(Value::Nil),
+                ),
+            ]);
+            let mut encoded = Vec::new();
+            fretwire_data::rmpv::encode::write_value(&mut encoded, &body)
+                .expect("msgpack encode to Vec is infallible");
+            let tlv = Tlv::command(op::SESSION_OPEN, encoded).to_bytes();
+            let ack = s.edit_request_txn(cmd::STREAM, tlv, txn)?;
+            if let Some((rejected, code)) = fretwire_data::stream::parse_edit_rejection(&ack.body)
+                && rejected == txn
+            {
+                tracing::warn!(op_id, code, "browse probe refused");
+                return Ok(Some(Value::from(format!("REFUSED code {code}"))));
+            }
+            Ok(Self::ir_reply_payload(&ack))
+        })
+    }
+
     /// Upload an IR into slot `slot` (op 9, then the op-13 commit).
     ///
     /// **This writes device flash.** Not firmware — user data, in the same risk class as

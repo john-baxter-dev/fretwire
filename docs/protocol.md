@@ -1316,7 +1316,7 @@ is the block (`@model`, `@type`, `@enabled`, then params by name — the same va
 `slot1` the paired cab for an amp, `data.meta.name` the name. `fretwire_data::hxb::Hxb::favorites`
 reads them; `show-backup` lists them.
 
-## User Defaults — op 109, one ask per model [hypothesis — same capture]
+## User Defaults — op 109, one ask per (model, composite, cab kind) [solid — capture + live, 2026-09-04]
 `op 109 {64: model, 106: composite, 105: cab kind}` on the browse side, reply `104: nil`. HX Edit
 sends it **1162 times during a backup** — exactly the row count of the `.hxb`'s `UMDS`
 (`L6UMDArchive`, "user model defaults") table for this Stomp, with 359 composite rows matching the
@@ -1324,10 +1324,23 @@ sends it **1162 times during a backup** — exactly the row count of the `.hxb`'
 legacy cab) or **687** (`HD2_CabMicIr_2x12JazzRivet`, the first of the mic'd-cab range 687–829) — the
 *kind* of cab the composite pairs, so an amp is asked three ways: alone, with a legacy cab, with a mic'd
 one. It is also sent **once when a block is selected** (op 78 on slot 5 → op 109 for that block's model).
-Every reply in the capture is nil, and the pedal had no user default saved. So: **op 109 reads the
-user default for a model, nil = none saved.** The backup's UMDS table is that sweep written out — a bare
-manifest here because there was nothing to carry. Untested: what a saved default answers, and how one
-is written. The sweep is slow: 1162 asks took 37 s, against 1.95 s for the 126-preset op-4 sweep.
+Every reply in the capture is nil, and the pedal had no user default saved. **Then the owner saved
+one** (the US Princess block, ACTION → user default, on the pedal) and `fretwire probe-browse` asked
+again the same evening:
+
+| ask | reply |
+|---|---|
+| `{64: 591, 106: false}` | nil |
+| `{64: 591, 106: true, 105: 48}` | nil |
+| `{64: 591, 106: true, 105: 687}` | the record — `{19: 6, 28: 0, 20: {24: {23: true, 25: 591, 26: 709}, 9: 33, 10: true, 11: {…12 values}, 12: {…7 cab values}}}` |
+
+So **op 109 reads the user default, nil means none is saved, and the key is the triple**: the block was
+an amp with a mic'd cab when it was saved, and only that form of the model holds it. The record is the
+same shape as a favorite's (op 113's `64`, with the cab under `12`). The backup's UMDS table is that
+sweep written out, and a bare manifest on both donors because there was nothing to carry; what a row
+with a default looks like in the file is still unseen. Not seen either: how one is written or cleared.
+The sweep is slow: 1162 asks took 37 s, against 1.95 s for the 126-preset op-4 sweep — a backup that
+includes user defaults should say so, or ask only the models the preset store uses.
 
 ## All global settings in one read — op 85 [solid — same capture]
 `op 85 {}` on the edit channel answers a 724-byte map: `{0: [{150: v}…{164: v}], 1: [{190: v}…{203: v}],

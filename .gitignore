@@ -38,3 +38,5 @@ __pycache__/
 /captures/pod-go/
 *.hxb
 *.pgb
+# Scratch build dir for the panel SSR test (tests/panel-ssr.mjs cleans it up itself).
+crates/fretwire-tauri/ui/.ssr-tmp/

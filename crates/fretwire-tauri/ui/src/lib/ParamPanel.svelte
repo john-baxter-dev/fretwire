@@ -258,10 +258,18 @@
   // The governed member of a tempo-sync group, resolved: whether the switch is on and the note
   // param to show while it is. `null` for every other param — including the switch and the note
   // themselves, which have no rows.
-  function syncOf(p) {
+  //
+  // `list` is the parameter list being rendered — the block's own or its paired cab's — and it is
+  // an argument rather than a lookup because the two lists index separately: a sync group only
+  // ever names members of its own. It was written as a bare `params`, which is the *snippet's*
+  // parameter and not in scope here, so this threw `ReferenceError: params is not defined` the
+  // moment it reached a governed param — taking the whole panel down with it. Every block with a
+  // tempo-sync group (a delay's Time, a chorus's Rate) could be selected but never opened.
+  // [owner's report, 2026-09-05: Trinity Chorus in preset 26, Bucket Brigade in preset 4]
+  function syncOf(p, list) {
     if (!p.sync || p.sync.role !== "governed") return null;
-    const tempo = params.find((q) => q.index === p.sync.tempo);
-    const note = params.find((q) => q.index === p.sync.note);
+    const tempo = list.find((q) => q.index === p.sync.tempo);
+    const note = list.find((q) => q.index === p.sync.note);
     if (!tempo || !note) return null;
     return { on: tempo.value >= 0.5, tempoIndex: tempo.index, note };
   }
@@ -596,7 +604,7 @@
         {@const k = key(paired, p)}
         {@const c = control(p)}
         {@const asg = assignmentFor(paired, p.index)}
-        {@const sync = syncOf(p)}
+        {@const sync = syncOf(p, params)}
         <!-- A tempo-sync group is one control here, as in HX Edit and on the pedal: the
              `Tempo Sync` switch and the `Note Sync` value have no rows of their own; the knob
              they govern carries the switch, and shows the note value while it is on. -->

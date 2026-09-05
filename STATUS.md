@@ -2,6 +2,18 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**The parameters pane wouldn't open for a tempo-sync block (2026-09-05).** The owner's own bug
+report: on preset 26 the Trinity Chorus block selected but never opened its panel, same for the
+Bucket Brigade on preset 4. `syncOf` — which folds a `Tempo Sync` switch and its `Note Sync` list
+into the knob they govern — read a bare **`params`**, which is the *render snippet's* parameter and
+not in scope in the script. So it threw `ReferenceError: params is not defined` on the first
+governed param, and Svelte took the whole panel down with it: the cell highlighted, nothing opened.
+Every block with a tempo-sync group was affected (a delay's Time, a chorus's Rate) on both the
+block's own list and a paired cab's; the list is now an argument. Nothing had caught it — the
+device data was valid, the Rust side was right, and a free variable is not a compile error — so
+`ui/tests/panel-ssr.mjs` renders the panel server-side for five synthetic blocks and fails if any
+throws. **Proven against the bug**: reintroduced, 4 of its 5 cases fail; with the fix, all pass.
+
 **Favorites came back empty on an XL — chunked replies (2026-09-05).** The reporter ran the new
 backup on his HX Stomp XL: `user_defaults` populated, `favorites` an **empty list**, though the
 pedal holds 21 (his `.hxb`, read by `show-backup --sections`, lists all 21 as `F000`–`F014` — so

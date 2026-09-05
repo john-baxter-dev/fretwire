@@ -1273,6 +1273,72 @@ assigning a user IR to an IR block answers it. Related: a `tone` IR block is `@t
 `@uuid`, and the preset's `irUuidTable` maps slot number → uuid, so the host side addresses IRs by
 uuid where the store addresses them by index.
 
+## Favorites — list, read, save [solid — from `favorite_add_delete_backup.pcapng`, HX Stomp fw 3.80, 2026-09-04]
+The store HX Edit's model picker shows as the **Favorites** category (id 23 in `HX_ModelCatalog.json`).
+It is not in the op-24 settings namespace and not in any preset — a `backup-device` before and after
+saving one on the owner's Stomp differed in nothing but Stomp Mode. It has its own three ops on the
+**browse side** (`PRI` channel, same as the preset listing), plus one on the edit channel:
+
+| op | channel | target | reply |
+|---|---|---|---|
+| **112** list | PRI, `cmd 0x0c` | `nil` | `[{118: index, 64: model, 105: paired cab or 65535, 109: name}]` |
+| **113** read | PRI, `cmd 0x0c` | `{118: index}` | the record, below |
+| **119** save | EDIT, `cmd 0x04` | `{98: block slot, 118: index, 31: true, 109: name}` | `nil`; then a **state push type 56** on the status channel carrying the new list entry |
+| **45** block-as-record | EDIT, `cmd 0x0c` | `{98: block slot}` | `{13: slot, 24: record}` — the block in favorite form; HX Edit asks it right after a save |
+
+`64`/`105`/`25`/`26` are **`Helix.sym` indices**: 591 = `HD2_AmpUSPrincess`, 709 =
+`HD2_CabMicIr_1x12USDeluxe`, 636 = `VIC_DynPlateStereo`, checked against the file. HX Edit lists
+(op 112) once at connect, between the preset listing (op 1) and the IR directory (op 13).
+
+The record (op 113's `64`, op 45's `24`):
+```
+{19: 6, 28: <index>,
+ 20: {24: {23: <composite>, 25: <model>, 26: <paired cab, or -1>},
+      9:  33 for the amp, 8 for the reverb — not the catalog category (Amp is 11, Reverb 6); unexplained
+      10: true,
+      11: {2: <values>, 3: <of which sym-listed>, 4: [values…]},      // the block
+      12: {2: 7, 3: 7, 4: [Mic, Position, Distance, Angle, LowCut, HighCut, Level]}}}   // the paired cab, or {2:0,3:0,4:[]}
+```
+The value arrays are in the model's **`Helix.sym` parameter order** — the US Princess's twelve are
+Drive, Bass, Mid, Treble, Presence, ChVol, Master, Sag, Hum, Ripple, Bias, BiasX exactly — with
+the **switch parameters that the sym list omits appended after it as bools** (the Dynamic Plate's
+`@trails` is the twelfth of `2: 12, 3: 11`). The cab's `IrData` is not carried. `{23, 25, 26}` is
+the same triple op 109 sends as `{106, 64, 105}` (below). `35`/`32`/`33` came back nil.
+
+Save (op 119) takes a **block in the current preset**, not a record: HX Edit saved slot 6 as index 1
+named "Dynamic Plate". Whether an index that exists is overwritten or refused, and what `31: true`
+means, was not exercised. **No delete was captured** — the capture's name says add+delete but only the
+add is in it, so the delete op is still unknown. Neither is rename.
+
+In HX Edit's `.hxb` each favorite is its own section, `F000`, `F001`, … (hex, like the IR slots,
+only the ones that exist), `L6ModelFavorite` JSON in the `.hlx` tone dialect: `data.favorite.slot0`
+is the block (`@model`, `@type`, `@enabled`, then params by name — the same values as the wire record),
+`slot1` the paired cab for an amp, `data.meta.name` the name. `fretwire_data::hxb::Hxb::favorites`
+reads them; `show-backup` lists them.
+
+## User Defaults — op 109, one ask per model [hypothesis — same capture]
+`op 109 {64: model, 106: composite, 105: cab kind}` on the browse side, reply `104: nil`. HX Edit
+sends it **1162 times during a backup** — exactly the row count of the `.hxb`'s `UMDS`
+(`L6UMDArchive`, "user model defaults") table for this Stomp, with 359 composite rows matching the
+359 calls that carry `105`. `105` is not the paired cab: it is **48** (`HD2_Cab1x12Lead80`, the first
+legacy cab) or **687** (`HD2_CabMicIr_2x12JazzRivet`, the first of the mic'd-cab range 687–829) — the
+*kind* of cab the composite pairs, so an amp is asked three ways: alone, with a legacy cab, with a mic'd
+one. It is also sent **once when a block is selected** (op 78 on slot 5 → op 109 for that block's model).
+Every reply in the capture is nil, and the pedal had no user default saved. So: **op 109 reads the
+user default for a model, nil = none saved.** The backup's UMDS table is that sweep written out — a bare
+manifest here because there was nothing to carry. Untested: what a saved default answers, and how one
+is written. The sweep is slow: 1162 asks took 37 s, against 1.95 s for the 126-preset op-4 sweep.
+
+## All global settings in one read — op 85 [solid — same capture]
+`op 85 {}` on the edit channel answers a 724-byte map: `{0: [{150: v}…{164: v}], 1: [{190: v}…{203: v}],
+2: [{0: v}…{136: v}], 3: [{0: v}…{10: v}], 4: nil}` — five groups in the order the `.hxb` writes `GLOB`
+(**DSP, EQ, System, Tuner, L6Link**), each a list of one-entry `{id: value}` maps. HX Edit asks it
+before the backup's IR read. Group 2's ids are the op-24 ids we already scan (19 Stomp Mode, 27
+PresetNumbering, 86 tuner reference 440.0 …), and so are DSP (150–164) and EQ (190–203): a
+`backup-device` from the same evening holds every id op 85 answered with a value, and lacks exactly
+the eleven op 85 answered nil (150–152, 155, 159–164, 201). Same coverage. What op 85 adds is the
+**grouping**, which the flat namespace cannot express, and one round trip in place of 166.
+
 ## Resolved vs. still open
 - [x] Endpoints / framing / channels / sequence.
 - [x] Value encoding = **big-endian f32**.

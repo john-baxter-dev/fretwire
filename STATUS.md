@@ -2,6 +2,23 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Favorites found on the wire and in the file (2026-09-04, evening).** The owner captured HX Edit
+saving a favorite and taking a backup on the Stomp. `show-backup --sections` on the new `.hxb` did
+what it was built for the same day: two tags it had never seen, `F000` and `F001` — **one section
+per favorite**, `L6ModelFavorite` JSON in the tone dialect (block as `slot0`, an amp's cab as
+`slot1`, the name in `meta`). The parser knows the tag now (`Hxb::favorites`, `HxbFavorite`),
+`show-backup` lists them. On the wire it is three browse-side ops — **112 list, 113 read, 119 save
+a block as a favorite** — plus op 45 (a block in favorite form) and a state push (type 56) when the
+list changes; the record's values are the model's `Helix.sym` order with the sym-omitted switches
+appended as bools, and every model/cab id is a `Helix.sym` index, checked. No delete or rename in
+the capture. Two more things fell out: **op 109** is asked once per `UMDS` row (1162 = 1162, 359
+composite = 359 with a cab kind) and once when a block is selected, nil every time on a pedal with
+no user default saved — so it is the **user-default read** [hypothesis], and the `.hxb` `UMDS`
+table is that sweep written out; and **op 85** returns the **whole global settings** in one 724-byte
+reply, grouped DSP/EQ/System/Tuner/L6Link like `GLOB` — the same ids the op-24 sweep already
+reads (a fresh backup holds every id op 85 valued and lacks exactly its nils), so what it adds is
+the grouping and one round trip in place of 166. All in `docs/protocol.md`. Tests +1.
+
 **Favorites and User Defaults — not held, now looked for (2026-09-04).** Asked on issue #5 whether
 `backup-device` covers the other two things an HX Edit backup does. It does not, and nothing we
 hold says where they live: the Floor `.hxb` and the POD Go `.pgb` have no favorites section under

@@ -475,12 +475,21 @@ guessing has already cost a power cycle): see section B of `captures/_RUNBOOK-hx
       `--sections` (2026-09-04) lists the container's table and flags any tag this reading has never
       seen.
 - [ ] **Favorites and User Defaults** in the device backup (issue #5, 2026-09-04). The two things
-      an HX Edit backup holds that ours does not. Neither real backup we have contains either (no
-      section for them; `UMDS` is a model manifest without values — see `hxb.rs`), no wire op for
-      them is known, and no capture shows one, so this needs a `.hxb` from a pedal that has them
-      saved (then `show-backup --sections` names the new tag) and a capture of HX Edit reading them.
-      Favorites is category id 23 in `HX_ModelCatalog.json`, so the picker side is data we already
-      read; the block star in the signal chain is a match against the store, once we hold it.
+      an HX Edit backup holds that ours does not. **Favorites decoded the same evening** (protocol
+      doc: ops 112 list / 113 read / 119 save, `.hxb` sections `F000`…, `Hxb::favorites`). To build:
+      (1) `backup-device` reads the list and each record (two ops, cheap) into a `favorites` array
+      — store the wire record, it is what a restore needs; (2) restore is the open question, since
+      the only save op seen takes a *block in the current preset*, so a restore is "load a scratch
+      preset, place the block with the record's values, op 119, put the preset back" unless a direct
+      write turns up — capture HX Edit restoring a backup to find out; (3) the star icon: a block
+      matches a favorite when model + values do (the pedal's own rule, per the reporter), or ask
+      op 45 and compare. Delete and rename ops still uncaptured. **User Defaults**: op 109 per
+      model, nil when none saved [hypothesis] — needs the owner to save one on the pedal, then
+      `op 109` for that model live to see the record, and a capture of HX Edit restoring one.
+- [ ] **Settings via op 85** (2026-09-04). One request returns every global, grouped
+      DSP/EQ/System/Tuner/L6Link — the same ids the op-24 sweep reads (checked live), so this is
+      a speed and structure improvement, not coverage: the backup's settings phase could be one
+      round trip instead of 166, and the panel could show the device's own grouping.
 
 ## Phase 7.5 — Tooling / developer experience
 - [x] **Move the CLI to `clap`.** (2026-07-29) `fretwire-cli` hand-rolled a `match` over

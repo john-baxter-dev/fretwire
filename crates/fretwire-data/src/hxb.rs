@@ -31,16 +31,19 @@
 //! | `SLNM` | the setlist names, NUL-terminated, raw |
 //! | `GLOB` | device globals, JSON |
 //! | `I000`… | IR slots, **hex**-numbered, RIFF WAV — the Floor writes all 128 (`I000`–`I07F`), the POD Go only the populated ones |
-//! | `UMDS` | the `L6UMDArchive` model-usage table, JSON |
+//! | `F000`… | **Favorites**, one section each, hex-numbered, `L6ModelFavorite` JSON — only the ones that exist (HX Stomp backup with two, 2026-09-04) |
+//! | `UMDS` | the `L6UMDArchive` **user model defaults** table, JSON — one entry per (model, composite, cab kind) the firmware knows; a bare manifest when none is saved |
 //! | `SL00`… | the setlists, `L6Setlist` JSON — 8 on a Floor, 2 on a POD Go (`Factory`, `User`), 128 slots each |
 //!
-//! That is every tag the two real backups we hold carry. Neither donor had saved a **Favorite**
-//! or a **User Default** (issue #5, 2026-09-04), and nothing here holds either: `GLOB` has no
-//! such key and `UMDS` is a bare manifest — one entry per model the firmware knows (the POD Go's
-//! 571 cover all 540 catalog models plus 31 more), with no parameter payload. Where HX Edit puts
-//! them in a backup is unknown, so [`Hxb::sections`] keeps the whole table, [`HxbSection::known_as`]
-//! says which tags this reading covers, and `show-backup --sections` prints both — a tag we have
-//! never seen is the first thing to look for in a backup from a pedal that has them.
+//! `F000` was found the way it was meant to be: neither of the first two real backups had a
+//! favorite saved, so [`Hxb::sections`] keeps the whole table, [`HxbSection::known_as`] says which
+//! tags this reading covers, and `show-backup --sections` reported the tag the moment a backup
+//! from a pedal with favorites arrived (issue #5). A favorite is JSON in the `.hlx` tone dialect:
+//! `data.favorite.slot0` is the block (`@model`, `@type`, `@enabled`, then params by name),
+//! `slot1` its paired cab when the block is an amp, `data.meta.name` the name. On the wire it is
+//! ops 112/113/119 — see `docs/protocol.md`. **User Defaults** are not a section: `UMDS` lists
+//! every (model, composite, cab kind) triple and, we believe, would carry the saved defaults inline
+//! — no backup with one saved has been seen. [hypothesis]
 //!
 //! A file without a valid table (we synthesize such in tests; no real one has been seen) falls
 //! back to the original reading: comment at 0x30..0x70, then a scan for back-to-back zlib streams.
@@ -116,8 +119,11 @@ impl HxbSection {
             b"DESC" => "user comment",
             b"SLNM" => "setlist names",
             b"GLOB" => "global settings (JSON)",
-            b"UMDS" => "model table (L6UMDArchive JSON)",
+            b"UMDS" => "user model defaults table (L6UMDArchive JSON)",
             [b'I', rest @ ..] if rest.iter().all(u8::is_ascii_hexdigit) => "IR slot (RIFF WAV)",
+            [b'F', rest @ ..] if rest.iter().all(u8::is_ascii_hexdigit) => {
+                "favorite (L6ModelFavorite JSON)"
+            }
             [b'S', b'L', rest @ ..] if rest.iter().all(u8::is_ascii_digit) => {
                 "setlist (L6Setlist JSON)"
             }
@@ -154,6 +160,18 @@ pub struct HxbPreset {
     /// The raw `tone` object. **JSON, not the wire blob** — kept whole so nothing is lost, but
     /// converting it to a writable preset stream is not implemented.
     pub tone: Json,
+}
+
+/// One favorite out of a backup.
+#[derive(Debug, Clone)]
+pub struct HxbFavorite {
+    /// The name the user gave it (`data.meta.name`).
+    pub name: String,
+    /// The block's model symbol (`slot0.@model`), e.g. `HD2_AmpUSPrincess`.
+    pub model: String,
+    /// The raw `data.favorite` object: `slot0` is the block in tone-JSON form, `slot1` the paired
+    /// cab when there is one. Kept whole, like a preset's `tone`.
+    pub favorite: Json,
 }
 
 impl Hxb {
@@ -288,6 +306,36 @@ impl Hxb {
             .iter()
             .filter(|s| s.starts_with(b"RIFF"))
             .map(|s| s.as_slice())
+            .collect()
+    }
+
+    /// The favorites, in file order (`F000`, `F001`, …). Only the ones that exist are written.
+    pub fn favorites(&self) -> Vec<HxbFavorite> {
+        self.by_schema("L6ModelFavorite")
+            .map(|j| {
+                let data = j.get("data");
+                let name = data
+                    .and_then(|d| d.get("meta"))
+                    .and_then(|m| m.get("name"))
+                    .and_then(Json::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let favorite = data
+                    .and_then(|d| d.get("favorite"))
+                    .cloned()
+                    .unwrap_or(Json::Null);
+                let model = favorite
+                    .get("slot0")
+                    .and_then(|b| b.get("@model"))
+                    .and_then(Json::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                HxbFavorite {
+                    name,
+                    model,
+                    favorite,
+                }
+            })
             .collect()
     }
 

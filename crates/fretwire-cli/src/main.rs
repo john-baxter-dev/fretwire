@@ -759,6 +759,13 @@ fn main() -> Result<()> {
                 println!("  comment: {}", b.comment);
             }
             println!("  {} impulse responses", b.impulse_responses().len());
+            let favorites = b.favorites();
+            if !favorites.is_empty() {
+                println!("  {} favorites", favorites.len());
+                for f in &favorites {
+                    println!("        {} ({})", f.name, f.model);
+                }
+            }
             for s in b.setlists() {
                 println!(
                     "  [{}] {:<12} {}/{} slots used",

@@ -173,7 +173,7 @@ fn the_section_table_is_kept_and_unknown_tags_are_reported() {
     );
 
     let h = Hxb::parse(&build_with_table(&[
-        (b"FAVS", br#"{"schema":"L6Whatever","data":{}}"#, true),
+        (b"QRST", br#"{"schema":"L6Whatever","data":{}}"#, true),
         (b"XYZW", b"raw bytes", false),
     ]))
     .unwrap();
@@ -182,7 +182,7 @@ fn the_section_table_is_kept_and_unknown_tags_are_reported() {
         .iter()
         .map(|s| s.tag.as_str())
         .collect();
-    assert_eq!(unknown, ["FAVS", "XYZW"]);
+    assert_eq!(unknown, ["QRST", "XYZW"]);
     // The unknown compressed one still inflates into `streams`, as before — nothing is lost,
     // it is just now also named.
     assert_eq!(h.streams.len(), 6);
@@ -193,6 +193,38 @@ fn the_section_table_is_kept_and_unknown_tags_are_reported() {
     );
     // A legacy file has no table to keep.
     assert!(Hxb::parse(&build()).unwrap().sections.is_empty());
+}
+
+/// `F000`… is a favorite: the shape HX Edit wrote for an HX Stomp with two saved (2026-09-04).
+/// An amp carries its cab as `slot1`; anything else has `slot0` alone.
+#[test]
+fn favorites_are_one_section_each() {
+    let amp = br#"{"data":{"device":2162694,"device_version":58720256,"favorite":{"slot0":{"@enabled":true,"@model":"HD2_AmpUSPrincess","@type":3,"Drive":0.42},"slot1":{"@model":"HD2_CabMicIr_1x12USDeluxe","@type":2,"Mic":2}},"meta":{"name":"US Princess"}},"schema":"L6ModelFavorite","version":1}"#;
+    let verb = br#"{"data":{"device":2162694,"device_version":58720256,"favorite":{"slot0":{"@enabled":true,"@model":"VIC_DynPlate","@stereo":true,"@trails":false,"@type":7,"Decay":2.0}},"meta":{"name":"Dynamic Plate"}},"schema":"L6ModelFavorite","version":1}"#;
+    let h = Hxb::parse(&build_with_table(&[
+        (b"F000", amp, true),
+        (b"F001", verb, true),
+    ]))
+    .unwrap();
+    assert!(h.unknown_sections().is_empty(), "F-tags are known");
+    let favs = h.favorites();
+    assert_eq!(favs.len(), 2);
+    assert_eq!(
+        (favs[0].name.as_str(), favs[0].model.as_str()),
+        ("US Princess", "HD2_AmpUSPrincess")
+    );
+    assert_eq!(
+        favs[0].favorite["slot1"]["@model"],
+        "HD2_CabMicIr_1x12USDeluxe"
+    );
+    assert_eq!(
+        (favs[1].name.as_str(), favs[1].model.as_str()),
+        ("Dynamic Plate", "VIC_DynPlate")
+    );
+    assert!(favs[1].favorite.get("slot1").is_none());
+    // Favorites are not setlists and not IRs.
+    assert_eq!(h.setlists().len(), 2);
+    assert_eq!(h.impulse_responses().len(), 1);
 }
 
 #[test]

@@ -4675,3 +4675,36 @@ without anyone flipping it.
   check, the same day. So both claims stand: the flag reads back, and the switch holds.
 
 381 Rust tests, 200 UI tests, clippy clean.
+
+## Seventy-sixth round (2026-09-04) — **live-follow was broken in every GUI build since 2026-08-25: the build script had stopped compiling the capabilities in** (issue #15)
+
+The POD Go owner ran the two GUI logs asked for and found them identical, then opened the
+webview's devtools: `Unhandled Promise Rejection: event.listen not allowed. Plugin not found`,
+three times. Under `fretwire-serve` in Chrome the same editor followed the pedal. Three
+listeners in `App.svelte`, three rejections — the `device-pushes` subscription never attached.
+
+- **Cause.** Commit `106414e` (2026-08-25, "Warn when the embedded frontend is older than
+  ui/src") rewrote `crates/fretwire-tauri/build.rs` and dropped `tauri_build::build()`. That call
+  is what resolves `capabilities/default.json` against the plugins' permission manifests and
+  writes the ACL into `OUT_DIR` for `generate_context!`; without it the ACL is empty. App
+  commands (`invoke`) have no ACL of their own and kept working, so the editor looked healthy;
+  every *plugin* call — `listen`, the file dialogs — was refused, and the refusal goes to the
+  JS console only. Every build from that commit through the v0.5.0 AppImage shipped this way.
+- **Why nobody here saw it.** Cargo reuses `OUT_DIR` for a package whose metadata hash is
+  unchanged, so the dev tree kept serving the ACL files an earlier build had written there
+  (every `out/` from before 08-25 has them; every one since does not). The owner's bisect named
+  the 0.4.0 version bump for the same reason — the bump was the first commit to change the hash
+  and get a clean `OUT_DIR`. A fresh clone or a CI runner never had the files.
+- **Fix.** The call is back, with a comment that says what it is for. `dialog:allow-save` is
+  now granted too — the IR export's save dialog had never been in the capability file, so it
+  was refused even when the ACL was compiled. The GUI's log goes to **stderr** now (the
+  instructions said `2> gui.log`; the writer was stdout). `capability_tests` in the crate asks
+  the compiled `RuntimeAuthority` whether `plugin:event|listen`, `unlisten`, `dialog|open` and
+  `dialog|save` resolve for the main window, and that an ungranted command still does not —
+  run with the call commented out and a scrubbed `OUT_DIR`, the first assertion fails.
+- **The empty-slot capture landed too.** POD Go Edit's fill of slot 10 is **op 39**, the
+  envelope `edit::add_block` builds, one value apart in key `9` (it sends `8`; HX Edit and we
+  send `1`, which the pedal has taken every time). The reply carries the whole block; two status
+  pushes and a full re-read (op 23, op 22) follow. `docs/pod-go.md` has the bytes.
+
+381 Rust tests in the workspace plus 7 in the GUI crate (two new), clippy clean. CI runs the GUI crate's tests on a fresh runner, which is exactly where the ACL was missing.

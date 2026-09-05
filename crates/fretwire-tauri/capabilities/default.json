@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Core APIs the frontend needs: the event system (listen/emit) for live-follow, and the file dialog for the first-run data import.",
+  "description": "Core APIs the frontend needs: the event system (listen/emit) for live-follow, the open dialog for the first-run data import and the file-based flows, and the save dialog for exporting an IR. Only compiled in by the tauri_build::build() call in build.rs.",
   "windows": ["main"],
-  "permissions": ["core:default", "core:event:default", "dialog:allow-open"]
+  "permissions": ["core:default", "core:event:default", "dialog:allow-open", "dialog:allow-save"]
 }

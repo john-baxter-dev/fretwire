@@ -91,9 +91,13 @@ fn shrink_to_fit(want: (f64, f64), avail: (f64, f64)) -> Option<(f64, f64)> {
 }
 
 fn main() {
-    // Logs go to the terminal; run with `RUST_LOG=trace cargo run -p fretwire-tauri` to trace USB I/O.
+    // Logs go to the terminal, on stderr — so `fretwire-gui 2> gui.log` captures them, which is
+    // what the bug-report instructions say to do (the default writer is stdout, and the first log
+    // asked for in issue #15 came back empty until the owner worked that out). Run with
+    // `RUST_LOG=trace cargo run -p fretwire-tauri` to trace USB I/O.
     tracing_subscriber::fmt()
         .with_env_filter(fretwire_log_filter())
+        .with_writer(std::io::stderr)
         .init();
     // First line of every log, so a pasted log says which build produced it.
     tracing::info!(
@@ -240,6 +244,45 @@ fn fretwire_log_filter() -> tracing_subscriber::EnvFilter {
             tracing_subscriber::EnvFilter::new(damped)
         }
         _ => tracing_subscriber::EnvFilter::new("info,nusb=warn"),
+    }
+}
+
+/// The webview's access-control list, as compiled into this binary. Every plugin call the
+/// frontend makes — `listen` for live-follow, the dialogs — has to be granted here, and the
+/// grant only exists if `build.rs` ran `tauri_build::build()` over `capabilities/`. A build
+/// script that skips the call still compiles, links and opens a window; what it loses is
+/// silent (the rejection lands in the webview's console, nowhere else), and it stayed lost from
+/// 2026-08-25 to v0.5.0. So this is checked the way the frontend will: by asking the authority.
+#[cfg(test)]
+mod capability_tests {
+    use tauri::ipc::Origin;
+
+    fn allowed(command: &str) -> bool {
+        let mut ctx: tauri::Context<tauri::Wry> = tauri::generate_context!();
+        ctx.runtime_authority_mut()
+            .resolve_access(command, "main", "main", &Origin::Local)
+            .is_some()
+    }
+
+    #[test]
+    fn capabilities_are_compiled_in() {
+        // `App.svelte` subscribes to device-pushes, device-lost and backup-progress through this
+        // one command; it is what live-follow is made of.
+        assert!(
+            allowed("plugin:event|listen"),
+            "the event listener is not in the compiled ACL — build.rs must call tauri_build::build()"
+        );
+        assert!(allowed("plugin:event|unlisten"));
+        // `pickPath` in ipc.js: the open dialog for the data import, the save dialog for an IR.
+        assert!(allowed("plugin:dialog|open"));
+        assert!(allowed("plugin:dialog|save"));
+    }
+
+    #[test]
+    fn what_was_not_granted_stays_refused() {
+        // The ACL is a real allow-list, not everything-on: a plugin command nobody asked for is
+        // still refused, which is the property that makes the test above mean something.
+        assert!(!allowed("plugin:dialog|message"));
     }
 }
 

@@ -126,20 +126,22 @@ and 537/627 POD Go symbols where stripping alone got 372.
   the pedal answers in a shape `fretwire_data::ir::parse_directory` does not read, or reports a
   genuinely empty directory, needs the bytes: `RUST_LOG=debug fretwire ir-list` now logs the
   reply. Until then `Session::ir_directory` falls back to the scan on a POD Go.
-- **Why the GUI stopped following the pedal.** Footswitch bypasses and knob turns mirrored into
-  the editor on 2026-08-26 (commit `3a71263`) and did not on 2026-09-02 (`1d7ca66`); nothing on
-  the push path — `poll_events`, `parse_status_push`, the heartbeat, `handlePushes` — changed
-  between those builds, and the same build's HX Stomp session drains its status channel normally.
-  Half answered 2026-09-03: **`fretwire watch` receives the pushes**, so they reach the host and
-  decode; it is the GUI that does not show them. The owner's `git bisect` named `8c33c5c` as the
-  first bad commit, and that commit is the 0.4.0 version bump — `Cargo.toml`, `Cargo.lock` and a
-  release-notes file, nothing that runs — with its parent marked good, so either the symptom is
-  intermittent or a bisect step was built against a stale `ui/dist` (the GUI embeds whatever
-  `dist/` holds when the crate happens to rebuild). What is left is the GUI's own log: it runs the
-  same `poll_events` on its heartbeat, so `RUST_LOG=debug FRETWIRE_TRACE_STATUS=1 fretwire-gui`
-  (stderr) while a footswitch is pressed says whether the heartbeat drains the push, and if it
-  does, whether the `device-pushes` emit fails — each is a logged line.
-- What POD Go Edit sends to **fill an empty slot** (see "The fixed chain").
+- ~~Why the GUI stopped following the pedal.~~ **Found, 2026-09-04, and not a POD Go matter at
+  all.** The owner opened the webview's devtools: `event.listen not allowed. Plugin not found`,
+  three times — one per `listen` in `App.svelte` — and the same editor under `fretwire-serve` in
+  Chrome followed the pedal fine. The 2026-08-25 rewrite of the Tauri crate's `build.rs`
+  (`106414e`) dropped its `tauri_build::build()` call, which is what compiles
+  `capabilities/default.json` into the binary; without it the webview's ACL is empty, every
+  plugin call from the frontend is refused (app commands still run, having no ACL of their own),
+  and the refusal lands only in the JS console. So the `device-pushes` listener never attached,
+  in every build from that commit through v0.5.0 — the AppImage included. The bisect named the
+  0.4.0 version bump because cargo reuses `OUT_DIR` across builds with the same package metadata:
+  a tree that had built before 08-25 kept serving the ACL an earlier build had written, and the
+  bump was the first commit to change the hash. The call is back, the ACL now also grants the
+  save dialog (IR export had never been granted it), and a test in the crate asks the compiled
+  authority whether `plugin:event|listen` is allowed. The two GUI logs the owner sent (67cdcf6
+  and 281c15c) are identical on the Rust side, as they had to be: the push was drained and
+  emitted both times, and nobody was listening in one of them.
 - **Two writes have completed on POD Go hardware by fretwire itself** — the owner's
   `fretwire restore` (2026-09-02) and `fretwire move 1 3` (2026-09-03, once the Helix-only credit
   guard was out of its way — see the next section). Every other reconciliation is against
@@ -290,9 +292,18 @@ swap and produced presets it then mishandled). A rejection that corrupts device 
 safe probe, so `Session::swap_model` refuses wah→non-wah and volume→non-volume swaps client-side
 before anything is sent. The EQ and FX loop blocks swap freely (owner-verified).
 
-**Op 39 (add) fills any of the ten slots.** POD Go Edit has no add of its own — an emptied slot
-is re-filled by picking a model — but op 39 is how the owner fills empty slots from fretwire, and
-it holds up across the chain: whole chains built with it load reliably (2026-08-28), and slots 9
+**Op 39 (add) fills any of the ten slots — and it is POD Go Edit's own fill.** [solid —
+2026-09-04 capture] Picking a model for the emptied slot 10 in POD Go Edit sends
+`{102: txn, 100: 39, 101: {98: 10, 99: {19: 6, 20: {24: {23: false, 25: 421, 26: -1}, 9: 8,
+10: true}}}}` — the same envelope `edit::add_block` builds, key for key, with one value apart:
+key `9`, which HX Edit always sends as `1` and POD Go Edit sent as `8` here (the preset's other
+blocks carry 1, 2, 4, 5, 8, 9, 17, 23 and 26 in that key, so it is per-block and not a flag;
+what it indexes is still open, and the pedal takes our `1` — the owner's fills of slots 1–8 and
+the doc-loading of whole chains all went through with it). The reply carries the new block
+complete, `11: {2: 14, 3: 13, 4: [...]}` — a 13-parameter model with a trailing extra — and the
+pedal follows with two status pushes, type 31 `{98: 10, 70: 2, 79: true}` and a type 49 naming
+the slot, after which POD Go Edit re-reads the preset in full (op 23, then op 22). So "fill" and
+"add" are one op, and it holds up across the chain: whole chains built with it load reliably (2026-08-28), and slots 9
 and 10 take it like the rest (owner, 2026-09-03). The two incidents that looked like a slot
 hazard were not one: the `-306` of 2026-08-28 was a slot-9 add into a chain with none of the
 mandated blocks in it, and the 2026-08-26 crash-at-next-preset-change was an add into slot
@@ -333,9 +344,9 @@ The owner captured POD Go Edit's two structural verbs, and neither is the HX's o
 - **Set a block to empty** is bare **op 28** `{98: slot}` — the exact op and shape our
   `delete_block` already sends (ours prefixes the op-78 marker, as HX Edit does; POD Go Edit
   skips it).
-- **There is no add verb.** POD Go Edit cannot add or delete blocks, only empty a slot and
-  re-fill it — with what op, uncaptured. fretwire fills empties with op 39, which the owner has
-  shown works in every slot; see "The fixed chain".
+- **The add verb is op 39, same as HX Edit's.** POD Go Edit cannot add or delete blocks in the
+  HX sense, only empty a slot and re-fill it — and the re-fill is op 39 with the block spec our
+  `add_block` builds (captured 2026-09-04, one value apart in key `9`; see "The fixed chain").
 
 The op-21 blob also exposed POD Go Edit's serializer habits, pinned in the move tests: it
 re-spells the EQ as class `1` and the FX loop as class `8` where the device reads back `23`/`9`
@@ -390,14 +401,13 @@ What the POD Go's tones do differently (each reconciled, not assumed):
 
 ### What would still help
 
-Every capture ask was delivered (move + set-to-empty, the second IR preset, and the looper —
-they produced everything in the sections above), and the two hardware rounds (2026-09-02 and
--03) answered the write asks: **restore works, and so does the move** once the Helix credit guard
-was out of its way (see "The write path, live"). Two logs and one capture would close what's open:
+Every capture ask was delivered (move + set-to-empty, the second IR preset, the looper, and the
+native fill of an empty slot — they produced everything in the sections above), the two hardware
+rounds (2026-09-02 and -03) answered the write asks — **restore works, and so does the move** once
+the Helix credit guard was out of its way (see "The write path, live") — and the live-follow
+question closed on 2026-09-04 from the webview's console rather than any log. What's open:
 
-- **`RUST_LOG=debug FRETWIRE_TRACE_STATUS=1 fretwire-gui`** (stderr), pressing a footswitch while
-  the editor is connected — for the lost live-follow. `fretwire watch` already showed the pushes
-  reach the host; this says what the GUI's heartbeat does with them.
 - **`RUST_LOG=debug fretwire ir-list`** — the op-13 reply, so the IR directory can be decoded
   rather than scanned around.
-- **A POD Go Edit capture of picking a model for an empty slot** — the native fill.
+- **A footswitch press with the rebuilt GUI connected** — the first look at live-follow on a POD
+  Go since the ACL came back; expected to just work, since `watch` already decodes the pushes.

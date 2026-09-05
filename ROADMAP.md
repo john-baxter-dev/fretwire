@@ -469,9 +469,18 @@ guessing has already cost a power cycle): see section B of `captures/_RUNBOOK-hx
       stale; noticed 2026-09-03. "Duplicate" is Copy then Paste into an empty slot.
 - [x] **`.hxb` backup reading** (2026-07-26) — `fretwire_data::hxb` parses HX Edit's own backup
       container (AF6L header + concatenated raw zlib streams): globals, 128 IR slots, the model-usage
-      table and the 8 setlists. CLI `show-backup <file.hxb> [--presets]`. Reading only — the presets
-      inside are `tone` JSON, not wire blobs, so restoring *from* a `.hxb` still needs a JSON→blob
-      conversion. Its setlist order is what promoted `Device::setlists` to [solid].
+      table and the 8 setlists. CLI `show-backup <file.hxb> [--presets] [--sections]`. Reading only —
+      the presets inside are `tone` JSON, not wire blobs, so restoring *from* a `.hxb` still needs a
+      JSON→blob conversion. Its setlist order is what promoted `Device::setlists` to [solid].
+      `--sections` (2026-09-04) lists the container's table and flags any tag this reading has never
+      seen.
+- [ ] **Favorites and User Defaults** in the device backup (issue #5, 2026-09-04). The two things
+      an HX Edit backup holds that ours does not. Neither real backup we have contains either (no
+      section for them; `UMDS` is a model manifest without values — see `hxb.rs`), no wire op for
+      them is known, and no capture shows one, so this needs a `.hxb` from a pedal that has them
+      saved (then `show-backup --sections` names the new tag) and a capture of HX Edit reading them.
+      Favorites is category id 23 in `HX_ModelCatalog.json`, so the picker side is data we already
+      read; the block star in the signal chain is a match against the store, once we hold it.
 
 ## Phase 7.5 — Tooling / developer experience
 - [x] **Move the CLI to `clap`.** (2026-07-29) `fretwire-cli` hand-rolled a `match` over

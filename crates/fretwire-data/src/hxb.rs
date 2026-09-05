@@ -34,6 +34,14 @@
 //! | `UMDS` | the `L6UMDArchive` model-usage table, JSON |
 //! | `SL00`… | the setlists, `L6Setlist` JSON — 8 on a Floor, 2 on a POD Go (`Factory`, `User`), 128 slots each |
 //!
+//! That is every tag the two real backups we hold carry. Neither donor had saved a **Favorite**
+//! or a **User Default** (issue #5, 2026-09-04), and nothing here holds either: `GLOB` has no
+//! such key and `UMDS` is a bare manifest — one entry per model the firmware knows (the POD Go's
+//! 571 cover all 540 catalog models plus 31 more), with no parameter payload. Where HX Edit puts
+//! them in a backup is unknown, so [`Hxb::sections`] keeps the whole table, [`HxbSection::known_as`]
+//! says which tags this reading covers, and `show-backup --sections` prints both — a tag we have
+//! never seen is the first thing to look for in a backup from a pedal that has them.
+//!
 //! A file without a valid table (we synthesize such in tests; no real one has been seen) falls
 //! back to the original reading: comment at 0x30..0x70, then a scan for back-to-back zlib streams.
 //!
@@ -78,6 +86,44 @@ pub struct Hxb {
     pub setlist_names: Vec<String>,
     /// Every inflated stream, in file order.
     pub streams: Vec<Vec<u8>>,
+    /// The section table as the container describes it, in file order — every entry, whether or
+    /// not this parser interprets it. Empty for a file without a valid table.
+    pub sections: Vec<HxbSection>,
+}
+
+/// One entry of the section table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HxbSection {
+    /// The tag as read (`DESC`, `SL00`, …) — the on-disk bytes are stored reversed.
+    pub tag: String,
+    /// Where the section's bytes start in the file.
+    pub offset: u64,
+    /// How many bytes it occupies there.
+    pub stored_len: u64,
+    /// Whether those bytes are one zlib stream.
+    pub compressed: bool,
+    /// The length the table declares for the inflated data (equals `stored_len` when raw).
+    pub inflated_len: u64,
+}
+
+impl HxbSection {
+    /// What this reading of the format understands the tag to hold, or `None` for a tag that no
+    /// backup we have seen carries — the thing to report.
+    pub fn known_as(&self) -> Option<&'static str> {
+        let t = self.tag.as_bytes();
+        Some(match t {
+            b"HXDI" | b"PGDI" => "header fields (device id, firmware, timestamp)",
+            b"DESC" => "user comment",
+            b"SLNM" => "setlist names",
+            b"GLOB" => "global settings (JSON)",
+            b"UMDS" => "model table (L6UMDArchive JSON)",
+            [b'I', rest @ ..] if rest.iter().all(u8::is_ascii_hexdigit) => "IR slot (RIFF WAV)",
+            [b'S', b'L', rest @ ..] if rest.iter().all(u8::is_ascii_digit) => {
+                "setlist (L6Setlist JSON)"
+            }
+            _ => return None,
+        })
+    }
 }
 
 /// One setlist out of a backup.
@@ -129,9 +175,17 @@ impl Hxb {
             comment: String::new(),
             setlist_names: Vec::new(),
             streams: Vec::new(),
+            sections: Vec::new(),
         };
         if let Some(sections) = section_table(bytes) {
             for s in sections {
+                hxb.sections.push(HxbSection {
+                    tag: String::from_utf8_lossy(&s.tag).into_owned(),
+                    offset: s.offset,
+                    stored_len: s.data.len() as u64,
+                    compressed: s.compressed,
+                    inflated_len: s.inflated_len,
+                });
                 match (&s.tag, s.compressed) {
                     (b"DESC", false) => {
                         hxb.comment = String::from_utf8_lossy(s.data)
@@ -236,14 +290,25 @@ impl Hxb {
             .map(|s| s.as_slice())
             .collect()
     }
+
+    /// The sections this reading of the format does not cover. Anything here is data the
+    /// container holds that fretwire silently ignores — see the module docs.
+    pub fn unknown_sections(&self) -> Vec<&HxbSection> {
+        self.sections
+            .iter()
+            .filter(|s| s.known_as().is_none())
+            .collect()
+    }
 }
 
 /// One entry out of the section table.
 struct Section<'a> {
     /// The on-disk byte-reversed tag, turned back around (`"CSED"` → `DESC`).
     tag: [u8; 4],
+    offset: u64,
     data: &'a [u8],
     compressed: bool,
+    inflated_len: u64,
 }
 
 /// The section table, if this file carries a valid one, in file order.
@@ -267,13 +332,16 @@ fn section_table(bytes: &[u8]) -> Option<Vec<Section<'_>>> {
         let off = u64::from_le_bytes(entry[4..12].try_into().unwrap()) as usize;
         let len = u64::from_le_bytes(entry[12..20].try_into().unwrap()) as usize;
         let compressed = u32::from_le_bytes(entry[20..24].try_into().unwrap()) != 0;
+        let inflated_len = u64::from_le_bytes(entry[24..32].try_into().unwrap());
         if off.checked_add(len)? > table || !tag.iter().all(|b| b.is_ascii_graphic()) {
             return None;
         }
         out.push(Section {
             tag,
+            offset: off as u64,
             data: &bytes[off..off + len],
             compressed,
+            inflated_len,
         });
     }
     Some(out)

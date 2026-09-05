@@ -27,13 +27,11 @@ fn setlist(name: &str, presets: &[Option<&str>]) -> Vec<u8> {
             None => "{}".to_string(),
         })
         .collect();
-    zlib(
-        format!(
-            r#"{{"schema":"L6Setlist","version":2,"data":{{"meta":{{"name":"{name}"}},"presets":[{}]}}}}"#,
-            slots.join(",")
-        )
-        .as_bytes(),
+    format!(
+        r#"{{"schema":"L6Setlist","version":2,"data":{{"meta":{{"name":"{name}"}},"presets":[{}]}}}}"#,
+        slots.join(",")
     )
+    .into_bytes()
 }
 
 fn build() -> Vec<u8> {
@@ -49,18 +47,18 @@ fn build() -> Vec<u8> {
     f.extend(zlib(br#"{"System":{"PresetNumbering":false}}"#)); // #0 globals
     f.extend(zlib(b"RIFF\0\0\0\0WAVEfmt ")); // #1 one IR slot
     f.extend(zlib(br#"{"schema":"L6UMDArchive","data":{}}"#)); // #2 model-usage table
-    f.extend(setlist(
+    f.extend(zlib(&setlist(
         "FACTORY 1",
         &[Some("Pull Me Under"), Some("Richeese")],
-    ));
-    f.extend(setlist("USER 1", &[None, Some("Sludge")]));
+    )));
+    f.extend(zlib(&setlist("USER 1", &[None, Some("Sludge")])));
     f.extend([0u8, 0u8]); // the real file ends with two NUL bytes; must not upset the walker
     f
 }
 
 /// A `.pgb`-shaped file: sections indexed by the 36-byte-entry table at the end. Offsets and
 /// lengths are computed, not hardcoded, so the fixture can't drift from its own table.
-fn build_with_table() -> Vec<u8> {
+fn build_with_table(extra: &[(&[u8; 4], &[u8], bool)]) -> Vec<u8> {
     let mut f = vec![0u8; 0x30];
     f[0..4].copy_from_slice(b"AF6L");
     f[0x04..0x08].copy_from_slice(&1u32.to_le_bytes());
@@ -68,19 +66,21 @@ fn build_with_table() -> Vec<u8> {
     f[0x1c..0x20].copy_from_slice(&0x0250_0000u32.to_le_bytes());
     f[0x28..0x2c].copy_from_slice(&1_787_931_000u32.to_le_bytes());
 
-    // (tag as read, data, compressed) — the builder stores the tag reversed, as the editor does.
-    let sections: Vec<(&[u8; 4], Vec<u8>, bool)> = vec![
+    // (tag as read, inflated data, compressed) — the builder stores the tag reversed, as the
+    // editor does, and deflates the compressed ones itself so the declared inflated length is
+    // the true one. `extra` appends sections this parser has no reading for.
+    let mut sections: Vec<(&[u8; 4], Vec<u8>, bool)> = vec![
         (b"PGDI", f[0x18..0x30].to_vec(), false), // points at the header fields; dropped below
         (b"SLNM", b"Factory\0User\0".to_vec(), false),
         (
             b"GLOB",
-            zlib(br#"{"System":{"PresetNumbering":false}}"#),
+            br#"{"System":{"PresetNumbering":false}}"#.to_vec(),
             true,
         ),
-        (b"I000", zlib(b"RIFF\0\0\0\0WAVEfmt "), true),
+        (b"I000", b"RIFF\0\0\0\0WAVEfmt ".to_vec(), true),
         (
             b"UMDS",
-            zlib(br#"{"schema":"L6UMDArchive","data":{}}"#),
+            br#"{"schema":"L6UMDArchive","data":{}}"#.to_vec(),
             true,
         ),
         (
@@ -94,21 +94,27 @@ fn build_with_table() -> Vec<u8> {
             true,
         ),
     ];
+    sections.extend(extra.iter().map(|(t, d, c)| (*t, d.to_vec(), *c)));
     let mut table = Vec::new();
     for (tag, data, compressed) in &sections {
         let (off, len) = if *tag == b"PGDI" {
             (0x18u64, 0x18u64) // the one section that points back into the header
         } else {
             let off = f.len() as u64;
-            f.extend_from_slice(data);
-            (off, data.len() as u64)
+            let stored = if *compressed {
+                zlib(data)
+            } else {
+                data.clone()
+            };
+            f.extend_from_slice(&stored);
+            (off, stored.len() as u64)
         };
         let mut e = Vec::with_capacity(36);
         e.extend(tag.iter().rev()); // stored reversed
         e.extend(off.to_le_bytes());
         e.extend(len.to_le_bytes());
         e.extend((u32::from(*compressed)).to_le_bytes());
-        e.extend(0u64.to_le_bytes()); // inflated length — unchecked by the parser
+        e.extend((data.len() as u64).to_le_bytes()); // declared inflated length
         e.extend([0u8; 4]);
         table.push(e);
     }
@@ -123,7 +129,7 @@ fn build_with_table() -> Vec<u8> {
 
 #[test]
 fn the_section_table_names_the_setlists_and_bounds_the_streams() {
-    let h = Hxb::parse(&build_with_table()).unwrap();
+    let h = Hxb::parse(&build_with_table(&[])).unwrap();
     assert_eq!(h.device_id, 0x0021_0007);
     assert_eq!(h.device_version, 0x0250_0000);
     // No DESC section: the comment is empty, not the bytes that happen to sit at 0x30 — which
@@ -138,6 +144,55 @@ fn the_section_table_names_the_setlists_and_bounds_the_streams() {
     assert_eq!((sets[0].bank, sets[0].name.as_str()), (0, "Factory"));
     assert_eq!((sets[1].bank, sets[1].name.as_str()), (1, "User"));
     assert_eq!(sets[0].presets[0].as_ref().unwrap().name, "US Deluxe Nrm");
+}
+
+/// The table is kept whole, every tag classified, and a tag this reading has never seen — the
+/// shape a Favorites or User Defaults store would first appear in — is called out rather than
+/// folded silently into `streams`.
+#[test]
+fn the_section_table_is_kept_and_unknown_tags_are_reported() {
+    let h = Hxb::parse(&build_with_table(&[])).unwrap();
+    let tags: Vec<&str> = h.sections.iter().map(|s| s.tag.as_str()).collect();
+    assert_eq!(
+        tags,
+        ["PGDI", "SLNM", "GLOB", "I000", "UMDS", "SL00", "SL01"]
+    );
+    assert!(h.sections.iter().all(|s| s.known_as().is_some()));
+    assert!(h.unknown_sections().is_empty());
+    let glob = &h.sections[2];
+    assert!(glob.compressed);
+    assert_eq!(
+        glob.inflated_len,
+        br#"{"System":{"PresetNumbering":false}}"#.len() as u64
+    );
+    assert_ne!(glob.stored_len, glob.inflated_len);
+    let slnm = &h.sections[1];
+    assert_eq!(
+        (slnm.compressed, slnm.stored_len, slnm.inflated_len),
+        (false, 13, 13)
+    );
+
+    let h = Hxb::parse(&build_with_table(&[
+        (b"FAVS", br#"{"schema":"L6Whatever","data":{}}"#, true),
+        (b"XYZW", b"raw bytes", false),
+    ]))
+    .unwrap();
+    let unknown: Vec<&str> = h
+        .unknown_sections()
+        .iter()
+        .map(|s| s.tag.as_str())
+        .collect();
+    assert_eq!(unknown, ["FAVS", "XYZW"]);
+    // The unknown compressed one still inflates into `streams`, as before — nothing is lost,
+    // it is just now also named.
+    assert_eq!(h.streams.len(), 6);
+    assert_eq!(
+        h.setlists().len(),
+        2,
+        "unknown sections do not disturb the setlist reading"
+    );
+    // A legacy file has no table to keep.
+    assert!(Hxb::parse(&build()).unwrap().sections.is_empty());
 }
 
 #[test]

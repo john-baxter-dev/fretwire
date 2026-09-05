@@ -104,6 +104,10 @@ enum Command {
         /// Also list every preset in every setlist.
         #[arg(long)]
         presets: bool,
+        /// List the container's section table: every tag, its size, and whether fretwire knows
+        /// what it holds. Names no preset — safe to paste into a bug report.
+        #[arg(long)]
+        sections: bool,
     },
     /// Convert presets out of a device backup (`.hxb`/`.pgb`) into a fretwire export file.
     /// **Offline.**
@@ -735,6 +739,7 @@ fn main() -> Result<()> {
         Command::ShowBackup {
             backup: path,
             presets: verbose,
+            sections,
         } => {
             let bytes = std::fs::read(&path)?;
             let b = fretwire_data::hxb::Hxb::parse(&bytes)?;
@@ -767,6 +772,37 @@ fn main() -> Result<()> {
                         println!("        [{:>3}] {}", p.index, p.name);
                     }
                 }
+            }
+            if sections {
+                if b.sections.is_empty() {
+                    println!("  no section table (legacy layout)");
+                }
+                for s in &b.sections {
+                    let size = if s.compressed {
+                        format!("{:>8} B → {:>8} B", s.stored_len, s.inflated_len)
+                    } else {
+                        format!("{:>8} B   {:>10}", s.stored_len, "raw")
+                    };
+                    println!(
+                        "  {} @{:#08x} {size}  {}",
+                        s.tag,
+                        s.offset,
+                        s.known_as().unwrap_or("?? not a tag fretwire knows")
+                    );
+                }
+            }
+            // Surfaced even without --sections: a tag this reading does not cover is data the
+            // backup holds that fretwire ignores, and the way an unknown store (Favorites,
+            // User Defaults) will first show itself.
+            let unknown = b.unknown_sections();
+            if !unknown.is_empty() {
+                let tags: Vec<&str> = unknown.iter().map(|s| s.tag.as_str()).collect();
+                println!(
+                    "  {} section(s) fretwire does not recognise: {} — please report them \
+                     (`show-backup --sections` lists everything, and names no preset)",
+                    unknown.len(),
+                    tags.join(" ")
+                );
             }
         }
         Command::HxbConvert {

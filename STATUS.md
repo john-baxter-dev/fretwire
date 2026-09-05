@@ -2,6 +2,19 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Favorites and User Defaults — not held, now looked for (2026-09-04).** Asked on issue #5 whether
+`backup-device` covers the other two things an HX Edit backup does. It does not, and nothing we
+hold says where they live: the Floor `.hxb` and the POD Go `.pgb` have no favorites section under
+any tag, `GLOB` has no such key, and `UMDS` (`L6UMDArchive`) is a bare manifest — one entry per
+model the firmware knows (the POD Go's 571 cover all 540 catalog models plus 31 more), with no
+parameter payload — because neither donor had saved either. No wire op is known for them. The
+reading was also blind to them: `Hxb::parse` folded every unrecognised compressed section into
+`streams` without a word. It now keeps the section table (`Hxb::sections`, `HxbSection::known_as`,
+`Hxb::unknown_sections`), `show-backup --sections` prints every tag with sizes and what fretwire
+takes it for, and `show-backup` always names the tags it doesn't recognise — safe to paste, it names
+no preset. That is the ask: a backup from a pedal with one Favorite and one User Default saved
+(owner's Stomp tonight, or the reporter's XL). Tests +1.
+
 **Footswitch type — latching or momentary (2026-09-03).** The one field of the switch record
 that could be read but not written. It is layout-entry key `12` (`@fs_momentary` in a tone, no
 gate), on every binding of the switch like the label and colour, so it takes the same op-21

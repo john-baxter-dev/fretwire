@@ -482,6 +482,7 @@ pub async fn restore_preset_inline(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // one flag per part of the device, plus Tauri's app and state
 pub async fn backup_device(
     app: tauri::AppHandle,
     state: State<'_, AppState>,

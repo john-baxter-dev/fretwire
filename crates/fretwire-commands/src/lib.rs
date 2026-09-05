@@ -22,7 +22,7 @@ pub mod events;
 
 use crate::dto::{
     BackupFileDto, BackupInfoDto, BackupSummaryDto, CategoryDto, DataStatusDto, DetectedDeviceDto,
-    ImportResultDto, IrFileDto, IrSlotDto, ModelChoiceDto, PresetDto, PresetListItem,
+    FavoriteDto, ImportResultDto, IrFileDto, IrSlotDto, ModelChoiceDto, PresetDto, PresetListItem,
     RestoreReportDto, SettingDto, SplitTypeDto, UpdateStatusDto,
 };
 use crate::events::{Event, EventSink};
@@ -187,7 +187,76 @@ fn dto(s: &Session, p: &EditorPreset) -> PresetDto {
     d.history = s.history_labels();
     d.history_cursor = s.history_cursor() as i64;
     d.dirty = s.dirty();
+    // The star: which blocks are a favorite, by the pedal's rule. `favorite_match` compares against
+    // the list read at connect and reads nothing.
+    for (dto_block, block) in d.blocks.iter_mut().zip(p.blocks.iter()) {
+        dto_block.favorite = s.favorite_match(block).map(|f| f.name.clone());
+    }
     d
+}
+
+/// The device's favorites, for the picker. Read at connect; this re-reads them (two cheap ops).
+pub async fn favorites(state: &AppState) -> R<Vec<FavoriteDto>> {
+    run(state, |s| {
+        let favs: Vec<fretwire_core::Favorite> = s.refresh_favorites()?.to_vec();
+        Ok(favs.iter().map(|f| favorite_dto(s, f)).collect())
+    })
+    .await
+}
+
+fn favorite_dto(s: &Session, f: &fretwire_core::Favorite) -> FavoriteDto {
+    let cat = s.catalog();
+    let choice = cat.choice_by_index(f.model);
+    let cab_load = f.paired_cab.and_then(|c| cat.model_load_by_index(c));
+    let dsp_load = match (choice.as_ref().and_then(|c| c.dsp_load), cab_load) {
+        (Some(a), Some(b)) => Some(a + b),
+        (a, None) => a,
+        (None, b) => b,
+    };
+    FavoriteDto {
+        index: f.index,
+        name: f.name.clone(),
+        model_index: f.model,
+        model_name: choice
+            .as_ref()
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| s.model_label(f.model)),
+        symbolic_id: choice.as_ref().map(|c| c.symbolic_id.clone()),
+        category: choice.as_ref().and_then(|c| c.category),
+        paired_index: f.paired_cab,
+        paired_model_name: f.paired_cab.and_then(|c| cat.model_name_by_index(c)),
+        dsp_load,
+    }
+}
+
+/// Add favorite `index` to the end of the chain: the block with its cab, then its values.
+pub async fn add_favorite(state: &AppState, index: i64) -> R<PresetDto> {
+    returning_edit(
+        state,
+        move |s| favorite_label(s, index),
+        move |s| s.add_favorite(index, None),
+    )
+    .await
+}
+
+/// Add favorite `index` into a specific empty grid slot.
+pub async fn add_favorite_at(state: &AppState, slot: i64, index: i64) -> R<PresetDto> {
+    returning_edit(
+        state,
+        move |s| favorite_label(s, index),
+        move |s| s.add_favorite(index, Some(slot)),
+    )
+    .await
+}
+
+fn favorite_label(s: &Session, index: i64) -> String {
+    let name = s
+        .cached_favorites()
+        .iter()
+        .find(|f| f.index == index)
+        .map(|f| f.name.clone())
+        .unwrap_or_else(|| format!("favorite {index}"));
+    format!("Add favorite {name}")
 }
 
 /// Mutate via `f`, then re-read the preset so the frontend gets fresh, authoritative state.
@@ -350,6 +419,11 @@ pub async fn connect(state: &AppState) -> R<PresetDto> {
         }
         let s = guard.as_mut().expect("just set");
         let preset = s.read_preset().map_err(|e| e.to_string())?;
+        // Favorites, for the star and the picker. Best effort: a device or firmware without the
+        // store still connects.
+        if let Err(e) = s.refresh_favorites() {
+            tracing::warn!(error = %e, "favorites not read at connect");
+        }
         Ok(dto(s, &preset))
     })
     .await

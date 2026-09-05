@@ -277,6 +277,10 @@ pub struct BlockDto {
     pub paired_symbolic_id: Option<String>,
     pub paired_category: Option<i64>,
     pub paired_params: Vec<ParamDto>,
+    /// The favorite this block is — same model, cab and values — by name, or `null`. The chain
+    /// draws the star for it, as the pedal does. Stamped by the command layer from the favorites
+    /// read at connect.
+    pub favorite: Option<String>,
 }
 
 impl From<&EditorBlock> for BlockDto {
@@ -303,8 +307,26 @@ impl From<&EditorBlock> for BlockDto {
             paired_symbolic_id: b.paired_symbolic_id.clone(),
             paired_category: b.paired_category,
             paired_params: b.paired_params.iter().map(ParamDto::from).collect(),
+            favorite: None,
         }
     }
+}
+
+/// One of the device's favorites, for the picker's Favorites category: the entry (index, name)
+/// plus its model as the picker lists any model, so it can be drawn and costed the same way.
+#[derive(Serialize, Clone, Debug)]
+pub struct FavoriteDto {
+    /// Index in the device's list — pass to `add_favorite`.
+    pub index: i64,
+    pub name: String,
+    pub model_index: i64,
+    pub model_name: String,
+    pub symbolic_id: Option<String>,
+    pub category: Option<i64>,
+    pub paired_index: Option<i64>,
+    pub paired_model_name: Option<String>,
+    /// Model plus paired cab, raw model-file units like `ModelChoiceDto::dsp_load`.
+    pub dsp_load: Option<f64>,
 }
 
 #[derive(Serialize)]

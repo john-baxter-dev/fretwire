@@ -2,6 +2,22 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Favorites in the editor (2026-09-04, night, verified live).** The add picker has a
+**Favorites** category when the pedal has any: `Session::refresh_favorites` reads the list and each
+record at connect (decoded into `Favorite` — values in sym order, the sym-listed count, the cab's
+values), `favorites` on all three transports lists them for the picker (drawn and costed like any
+model, via a new `Catalog::choice_by_index`), and picking one is `Session::add_favorite`: the block
+and its cab, then one **typed** op 30 per sym-listed value — the first live try sent the cab's Mic
+as a float and the device refused it with -3, which is the wire-type rule doing its job. CLI
+`favorites` / `add-favorite <index> [slot]`. The **star**: `Session::favorite_match` finds the
+favorite a block *is* (model, cab, every sym-listed value within 1e-4), the command layer stamps
+`favorite` on the block DTO, and the chain draws the star (a new icon shape, category 23) with the
+name in the tooltip. **Live:** both favorites added on a cleared buffer, every value read back equal
+to the record. The star is verified through the mock (the DTO path) and the comparison is the rule
+the reporter described; a look at the GUI on the Stomp is still owed. **User defaults need nothing
+in the editor**: adding a US Princess over USB came in at the saved default — the pedal applies it
+on the add [solid]. Mock backend + a test (+6, 6 files), dispatcher at 83 commands.
+
 **Favorites and user defaults in the backup (2026-09-04, night).** The read side, built and
 verified live the same night the ops were found. Format **v4** of the `fretwire-backup` JSON adds
 `favorites` — index, name, model, paired cab, and the op-113 record as the bytes the device sent —

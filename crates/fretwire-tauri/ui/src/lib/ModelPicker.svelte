@@ -17,9 +17,16 @@
     // that scale, only the numbers on screen are converted.
     remaining = 75,
     budget = 75,
+    // The device's favorites (`favorites` command), or null. When given and non-empty, a
+    // Favorites category joins the list, as on the pedal's own model list.
+    favorites = null,
     onpick,
+    // Called with a favorite's index instead of `onpick` when a favorite is chosen.
+    onpickfavorite = null,
     oncancel,
   } = $props();
+
+  const FAVORITES = 23;
 
   // Shown as a percentage of what the pedal will actually accept, so the ceiling reads 100% and a
   // model's cost adds up against the meter next to it. See `editor::DSP_CEILING`.
@@ -35,6 +42,19 @@
 
   async function loadModels() {
     if (categoryId == null) return;
+    if (categoryId === FAVORITES) {
+      models = (favorites ?? []).map((f) => ({
+        index: f.model_index,
+        symbolic_id: f.symbolic_id,
+        name: f.name,
+        detail: f.model_name + (f.paired_model_name ? " + " + f.paired_model_name : ""),
+        category: FAVORITES,
+        dsp_load: f.dsp_load,
+        default_paired_index: f.paired_index,
+        favorite: f.index,
+      }));
+      return;
+    }
     loading = true;
     err = null;
     try {
@@ -48,6 +68,7 @@
   onMount(async () => {
     try {
       cats = await invoke("categories");
+      if (favorites?.length && onpickfavorite) cats = [{ id: FAVORITES, name: "Favorites", color: null }, ...cats];
       if (categoryId == null && cats.length) categoryId = cats[0].id;
       await loadModels();
     } catch (e) {
@@ -91,7 +112,7 @@
         title={tooBig
           ? `Needs ${pct(m.dsp_load ?? 0).toFixed(1)}% DSP; only ${pct(remaining).toFixed(1)}% is free. Remove or simplify a block to make room.`
           : m.name}
-        onclick={() => onpick(m.index, m.default_paired_index ?? null)}
+        onclick={() => (m.favorite != null ? onpickfavorite(m.favorite) : onpick(m.index, m.default_paired_index ?? null))}
       >
         <ModelIcon
           symbolicId={m.symbolic_id}
@@ -99,7 +120,7 @@
           name={m.name}
           size={22}
         />
-        <span class="name">{m.name}{isCurrent ? " ✓" : ""}</span>
+        <span class="name">{m.name}{isCurrent ? " ✓" : ""}{#if m.detail}<span class="dim"> — {m.detail}</span>{/if}</span>
         <span class="dsp">{m.dsp_load != null ? pct(m.dsp_load).toFixed(1) + "%" : "—"}</span>
       </button>
     {/each}

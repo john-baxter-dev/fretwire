@@ -30,6 +30,9 @@ export const CAT = {
   IR: 16,
   VOLUME_PAN: 17,
   CAB_MIC_IR: 19,
+  // `HX_ModelCatalog.json`'s Favorites category — not a device effect type, but the picker's
+  // Favorites list and a block that *is* a favorite draw the star, as the pedal's screen does.
+  FAVORITES: 23,
   AMP_CAB: 100,
 };
 
@@ -53,6 +56,7 @@ export const CATEGORY_SPECS = {
   [CAT.VOLUME_PAN]: { shape: "pedalboard", body: C.graphite },
   [CAT.SEND_RETURN]: { shape: "util", jacks: 2, body: C.teal, arrow: true },
   [CAT.LOOPER]: { shape: "looper", body: C.graphite, sw: 2 },
+  [CAT.FAVORITES]: { shape: "star", body: "#e8b93c" },
 };
 
 const GENERIC = { shape: "stomp", body: C.graphite, knobs: 3 };
@@ -151,6 +155,8 @@ function cabSpec(name) {
  */
 export function iconSpec(symbolicId, category = null, name = "") {
   const id = symbolicId ?? "";
+  // A favorite is the star whatever its model — the category wins over the symbol here alone.
+  if (category === CAT.FAVORITES) return CATEGORY_SPECS[CAT.FAVORITES];
   if (MODELS[id]) return MODELS[id];
 
   if (category === CAT.CAB || category === CAT.CAB_MIC_IR || /^HD2_Cab/i.test(id)) {

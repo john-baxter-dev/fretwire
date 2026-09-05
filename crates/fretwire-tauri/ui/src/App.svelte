@@ -620,6 +620,26 @@
     selectedSlot = null;
     apply(invoke("delete_block", { slot }));
   }
+  // The device's favorites, read after connect for the add picker's Favorites category. null
+  // until then, or when the device has none.
+  let favorites = $state(null);
+  async function refreshFavorites() {
+    try {
+      const f = await invoke("favorites");
+      favorites = f?.length ? f : null;
+    } catch (e) {
+      favorites = null;
+    }
+  }
+  function onAddFavorite(index) {
+    const slot = addTarget;
+    addTarget = null;
+    if (slot != null && slot >= 0) {
+      apply(invoke("add_favorite_at", { slot, index }));
+    } else {
+      apply(invoke("add_favorite", { index }));
+    }
+  }
   function onAdd(modelIndex, defaultPaired) {
     const slot = addTarget;
     addTarget = null;
@@ -955,6 +975,7 @@
       // with the plainer per-preset line. Everything after connect is fair game for the effect.
       announced = presetKey(preset);
       connected = true;
+      refreshFavorites();
       activeSnapshot = preset.active_snapshot ?? 0;
       // Open the sidebar on the setlist the device is actually sitting in, not always Factory 1 —
       // otherwise a Floor parked in User 1 lists names that have nothing to do with its screen.
@@ -1441,6 +1462,8 @@
               (addTarget >= 0 ? loadForSlot(addTarget) : Math.min(...dspViews.map((v) => v.dsp_load)))}
             budget={BUDGET}
             onpick={onAdd}
+            {favorites}
+            onpickfavorite={onAddFavorite}
             oncancel={() => (addTarget = null)}
           />
         {/if}

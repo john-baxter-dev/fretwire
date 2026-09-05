@@ -491,6 +491,22 @@ guessing has already cost a power cycle): see section B of `captures/_RUNBOOK-hx
       keyed by setting *name*, so it carries only the 54 of 166 ids we have named. Container and
       section tags are decoded (`hxb.rs`); IRs are RIFF WAV either way. First test when built: HX
       Edit restores one of ours onto the Stomp.
+- [x] **Favorites in the editor — pick and star** (2026-09-04, verified live). The add picker
+      gains a **Favorites** category when the device has any (read at connect, ops 112/113):
+      picking one adds its block and cab and sends its values typed (`Session::add_favorite`,
+      `add_favorite` / `add_favorite_at` on all three transports, CLI `favorites` /
+      `add-favorite`). A block that *is* a favorite — same model, cab and sym-listed values, the
+      pedal's rule — carries `favorite` on its DTO and the chain draws the star for it, with the
+      name in the tooltip. **User defaults need nothing here**: the pedal applies them on the add
+      itself (protocol doc).
+- [ ] **Favorites — the rest of the editor**. (a) **Save as favorite** on a block: op 119
+      (`{98: slot, 118: index, 31: true, 109: name}`), captured once; build it byte-exact, try it
+      once against the list read back, then a button. (b) **Replace with a favorite** in the swap
+      picker: `swap_model` then the values, the same path as add. (c) **Refresh on the pedal's
+      push**: state type 56 announces a list change; today the list is read at connect and by the
+      picker. (d) **MCP tools** for the list and the add. (e) Delete and rename: no op captured.
+      (f) Try op 39 with the record's value lists in the spec — a favorite added in one op, if the
+      device takes it (protocol doc).
 - [ ] **Favorites and User Defaults — restore**. The only write seen is op 119, which saves a
       *block in the current preset* as a favorite; no direct record write, no delete, no rename, no
       user-default write has been captured. A restore today reports them as held and not put back.

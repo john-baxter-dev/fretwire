@@ -34,7 +34,7 @@ pub mod session;
 pub mod update;
 
 pub use editor::{Catalog, EditorBlock, EditorParam, EditorPreset, ModelChoice};
-pub use session::{ExportProgress, Session};
+pub use session::{ExportProgress, Favorite, Session};
 
 /// Re-export the building blocks so the CLI and GUI depend on one crate.
 pub use fretwire_data;

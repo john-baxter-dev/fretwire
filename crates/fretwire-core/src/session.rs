@@ -18,7 +18,7 @@
 //! rejected — the UI can't express one, and the device's surgical ops address a single grid. Reading
 //! and per-block edits were already DSP-agnostic; this makes the planning layer so too.
 
-use crate::editor::{Catalog, EditorPreset};
+use crate::editor::{Catalog, EditorBlock, EditorPreset};
 use fretwire_data::stream::{ParamValue, PresetListEntry};
 use fretwire_protocol::{EditValue, Frame, Tlv, channel, cmd, edit, op};
 use fretwire_usb::Transport;
@@ -65,6 +65,10 @@ pub struct Session {
     /// same `Err`. Without it a settings sweep emits 95 warnings on an HX Stomp for working exactly
     /// as intended, which trains the reader to ignore the line that matters.
     probing: bool,
+    /// The device's favorites, once read (`refresh_favorites`); `None` until then. Read at
+    /// connect by the command layer, so the chain's star and the picker's Favorites category
+    /// have them without a round trip per preset.
+    favorites: Option<Vec<Favorite>>,
 }
 
 /// One state on the edit-history timeline: the op-21-writable preset blob plus the label of the
@@ -199,6 +203,68 @@ fn setlist_name(names: &'static [&'static str], bank: i64) -> &'static str {
         .unwrap_or("Presets")
 }
 
+/// A favorite as the device lists it (op 112) with its record decoded (op 113): the block's
+/// values in `Helix.sym` order — the first `sym_values` of them address parameters by index, any
+/// after that are switches the sym list omits — and the paired cab's, when there is one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Favorite {
+    pub index: i64,
+    pub name: String,
+    /// `Helix.sym` index of the block's model.
+    pub model: i64,
+    /// `Helix.sym` index of the paired cab, for an amp favorite.
+    pub paired_cab: Option<i64>,
+    pub values: Vec<ParamValue>,
+    /// How many of `values` the sym list names (the record's `3`); the rest are not addressable
+    /// by op 30 and are not compared.
+    pub sym_values: usize,
+    pub paired_values: Vec<ParamValue>,
+}
+
+/// The value list under a favorite record's `20.<key>` (`11` the block, `12` the paired cab):
+/// `{2: count, 3: sym-listed count, 4: [values]}` → the values and the sym-listed count.
+fn favorite_values(
+    record: &fretwire_data::rmpv::Value,
+    key: i64,
+) -> Option<(Vec<ParamValue>, usize)> {
+    use fretwire_data::rmpv::Value;
+    use fretwire_data::stream::map_get;
+    let list = map_get(map_get(record, 20)?, key)?;
+    let sym = map_get(list, 3).and_then(Value::as_u64).unwrap_or(0) as usize;
+    let Some(Value::Array(vals)) = map_get(list, 4) else {
+        return None;
+    };
+    let values = vals
+        .iter()
+        .map(|v| match v {
+            Value::Boolean(b) => ParamValue::Bool(*b),
+            Value::Integer(n) => ParamValue::Int(n.as_i64().unwrap_or(0)),
+            Value::F32(f) => ParamValue::Float(*f),
+            Value::F64(f) => ParamValue::Float(*f as f32),
+            _ => ParamValue::Float(0.0),
+        })
+        .collect();
+    Some((values, sym))
+}
+
+fn param_as_f32(v: &ParamValue) -> f32 {
+    match v {
+        ParamValue::Float(f) => *f,
+        ParamValue::Int(n) => *n as f32,
+        ParamValue::Bool(b) => f32::from(u8::from(*b)),
+    }
+}
+
+/// Whether the block's parameters hold `want`, value for value by index. A parameter the block
+/// does not list is not a mismatch; a listed one that differs is.
+fn values_match(want: &[ParamValue], have: &[crate::EditorParam]) -> bool {
+    want.iter().enumerate().all(|(i, w)| {
+        have.iter()
+            .find(|p| p.index == i)
+            .is_none_or(|p| (param_as_f32(&p.value) - param_as_f32(w)).abs() <= 1e-4)
+    })
+}
+
 /// One step of an [`Session::export_setlists`] sweep, as the caller sees it.
 ///
 /// A struct rather than positional arguments because the sweep can now span setlists: `done`/`total`
@@ -277,6 +343,7 @@ impl Session {
                 txn: 0,
                 closed: false,
                 probing: false,
+                favorites: None,
                 device_lost: false,
                 last_raw: None,
                 history: Vec::new(),
@@ -3579,6 +3646,102 @@ impl Session {
             })?;
         }
         Ok(backup)
+    }
+
+    /// The favorites as last read, or nothing if they have not been (`refresh_favorites`).
+    pub fn cached_favorites(&self) -> &[Favorite] {
+        self.favorites.as_deref().unwrap_or(&[])
+    }
+
+    /// The favorites, reading them from the device the first time.
+    pub fn favorites(&mut self) -> crate::Result<&[Favorite]> {
+        if self.favorites.is_none() {
+            self.refresh_favorites()?;
+        }
+        Ok(self.cached_favorites())
+    }
+
+    /// Re-read the favorites from the device (ops 112 + 113) and decode each record. **Reads only.**
+    pub fn refresh_favorites(&mut self) -> crate::Result<&[Favorite]> {
+        let raw = self.read_favorites()?;
+        let decoded: Vec<Favorite> = raw
+            .into_iter()
+            .filter_map(|f| {
+                let rec = fretwire_data::rmpv::decode::read_value(&mut f.record.as_slice()).ok()?;
+                let (values, sym_values) = favorite_values(&rec, 11)?;
+                let (paired_values, _) = favorite_values(&rec, 12).unwrap_or_default();
+                Some(Favorite {
+                    index: f.index,
+                    name: f.name,
+                    model: f.model,
+                    paired_cab: f.paired_cab,
+                    values,
+                    sym_values,
+                    paired_values,
+                })
+            })
+            .collect();
+        tracing::info!(count = decoded.len(), "favorites read");
+        self.favorites = Some(decoded);
+        Ok(self.cached_favorites())
+    }
+
+    /// The favorite this block **is**, if any: same model, same paired cab, and every sym-listed
+    /// value equal — the pedal's own rule for drawing the star instead of the category icon
+    /// (issue #5). Compares against the cached list; nothing is read.
+    pub fn favorite_match(&self, block: &EditorBlock) -> Option<&Favorite> {
+        let model = block.model_index?;
+        self.cached_favorites().iter().find(|f| {
+            f.model == model
+                && f.paired_cab == block.paired_index
+                && values_match(&f.values[..f.sym_values.min(f.values.len())], &block.params)
+                && (f.paired_cab.is_none() || values_match(&f.paired_values, &block.paired_params))
+        })
+    }
+
+    /// Add favorite `index` to the preset: the block with its model and paired cab (appended, or
+    /// into empty grid `slot` when given), then every sym-listed value from the record, the cab's
+    /// too. The pedal applies a model's **user default** on the add by itself [solid — live
+    /// 2026-09-04: a US Princess added over USB came in at its saved values]; a favorite's values
+    /// are ours to send, one op 30 each.
+    pub fn add_favorite(&mut self, index: i64, slot: Option<i64>) -> crate::Result<EditorPreset> {
+        let fav = self
+            .favorites()?
+            .iter()
+            .find(|f| f.index == index)
+            .cloned()
+            .ok_or_else(|| crate::Error::Backup(format!("no favorite at index {index}")))?;
+        let before: Vec<i64> = self.read_preset()?.blocks.iter().map(|b| b.slot).collect();
+        let paired = fav.paired_cab.unwrap_or(-1);
+        let after = match slot {
+            Some(s) => {
+                self.add_block_at(s, fav.model, paired)?;
+                self.read_preset()?
+            }
+            None => self.add_block_append(fav.model, paired)?,
+        };
+        let Some(new_slot) = after
+            .blocks
+            .iter()
+            .map(|b| b.slot)
+            .find(|s| !before.contains(s))
+        else {
+            return Err(crate::Error::Backup(
+                "the block was added but cannot be found in the preset".into(),
+            ));
+        };
+        // Typed: the device refuses a value in the wrong wire type (-3), and a favorite carries
+        // ints for its enum params (a cab's Mic) and bools for its switches alongside the floats.
+        for (i, v) in fav.values.iter().take(fav.sym_values).enumerate() {
+            self.set_param_value(new_slot, false, i as i64, *v)?;
+        }
+        if fav.paired_cab.is_some() {
+            for (i, v) in fav.paired_values.iter().enumerate() {
+                self.set_param_value(new_slot, true, i as i64, *v)?;
+            }
+        }
+        tracing::info!(index, name = %fav.name, slot = new_slot, "favorite added");
+        self.read_preset()
     }
 
     /// The favorites the device holds, each with its record: op 112 for the list, op 113 per entry,

@@ -1305,6 +1305,11 @@ the **switch parameters that the sym list omits appended after it as bools** (th
 `@trails` is the twelfth of `2: 12, 3: 11`). The cab's `IrData` is not carried. `{23, 25, 26}` is
 the same triple op 109 sends as `{106, 64, 105}` (below). `35`/`32`/`33` came back nil.
 
+Adding a favorite from fretwire is `add_block` with its model and cab, then one typed op 30 per
+sym-listed value — typed, because a favorite carries ints for enum params (a cab's Mic) and the
+device refuses a float there with -3 [live 2026-09-04: the first attempt did exactly that]. Verified
+live: both favorites land with every value equal to the record.
+
 Save (op 119) takes a **block in the current preset**, not a record: HX Edit saved slot 6 as index 1
 named "Dynamic Plate". Whether an index that exists is overwritten or refused, and what `31: true`
 means, was not exercised. **No delete was captured** — the capture's name says add+delete but only the
@@ -1339,6 +1344,15 @@ an amp with a mic'd cab when it was saved, and only that form of the model holds
 same shape as a favorite's (op 113's `64`, with the cab under `12`). The backup's UMDS table is that
 sweep written out, and a bare manifest on both donors because there was nothing to carry; what a row
 with a default looks like in the file is still unseen. Not seen either: how one is written or cleared.
+**The pedal applies a user default itself when a block is added over USB** [solid — live
+2026-09-04]: with the US Princess default saved, `add_block` (op 39, no values in the spec, then the
+cab swap) came back at Drive 0.42, Bass 0.21 … and the cab at Mic 2, Position 0.42 — the saved
+record, not the factory values. So an editor need do nothing for user defaults beyond backing them
+up. Also worth noting: op 39's add spec `{19: 6, 20: {24: {23, 25, 26}, 9, 10}}` is the favorite
+record's top level minus the value lists `11`/`12` — the same structure with the values left out.
+Whether op 39 accepts a spec *with* `11`/`12` (a favorite added in one op) is untested.
+[hypothesis]
+
 HX Edit's sweep is slow — 1162 asks over 37 s, against 1.95 s for the 126-preset op-4 sweep — but
 that is its pacing, not the pedal's: `backup-device` asks 1414 (every `Helix.sym` model alone, every
 amp and preamp with each cab kind, every cab with the legacy kind — a superset, and an ask the

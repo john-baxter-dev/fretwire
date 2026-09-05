@@ -244,6 +244,11 @@ enum Command {
     },
     /// Delete a block (op 28 surgical delete — preserves the other blocks' footswitch layout).
     DeleteBlock { slot: i64 },
+    /// List the device's favorites (ops 112 + 113). **Reads only.**
+    Favorites,
+    /// Add a favorite to the current preset: its block and cab, then its values. Appended to the
+    /// chain, or into empty grid `slot` when given.
+    AddFavorite { index: i64, slot: Option<i64> },
     /// Move a block. The destination slot encodes the row: a parallel slot index moves it to row B.
     /// On a POD Go (slots 1..=10, one row) this rides POD Go Edit's own path: a whole-preset
     /// rewrite into the edit buffer, not the HX move op.
@@ -1013,6 +1018,30 @@ fn main() -> Result<()> {
             print_preset(&preset);
         }
         // op 78 begin-structural first, as HX Edit does. Edit buffer only; reload to undo.
+        Command::Favorites => {
+            let mut s = fretwire_core::Session::connect()?;
+            let favs = s.refresh_favorites()?.to_vec();
+            if favs.is_empty() {
+                println!("no favorites on the device");
+            }
+            for f in &favs {
+                println!(
+                    "[{}] {}  — {}{}  ({} values)",
+                    f.index,
+                    f.name,
+                    s.model_label(f.model),
+                    f.paired_cab
+                        .map(|c| format!(" + {}", s.model_label(c)))
+                        .unwrap_or_default(),
+                    f.values.len()
+                );
+            }
+        }
+        Command::AddFavorite { index, slot } => {
+            let mut s = fretwire_core::Session::connect()?;
+            let p = s.add_favorite(index, slot)?;
+            println!("added; the preset now has {} block(s)", p.blocks.len());
+        }
         Command::DeleteBlock { slot } => {
             eprintln!(
                 "deleting block at slot {slot} via op-28 (surgical; keeps footswitch layout)."

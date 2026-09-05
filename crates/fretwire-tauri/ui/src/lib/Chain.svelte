@@ -121,8 +121,11 @@
         name,
         symbolicId: b?.symbolic_id ?? null,
         modelName: b?.model_name ?? "",
-        // An amp carrying a paired cab is drawn as the full stack, the way it is on stage.
-        iconCategory: b?.paired_symbolic_id ? 100 : (b?.category ?? null),
+        // A block that *is* a favorite — same model, cab and values — gets the star in place of
+        // its category icon, as on the pedal's screen. Otherwise an amp carrying a paired cab is
+        // drawn as the full stack, the way it is on stage.
+        iconCategory: b?.favorite ? 23 : b?.paired_symbolic_id ? 100 : (b?.category ?? null),
+        favorite: b?.favorite ?? null,
         bypassed: b ? !!b.bypassed : false,
         // Which footswitch toggles this block's bypass, or 0 for unbound. Decoded from the
         // preset's footswitch layout (key `3 → 8`, position + 1) and carried on every block —
@@ -293,7 +296,7 @@
         class:sel={c.slot === selectedSlot}
         class:bypassed={c.bypassed}
         class:stranded={c.stranded != null}
-        title={c.strandedWhy ?? c.name}
+        title={c.strandedWhy ?? (c.favorite ? `${c.name} — favorite "${c.favorite}"` : c.name)}
         class:insb={dragOver === c.slot && dragSide === "l" && dragSrc != null && dragSrc !== c.slot}
         class:insa={dragOver === c.slot && dragSide === "r" && dragSrc != null && dragSrc !== c.slot}
         draggable="true"

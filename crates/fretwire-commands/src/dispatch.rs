@@ -53,6 +53,9 @@ pub const COMMAND_NAMES: &[&str] = &[
     "swap_model",
     "add_block",
     "add_block_at",
+    "favorites",
+    "add_favorite",
+    "add_favorite_at",
     "delete_block",
     "clear_preset",
     "reorder_block",
@@ -221,6 +224,9 @@ pub async fn dispatch(
         )
         .await?),
         "add_block" => ok(c::add_block(state, a.req("modelIndex")?, a.req("pairedIndex")?).await?),
+        "favorites" => ok(c::favorites(state).await?),
+        "add_favorite" => ok(c::add_favorite(state, a.req("index")?).await?),
+        "add_favorite_at" => ok(c::add_favorite_at(state, a.req("slot")?, a.req("index")?).await?),
         "add_block_at" => ok(c::add_block_at(
             state,
             a.req("slot")?,
@@ -436,7 +442,7 @@ mod tests {
     /// pinned by `connect_is_matched_without_running`.
     #[tokio::test]
     async fn every_name_dispatches() {
-        assert_eq!(COMMAND_NAMES.len(), 80, "the surface was 80 commands");
+        assert_eq!(COMMAND_NAMES.len(), 83, "the surface was 83 commands");
         for name in COMMAND_NAMES {
             if *name == "connect" {
                 continue;

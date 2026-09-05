@@ -984,6 +984,29 @@ impl Catalog {
 
     /// A model's display name by its `Helix.sym` index (e.g. for labeling an add/swap in the edit
     /// history before the block exists to read it from).
+    /// One model as the picker would list it, by its `Helix.sym` index — what a favorite carries.
+    /// `None` for an index outside the table or a symbol the model table does not know.
+    pub fn choice_by_index(&self, index: i64) -> Option<ModelChoice> {
+        let (sym, _) = self.symbols.by_index(usize::try_from(index).ok()?)?;
+        let (base, var) = split_variant(sym);
+        let id = self.models.id_by_symbolic_id(sym)?;
+        let category = self.models.category(id).map(canonical_category);
+        let name = self
+            .models
+            .name(id)
+            .map(str::to_string)
+            .unwrap_or_else(|| base.to_string());
+        Some(ModelChoice {
+            index,
+            symbolic_id: base.to_string(),
+            name,
+            category,
+            variant: var,
+            dsp_load: self.model_load(base, var),
+            default_paired_index: None,
+        })
+    }
+
     pub fn model_name_by_index(&self, index: i64) -> Option<String> {
         let (sym, _) = self.symbols.by_index(index as usize)?;
         let (base, _) = split_variant(sym);

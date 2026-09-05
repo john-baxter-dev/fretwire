@@ -203,6 +203,21 @@ pub async fn swap_model(
 }
 
 #[tauri::command]
+pub async fn favorites(state: State<'_, AppState>) -> R<Vec<fretwire_commands::dto::FavoriteDto>> {
+    fretwire_commands::favorites(&state).await
+}
+
+#[tauri::command]
+pub async fn add_favorite(state: State<'_, AppState>, index: i64) -> R<PresetDto> {
+    fretwire_commands::add_favorite(&state, index).await
+}
+
+#[tauri::command]
+pub async fn add_favorite_at(state: State<'_, AppState>, slot: i64, index: i64) -> R<PresetDto> {
+    fretwire_commands::add_favorite_at(&state, slot, index).await
+}
+
+#[tauri::command]
 pub async fn add_block(
     state: State<'_, AppState>,
     model_index: i64,

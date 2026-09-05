@@ -167,6 +167,23 @@ const CATALOG = [
 const findModel = (symOrIndex) =>
   CATALOG.find((m) => m.symbolic_id === symOrIndex || m.index === symOrIndex);
 
+function mockFavorites() {
+  const amp = CATALOG.find((m) => m.category === 1);
+  const cab = amp && CAB_LINKS[amp.symbolic_id] ? findModel(CAB_LINKS[amp.symbolic_id]) : null;
+  const verb = CATALOG.find((m) => m.category === 10);
+  const out = [];
+  if (amp) out.push({
+    index: 0, name: "Big Clean", model_index: amp.index, model_name: amp.name, symbolic_id: amp.symbolic_id,
+    category: amp.category, paired_index: cab?.index ?? null, paired_model_name: cab?.name ?? null,
+    dsp_load: amp.dsp_load + (cab?.dsp_load ?? 0),
+  });
+  if (verb) out.push({
+    index: 1, name: "Long Tail", model_index: verb.index, model_name: verb.name, symbolic_id: verb.symbolic_id,
+    category: verb.category, paired_index: null, paired_model_name: null, dsp_load: verb.dsp_load,
+  });
+  return out;
+}
+
 // Amp → suggested-cab links (the real backend reads these from amp.models' `ircablink`), for the
 // synthetic Amp+Cab category.
 const CAB_LINKS = {
@@ -188,6 +205,9 @@ function makeBlock(sym, opts = {}) {
   const md = findModel(sym);
   const b = {
     kind: "effect",
+    // The favorite this block was added from, by name — the real backend re-derives this from
+    // model + cab + values on every read; the mock remembers, and forgets on the first edit.
+    favorite: opts.favorite ?? null,
     modelIndex: md.index,
     symbolic_id: md.symbolic_id,
     model_name: md.name,
@@ -827,6 +847,8 @@ const EDIT_LABELS = {
     (a.pairedIndex >= 0 ? ` + ${modelName(a.pairedIndex)}` : ""),
   rename_snapshot: (a) => `Rename snapshot ${a.index + 1}`,
   add_block: (a) => `Add ${modelName(a.modelIndex)}`,
+  add_favorite: (a) => `Add favorite ${mockFavorites().find((f) => f.index === a.index)?.name ?? a.index}`,
+  add_favorite_at: (a) => `Add favorite ${mockFavorites().find((f) => f.index === a.index)?.name ?? a.index}`,
   add_block_at: (a) => `Add ${modelName(a.modelIndex)}`,
   delete_block: (a) => `Delete ${slotName(a.slot)}`,
   clear_preset: () => "Clear preset",
@@ -865,6 +887,7 @@ function blockDto(p, slot, e) {
     paired_model_name: e.paired_model_name, paired_index: e.paired_index,
     paired_symbolic_id: cab?.symbolic_id ?? null, paired_category: cab?.category ?? null,
     paired_params: clone(e.paired_params),
+    favorite: e.favorite ?? null,
   };
 }
 
@@ -1520,6 +1543,27 @@ const HANDLERS = {
         e.paired_params = [];
       }
     }
+    return toDto(current);
+  },
+  // ---- favorites ----
+  // Two, like the owner's Stomp on 2026-09-04: an amp with its cab and a reverb. Built from
+  // whatever amp and reverb the mock catalog has, so they draw and cost like any model.
+  favorites: () => mockFavorites(),
+  add_favorite: ({ index }) => {
+    const f = mockFavorites().find((x) => x.index === index);
+    if (!f) throw new Error(`no favorite at index ${index}`);
+    // The new block is the slot that was empty before, as Session::add_favorite finds it.
+    const before = new Set(Object.keys(current.slots).filter((k) => current.slots[k]));
+    HANDLERS.add_block({ modelIndex: f.model_index, pairedIndex: f.paired_index ?? -1 });
+    const slot = Object.keys(current.slots).find((k) => current.slots[k] && !before.has(k));
+    if (slot != null) current.slots[slot].favorite = f.name;
+    return toDto(current);
+  },
+  add_favorite_at: ({ slot, index }) => {
+    const f = mockFavorites().find((x) => x.index === index);
+    if (!f) throw new Error(`no favorite at index ${index}`);
+    HANDLERS.add_block_at({ slot, modelIndex: f.model_index, pairedIndex: f.paired_index ?? -1 });
+    if (current.slots[slot]) current.slots[slot].favorite = f.name;
     return toDto(current);
   },
   add_block: ({ modelIndex, pairedIndex }) => {

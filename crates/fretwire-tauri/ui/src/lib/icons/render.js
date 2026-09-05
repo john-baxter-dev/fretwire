@@ -462,7 +462,22 @@ function drawSpring(s) {
   return out;
 }
 
+function drawStar(s) {
+  // The pedal's favorite mark: a five-point star, the outline the same weight as every other icon.
+  const body = s.body ?? "#e8b93c";
+  const pts = [];
+  for (let i = 0; i < 10; i++) {
+    const r = i % 2 === 0 ? 13 : 5.6;
+    const a = -Math.PI / 2 + (i * Math.PI) / 5;
+    pts.push(`${N(16 + r * Math.cos(a))},${N(16.8 + r * Math.sin(a))}`);
+  }
+  let out = `<polygon points="${pts.join(" ")}" fill="${OUTLINE}" opacity="0.5" transform="translate(0 0.6)"/>`;
+  out += `<polygon points="${pts.join(" ")}" fill="${body}" stroke="${shade(body, -0.35)}" stroke-width="1" stroke-linejoin="round"/>`;
+  return out;
+}
+
 const SHAPES = {
+  star: drawStar,
   stomp: (s) => drawStomp(s, { x: 8, w: 16 }),
   stompWide: (s) => drawStomp(s, { x: 4.5, w: 23 }),
   stompNarrow: (s) => drawStomp(s, { x: 10, w: 12 }),

@@ -499,6 +499,11 @@ guessing has already cost a power cycle): see section B of `captures/_RUNBOOK-hx
       pedal's rule — carries `favorite` on its DTO and the chain draws the star for it, with the
       name in the tooltip. **User defaults need nothing here**: the pedal applies them on the add
       itself (protocol doc).
+- [ ] **Confirm the chunked-listing fix on a device with many favorites** (issue #5, 2026-09-05).
+      A 21-favorite XL backed up none: browse-side listings were read from the first frame only.
+      Fixed by reassembling (`browse_reply_bytes`), but the owner's Stomp has two favorites and
+      cannot exercise it — the reporter's XL is the test. The IR directory (op 13) took the same
+      fix and is likewise unproven past one frame.
 - [ ] **Favorites — the rest of the editor**. (a) **Save as favorite** on a block: op 119
       (`{98: slot, 118: index, 31: true, 109: name}`), captured once; build it byte-exact, try it
       once against the list read back, then a button. (b) **Replace with a favorite** in the swap

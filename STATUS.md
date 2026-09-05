@@ -2,6 +2,27 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Favorites came back empty on an XL — chunked replies (2026-09-05).** The reporter ran the new
+backup on his HX Stomp XL: `user_defaults` populated, `favorites` an **empty list**, though the
+pedal holds 21 (his `.hxb`, read by `show-backup --sections`, lists all 21 as `F000`–`F014` — so
+the container tags hold across devices, which was the ask). Cause: every browse-side listing was
+read from **the first reply frame alone**. A reply declares its length in the frame's first 8
+bytes, and one favorite fits (42 B body, 34 declared) while twenty-one do not — the partial buffer
+then fails to decode as MessagePack, and `read_favorites` treated that failure as "the device has
+none". `Session::browse_reply_bytes` now reassembles when the declared length exceeds the frame
+(`drain_chunked_stream`, as the IR blob and preset stream already did), and an undecodable list is
+an **error** rather than an empty answer. **op 13's IR directory had the identical latent bug** and
+now goes through the same path — 128 IR records would never have fitted one frame either.
+Verified: the small case is unchanged live (the owner's 2 favorites still read); **the 21-favorite
+case is unverified — it needs the reporter's XL**, which is where this is parked.
+
+**PARKED HERE (2026-09-05).** Next, in order: (1) ask the reporter to re-run `backup-device` on the
+XL and confirm 21 favorites land in the JSON — that is the only test of the reassembly path we
+have; (2) the GUI star has still never been looked at on a real pedal (the comparison is exercised
+only through the mock); (3) then the open roadmap items — save-as-favorite (op 119), favorites
+restore, `.hxb` writing. Nothing is pushed: nine commits sit on master, and the reply to #5 already
+told the reporter this is "on master", so **the push is the first thing owed**.
+
 **Favorites in the editor (2026-09-04, night, verified live).** The add picker has a
 **Favorites** category when the pedal has any: `Session::refresh_favorites` reads the list and each
 record at connect (decoded into `Favorite` — values in sym order, the sym-listed count, the cab's

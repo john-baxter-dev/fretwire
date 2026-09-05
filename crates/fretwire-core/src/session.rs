@@ -3752,16 +3752,37 @@ impl Session {
         use fretwire_data::stream::map_get;
         self.in_ir_session(|s| {
             let txn = s.bump_txn();
-            let list = match s.ir_request(cmd::STREAM, edit::favorites_list(txn), txn) {
-                Ok(ack) => Self::ir_reply_payload(&ack),
+            let ack = match s.ir_request(cmd::STREAM, edit::favorites_list(txn), txn) {
+                Ok(ack) => ack,
                 Err(crate::Error::Rejected(m)) => {
+                    // A device without the store answers no list, which is not a failure.
                     tracing::warn!(%m, "favorites list refused — recording none");
                     return Ok(Vec::new());
                 }
                 Err(e) => return Err(e),
             };
-            let Some(Value::Array(entries)) = list else {
-                return Ok(Vec::new());
+            let bytes = s.browse_reply_bytes(ack, "favorites list")?;
+            let entries = match Self::reply_payload(&bytes) {
+                Some(Value::Array(entries)) => entries,
+                // The device holds no favorites — a real answer, and the only empty one.
+                Some(Value::Nil) | None
+                    if fretwire_data::stream::locate_root(&bytes, 32).is_some() =>
+                {
+                    return Ok(Vec::new());
+                }
+                // Anything else means we did not understand the reply. Saying "no favorites" here
+                // is how a tester's twenty-one went missing from a backup without a word.
+                other => {
+                    return Err(fretwire_data::Error::Stream(format!(
+                        "could not read the favorites list ({} bytes, {})",
+                        bytes.len(),
+                        match other {
+                            Some(v) => format!("reply was {v}"),
+                            None => "no envelope in the reply".into(),
+                        }
+                    ))
+                    .into());
+                }
             };
             let mut out = Vec::with_capacity(entries.len());
             for e in &entries {
@@ -4719,8 +4740,43 @@ impl Session {
 
     /// The `104` payload of an IR reply, if it carries one.
     fn ir_reply_payload(ack: &Frame) -> Option<fretwire_data::rmpv::Value> {
-        let root = fretwire_data::stream::locate_root(&ack.body, 32)?;
+        Self::reply_payload(&ack.body)
+    }
+
+    /// Envelope key 104 out of a complete browse-side reply.
+    fn reply_payload(bytes: &[u8]) -> Option<fretwire_data::rmpv::Value> {
+        let root = fretwire_data::stream::locate_root(bytes, 32)?;
         fretwire_data::stream::map_get(&root.value, 104).cloned()
+    }
+
+    /// Whether a reply frame holds the whole reply, by its own declared length. A reply that
+    /// declares more than the frame carries is the head of a chunked stream and must be
+    /// reassembled before it will decode at all.
+    fn reply_is_complete(body: &[u8]) -> bool {
+        fretwire_data::stream::declared_stream_len(body).is_none_or(|n| body.len() >= n)
+    }
+
+    /// The complete bytes of a browse-side reply: the frame as it came when that is the whole of
+    /// it, and the reassembled stream when the device declared more.
+    ///
+    /// **This is the fix for "my favorites came back empty".** A listing's size scales with what
+    /// the user has, and every browse-side listing was read from the first frame alone: one entry
+    /// fits, twenty-one do not, and the partial buffer then fails to decode as MessagePack. The
+    /// owner's Stomp has two favorites and read them correctly; a tester's HX Stomp XL has
+    /// twenty-one and backed up **none**, silently, because the decode failure was being treated
+    /// as "the device has none". [solid — issue #5, 2026-09-05; op 13's IR directory had the same
+    /// latent bug, and 128 IR records would have hit it]
+    fn browse_reply_bytes(&mut self, ack: Frame, what: &str) -> crate::Result<Vec<u8>> {
+        if Self::reply_is_complete(&ack.body) {
+            return Ok(ack.body);
+        }
+        tracing::debug!(
+            what,
+            first = ack.body.len(),
+            declared = ?fretwire_data::stream::declared_stream_len(&ack.body),
+            "reply is chunked — reassembling"
+        );
+        self.drain_chunked_stream(channel::EDIT, ack.body, what)
     }
 
     /// Select slot `slot` and return the metadata the device answers with (op 12).
@@ -5099,7 +5155,10 @@ impl Session {
     fn ir_commit(&mut self) -> crate::Result<Vec<fretwire_data::ir::IrSlot>> {
         let txn = self.bump_txn();
         let ack = self.ir_request(cmd::OPEN, fretwire_protocol::edit::ir_commit(txn), txn)?;
-        let payload = Self::ir_reply_payload(&ack);
+        // Reassembled when the device declares more than one frame: 128 IR records do not fit
+        // one, the same way twenty-one favorites do not (issue #5).
+        let body = self.browse_reply_bytes(ack, "IR directory")?;
+        let payload = Self::reply_payload(&body);
         let dir = payload
             .as_ref()
             .map(fretwire_data::ir::parse_directory)
@@ -5108,7 +5167,7 @@ impl Session {
         // nothing (the POD Go, so far) carries the bytes needed to read it.
         tracing::debug!(
             records = dir.len(),
-            body = ?ack.body,
+            ?body,
             ?payload,
             "IR directory reply (op 13)"
         );

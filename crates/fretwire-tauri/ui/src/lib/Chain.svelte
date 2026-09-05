@@ -69,16 +69,11 @@
     // always exist in the device's fixed slot array). Normally we hide that row when serial — but
     // while a drag is in flight we reveal it as drop targets: dropping a block there is how the
     // split gets *created* (one place_block; the device activates the split and we re-read).
-    const dragging = dragSrc != null || dragNode != null;
     const showB = split || dragSrc != null;
-    // Trim trailing empty columns: at rest, show up to one spare column past the last block (and
-    // never cut the bracket off — keep through the mixer column on a split preset). While a drag is
-    // in flight every column is a potential drop target, so reveal them all.
-    const maxAllCol = allCells.reduce((m, c) => Math.max(m, c.column), 1);
-    const lastOcc = allCells.reduce((m, c) => (c.occupied ? Math.max(m, c.column) : m), 0);
-    const maxCol = dragging
-      ? maxAllCol
-      : Math.max(1, Math.min(Math.max(lastOcc + 1, split ? d.mixer_pos : 1), maxAllCol));
+    // Show every column the device has, always. The grid used to trim trailing empty columns to
+    // one spare past the last block, which left a new preset with a single cell — nowhere to put
+    // the first block but the head of the chain. Every empty cell is a place to add or drop into.
+    const maxCol = allCells.reduce((m, c) => Math.max(m, c.column), 1);
     // Every row-B cell is a legal drop target, including the ones past the mixer column. It is
     // tempting to hide those — the bracket wire stops at the mixer, so they look disconnected — and
     // for a few hours on 2026-08-02 we did. The device says otherwise: a Floor preset with the

@@ -350,7 +350,13 @@ impl Fretwire {
             let extra = if b.is_presets_only() {
                 String::new()
             } else {
-                format!(", {} IR(s), {} setting(s)", b.irs.len(), b.settings.len())
+                format!(
+                    ", {} IR(s), {} setting(s), {} favorite(s), {} user default(s)",
+                    b.irs.len(),
+                    b.settings.len(),
+                    b.favorites.len(),
+                    b.user_defaults.len()
+                )
             };
             Ok(format!(
                 "{} — {} preset(s){extra}\n{}",

@@ -1124,6 +1124,69 @@ pub const OP_IR_STREAM: i64 = 11;
 pub const OP_IR_SELECT: i64 = 12;
 /// Op 13: **commit** a write. Its reply is the directory of populated slots.
 pub const OP_IR_COMMIT: i64 = 13;
+
+// ---- Favorites and user defaults — browse-side reads [solid — 2026-09-04, HX Stomp capture +
+// live]. Same channel and session as the IR family. See docs/protocol.md "Favorites".
+/// List the favorites: `{102:txn, 100:112, 101:nil}` → `[{118: index, 64: model, 105: paired cab
+/// or 65535, 109: name}]`.
+pub const OP_FAVORITES_LIST: i64 = 112;
+/// Read one favorite's record: `{102:txn, 100:113, 101:{118: index}}`.
+pub const OP_FAVORITE_READ: i64 = 113;
+/// Save a block of the current preset as a favorite: `{98: slot, 118: index, 31: true, 109: name}`
+/// on the edit channel. Observed, not built: the only favorites write seen.
+pub const OP_FAVORITE_SAVE: i64 = 119;
+/// Read a model's user default: `{102:txn, 100:109, 101:{64: model, 106: composite[, 105: cab
+/// kind]}}` → the record, or nil when none is saved for that form of the model.
+pub const OP_USER_DEFAULT_READ: i64 = 109;
+/// A favorite's index in op 112's list — the same key number as the setting id and the read
+/// prep, a different meaning here.
+pub const K_FAVORITE_INDEX: i64 = 118;
+/// The model, as a `Helix.sym` index (op 109 target, op 112 entry).
+pub const K_UD_MODEL: i64 = 64;
+/// Whether the ask is for the amp-with-cab form of the model (op 109 target).
+pub const K_UD_COMPOSITE: i64 = 106;
+/// Which kind of cab the composite pairs — the `Helix.sym` index of the first legacy cab or of the
+/// first mic'd cab (op 109 target); in an op-112 entry, the favorite's actual paired cab.
+pub const K_UD_CAB_KIND: i64 = 105;
+
+/// Build the **favorites list** body (op 112): `{102:txn, 100:112, 101:nil}`.
+pub fn favorites_list(txn: u16) -> Vec<u8> {
+    encode(Value::Map(vec![
+        (Value::from(K_TXN), Value::from(txn)),
+        (Value::from(K_OP), Value::from(OP_FAVORITES_LIST)),
+        (Value::from(K_TARGET), Value::Nil),
+    ]))
+}
+
+/// Build the **favorite read** body (op 113): `{102:txn, 100:113, 101:{118:index}}`.
+pub fn favorite_read(txn: u16, index: i64) -> Vec<u8> {
+    encode(Value::Map(vec![
+        (Value::from(K_TXN), Value::from(txn)),
+        (Value::from(K_OP), Value::from(OP_FAVORITE_READ)),
+        (
+            Value::from(K_TARGET),
+            Value::Map(vec![(Value::from(K_FAVORITE_INDEX), Value::from(index))]),
+        ),
+    ]))
+}
+
+/// Build the **user default read** body (op 109): `{102:txn, 100:109, 101:{64:model, 106:false}}`
+/// for the model on its own, or `{64:model, 106:true, 105:cab_kind}` for its composite form. Key
+/// order is HX Edit's.
+pub fn user_default_read(txn: u16, model: i64, cab_kind: Option<i64>) -> Vec<u8> {
+    let mut target = vec![
+        (Value::from(K_UD_MODEL), Value::from(model)),
+        (Value::from(K_UD_COMPOSITE), Value::from(cab_kind.is_some())),
+    ];
+    if let Some(kind) = cab_kind {
+        target.push((Value::from(K_UD_CAB_KIND), Value::from(kind)));
+    }
+    encode(Value::Map(vec![
+        (Value::from(K_TXN), Value::from(txn)),
+        (Value::from(K_OP), Value::from(OP_USER_DEFAULT_READ)),
+        (Value::from(K_TARGET), Value::Map(target)),
+    ]))
+}
 /// Op 15: **empty** a slot.
 pub const OP_IR_DELETE: i64 = 15;
 /// Op 10: **rename** the IR in a slot.
@@ -1908,5 +1971,28 @@ mod tests {
             let e = EditBody::parse(&body).unwrap();
             assert_eq!(e.op, OP_SETTING);
         }
+    }
+
+    /// The four bodies HX Edit sent in `favorite_add_delete_backup.pcapng` (2026-09-04), after the
+    /// 8-byte TLV header, byte for byte.
+    #[test]
+    fn favorites_and_user_default_reads_are_byte_exact() {
+        assert_eq!(favorites_list(1003), hex("8366cd03eb647065c0"));
+        assert_eq!(favorite_read(1010, 0), hex("8366cd03f2647165817600"));
+        assert_eq!(
+            user_default_read(1005, 591, Some(687)),
+            hex("8366cd03ed646d658340cd024f6ac369cd02af")
+        );
+        assert_eq!(
+            user_default_read(1006, 636, None),
+            hex("8366cd03ee646d658240cd027c6ac2")
+        );
+    }
+
+    fn hex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
     }
 }

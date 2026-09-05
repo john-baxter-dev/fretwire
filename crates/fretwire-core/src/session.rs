@@ -211,7 +211,8 @@ pub struct ExportProgress<'a> {
     /// Items in the whole job — every preset across every setlist requested, plus each IR and
     /// one tick for the settings when the sweep covers those.
     pub total: usize,
-    /// Which part of the device this item belongs to: `"presets"`, `"irs"` or `"settings"`.
+    /// Which part of the device this item belongs to: `"presets"`, `"irs"`, `"settings"`,
+    /// `"favorites"` or `"user_defaults"`.
     pub stage: &'static str,
     /// The setlist this preset came from.
     pub bank: i64,
@@ -3430,6 +3431,8 @@ impl Session {
         banks: &[i64],
         irs: bool,
         settings: bool,
+        favorites: bool,
+        user_defaults: bool,
         mut progress: impl FnMut(ExportProgress) -> bool,
     ) -> crate::Result<crate::backup::Backup> {
         // The IR directory first, so the total is the whole job from the first tick: one request,
@@ -3442,7 +3445,15 @@ impl Session {
         } else {
             Vec::new()
         };
-        let extra = ir_slots.len() + usize::from(settings);
+        // The favorites are two cheap asks and count as one tick; the user-default sweep is one
+        // ask per (model, form) and ticks per ask — 1414 of them on a Stomp, which the pedal
+        // answers in about 3 s (HX Edit paces the same sweep over 37 s; the device does not).
+        let ud_asks = if user_defaults {
+            self.user_default_asks()
+        } else {
+            Vec::new()
+        };
+        let extra = ir_slots.len() + usize::from(settings) + usize::from(favorites) + ud_asks.len();
         let mut cancelled = false;
         let mut backup = if banks.is_empty() {
             crate::backup::Backup {
@@ -3509,16 +3520,212 @@ impl Session {
                 }
             }
             done += 1;
-            progress(ExportProgress {
+            if !progress(ExportProgress {
                 done,
                 total,
                 stage: "settings",
                 bank: 0,
                 setlist: "Settings",
                 name: "global settings",
-            });
+            }) {
+                return Ok(backup);
+            }
+        }
+
+        if favorites {
+            backup.favorites = self.read_favorites()?;
+            done += 1;
+            if !progress(ExportProgress {
+                done,
+                total,
+                stage: "favorites",
+                bank: 0,
+                setlist: "Favorites",
+                name: "favorites",
+            }) {
+                return Ok(backup);
+            }
+        }
+
+        if !ud_asks.is_empty() {
+            let symbols = &self.catalog.symbols;
+            let names: Vec<String> = ud_asks
+                .iter()
+                .map(|(model, kind)| {
+                    let sym = symbols
+                        .by_index(*model as usize)
+                        .map(|(s, _)| s)
+                        .unwrap_or("?");
+                    match kind {
+                        None => sym.to_string(),
+                        Some(k) if Some(*k) == self.cab_kind_micd() => format!("{sym} + mic'd cab"),
+                        Some(_) => format!("{sym} + cab"),
+                    }
+                })
+                .collect();
+            let mut i = 0;
+            backup.user_defaults = self.read_user_defaults(&ud_asks, |_| {
+                done += 1;
+                let go = progress(ExportProgress {
+                    done,
+                    total,
+                    stage: "user_defaults",
+                    bank: 0,
+                    setlist: "User defaults",
+                    name: &names[i],
+                });
+                i += 1;
+                go
+            })?;
         }
         Ok(backup)
+    }
+
+    /// The favorites the device holds, each with its record: op 112 for the list, op 113 per entry,
+    /// in one browse session. **Reads only.** A device that refuses op 112 has no favorites store
+    /// and answers an empty list here, with a warning.
+    pub fn read_favorites(&mut self) -> crate::Result<Vec<crate::backup::BackupFavorite>> {
+        use fretwire_data::rmpv::Value;
+        use fretwire_data::stream::map_get;
+        self.in_ir_session(|s| {
+            let txn = s.bump_txn();
+            let list = match s.ir_request(cmd::STREAM, edit::favorites_list(txn), txn) {
+                Ok(ack) => Self::ir_reply_payload(&ack),
+                Err(crate::Error::Rejected(m)) => {
+                    tracing::warn!(%m, "favorites list refused — recording none");
+                    return Ok(Vec::new());
+                }
+                Err(e) => return Err(e),
+            };
+            let Some(Value::Array(entries)) = list else {
+                return Ok(Vec::new());
+            };
+            let mut out = Vec::with_capacity(entries.len());
+            for e in &entries {
+                let int = |k: i64| map_get(e, k).and_then(Value::as_i64);
+                let Some(index) = int(edit::K_FAVORITE_INDEX) else {
+                    continue;
+                };
+                let name = map_get(e, edit::K_NAME)
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim_end_matches('\0')
+                    .to_string();
+                let model = int(edit::K_UD_MODEL).unwrap_or(-1);
+                // 65535 is the list's "no cab"; the record says -1 for the same.
+                let paired_cab = int(edit::K_UD_CAB_KIND).filter(|c| (0..65535).contains(c));
+                let txn = s.bump_txn();
+                let ack = s.ir_request(cmd::STREAM, edit::favorite_read(txn, index), txn)?;
+                let Some(reply) = Self::ir_reply_payload(&ack) else {
+                    tracing::warn!(index, %name, "favorite answered nothing — skipped");
+                    continue;
+                };
+                let Some(rec) = map_get(&reply, edit::K_UD_MODEL) else {
+                    tracing::warn!(index, %name, "favorite reply carries no record — skipped");
+                    continue;
+                };
+                let mut record = Vec::new();
+                fretwire_data::rmpv::encode::write_value(&mut record, rec)
+                    .expect("msgpack encode to Vec is infallible");
+                tracing::info!(index, %name, model, ?paired_cab, bytes = record.len(), "favorite");
+                out.push(crate::backup::BackupFavorite {
+                    index,
+                    name,
+                    model,
+                    paired_cab,
+                    record,
+                });
+            }
+            Ok(out)
+        })
+    }
+
+    /// The `Helix.sym` index of the first legacy cab — the cab kind an amp's legacy-cab composite
+    /// form is asked by.
+    fn cab_kind_legacy(&self) -> Option<i64> {
+        self.catalog
+            .symbols
+            .index_of("HD2_Cab1x12Lead80")
+            .map(|i| i as i64)
+    }
+
+    /// The `Helix.sym` index of the first mic'd cab — the other cab kind.
+    fn cab_kind_micd(&self) -> Option<i64> {
+        self.catalog
+            .symbols
+            .index_of("HD2_CabMicIr_2x12JazzRivet")
+            .map(|i| i as i64)
+    }
+
+    /// Every (model, form) a user default can be saved under, derived from the symbol table: each
+    /// model on its own, every amp and preamp with each cab kind, every cab with the legacy kind
+    /// (a dual cab). A superset of the 1162 asks HX Edit makes on a Stomp — it skips routing nodes
+    /// and asks only two preamps composite — but an ask the device has no slot for answers nil,
+    /// the same as none saved [checked live 2026-09-04], so the extra ~250 cost time and nothing
+    /// else. The two cab-kind ids come from the same table, so a device whose `Helix.sym` orders
+    /// them elsewhere is asked by its own numbers.
+    pub fn user_default_asks(&self) -> Vec<(i64, Option<i64>)> {
+        let symbols = &self.catalog.symbols;
+        let legacy = self.cab_kind_legacy();
+        let micd = self.cab_kind_micd();
+        let mut asks = Vec::with_capacity(symbols.len() * 2);
+        for i in 0..symbols.len() {
+            let Some((sym, _)) = symbols.by_index(i) else {
+                continue;
+            };
+            let model = i as i64;
+            asks.push((model, None));
+            if sym.starts_with("HD2_Amp") || sym.starts_with("HD2_Preamp") {
+                asks.extend(legacy.map(|k| (model, Some(k))));
+                asks.extend(micd.map(|k| (model, Some(k))));
+            } else if sym.starts_with("HD2_Cab") {
+                asks.extend(legacy.map(|k| (model, Some(k))));
+            }
+        }
+        asks
+    }
+
+    /// Read the user defaults for `asks` (op 109 each, one browse session), keeping the ones that
+    /// answer with a record. `progress` is called once per ask; returning `false` stops after it.
+    /// **Reads only.** A refused ask is treated as none saved.
+    pub fn read_user_defaults(
+        &mut self,
+        asks: &[(i64, Option<i64>)],
+        mut progress: impl FnMut(usize) -> bool,
+    ) -> crate::Result<Vec<crate::backup::BackupUserDefault>> {
+        self.in_ir_session(|s| {
+            let mut out = Vec::new();
+            for (n, &(model, cab_kind)) in asks.iter().enumerate() {
+                let txn = s.bump_txn();
+                let reply = match s.ir_request(
+                    cmd::STREAM,
+                    edit::user_default_read(txn, model, cab_kind),
+                    txn,
+                ) {
+                    Ok(ack) => Self::ir_reply_payload(&ack),
+                    Err(crate::Error::Rejected(m)) => {
+                        tracing::debug!(model, ?cab_kind, %m, "user default ask refused");
+                        None
+                    }
+                    Err(e) => return Err(e),
+                };
+                if let Some(rec) = reply.filter(|v| !v.is_nil()) {
+                    let mut record = Vec::new();
+                    fretwire_data::rmpv::encode::write_value(&mut record, &rec)
+                        .expect("msgpack encode to Vec is infallible");
+                    tracing::info!(model, ?cab_kind, bytes = record.len(), "user default");
+                    out.push(crate::backup::BackupUserDefault {
+                        model,
+                        cab_kind,
+                        record,
+                    });
+                }
+                if !progress(n) {
+                    break;
+                }
+            }
+            Ok(out)
+        })
     }
 
     /// Restore a device backup: every preset the file holds into its own setlist slot, every IR

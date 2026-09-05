@@ -2,6 +2,24 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Favorites and user defaults in the backup (2026-09-04, night).** The read side, built and
+verified live the same night the ops were found. Format **v4** of the `fretwire-backup` JSON adds
+`favorites` — index, name, model, paired cab, and the op-113 record as the bytes the device sent —
+and `user_defaults` — model, cab kind, the op-109 record; a file with neither stays v3, so a 0.5
+build reads a backup that did not ask. `Session::read_favorites` (op 112 then 113 per entry, one
+browse session), `Session::user_default_asks` (every `Helix.sym` model alone, every amp and preamp
+with each cab kind, every cab with the legacy kind — the two kind ids looked up in the table by
+name, 1414 asks on a Stomp, a superset of HX Edit's 1162 that costs nothing but time since an ask
+with no slot answers nil, checked live) and `read_user_defaults`; two more flags on `backup_device`
+through the commands crate, the dispatcher (default on for an older client), Tauri, and the CLI
+(`--no-favorites`, `--no-user-defaults`); two checkboxes in the GUI dialog; counts in every summary,
+`backup-show`, the restore dialog and dry run (which say plainly that these are held and not put
+back — no write op is known), and the MCP `backup_list`. Protocol builders byte-exact against the
+capture (+1 test), a v4 round trip (+1), the mock backend and its test (+5, 33). **Live on the
+Stomp:** 126 presets, 1 IR, 154 settings, 2 favorites, 1 user default, **10 s for the whole file** —
+the 1414-ask sweep takes about 3 s, where HX Edit paces the same sweep over 37 s. `probe-browse`
+is new too: the IR probe with a free target, for the browse-side ops.
+
 **User default read confirmed live (2026-09-04, later).** The owner saved a user default for the
 US Princess on the pedal; `probe-browse --op 109` (new: the IR probe with a free target, for the
 browse-side ops) answered nil for the amp alone and with a legacy cab, and the full record for the

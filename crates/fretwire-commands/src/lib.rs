@@ -1005,6 +1005,8 @@ pub async fn export_setlists_inline(
             count: backup.presets.len() as i64,
             irs: 0,
             settings: 0,
+            favorites: 0,
+            user_defaults: 0,
             json: backup.to_json(),
         })
     })
@@ -1022,6 +1024,7 @@ pub async fn export_setlists_inline(
 /// Back up the device to `path`: every setlist in `banks`, plus the IRs and settings when asked.
 /// **Reads only.** Progress as `backup-progress` events; `cancel_export` stops it, and the file
 /// keeps what was read.
+#[allow(clippy::too_many_arguments)] // one flag per part of the device; a struct here would be the same list
 pub async fn backup_device(
     state: &AppState,
     sink: impl EventSink,
@@ -1029,18 +1032,31 @@ pub async fn backup_device(
     banks: Vec<i64>,
     irs: bool,
     settings: bool,
+    favorites: bool,
+    user_defaults: bool,
 ) -> R<BackupSummaryDto> {
     let target = backup_path(&path);
-    sweep_device(state, sink, banks, irs, settings, move |backup| {
-        std::fs::write(&target, backup.to_json()).map_err(|e| {
-            fretwire_core::Error::Backup(format!("writing {}: {e}", target.display()))
-        })?;
-        Ok(BackupSummaryDto {
-            presets: backup.presets.len() as i64,
-            irs: backup.irs.len() as i64,
-            settings: backup.settings.len() as i64,
-        })
-    })
+    sweep_device(
+        state,
+        sink,
+        banks,
+        irs,
+        settings,
+        favorites,
+        user_defaults,
+        move |backup| {
+            std::fs::write(&target, backup.to_json()).map_err(|e| {
+                fretwire_core::Error::Backup(format!("writing {}: {e}", target.display()))
+            })?;
+            Ok(BackupSummaryDto {
+                presets: backup.presets.len() as i64,
+                irs: backup.irs.len() as i64,
+                settings: backup.settings.len() as i64,
+                favorites: backup.favorites.len() as i64,
+                user_defaults: backup.user_defaults.len() as i64,
+            })
+        },
+    )
     .await
 }
 
@@ -1051,24 +1067,40 @@ pub async fn backup_device_inline(
     banks: Vec<i64>,
     irs: bool,
     settings: bool,
+    favorites: bool,
+    user_defaults: bool,
 ) -> R<BackupFileDto> {
-    sweep_device(state, sink, banks, irs, settings, |backup| {
-        Ok(BackupFileDto {
-            count: backup.presets.len() as i64,
-            irs: backup.irs.len() as i64,
-            settings: backup.settings.len() as i64,
-            json: backup.to_json(),
-        })
-    })
+    sweep_device(
+        state,
+        sink,
+        banks,
+        irs,
+        settings,
+        favorites,
+        user_defaults,
+        |backup| {
+            Ok(BackupFileDto {
+                count: backup.presets.len() as i64,
+                irs: backup.irs.len() as i64,
+                settings: backup.settings.len() as i64,
+                favorites: backup.favorites.len() as i64,
+                user_defaults: backup.user_defaults.len() as i64,
+                json: backup.to_json(),
+            })
+        },
+    )
     .await
 }
 
+#[allow(clippy::too_many_arguments)] // one flag per part of the device; a struct here would be the same list
 async fn sweep_device<T, F>(
     state: &AppState,
     sink: impl EventSink,
     banks: Vec<i64>,
     irs: bool,
     settings: bool,
+    favorites: bool,
+    user_defaults: bool,
     finish: F,
 ) -> R<T>
 where
@@ -1078,7 +1110,7 @@ where
     let cancel = state.cancel_export.clone();
     cancel.store(false, Ordering::Relaxed);
     run(state, move |s| {
-        let backup = s.backup_device(&banks, irs, settings, |p| {
+        let backup = s.backup_device(&banks, irs, settings, favorites, user_defaults, |p| {
             sink.emit(progress_event(&p));
             !cancel.load(Ordering::Relaxed)
         })?;

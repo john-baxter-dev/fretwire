@@ -144,8 +144,9 @@ user's files are on the laptop, not the Pi. Settled 2026-09-01 and landed 2026-0
   2 MB default to 64 MB for exactly this). The export dialog under serve has a checkbox for
   **saving on the daemon's disk instead** (a backup that lives with the rig, cron-able), which is
   the one place the server-path variant is still reachable from the browser UI. The whole-device
-  backup (2026-09-03) follows the same pattern: `backup_device_inline(banks, irs, settings)`
-  returns `{count, irs, settings, json}`, `backup_info_inline(json)` the file's counts, and
+  backup (2026-09-03) follows the same pattern: `backup_device_inline(banks, irs, settings,
+  favorites, user_defaults)` (the last two default on when absent) returns `{count, irs, settings,
+  favorites, user_defaults, json}`, `backup_info_inline(json)` the file's counts, and
   `restore_device_inline(json, presets, irs, settings)` the report — a device backup with the IR
   store is a couple of MB more, still well under the cap.
 - **Data import — server-side, permanently.** The HX Edit installer is ~a gigabyte and `res/` is

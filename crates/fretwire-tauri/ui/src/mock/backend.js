@@ -523,14 +523,26 @@ const settingEntry = (id, d) => ({
 // blob; what matters to the restore is that the same file restores to the same hash.
 const irRaw = (held) => hexEncode(`${held.md5}:${held.name}`);
 
+// The favorites and user defaults the mock pedal holds — the two favorites and the one user
+// default the real Stomp had on 2026-09-04, records as opaque bytes. Reads only, like the device.
+const MOCK_FAVORITES = [
+  { index: 0, name: "US Princess", model: 591, paired_cab: 709, record_hex: "811306" },
+  { index: 1, name: "Dynamic Plate", model: 636, paired_cab: null, record_hex: "811307" },
+];
+const MOCK_USER_DEFAULTS = [{ model: 591, cab_kind: 687, record_hex: "811308" }];
+// The real sweep asks once per (model, form); the mock asks a token few so the stage shows.
+const MOCK_USER_DEFAULT_ASKS = 12;
+
 // Walks whichever setlists it is given, as the real sweep does; with `irs`/`settings` set it is
-// `backup_device`, and the file is version 3 with those two sections.
-async function sweepBackup(banks, { irs = false, settings = false } = {}) {
+// `backup_device`, and the file is version 3 with those two sections — version 4 once
+// `favorites`/`userDefaults` add theirs.
+async function sweepBackup(banks, { irs = false, settings = false, favorites = false, userDefaults = false } = {}) {
   exportCancelled = false;
   const entries = [];
   const lists = banks.map((b) => [b, bankOf(b)]);
   const irSlots = irs ? [...irStore.keys()].sort((a, b) => a - b) : [];
-  const total = lists.reduce((n, [, l]) => n + l.length, 0) + irSlots.length + (settings ? 1 : 0);
+  const total = lists.reduce((n, [, l]) => n + l.length, 0) + irSlots.length + (settings ? 1 : 0)
+    + (favorites ? 1 : 0) + (userDefaults ? MOCK_USER_DEFAULT_ASKS : 0);
   let done = 0;
   outer: for (const [bank, list] of lists) {
     for (const p of list) {
@@ -545,8 +557,9 @@ async function sweepBackup(banks, { irs = false, settings = false } = {}) {
       if (exportCancelled) break outer;
     }
   }
+  const v4 = favorites || userDefaults;
   const file = {
-    format: "fretwire-backup", version: irs || settings ? 3 : 2,
+    format: "fretwire-backup", version: v4 ? 4 : irs || settings ? 3 : 2,
     device: DEVICES[deviceMode].name,
     setlists: banks.map((b) => ({ bank: b, name: setlistNames()[b] ?? "Presets" })),
     presets: entries,
@@ -572,6 +585,24 @@ async function sweepBackup(banks, { irs = false, settings = false } = {}) {
       emit("backup-progress", { done, total, stage: "settings", bank: 0, setlist: "Settings", name: "global settings" });
     }
   }
+  if (v4) {
+    file.favorites = [];
+    file.user_defaults = [];
+    if (favorites && !exportCancelled) {
+      file.favorites = MOCK_FAVORITES.map((f) => ({ ...f }));
+      done++;
+      emit("backup-progress", { done, total, stage: "favorites", bank: 0, setlist: "Favorites", name: "favorites" });
+    }
+    if (userDefaults && !exportCancelled) {
+      for (let i = 0; i < MOCK_USER_DEFAULT_ASKS; i++) {
+        await sleep(30);
+        done++;
+        emit("backup-progress", { done, total, stage: "user_defaults", bank: 0, setlist: "User defaults", name: `model ${i}` });
+        if (exportCancelled) break;
+      }
+      if (!exportCancelled) file.user_defaults = MOCK_USER_DEFAULTS.map((d) => ({ ...d }));
+    }
+  }
   lastBackup = file;
   return lastBackup;
 }
@@ -582,6 +613,8 @@ const backupInfo = (file) => ({
   presets: file.presets.length,
   irs: file.irs?.length ?? 0,
   settings: file.settings?.length ?? 0,
+  favorites: file.favorites?.length ?? 0,
+  user_defaults: file.user_defaults?.length ?? 0,
   setlists: (file.setlists ?? []).map((s) => s.name),
 });
 
@@ -1721,17 +1754,17 @@ const HANDLERS = {
   restore_preset_inline: ({ json, index, slot, bank = 0 }) =>
     restoreFrom(parseBackup(json), index, slot, bank),
   // ---- whole-device backup / restore ----
-  backup_device: async ({ path, banks, irs, settings }) => {
-    await sweepBackup(banks, { irs, settings });
+  // `favorites` / `user_defaults` default on, as the real dispatcher's do for an older client.
+  backup_device: async ({ path, banks, irs, settings, favorites = true, user_defaults = true }) => {
+    await sweepBackup(banks, { irs, settings, favorites, userDefaults: user_defaults });
     console.info(`[fretwire mock] would write ${path}`);
-    return { presets: lastBackup.presets.length, irs: lastBackup.irs.length, settings: lastBackup.settings.length };
+    const { presets, irs: i, settings: s, favorites: f, user_defaults: u } = backupInfo(lastBackup);
+    return { presets, irs: i, settings: s, favorites: f, user_defaults: u };
   },
-  backup_device_inline: async ({ banks, irs, settings }) => {
-    await sweepBackup(banks, { irs, settings });
-    return {
-      count: lastBackup.presets.length, irs: lastBackup.irs.length, settings: lastBackup.settings.length,
-      json: JSON.stringify(lastBackup, null, 2),
-    };
+  backup_device_inline: async ({ banks, irs, settings, favorites = true, user_defaults = true }) => {
+    await sweepBackup(banks, { irs, settings, favorites, userDefaults: user_defaults });
+    const { presets, irs: i, settings: s, favorites: f, user_defaults: u } = backupInfo(lastBackup);
+    return { count: presets, irs: i, settings: s, favorites: f, user_defaults: u, json: JSON.stringify(lastBackup, null, 2) };
   },
   backup_info: ({ path }) => {
     if (!lastBackup)

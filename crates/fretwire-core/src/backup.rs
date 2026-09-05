@@ -128,8 +128,36 @@ pub struct BackupIr {
     pub blob: Vec<u8>,
 }
 
+/// One favorite, as the device holds it: its place in the list, its name, and the record op 113
+/// answered — the block's model and values with its paired cab — kept as the MessagePack bytes
+/// the device sent, since that is what a restore will have to send back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackupFavorite {
+    /// Index in the favorites list (op 112's `118`).
+    pub index: i64,
+    pub name: String,
+    /// The block's model, a `Helix.sym` index.
+    pub model: i64,
+    /// The paired cab's `Helix.sym` index, for an amp favorite.
+    pub paired_cab: Option<i64>,
+    /// The record (op 113's `64`), MessagePack-encoded.
+    pub record: Vec<u8>,
+}
+
+/// One user default: the form of the model it was saved for and the record the device answered
+/// (op 109), MessagePack-encoded like a favorite's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackupUserDefault {
+    /// The model, a `Helix.sym` index.
+    pub model: i64,
+    /// `None` for the model on its own; for its amp-with-cab form, the cab kind the ask named (the
+    /// `Helix.sym` index of the first legacy cab or the first mic'd cab).
+    pub cab_kind: Option<i64>,
+    pub record: Vec<u8>,
+}
+
 /// A whole backup file: device tag + the presets it holds (any subset of any setlists), and
-/// whatever of the device's settings and IRs the sweep was asked for.
+/// whatever of the device's settings, IRs, favorites and user defaults the sweep was asked for.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Backup {
     pub device: String,
@@ -142,11 +170,18 @@ pub struct Backup {
     pub settings: Vec<BackupSetting>,
     /// The populated user IR slots, in slot order. Empty on a presets-only export.
     pub irs: Vec<BackupIr>,
+    /// The favorites, in list order. Version 4.
+    pub favorites: Vec<BackupFavorite>,
+    /// Every (model, form) that holds a user default. Version 4.
+    pub user_defaults: Vec<BackupUserDefault>,
 }
 
 const FORMAT: &str = "fretwire-backup";
-/// The version a file with settings or IRs is written as.
-const VERSION: i64 = 3;
+/// The version a file with favorites or user defaults is written as.
+const VERSION: i64 = 4;
+/// The version a file with settings or IRs but neither of the above is written as — what every
+/// build since 0.5 reads.
+const DEVICE_VERSION: i64 = 3;
 /// The version a presets-only file is written as — the last one every released build reads.
 const PRESETS_ONLY_VERSION: i64 = 2;
 /// The oldest version we still read. See the module docs on why v1 needs no migration.
@@ -155,19 +190,26 @@ const MIN_VERSION: i64 = 1;
 impl Backup {
     /// Whether the file carries anything beyond presets.
     pub fn is_presets_only(&self) -> bool {
-        self.settings.is_empty() && self.irs.is_empty()
+        self.settings.is_empty()
+            && self.irs.is_empty()
+            && self.favorites.is_empty()
+            && self.user_defaults.is_empty()
     }
 
-    /// The version [`Self::to_json`] writes this backup as.
+    /// The version [`Self::to_json`] writes this backup as: the oldest one that can carry what
+    /// this file holds, so a file never claims a version it does not need.
     pub fn version(&self) -> i64 {
         if self.is_presets_only() {
             PRESETS_ONLY_VERSION
+        } else if self.favorites.is_empty() && self.user_defaults.is_empty() {
+            DEVICE_VERSION
         } else {
             VERSION
         }
     }
 
-    /// Serialize to JSON (pretty-printed) — version 2 for a presets-only file, 3 otherwise.
+    /// Serialize to JSON (pretty-printed) — version 2 for a presets-only file, 3 with settings or
+    /// IRs, 4 with favorites or user defaults.
     pub fn to_json(&self) -> String {
         use fretwire_protocol::settings::by_id;
         let presets: Vec<serde_json::Value> = self
@@ -230,6 +272,34 @@ impl Backup {
                 .collect();
             root["settings"] = serde_json::Value::Array(settings);
             root["irs"] = serde_json::Value::Array(irs);
+        }
+        if self.version() >= VERSION {
+            let favorites: Vec<serde_json::Value> = self
+                .favorites
+                .iter()
+                .map(|f| {
+                    serde_json::json!({
+                        "index": f.index,
+                        "name": f.name,
+                        "model": f.model,
+                        "paired_cab": f.paired_cab,
+                        "record_hex": hex_encode(&f.record),
+                    })
+                })
+                .collect();
+            let user_defaults: Vec<serde_json::Value> = self
+                .user_defaults
+                .iter()
+                .map(|d| {
+                    serde_json::json!({
+                        "model": d.model,
+                        "cab_kind": d.cab_kind,
+                        "record_hex": hex_encode(&d.record),
+                    })
+                })
+                .collect();
+            root["favorites"] = serde_json::Value::Array(favorites);
+            root["user_defaults"] = serde_json::Value::Array(user_defaults);
         }
         serde_json::to_string_pretty(&root).expect("json of plain values")
     }
@@ -323,11 +393,56 @@ impl Backup {
                 irs.push(BackupIr { slot, name, blob });
             }
         }
+        // Version 4: both optional, both absent before.
+        let mut favorites = Vec::new();
+        if let Some(list) = root["favorites"].as_array() {
+            for (i, e) in list.iter().enumerate() {
+                let index = e["index"]
+                    .as_i64()
+                    .ok_or_else(|| bad(format!("favorite #{i}: missing \"index\"")))?;
+                let name = e["name"].as_str().unwrap_or("").to_string();
+                let model = e["model"]
+                    .as_i64()
+                    .ok_or_else(|| bad(format!("favorite #{i}: missing \"model\"")))?;
+                let hex = e["record_hex"]
+                    .as_str()
+                    .ok_or_else(|| bad(format!("favorite #{i}: missing \"record_hex\"")))?;
+                let record = hex_decode(hex)
+                    .map_err(|m| bad(format!("favorite {index} (\"{name}\"): {m}")))?;
+                favorites.push(BackupFavorite {
+                    index,
+                    name,
+                    model,
+                    paired_cab: e["paired_cab"].as_i64(),
+                    record,
+                });
+            }
+        }
+        let mut user_defaults = Vec::new();
+        if let Some(list) = root["user_defaults"].as_array() {
+            for (i, e) in list.iter().enumerate() {
+                let model = e["model"]
+                    .as_i64()
+                    .ok_or_else(|| bad(format!("user default #{i}: missing \"model\"")))?;
+                let hex = e["record_hex"]
+                    .as_str()
+                    .ok_or_else(|| bad(format!("user default #{i}: missing \"record_hex\"")))?;
+                let record = hex_decode(hex)
+                    .map_err(|m| bad(format!("user default for model {model}: {m}")))?;
+                user_defaults.push(BackupUserDefault {
+                    model,
+                    cab_kind: e["cab_kind"].as_i64(),
+                    record,
+                });
+            }
+        }
         Ok(Backup {
             device,
             setlists,
             presets,
             settings,
+            favorites,
+            user_defaults,
             irs,
         })
     }
@@ -525,11 +640,61 @@ mod tests {
     fn rejects_foreign_files() {
         assert!(Backup::from_json("{}").is_err());
         assert!(Backup::from_json("not json").is_err());
-        let too_new = r#"{"format":"fretwire-backup","version":4,"device":"x","presets":[]}"#;
+        let too_new = r#"{"format":"fretwire-backup","version":5,"device":"x","presets":[]}"#;
         assert!(Backup::from_json(too_new).is_err());
         let bad_hex = r#"{"format":"fretwire-backup","version":2,"device":"x",
             "presets":[{"bank":0,"index":0,"name":"a","raw_hex":"zz"}]}"#;
         assert!(Backup::from_json(bad_hex).is_err());
+    }
+
+    /// Favorites and user defaults make a file version 4; a file with settings and IRs but
+    /// neither stays version 3, so a 0.5 build still reads a backup that did not ask for them.
+    /// The records round-trip as the bytes the device sent.
+    #[test]
+    fn version_4_carries_favorites_and_user_defaults() {
+        let mut b = Backup {
+            device: "HX Stomp".into(),
+            settings: vec![BackupSetting {
+                id: 27,
+                value: SettingValue::Bool(true),
+            }],
+            ..Default::default()
+        };
+        assert_eq!(b.version(), 3);
+        b.favorites.push(BackupFavorite {
+            index: 0,
+            name: "US Princess".into(),
+            model: 591,
+            paired_cab: Some(709),
+            record: vec![0x81, 0x13, 0x06],
+        });
+        b.favorites.push(BackupFavorite {
+            index: 1,
+            name: "Dynamic Plate".into(),
+            model: 636,
+            paired_cab: None,
+            record: vec![0x81, 0x13, 0x07],
+        });
+        b.user_defaults.push(BackupUserDefault {
+            model: 591,
+            cab_kind: Some(687),
+            record: vec![0x81, 0x13, 0x08],
+        });
+        assert_eq!(b.version(), 4);
+        let json = b.to_json();
+        assert!(json.contains("\"favorites\"") && json.contains("\"user_defaults\""));
+        let back = Backup::from_json(&json).unwrap();
+        assert_eq!(back, b);
+        assert_eq!(back.favorites[1].paired_cab, None);
+        // Favorites alone are enough for version 4 — no settings needed.
+        let only = Backup {
+            device: "HX Stomp".into(),
+            favorites: b.favorites.clone(),
+            ..Default::default()
+        };
+        assert_eq!(only.version(), 4);
+        assert!(!only.is_presets_only());
+        assert_eq!(Backup::from_json(&only.to_json()).unwrap(), only);
     }
 
     /// A presets-only file is still version 2 — an older build reads it — and a file with either

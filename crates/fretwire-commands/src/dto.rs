@@ -728,6 +728,10 @@ pub struct BackupFileDto {
     pub irs: i64,
     /// Global settings in the file. Always `0` from a presets-only export.
     pub settings: i64,
+    /// Favorites in the file (format v4).
+    pub favorites: i64,
+    /// User defaults in the file (format v4).
+    pub user_defaults: i64,
     /// The file's text, exactly what the path variant would have written.
     pub json: String,
 }
@@ -738,6 +742,8 @@ pub struct BackupSummaryDto {
     pub presets: i64,
     pub irs: i64,
     pub settings: i64,
+    pub favorites: i64,
+    pub user_defaults: i64,
 }
 
 /// What a backup file holds, before anything is restored from it (`backup_info`).
@@ -750,6 +756,10 @@ pub struct BackupInfoDto {
     pub presets: i64,
     pub irs: i64,
     pub settings: i64,
+    /// Favorites and user defaults the file holds (format v4). Read into the file and reported;
+    /// a restore does not put them back yet — the write ops are unknown.
+    pub favorites: i64,
+    pub user_defaults: i64,
     /// Setlist names the file recorded, in bank order.
     pub setlists: Vec<String>,
 }
@@ -762,6 +772,8 @@ impl From<&fretwire_core::backup::Backup> for BackupInfoDto {
             presets: b.presets.len() as i64,
             irs: b.irs.len() as i64,
             settings: b.settings.len() as i64,
+            favorites: b.favorites.len() as i64,
+            user_defaults: b.user_defaults.len() as i64,
             setlists: b.setlists.iter().map(|(_, n)| n.clone()).collect(),
         }
     }

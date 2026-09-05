@@ -315,6 +315,8 @@ pub async fn dispatch(
             ok(c::export_setlists_inline(state, sink, a.req("banks")?).await?)
         }
         "backup_show_inline" => ok(c::backup_show_inline(a.req("json")?).await?),
+        // `favorites` / `user_defaults` default on: a client built before format v4 asked for a
+        // whole-device backup and should get one.
         "backup_device" => ok(c::backup_device(
             state,
             sink,
@@ -322,6 +324,8 @@ pub async fn dispatch(
             a.req("banks")?,
             a.req("irs")?,
             a.req("settings")?,
+            a.opt("favorites")?.unwrap_or(true),
+            a.opt("user_defaults")?.unwrap_or(true),
         )
         .await?),
         "backup_device_inline" => ok(c::backup_device_inline(
@@ -330,6 +334,8 @@ pub async fn dispatch(
             a.req("banks")?,
             a.req("irs")?,
             a.req("settings")?,
+            a.opt("favorites")?.unwrap_or(true),
+            a.opt("user_defaults")?.unwrap_or(true),
         )
         .await?),
         "backup_info" => ok(c::backup_info(a.req("path")?).await?),

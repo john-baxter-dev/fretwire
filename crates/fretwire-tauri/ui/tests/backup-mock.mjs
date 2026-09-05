@@ -45,7 +45,7 @@ const irsBefore = await mock.invoke("ir_list");
 const settingsBefore = await mock.invoke("settings_read", { all: false });
 const stages = [];
 const off2 = await mock.listen("backup-progress", (e) => stages.push(e.payload.stage));
-const dev = await mock.invoke("backup_device_inline", { banks: [0], irs: true, settings: true });
+const dev = await mock.invoke("backup_device_inline", { banks: [0], irs: true, settings: true, favorites: false, user_defaults: false });
 off2();
 ok(dev.count === list.length && dev.irs === irsBefore.length && dev.settings > settingsBefore.length,
   `device backup counts presets, IRs and every answering setting (${dev.count}/${dev.irs}/${dev.settings})`);
@@ -56,6 +56,21 @@ ok(devFile.settings.every((s) => ["bool", "int", "f32"].includes(s.type)), "sett
 const info = await mock.invoke("backup_info_inline", { json: dev.json });
 ok(info.presets === dev.count && info.irs === dev.irs && info.settings === dev.settings && info.version === 3, "backup_info reads the counts back");
 ok(info.device === restored.device_name, "the file names the device it came off");
+
+// ---- favorites and user defaults (format v4) ----
+// Asked for, they make the file version 4 and are counted back; left out (as above), the file
+// stays version 3 so a 0.5 build reads it. An older client that names neither gets both.
+const stages4 = [];
+const off3 = await mock.listen("backup-progress", (e) => stages4.push(e.payload.stage));
+const dev4 = await mock.invoke("backup_device_inline", { banks: [0], irs: true, settings: true });
+off3();
+const devFile4 = JSON.parse(dev4.json);
+ok(devFile4.version === 4 && dev4.favorites === 2 && dev4.user_defaults === 1, `favorites and user defaults make a version-4 file (${dev4.favorites}/${dev4.user_defaults})`);
+ok(devFile4.favorites[0].name === "US Princess" && devFile4.favorites[0].paired_cab === 709 && devFile4.favorites[1].paired_cab === null, "favorites carry name, model and paired cab");
+ok(stages4.includes("favorites") && stages4.at(-1) === "user_defaults", "the two new stages are reported, user defaults last");
+const info4 = await mock.invoke("backup_info_inline", { json: dev4.json });
+ok(info4.favorites === 2 && info4.user_defaults === 1 && info4.version === 4, "backup_info counts them");
+ok(!("favorites" in devFile), "a file that did not ask for them has no favorites section");
 
 // A presets-only export is still version 2, so an older build reads it.
 ok(parsed.version === 2 && !("irs" in parsed), "a presets-only export stays version 2");

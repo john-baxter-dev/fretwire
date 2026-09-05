@@ -474,8 +474,20 @@ pub async fn backup_device(
     banks: Vec<i64>,
     irs: bool,
     settings: bool,
+    favorites: bool,
+    user_defaults: bool,
 ) -> R<BackupSummaryDto> {
-    fretwire_commands::backup_device(&state, TauriSink(app), path, banks, irs, settings).await
+    fretwire_commands::backup_device(
+        &state,
+        TauriSink(app),
+        path,
+        banks,
+        irs,
+        settings,
+        favorites,
+        user_defaults,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -485,8 +497,19 @@ pub async fn backup_device_inline(
     banks: Vec<i64>,
     irs: bool,
     settings: bool,
+    favorites: bool,
+    user_defaults: bool,
 ) -> R<BackupFileDto> {
-    fretwire_commands::backup_device_inline(&state, TauriSink(app), banks, irs, settings).await
+    fretwire_commands::backup_device_inline(
+        &state,
+        TauriSink(app),
+        banks,
+        irs,
+        settings,
+        favorites,
+        user_defaults,
+    )
+    .await
 }
 
 #[tauri::command]

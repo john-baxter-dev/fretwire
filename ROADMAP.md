@@ -474,19 +474,21 @@ guessing has already cost a power cycle): see section B of `captures/_RUNBOOK-hx
       JSON→blob conversion. Its setlist order is what promoted `Device::setlists` to [solid].
       `--sections` (2026-09-04) lists the container's table and flags any tag this reading has never
       seen.
-- [ ] **Favorites and User Defaults** in the device backup (issue #5, 2026-09-04). The two things
-      an HX Edit backup holds that ours does not. **Favorites decoded the same evening** (protocol
-      doc: ops 112 list / 113 read / 119 save, `.hxb` sections `F000`…, `Hxb::favorites`). To build:
-      (1) `backup-device` reads the list and each record (two ops, cheap) into a `favorites` array
-      — store the wire record, it is what a restore needs; (2) restore is the open question, since
-      the only save op seen takes a *block in the current preset*, so a restore is "load a scratch
-      preset, place the block with the record's values, op 119, put the preset back" unless a direct
-      write turns up — capture HX Edit restoring a backup to find out; (3) the star icon: a block
-      matches a favorite when model + values do (the pedal's own rule, per the reporter), or ask
-      op 45 and compare. Delete and rename ops still uncaptured. **User Defaults**: op 109 per
-      (model, composite, cab kind), nil when none saved [solid, live] — the read is done; a backup
-      sweeps the 1162 triples (37 s, so behind a flag or a progress bar) and stores the non-nil
-      records; the write is unknown and needs a capture of HX Edit restoring one.
+- [x] **Favorites and User Defaults — read into the backup** (issue #5, 2026-09-04, verified
+      live). Format **v4** adds `favorites` (index, name, model, paired cab, the op-113 record as
+      bytes) and `user_defaults` (model, cab kind, the op-109 record); a file with neither stays
+      v3. `Session::read_favorites` / `read_user_defaults` / `user_default_asks`, two more flags on
+      `backup_device` through all three transports (`--no-favorites` / `--no-user-defaults`, two
+      checkboxes), counted in every summary; `show-backup` lists a `.hxb`'s favorites too. The
+      user-default sweep is 1414 asks in ~3 s. Protocol: ops 112/113/109 [solid], `.hxb` `F000`…
+- [ ] **Favorites and User Defaults — restore**. The only write seen is op 119, which saves a
+      *block in the current preset* as a favorite; no direct record write, no delete, no rename, no
+      user-default write has been captured. A restore today reports them as held and not put back.
+      Two routes: capture HX Edit restoring the Sep-04 `.hxb` (would show a direct write if one
+      exists), or build the roundabout one — load a scratch preset, place the block with the
+      record's values, op 119, put the preset back. The star icon in the signal chain is a
+      separate, smaller piece: a block matches a favorite when model and values do (the pedal's
+      rule, per the reporter), or op 45 asks the pedal for a block's favorite form.
 - [ ] **Settings via op 85** (2026-09-04). One request returns every global, grouped
       DSP/EQ/System/Tuner/L6Link — the same ids the op-24 sweep reads (checked live), so this is
       a speed and structure improvement, not coverage: the backup's settings phase could be one

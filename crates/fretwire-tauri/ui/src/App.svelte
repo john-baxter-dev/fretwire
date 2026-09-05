@@ -171,7 +171,7 @@
   // { path | json+fileName, entries, index, slot } — entries load from the file, which is a path
   // for the backend to open or (INLINE_FILES) the file's text carried in the invoke.
   let restoreDlg = $state(null);
-  // Whole-device backup: { path, irs, settings, onServer } — every setlist, plus the IR store and
+  // Whole-device backup: { path, irs, settings, favorites, userDefaults, onServer } — every setlist, plus the IR store and
   // the global settings unless unticked. The export dialog above is presets only.
   let backupDlg = $state(null);
   // Whole-device restore: { path | json+fileName, info, presets, irs, settings }. `info` is what
@@ -823,11 +823,14 @@
       path: INLINE_FILES ? backupDefault : `~/${backupDefault}`,
       irs: true,
       settings: true,
+      favorites: true,
+      userDefaults: true,
       onServer: false,
     });
   const backupInline = $derived(INLINE_FILES && !backupDlg?.onServer);
   async function confirmBackupDevice() {
-    const { path, irs, settings } = backupDlg;
+    const { path, irs, settings, favorites, userDefaults } = backupDlg;
+    const parts = { irs, settings, favorites, user_defaults: userDefaults };
     const inline = backupInline;
     const banks = setlists.map((_, i) => i);
     backupDlg = null;
@@ -839,15 +842,15 @@
       let counts;
       let where;
       if (inline) {
-        const file = await invoke("backup_device_inline", { banks, irs, settings });
-        counts = { presets: file.count, irs: file.irs, settings: file.settings };
+        const file = await invoke("backup_device_inline", { banks, ...parts });
+        counts = { presets: file.count, irs: file.irs, settings: file.settings, favorites: file.favorites, user_defaults: file.user_defaults };
         where = path.trim().split(/[\\/]/).pop() || backupDefault;
         saveFile(where, new Blob([file.json], { type: "application/json" }));
       } else {
-        counts = await invoke("backup_device", { path: path.trim(), banks, irs, settings });
+        counts = await invoke("backup_device", { path: path.trim(), banks, ...parts });
         where = path.trim();
       }
-      const what = `${counts.presets} presets, ${counts.irs} IRs, ${counts.settings} settings`;
+      const what = `${counts.presets} presets, ${counts.irs} IRs, ${counts.settings} settings, ${counts.favorites} favorites, ${counts.user_defaults} user defaults`;
       const how = exportCancelling ? "Cancelled —" : "Backed up";
       toast(`${how} ${what} to ${where}`, exportCancelling ? "warn" : "info");
       status = `${how} ${what}.`;
@@ -1803,6 +1806,14 @@
         <input type="checkbox" checked={backupDlg.settings} onchange={(e) => (backupDlg = { ...backupDlg, settings: e.currentTarget.checked })} />
         Global settings
       </label>
+      <label class="dlg-check">
+        <input type="checkbox" checked={backupDlg.favorites} onchange={(e) => (backupDlg = { ...backupDlg, favorites: e.currentTarget.checked })} />
+        Favorites
+      </label>
+      <label class="dlg-check">
+        <input type="checkbox" checked={backupDlg.userDefaults} onchange={(e) => (backupDlg = { ...backupDlg, userDefaults: e.currentTarget.checked })} />
+        User defaults
+      </label>
     </div>
     <p class="dlg-text">
       Reads everything to the file — nothing on the device is written. The pedal may step through
@@ -1845,7 +1856,8 @@
       {@const info = restoreDevDlg.info}
       <p class="dlg-text">
         From a <b>{info.device}</b>: {info.presets} presets{#if info.setlists.length > 1} in {info.setlists.length} setlists{/if},
-        {info.irs} IRs, {info.settings} settings.
+        {info.irs} IRs, {info.settings} settings{#if info.favorites || info.user_defaults}, {info.favorites} favorites and
+        {info.user_defaults} user defaults (held in the file; not put back yet — there is no known way to write them){/if}.
       </p>
       {#if restoreDevMismatch}
         <p class="dlg-warn">
@@ -1936,7 +1948,7 @@
       </div>
       <div class="bk-line">
         {backupProgress.done}/{backupProgress.total || "…"}
-        {#if backupProgress.setlist && (setlists.length > 1 || backupProgress.stage === "irs" || backupProgress.stage === "settings")}— {backupProgress.setlist}{/if}
+        {#if backupProgress.setlist && (setlists.length > 1 || backupProgress.stage !== "presets")}— {backupProgress.setlist}{/if}
         — {backupProgress.name}
       </div>
       <!-- All eight of a Floor's setlists is 1024 presets and the better part of an hour. An

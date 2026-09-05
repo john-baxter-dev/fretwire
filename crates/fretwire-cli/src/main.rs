@@ -341,6 +341,13 @@ enum Command {
         /// Leave the global settings out.
         #[arg(long)]
         no_settings: bool,
+        /// Leave the favorites out.
+        #[arg(long)]
+        no_favorites: bool,
+        /// Leave the user defaults out. Reading them asks the device about every model and every
+        /// amp-with-cab form — 1414 asks on an HX Stomp, about 3 s.
+        #[arg(long)]
+        no_user_defaults: bool,
     },
     /// ⚠ PERSISTENT WRITE. Restore a device backup: every preset to its slot, every IR to its
     /// slot, every identified global setting.
@@ -1239,13 +1246,26 @@ fn main() -> Result<()> {
             let backup =
                 fretwire_core::backup::Backup::from_json(&std::fs::read_to_string(&path)?)?;
             println!(
-                "{} — format v{}: {} presets, {} IRs, {} settings",
+                "{} — format v{}: {} presets, {} IRs, {} settings, {} favorites, {} user defaults",
                 backup.device,
                 backup.version(),
                 backup.presets.len(),
                 backup.irs.len(),
-                backup.settings.len()
+                backup.settings.len(),
+                backup.favorites.len(),
+                backup.user_defaults.len()
             );
+            for f in &backup.favorites {
+                println!(
+                    "  favorite [{}] {} (model {}{})",
+                    f.index,
+                    f.name,
+                    f.model,
+                    f.paired_cab
+                        .map(|c| format!(" + cab {c}"))
+                        .unwrap_or_default()
+                );
+            }
             for bank in backup.banks() {
                 // A v1 file records no setlist names, and multi-setlist files are the only ones
                 // where the heading earns its line.
@@ -1294,6 +1314,8 @@ fn main() -> Result<()> {
             bank,
             no_irs,
             no_settings,
+            no_favorites,
+            no_user_defaults,
         } => {
             let mut s = fretwire_core::Session::connect()?;
             let names = s.device().setlist_names();
@@ -1302,7 +1324,7 @@ fn main() -> Result<()> {
                 None => (0..names.len() as i64).collect(),
             };
             println!(
-                "backing up {}{}{}…",
+                "backing up {}{}{}{}{}…",
                 banks
                     .iter()
                     .map(|b| names.get(*b as usize).copied().unwrap_or("Presets"))
@@ -1313,18 +1335,33 @@ fn main() -> Result<()> {
                     ""
                 } else {
                     ", the global settings"
+                },
+                if no_favorites { "" } else { ", the favorites" },
+                if no_user_defaults {
+                    ""
+                } else {
+                    ", the user defaults"
                 }
             );
-            let backup = s.backup_device(&banks, !no_irs, !no_settings, |p| {
-                println!("  [{:>4}/{}] {}: {}", p.done, p.total, p.setlist, p.name);
-                true
-            })?;
+            let backup = s.backup_device(
+                &banks,
+                !no_irs,
+                !no_settings,
+                !no_favorites,
+                !no_user_defaults,
+                |p| {
+                    println!("  [{:>4}/{}] {}: {}", p.done, p.total, p.setlist, p.name);
+                    true
+                },
+            )?;
             std::fs::write(&out, backup.to_json())?;
             println!(
-                "wrote {out}: {} presets, {} IRs, {} settings (format v{})",
+                "wrote {out}: {} presets, {} IRs, {} settings, {} favorites, {} user defaults (format v{})",
                 backup.presets.len(),
                 backup.irs.len(),
                 backup.settings.len(),
+                backup.favorites.len(),
+                backup.user_defaults.len(),
                 backup.version()
             );
         }
@@ -1376,6 +1413,13 @@ fn main() -> Result<()> {
             println!("would write, where the device does not already hold it:");
             for (_, line) in plan.iter().filter(|(on, _)| *on) {
                 println!("  - {line}");
+            }
+            if !backup.favorites.is_empty() || !backup.user_defaults.is_empty() {
+                println!(
+                    "not restored (no write op is known yet): {} favorites, {} user defaults",
+                    backup.favorites.len(),
+                    backup.user_defaults.len()
+                );
             }
             if !yes {
                 println!("dry run — pass --yes to write.");

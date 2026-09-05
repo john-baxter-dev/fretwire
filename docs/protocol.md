@@ -1339,8 +1339,10 @@ an amp with a mic'd cab when it was saved, and only that form of the model holds
 same shape as a favorite's (op 113's `64`, with the cab under `12`). The backup's UMDS table is that
 sweep written out, and a bare manifest on both donors because there was nothing to carry; what a row
 with a default looks like in the file is still unseen. Not seen either: how one is written or cleared.
-The sweep is slow: 1162 asks took 37 s, against 1.95 s for the 126-preset op-4 sweep — a backup that
-includes user defaults should say so, or ask only the models the preset store uses.
+HX Edit's sweep is slow — 1162 asks over 37 s, against 1.95 s for the 126-preset op-4 sweep — but
+that is its pacing, not the pedal's: `backup-device` asks 1414 (every `Helix.sym` model alone, every
+amp and preamp with each cab kind, every cab with the legacy kind — a superset, and an ask the
+device has no slot for answers nil, checked live) in about 3 s, one browse session.
 
 ## All global settings in one read — op 85 [solid — same capture]
 `op 85 {}` on the edit channel answers a 724-byte map: `{0: [{150: v}…{164: v}], 1: [{190: v}…{203: v}],

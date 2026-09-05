@@ -481,6 +481,16 @@ guessing has already cost a power cycle): see section B of `captures/_RUNBOOK-hx
       `backup_device` through all three transports (`--no-favorites` / `--no-user-defaults`, two
       checkboxes), counted in every summary; `show-backup` lists a `.hxb`'s favorites too. The
       user-default sweep is 1414 asks in ~3 s. Protocol: ops 112/113/109 [solid], `.hxb` `F000`…
+- [ ] **Write `.hxb`** — a derived export in HX Edit's own container, so a fretwire backup can be
+      restored by HX Edit (and HX Edit's restore would put favorites and user defaults back, which
+      ours cannot yet). Asked 2026-09-04. Not the primary format: ours stores the bytes the pedal
+      sent and restores byte-identical, while a `.hxb` holds presets, favorites and user defaults as
+      **tone JSON by parameter name**, and HX Edit restoring it onto the pedal is the only
+      validator. **Depends on blob→tone JSON**, the inverse of `hxb-convert` — blocks, snapshots,
+      controllers, split topology, in a form HX Edit accepts — which does not exist; and `GLOB` is
+      keyed by setting *name*, so it carries only the 54 of 166 ids we have named. Container and
+      section tags are decoded (`hxb.rs`); IRs are RIFF WAV either way. First test when built: HX
+      Edit restores one of ours onto the Stomp.
 - [ ] **Favorites and User Defaults — restore**. The only write seen is op 119, which saves a
       *block in the current preset* as a favorite; no direct record write, no delete, no rename, no
       user-default write has been captured. A restore today reports them as held and not put back.

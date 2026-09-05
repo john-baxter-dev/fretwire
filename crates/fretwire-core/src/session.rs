@@ -4220,7 +4220,22 @@ impl Session {
             match self.read_preset_at_once(bank, slot) {
                 // Including `None`: a nil answer is the device's real answer, and re-asking twice
                 // more only slows the sweep down to arrive at the same place.
-                Ok(payload) => return Ok(payload),
+                Ok(None) => return Ok(None),
+                // A blob that reassembled but does not parse is the same transient as a short
+                // read — a stray frame spliced into the stream — and until 2026-09-04 it was the
+                // one failure that still got past the retries: the export checked it *after*
+                // this returned and aborted on the spot. A backup-device run on the owner's Stomp
+                // died that way ("no MessagePack envelope root") and the re-run was clean.
+                Ok(Some(raw)) => match fretwire_data::stream::PresetStream::parse(&raw) {
+                    Ok(_) => return Ok(Some(raw)),
+                    Err(e) => {
+                        tracing::warn!(
+                            attempt, bank, slot, error = %e,
+                            "slot read reassembled but does not parse; re-reading"
+                        );
+                        last_err = Some(e.into());
+                    }
+                },
                 Err(e) => {
                     tracing::warn!(attempt, bank, slot, error = %e, "slot read failed; re-reading");
                     last_err = Some(e);

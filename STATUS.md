@@ -14,6 +14,14 @@ reading was also blind to them: `Hxb::parse` folded every unrecognised compresse
 takes it for, and `show-backup` always names the tags it doesn't recognise — safe to paste, it names
 no preset. That is the ask: a backup from a pedal with one Favorite and one User Default saved
 (owner's Stomp tonight, or the reporter's XL). Tests +1.
+Probed live the same day: a `backup-device` before and after saving a Favorite (the US Princess
+amp, confirmed in the panel's Favorites list) on the owner's Stomp differ in **one** setting — id 19 Stomp Mode, flipped by using the panel — and in no preset
+document (slot 12, the selected one, differs at byte 4 only, the envelope's txn counter). So
+Favorites are not in the op-24 namespace and not in any preset [solid]; they live in a store no op
+we know reads. The first of those runs also died with `preset stream: no MessagePack envelope root`
+and the re-run was clean: an op-4 blob that reassembles but does not parse was the one transient
+still outside the retries — the export checked it after `read_preset_at` returned. It now retries
+inside, like a short read.
 
 **Footswitch type — latching or momentary (2026-09-03).** The one field of the switch record
 that could be read but not written. It is layout-entry key `12` (`@fs_momentary` in a tone, no

@@ -2,6 +2,13 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**The XL's `preset_device_id`, from a reporter's backup (2026-09-05).** `Some(0x0021_000b)`, read
+out of the `.hxb` header of an HX Stomp XL backup posted on issue #5 — the same evidence class as
+the Floor's and the POD Go's ids, both of which came out of backup headers too. It had stayed
+`None` on the grounds that no XL backup had ever been opened, and the device test said so; that
+premise is gone, and `show-backup` now names an XL backup instead of calling it "unknown device".
+It also lets `hxb-convert` accept one.
+
 **The parameters pane wouldn't open for a tempo-sync block (2026-09-05).** The owner's own bug
 report: on preset 26 the Trinity Chorus block selected but never opened its panel, same for the
 Bucket Brigade on preset 4. `syncOf` — which folds a `Tempo Sync` switch and its `Note Sync` list

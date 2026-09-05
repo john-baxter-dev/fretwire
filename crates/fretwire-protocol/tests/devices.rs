@@ -112,9 +112,10 @@ fn the_stomp_xl_claims_nothing_it_hasnt_shown_us() {
     assert_eq!(xl.dsps, Some(1));
     assert_eq!(xl.snapshots, Some(4));
     assert_eq!(xl.dsp_count(), 1);
-    // What the streams do *not* carry stays empty. This is a `.hxb` backup-header field, and no
-    // backup from an XL has ever been opened — a preset stream is a different document.
-    assert!(xl.preset_device_id.is_none());
+    // A `.hxb` backup-header field, and a preset stream is a different document — so this stayed
+    // empty until an owner opened an XL backup with `show-backup` and it read `0x0021000b`
+    // (issue #5, 2026-09-05). Observed, like the Floor's and the POD Go's.
+    assert_eq!(xl.preset_device_id, Some(0x0021_000b));
     // Likewise the setlist arity: one setlist's size was read off the panel, but whether an XL has
     // several is unobserved, so the names stay absent rather than inheriting the Floor's.
     assert!(xl.setlists.is_none());

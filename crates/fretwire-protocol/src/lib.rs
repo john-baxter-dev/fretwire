@@ -182,7 +182,8 @@ pub struct Device {
 /// what `Verified` means here, and in both cases every field we did not observe stays `None` rather
 /// than being copied from a sibling: the LT reports the Floor's `P21` and still does not inherit its
 /// `preset_device_id`, and the XL's own `P36` said nothing about its DSP or snapshot counts — those
-/// two came from the captures, not from the code.
+/// two came from the captures, not from the code (its `preset_device_id` arrived later still, out
+/// of an owner's backup header).
 ///
 /// The **HX Effects** reached [`Support::Reported`] the same way, by outcome alone: its `lsusb`
 /// line arrived first and made it findable, and an owner has since said it works. That report is
@@ -332,9 +333,12 @@ pub const DEVICES: &[Device] = &[
         // carried `P36` at key `7 → 36`. The two paths are independent, so this is the one field a
         // bug report has been able to settle. [solid — 2026-08-21, owner report, issue #4]
         model_code: Some("P36"),
-        // Still unknown: nothing we have read exposes it. The model code above comes from an
-        // identity string and a preset stamp; this is a different field in the backup header.
-        preset_device_id: None,
+        // From an owner's own HX Edit backup of an XL: the `.hxb` header's device field reads
+        // `0x0021000b`, alongside fw `0x03800000` and a setlist of 128 slots. Same evidence class
+        // as the Floor's and the POD Go's ids, which also came out of backup headers — and until
+        // it arrived `show-backup` called an XL backup "unknown device".
+        // [solid — 2026-09-05, issue #5]
+        preset_device_id: Some(0x0021_000b),
         // **From the first captures we hold off an XL** — two preset streams contributed with
         // issue #13, 2026-08-25. Key `1` (the second DSP group) is nil and key `0 → 22` holds the
         // usual 20 slots, read by the same decoder that reports `[0, 1]` on a Floor.

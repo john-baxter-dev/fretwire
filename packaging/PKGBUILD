@@ -9,7 +9,7 @@
 # from a copy outside this repo (makepkg litters src/ and pkg/).
 
 pkgname=fretwire
-pkgver=0.5.0
+pkgver=0.5.1
 pkgrel=1
 pkgdesc="Independent editor for Line 6 HX, Helix and POD Go devices"
 arch=('x86_64')
@@ -23,7 +23,7 @@ options=('!lto')
 makedepends=('cargo' 'npm' 'pkgconf')
 optdepends=('p7zip: unpack an HX Edit installer during `fretwire import-data`')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-# SKIP until the v0.5.0 tag exists on GitHub — then `updpkgsums` (CI builds from the checkout and
+# SKIP until the v0.5.1 tag exists on GitHub — then `updpkgsums` (CI builds from the checkout and
 # skips this; the AUR copy must carry the real hash).
 sha256sums=('SKIP')
 

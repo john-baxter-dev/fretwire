@@ -2550,7 +2550,7 @@ impl Session {
         let was_probing = std::mem::replace(&mut self.probing, true);
         let out = self.send_edit(edit::probe(op, target, txn));
         self.probing = was_probing;
-        Ok(fretwire_data::stream::locate_root(&out?.body, 32).map(|r| r.value))
+        Ok(Self::reply_root(&out?.body))
     }
 
     /// Ask the device for footswitch `switch`'s record (op 33). **`switch` is one-based**: 1 is
@@ -2577,7 +2577,7 @@ impl Session {
     ) -> crate::Result<Option<fretwire_data::rmpv::Value>> {
         let txn = self.bump_txn();
         let ack = self.send_edit(edit::read_switch(switch, txn))?;
-        Ok(fretwire_data::stream::locate_root(&ack.body, 32).map(|r| r.value))
+        Ok(Self::reply_root(&ack.body))
     }
 
     /// Ask the device what drives parameter `param_index` of the block in `slot` (op 36).
@@ -2594,7 +2594,7 @@ impl Session {
     ) -> crate::Result<Option<fretwire_data::rmpv::Value>> {
         let txn = self.bump_txn();
         let ack = self.send_edit(edit::read_assignment(slot, paired, param_index, txn))?;
-        Ok(fretwire_data::stream::locate_root(&ack.body, 32).map(|r| r.value))
+        Ok(Self::reply_root(&ack.body))
     }
 
     /// Make footswitch `switch` toggle the bypass of the block in `slot` (op 56).
@@ -4833,6 +4833,21 @@ impl Session {
         Self::reply_payload(&ack.body)
     }
 
+    /// The envelope of a reply, whole, for the readers that return what the device said rather than
+    /// one known key out of it.
+    ///
+    /// Prefers a root carrying the transaction key `102` — every reply envelope leads with it, which
+    /// is the same handle [`reply_txn`] reads — so the length-marker decoy described on
+    /// [`Self::reply_payload`] cannot outbid the real root here either. Falls back to the plain
+    /// longest match, so a reply shaped in some way we have not met still comes back as it did.
+    fn reply_root(body: &[u8]) -> Option<fretwire_data::rmpv::Value> {
+        fretwire_data::stream::locate_root_where(body, 32, |v| {
+            fretwire_data::stream::map_get(v, edit::K_TXN).is_some()
+        })
+        .or_else(|| fretwire_data::stream::locate_root(body, 32))
+        .map(|r| r.value)
+    }
+
     /// Envelope key 104 out of a complete browse-side reply.
     ///
     /// The scan is **restricted to a root that carries key 104**, because longest-match alone picks
@@ -6164,6 +6179,15 @@ mod tests {
             assert!(
                 Session::reply_payload(&reply).is_some(),
                 "{total}-byte reply (declared {:#04x}) lost its payload",
+                total - 8
+            );
+            // The readers that hand back the whole envelope rather than one key have to survive
+            // the same decoy: the real root leads with the transaction key, the decoy has no keys
+            // in common with anything.
+            let root = Session::reply_root(&reply).expect("no root at all");
+            assert!(
+                fretwire_data::stream::map_get(&root, super::edit::K_TXN).is_some(),
+                "{total}-byte reply (declared {:#04x}) returned a root with no txn: {root}",
                 total - 8
             );
         }

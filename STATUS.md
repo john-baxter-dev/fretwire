@@ -14,8 +14,12 @@ already used; `Session::reply_payload` — every browse-side reply, so favorites
 IR select and the IR directory — was the last caller still scanning unfiltered. Two lengths in 256
 hit it, which is why one pedal's favorites were fine and another's were not, and why the four that
 failed were the four that happened to be that size. Fixed there and in `read_setting` and the IR
-blob read; the regression test builds a reply of a given total size and asserts both marker lengths
-(`0x82`, `0x94`) still find their payload. **Proven against the bug**: it fails with the old scan,
+blob read. The three readers that hand back the whole envelope rather than one known key — `probe`,
+`read_switch`, `read_assignment` — have no payload key to filter on, so they scan for the
+**transaction key `102`** instead, which every reply envelope leads with and the decoy never has,
+falling back to the plain longest match for a shape we have not met. The regression test builds a
+reply of a given total size and asserts both marker lengths (`0x82`, `0x94`) keep their payload and
+return a root that still carries its txn. **Proven against the bug**: it fails with the old scan,
 naming 138 and `0x82`. The **parameter-count hypothesis in the entry below is refuted** — record
 size had nothing to do with it.
 

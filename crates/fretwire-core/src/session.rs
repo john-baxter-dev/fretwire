@@ -3785,6 +3785,7 @@ impl Session {
                 }
             };
             let mut out = Vec::with_capacity(entries.len());
+            let mut missed = 0usize;
             for e in &entries {
                 let int = |k: i64| map_get(e, k).and_then(Value::as_i64);
                 let Some(index) = int(edit::K_FAVORITE_INDEX) else {
@@ -3798,14 +3799,13 @@ impl Session {
                 let model = int(edit::K_UD_MODEL).unwrap_or(-1);
                 // 65535 is the list's "no cab"; the record says -1 for the same.
                 let paired_cab = int(edit::K_UD_CAB_KIND).filter(|c| (0..65535).contains(c));
-                let txn = s.bump_txn();
-                let ack = s.ir_request(cmd::STREAM, edit::favorite_read(txn, index), txn)?;
-                let Some(reply) = Self::ir_reply_payload(&ack) else {
-                    tracing::warn!(index, %name, "favorite answered nothing — skipped");
+                let Some(reply) = s.favorite_record(index, &name)? else {
+                    missed += 1;
                     continue;
                 };
                 let Some(rec) = map_get(&reply, edit::K_UD_MODEL) else {
                     tracing::warn!(index, %name, "favorite reply carries no record — skipped");
+                    missed += 1;
                     continue;
                 };
                 let mut record = Vec::new();
@@ -3820,8 +3820,71 @@ impl Session {
                     record,
                 });
             }
+            // A gap here is silent data loss in a backup, so it is said once, plainly, with both
+            // counts — the per-entry warnings scroll past in a sweep that logs a line per favorite.
+            if missed > 0 {
+                tracing::warn!(
+                    listed = entries.len(),
+                    read = out.len(),
+                    missed,
+                    "some favorites could not be read — they are NOT in this backup"
+                );
+            }
             Ok(out)
         })
+    }
+
+    /// One favorite's record (op 113), reassembled when it spans frames, retried once, and `None`
+    /// when the device still answers nothing readable.
+    ///
+    /// Reassembly matters here for the same reason it does for the list: a record's size is the
+    /// favorite's parameter count, so an amp with a paired cab outgrows a frame while a small
+    /// stomp does not, and the partial buffer decodes as nothing at all. A reporter's XL read 18
+    /// of 21 favorites, skipping three amps [solid — issue #5, 2026-09-05].
+    ///
+    /// A record that will not come is skipped rather than fatal: one unreadable favorite should
+    /// not throw away the presets and IRs a whole-device backup has already read. The caller
+    /// counts the gaps and says so.
+    fn favorite_record(
+        &mut self,
+        index: i64,
+        name: &str,
+    ) -> crate::Result<Option<fretwire_data::rmpv::Value>> {
+        let mut note = String::from("no reply");
+        for attempt in 0..2 {
+            let txn = self.bump_txn();
+            let ack = match self.ir_request(cmd::STREAM, edit::favorite_read(txn, index), txn) {
+                Ok(ack) => ack,
+                Err(crate::Error::Rejected(m)) => {
+                    note = m;
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
+            let declared = fretwire_data::stream::declared_stream_len(&ack.body);
+            let first = ack.body.len();
+            match self.browse_reply_bytes(ack, "favorite record") {
+                Ok(bytes) => {
+                    if let Some(v) = Self::reply_payload(&bytes) {
+                        if attempt > 0 {
+                            tracing::info!(index, %name, "favorite read on the retry");
+                        }
+                        return Ok(Some(v));
+                    }
+                    note = format!(
+                        "{} bytes read, {first} in the first frame, {}",
+                        bytes.len(),
+                        match declared {
+                            Some(d) => format!("device declared {d}"),
+                            None => "no declared length".into(),
+                        }
+                    );
+                }
+                Err(e) => note = e.to_string(),
+            }
+        }
+        tracing::warn!(index, %name, %note, "favorite could not be read — skipped");
+        Ok(None)
     }
 
     /// The `Helix.sym` index of the first legacy cab — the cab kind an amp's legacy-cab composite

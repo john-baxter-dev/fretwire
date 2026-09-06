@@ -1290,6 +1290,13 @@ saving one on the owner's Stomp differed in nothing but Stomp Mode. It has its o
 `HD2_CabMicIr_1x12USDeluxe`, 636 = `VIC_DynPlateStereo`, checked against the file. HX Edit lists
 (op 112) once at connect, between the preset listing (op 1) and the IR directory (op 13).
 
+**Both replies can span frames, and must be reassembled** [solid — issue #5, 2026-09-05]. They are
+ordinary chunked streams: the first 8 bytes declare the length, and a reader that takes the frame
+as it came gets a truncated buffer that decodes as *nothing at all* rather than as an error. Size
+follows what the user has — a list grows with the number of favorites (21 did not fit; 2 did) and a
+record grows with the model's parameter count — so the bug is invisible on a lightly-used pedal and
+total on a full one. Op 13's IR directory is the same shape and the same trap.
+
 The record (op 113's `64`, op 45's `24`):
 ```
 {19: 6, 28: <index>,

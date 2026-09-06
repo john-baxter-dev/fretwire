@@ -2,6 +2,38 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**The backup dialog was broken in the shipped app — one argument name (2026-09-05).** The reporter
+ran the GUI and every whole-device backup died with *"command backup_device missing required key
+userDefaults"*. Tauri renames a command's Rust parameters to camelCase, so `user_defaults: bool` is
+asked for on the wire as `userDefaults`, and the dialog sent the snake_case name. **Neither of the
+other two backends is that strict**: the serve dispatcher looks a name up camelCase-first with a
+snake_case fallback, and the mock takes whatever it destructures — so the wrong name passed
+`npm test`, `npm run dev` and serve mode, and failed only in the one build a user actually runs.
+`user_defaults` was the first multi-word argument the UI had ever sent; every other one was already
+camelCase. Fixed in all four places (the dialog, the dispatcher's lookup, the mock, the backup
+test), and `ui/tests/invoke-args.mjs` now reads the command signatures out of `commands.rs` (85) and
+checks every `invoke()` call site (63) and every mock handler (53) against them — resolving a
+`...spread` to its nearest declaration, which is exactly where this one hid. **Proven against the
+bug**: put the old name back and the test names both call sites.
+
+**Three favorites of twenty-one were skipped (2026-09-05).** Same first-frame bug as the listing,
+one level down: with the list fixed the reporter's XL backed up 18 of 21, logging *"favorite
+answered nothing — skipped"* for three amps. The per-record read (op 113) still went through
+`ir_reply_payload`, which reads the frame as it came; a record's size is the favorite's parameter
+count, so a big amp outgrows a frame where a small stomp does not [hypothesis — the shape fits, but
+only the reporter's XL can confirm it]. `Session::favorite_record` reassembles, **retries once**,
+and says in the log how many bytes came and what the device declared, so a record that still will
+not come names its own symptom. A record that never arrives is skipped rather than fatal — one
+unreadable favorite should not throw away the presets and IRs already read — but the count is now
+said plainly at the end: *"listed 21, read 18 — they are NOT in this backup"*.
+
+**The GUI writes to the log (2026-09-05).** The reporter's bug arrived as a screenshot of a toast,
+because that is the only place the GUI said anything: *"it would be helpful for the GUI to emit any
+messages to the logs for easier copy-pasting than screenshots"*. Every toast now also goes to the
+backend's stderr through a new Tauri-only `ui_log` command, along with uncaught errors and
+unhandled rejections; under serve or the mock it goes to the browser console, which is where that
+reporter is already looking. Bounded to 2000 characters a line, and it can never throw.
+
 **The XL's `preset_device_id`, from a reporter's backup (2026-09-05).** `Some(0x0021_000b)`, read
 out of the `.hxb` header of an HX Stomp XL backup posted on issue #5 — the same evidence class as
 the Floor's and the POD Go's ids, both of which came out of backup headers too. It had stayed
@@ -32,15 +64,16 @@ none". `Session::browse_reply_bytes` now reassembles when the declared length ex
 (`drain_chunked_stream`, as the IR blob and preset stream already did), and an undecodable list is
 an **error** rather than an empty answer. **op 13's IR directory had the identical latent bug** and
 now goes through the same path — 128 IR records would never have fitted one frame either.
-Verified: the small case is unchanged live (the owner's 2 favorites still read); **the 21-favorite
-case is unverified — it needs the reporter's XL**, which is where this is parked.
+Verified: the small case is unchanged live (the owner's 2 favorites still read), and **the
+reporter's XL then listed all 21** — the first read of a multi-frame listing on real hardware.
 
-**PARKED HERE (2026-09-05).** Next, in order: (1) ask the reporter to re-run `backup-device` on the
-XL and confirm 21 favorites land in the JSON — that is the only test of the reassembly path we
-have; (2) the GUI star has still never been looked at on a real pedal (the comparison is exercised
-only through the mock); (3) then the open roadmap items — save-as-favorite (op 119), favorites
-restore, `.hxb` writing. Nothing is pushed: nine commits sit on master, and the reply to #5 already
-told the reporter this is "on master", so **the push is the first thing owed**.
+**WHERE THIS STANDS (2026-09-05).** The reassembly fix is confirmed on the reporter's XL — the
+listing reads all 21. Next, in order: (1) confirm the per-record fix the same way, since the three
+skipped amps are the last unread favorites and only that pedal has them; (2) the GUI star has still
+never been looked at on a real pedal (the comparison is exercised only through the mock); (3) then
+the open roadmap items — save-as-favorite (op 119), favorites restore, `.hxb` writing. Nothing is
+pushed: the commits sit on master, and the reply to #5 already told the reporter this is "on
+master", so **the push is the first thing owed**.
 
 **Favorites in the editor (2026-09-04, night, verified live).** The add picker has a
 **Favorites** category when the pedal has any: `Session::refresh_favorites` reads the list and each

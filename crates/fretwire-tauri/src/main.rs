@@ -136,6 +136,7 @@ fn main() {
             commands::update_check,
             commands::update_pref,
             commands::open_url,
+            commands::ui_log,
             commands::device_numbering,
             commands::settings_read,
             commands::settings_write,

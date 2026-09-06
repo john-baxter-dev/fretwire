@@ -33,6 +33,34 @@ if (IS_MOCK) {
 export const invoke = IS_SERVE ? serve.invoke : IS_MOCK ? mock.invoke : tauriInvoke;
 export const listen = IS_SERVE ? serve.listen : IS_MOCK ? mock.listen : tauriListen;
 
+/// Send one line to the backend's log — the stderr the user is already watching.
+///
+/// A GUI failure otherwise exists only in a toast and the webview's console, neither of which a
+/// bug report can carry: the first report of the backup dialog being broken came as a screenshot
+/// (issue #5). Only the desktop app has a backend log to write to; a browser has its own console,
+/// which the reporter is looking at anyway. Never throws, and never awaits — logging must not be
+/// able to break the thing it is reporting on.
+export function uiLog(level, message) {
+  const text = String(message);
+  if (IS_SERVE || IS_MOCK) {
+    (console[level] ?? console.log)(`[fretwire] ${text}`);
+    return;
+  }
+  tauriInvoke("ui_log", { level, message: text }).catch(() => {});
+}
+
+// Whatever the app fails to catch still reaches the log. (Guarded on the listener API, not just on
+// `window`: the SSR test harness supplies a stub window with neither.)
+if (HAS_WINDOW && typeof window.addEventListener === "function") {
+  window.addEventListener("error", (e) => {
+    uiLog("error", `uncaught: ${e.message} (${e.filename}:${e.lineno}:${e.colno})`);
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    const r = e.reason;
+    uiLog("error", `unhandled rejection: ${r?.stack || r?.message || r}`);
+  });
+}
+
 /// Native file/folder picker for a path *the backend* will open, behind the same seam. Tauri
 /// routes to the dialog plugin; a browser can't walk the backend's disk, so it falls back to typing
 /// a path. Returns the chosen path, or null if the user cancelled. Only the flows whose file

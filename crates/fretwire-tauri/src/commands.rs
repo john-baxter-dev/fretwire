@@ -75,6 +75,24 @@ pub async fn update_pref(enabled: bool) -> R<UpdateStatusDto> {
 ///
 /// Restricted to this project's release pages: the webview is the only caller, but a command
 /// that hands arbitrary strings to `xdg-open` is a wider door than the feature needs.
+/// A line from the webview, written into the same stderr log as everything else.
+///
+/// The GUI's errors used to live only in a toast and the webview's own console, so a bug report
+/// arrived as a screenshot of a toast that had already half-faded (issue #5, 2026-09-05). Now a
+/// failed command, an uncaught error and a rejected promise all land in the log the user is
+/// already running, next to the session traffic that explains them.
+#[tauri::command]
+pub fn ui_log(level: String, message: String) -> R<()> {
+    // A runaway loop in the webview should not fill a disk: one line, bounded.
+    let message: String = message.chars().take(2000).collect();
+    match level.as_str() {
+        "error" => tracing::error!(target: "ui", "{message}"),
+        "warn" => tracing::warn!(target: "ui", "{message}"),
+        _ => tracing::info!(target: "ui", "{message}"),
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn open_url(url: String) -> R<()> {
     const ALLOWED: &str = "https://github.com/john-baxter-dev/fretwire/releases";

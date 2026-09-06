@@ -265,6 +265,9 @@ fn values_match(want: &[ParamValue], have: &[crate::EditorParam]) -> bool {
     })
 }
 
+/// One setlist's listing — `(bank, [(slot, name)])` — as `Session::list_setlists` reads them.
+type SetlistListing = (i64, Vec<(u16, String)>);
+
 /// One step of an [`Session::export_setlists`] sweep, as the caller sees it.
 ///
 /// A struct rather than positional arguments because the sweep can now span setlists: `done`/`total`
@@ -3346,6 +3349,28 @@ impl Session {
     pub fn export_setlists(
         &mut self,
         banks: &[i64],
+        progress: impl FnMut(ExportProgress) -> bool,
+    ) -> crate::Result<crate::backup::Backup> {
+        let listings = self.list_setlists(banks)?;
+        self.export_listed(&listings, progress)
+    }
+
+    /// The listing of every setlist in `banks`, in that order: what [`Self::export_listed`] reads,
+    /// and what sizes the job. Listed up front so `total` is the whole job rather than the current
+    /// setlist — a progress bar that restarts per setlist is worse than none on a forty-minute
+    /// sweep — and so a device backup can count its presets before it reads anything.
+    fn list_setlists(&mut self, banks: &[i64]) -> crate::Result<Vec<SetlistListing>> {
+        let mut listings = Vec::with_capacity(banks.len());
+        for &bank in banks {
+            listings.push((bank, self.list_presets_in(bank)?));
+        }
+        Ok(listings)
+    }
+
+    /// [`Self::export_setlists`] over listings already read — see [`Self::list_setlists`].
+    fn export_listed(
+        &mut self,
+        listings: &[SetlistListing],
         mut progress: impl FnMut(ExportProgress) -> bool,
     ) -> crate::Result<crate::backup::Backup> {
         let names = self.device().setlist_names();
@@ -3363,18 +3388,12 @@ impl Session {
         // Whether the sweep ever selected a preset, and so owes the user their position back.
         let mut moved = false;
 
-        // Listings first, so `total` is the whole job rather than the current setlist: a progress
-        // bar that restarts per setlist is worse than none on a forty-minute sweep.
-        let mut listings = Vec::with_capacity(banks.len());
-        for &bank in banks {
-            listings.push((bank, self.list_presets_in(bank)?));
-        }
         let total: usize = listings.iter().map(|(_, l)| l.len()).sum();
 
         let mut presets = Vec::with_capacity(total);
         let mut done = 0usize;
         let mut cancelled = false;
-        for (bank, listing) in &listings {
+        for (bank, listing) in listings {
             let bank = *bank;
             let setlist = setlist_name(names, bank);
             for (index, listed_name) in listing {
@@ -3485,14 +3504,16 @@ impl Session {
         })
     }
 
-    /// Back up the device: the presets of `banks` (see [`Self::export_setlists`]), then every
-    /// populated user IR slot when `irs` is set, then every global setting that answers when
-    /// `settings` is set. **Reads only.** The three parts are what HX Edit's own backup carries,
-    /// and what a wiped pedal needs back — see [`Self::restore_device`].
+    /// Back up the device, **reads only**, in the order HX Edit's own backup runs: every global
+    /// setting that answers when `settings` is set, then every populated user IR slot when `irs`
+    /// is set, the favorites, the user defaults, and last the presets of `banks` (see
+    /// [`Self::export_setlists`]). Presets last on purpose — the sweep is the long part and the
+    /// only one that can walk the pedal, so a backup called off or lost partway through already
+    /// holds everything else (issue #18). The parts are what HX Edit's backup carries, and what a
+    /// wiped pedal needs back — see [`Self::restore_device`].
     ///
-    /// `progress` is called once per preset, once per IR and once for the settings, with `total`
-    /// covering the whole job; returning `false` stops the sweep, and the file keeps what was read
-    /// (the presets read so far, and no IRs or settings if it stopped before them).
+    /// `progress` is called once per item, with `total` covering the whole job from the first
+    /// tick; returning `false` stops after the current item, and the file keeps what was read.
     pub fn backup_device(
         &mut self,
         banks: &[i64],
@@ -3502,8 +3523,11 @@ impl Session {
         user_defaults: bool,
         mut progress: impl FnMut(ExportProgress) -> bool,
     ) -> crate::Result<crate::backup::Backup> {
-        // The IR directory first, so the total is the whole job from the first tick: one request,
-        // and it names the slots the IR pass reads.
+        // Everything is counted before anything is read, so `total` is the whole job from the
+        // first tick: the listings name the slots the preset sweep reads, the IR directory the
+        // slots the IR pass reads — one request each.
+        let listings = self.list_setlists(banks)?;
+        let preset_total: usize = listings.iter().map(|(_, l)| l.len()).sum();
         let ir_slots: Vec<fretwire_data::ir::IrSlot> = if irs {
             self.ir_directory()?
                 .into_iter()
@@ -3520,56 +3544,16 @@ impl Session {
         } else {
             Vec::new()
         };
-        let extra = ir_slots.len() + usize::from(settings) + usize::from(favorites) + ud_asks.len();
-        let mut cancelled = false;
-        let mut backup = if banks.is_empty() {
-            crate::backup::Backup {
-                device: self.device().name.into(),
-                ..Default::default()
-            }
-        } else {
-            self.export_setlists(banks, |p| {
-                let go = progress(ExportProgress {
-                    total: p.total + extra,
-                    ..p
-                });
-                cancelled |= !go;
-                go
-            })?
+        let total = preset_total
+            + ir_slots.len()
+            + usize::from(settings)
+            + usize::from(favorites)
+            + ud_asks.len();
+        let mut done = 0usize;
+        let mut backup = crate::backup::Backup {
+            device: self.device().name.into(),
+            ..Default::default()
         };
-        if cancelled {
-            return Ok(backup);
-        }
-        let mut done = backup.presets.len();
-        let total = done + extra;
-
-        for info in &ir_slots {
-            let Some((info, blob)) = self.ir_export(info.index)? else {
-                // The directory said it was used; a slot emptied between the two reads is not
-                // worth failing the backup over.
-                tracing::warn!(
-                    slot = info.index,
-                    "IR slot emptied between the listing and the read"
-                );
-                continue;
-            };
-            backup.irs.push(crate::backup::BackupIr {
-                slot: info.index,
-                name: info.name.clone(),
-                blob,
-            });
-            done += 1;
-            if !progress(ExportProgress {
-                done,
-                total,
-                stage: "irs",
-                bank: 0,
-                setlist: "IRs",
-                name: &info.name,
-            }) {
-                return Ok(backup);
-            }
-        }
 
         if settings {
             for (id, v) in self.scan_settings(0..=fretwire_protocol::settings::SCAN_MAX_ID) {
@@ -3594,6 +3578,34 @@ impl Session {
                 bank: 0,
                 setlist: "Settings",
                 name: "global settings",
+            }) {
+                return Ok(backup);
+            }
+        }
+
+        for info in &ir_slots {
+            let Some((info, blob)) = self.ir_export(info.index)? else {
+                // The directory said it was used; a slot emptied between the two reads is not
+                // worth failing the backup over.
+                tracing::warn!(
+                    slot = info.index,
+                    "IR slot emptied between the listing and the read"
+                );
+                continue;
+            };
+            backup.irs.push(crate::backup::BackupIr {
+                slot: info.index,
+                name: info.name.clone(),
+                blob,
+            });
+            done += 1;
+            if !progress(ExportProgress {
+                done,
+                total,
+                stage: "irs",
+                bank: 0,
+                setlist: "IRs",
+                name: &info.name,
             }) {
                 return Ok(backup);
             }
@@ -3631,6 +3643,7 @@ impl Session {
                 })
                 .collect();
             let mut i = 0;
+            let mut cancelled = false;
             backup.user_defaults = self.read_user_defaults(&ud_asks, |_| {
                 done += 1;
                 let go = progress(ExportProgress {
@@ -3642,8 +3655,25 @@ impl Session {
                     name: &names[i],
                 });
                 i += 1;
+                cancelled |= !go;
                 go
             })?;
+            if cancelled {
+                return Ok(backup);
+            }
+        }
+
+        if !listings.is_empty() {
+            let before = done;
+            let sweep = self.export_listed(&listings, |p| {
+                progress(ExportProgress {
+                    done: before + p.done,
+                    total,
+                    ..p
+                })
+            })?;
+            backup.setlists = sweep.setlists;
+            backup.presets = sweep.presets;
         }
         Ok(backup)
     }

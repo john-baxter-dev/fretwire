@@ -564,19 +564,6 @@ async function sweepBackup(banks, { irs = false, settings = false, favorites = f
   const total = lists.reduce((n, [, l]) => n + l.length, 0) + irSlots.length + (settings ? 1 : 0)
     + (favorites ? 1 : 0) + (userDefaults ? MOCK_USER_DEFAULT_ASKS : 0);
   let done = 0;
-  outer: for (const [bank, list] of lists) {
-    for (const p of list) {
-      await sleep(120); // the real sweep takes ~a second per preset; make the progress UI visible
-      done++;
-      entries.push({ bank, index: p.index, name: p.name, raw_hex: presetRaw(p) });
-      emit("backup-progress", {
-        done, total, stage: "presets", bank, setlist: setlistNames()[bank] ?? "Presets", name: p.name,
-      });
-      // Checked after the entry is kept, like the real sweep: a cancelled export still holds
-      // everything read up to the moment it was called off.
-      if (exportCancelled) break outer;
-    }
-  }
   const v4 = favorites || userDefaults;
   const file = {
     format: "fretwire-backup", version: v4 ? 4 : irs || settings ? 3 : 2,
@@ -584,9 +571,18 @@ async function sweepBackup(banks, { irs = false, settings = false, favorites = f
     setlists: banks.map((b) => ({ bank: b, name: setlistNames()[b] ?? "Presets" })),
     presets: entries,
   };
+  // The same order as the real sweep and HX Edit's: the cheap sections first, the preset walk
+  // last, so a backup called off partway through already holds everything else (issue #18).
   if (irs || settings) {
     file.irs = [];
     file.settings = [];
+    if (settings) {
+      for (const [id, d] of [...SETTINGS.entries()].sort((a, b) => a[0] - b[0])) file.settings.push(settingEntry(id, d));
+      // The unidentified ids answer too and are recorded; a restore never writes them.
+      for (const id of RAW_IDS) file.settings.push({ id, type: "int", value: id % 3 });
+      done++;
+      emit("backup-progress", { done, total, stage: "settings", bank: 0, setlist: "Settings", name: "global settings" });
+    }
     if (!exportCancelled) {
       for (const slot of irSlots) {
         await sleep(60);
@@ -596,13 +592,6 @@ async function sweepBackup(banks, { irs = false, settings = false, favorites = f
         emit("backup-progress", { done, total, stage: "irs", bank: 0, setlist: "IRs", name: held.name || "(unnamed)" });
         if (exportCancelled) break;
       }
-    }
-    if (settings && !exportCancelled) {
-      for (const [id, d] of [...SETTINGS.entries()].sort((a, b) => a[0] - b[0])) file.settings.push(settingEntry(id, d));
-      // The unidentified ids answer too and are recorded; a restore never writes them.
-      for (const id of RAW_IDS) file.settings.push({ id, type: "int", value: id % 3 });
-      done++;
-      emit("backup-progress", { done, total, stage: "settings", bank: 0, setlist: "Settings", name: "global settings" });
     }
   }
   if (v4) {
@@ -621,6 +610,21 @@ async function sweepBackup(banks, { irs = false, settings = false, favorites = f
         if (exportCancelled) break;
       }
       if (!exportCancelled) file.user_defaults = MOCK_USER_DEFAULTS.map((d) => ({ ...d }));
+    }
+  }
+  if (!exportCancelled) {
+    outer: for (const [bank, list] of lists) {
+      for (const p of list) {
+        await sleep(120); // the real sweep takes ~a second per preset; make the progress UI visible
+        done++;
+        entries.push({ bank, index: p.index, name: p.name, raw_hex: presetRaw(p) });
+        emit("backup-progress", {
+          done, total, stage: "presets", bank, setlist: setlistNames()[bank] ?? "Presets", name: p.name,
+        });
+        // Checked after the entry is kept, like the real sweep: a cancelled export still holds
+        // everything read up to the moment it was called off.
+        if (exportCancelled) break outer;
+      }
     }
   }
   lastBackup = file;

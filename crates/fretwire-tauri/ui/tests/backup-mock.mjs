@@ -49,7 +49,7 @@ const dev = await mock.invoke("backup_device_inline", { banks: [0], irs: true, s
 off2();
 ok(dev.count === list.length && dev.irs === irsBefore.length && dev.settings > settingsBefore.length,
   `device backup counts presets, IRs and every answering setting (${dev.count}/${dev.irs}/${dev.settings})`);
-ok(stages.includes("presets") && stages.includes("irs") && stages.at(-1) === "settings", "progress names its stage, settings last");
+ok(stages[0] === "settings" && stages.includes("irs") && stages.at(-1) === "presets", "progress names its stage: settings first, presets last (issue #18)");
 const devFile = JSON.parse(dev.json);
 ok(devFile.version === 3 && Array.isArray(devFile.irs) && Array.isArray(devFile.settings), "a device backup is a version-3 file");
 ok(devFile.settings.every((s) => ["bool", "int", "f32"].includes(s.type)), "settings are typed");
@@ -67,7 +67,7 @@ off3();
 const devFile4 = JSON.parse(dev4.json);
 ok(devFile4.version === 4 && dev4.favorites === 2 && dev4.user_defaults === 1, `favorites and user defaults make a version-4 file (${dev4.favorites}/${dev4.user_defaults})`);
 ok(devFile4.favorites[0].name === "US Princess" && devFile4.favorites[0].paired_cab === 709 && devFile4.favorites[1].paired_cab === null, "favorites carry name, model and paired cab");
-ok(stages4.includes("favorites") && stages4.at(-1) === "user_defaults", "the two new stages are reported, user defaults last");
+ok(stages4.indexOf("favorites") < stages4.indexOf("user_defaults") && stages4.lastIndexOf("user_defaults") < stages4.indexOf("presets"), "the two new stages are reported, before the presets");
 const info4 = await mock.invoke("backup_info_inline", { json: dev4.json });
 ok(info4.favorites === 2 && info4.user_defaults === 1 && info4.version === 4, "backup_info counts them");
 ok(!("favorites" in devFile), "a file that did not ask for them has no favorites section");

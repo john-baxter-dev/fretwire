@@ -838,8 +838,9 @@
 
   // ---- whole-device backup / restore ----
   // The three things a wiped pedal needs back — every preset, the IR store, the global settings —
-  // in one file (format v3). Same sweep as the export for the presets, then the IRs and a
-  // settings scan; `restore_device` writes only what the pedal does not already hold.
+  // in one file (format v3). The settings scan, the IRs, favorites and user defaults first and
+  // the preset sweep last — HX Edit's order, and the cheap parts are in hand if the long one is
+  // called off; `restore_device` writes only what the pedal does not already hold.
   const backupDefault = `fretwire-backup-${new Date().toISOString().slice(0, 10)}.json`;
   const onBackupDevice = () =>
     (backupDlg = {

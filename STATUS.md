@@ -2,6 +2,24 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Device backup runs in HX Edit's order — presets last (2026-09-06, issue #18).** The XL's owner
+noticed `backup-device` walks the sections as presets → IRs → settings → favorites → user defaults,
+where HX Edit does settings → IRs → favorites → user defaults → presets, and asked whether the order
+mattered. It does, for a reason other than the one asked: the preset sweep is the long part and the
+only one that can fail or be called off, and a cancel during it returned a file with the presets read
+so far and *nothing else*. `Session::backup_device` now lists the setlists up front (one request
+each — what sizes the job), reads the four cheap sections, and runs the sweep last through
+`export_listed` over those listings, so a partial backup already holds everything but the presets it
+did not reach. The mock and `backup-mock.mjs` follow. **What the reorder does not do:** the pedal's
+"Transferring data" screen, which the reporter saw during the user-defaults stage and guessed was
+suppressing the per-preset "ghost navigation", is the IR session (`in_ir_session`, which favorites,
+user defaults and the IR passes all open and close around themselves) — it is gone by the time the
+sweep starts, so the panel still walks. The walking itself is the finding: `export_setlists` reads
+slots in place with op 4 and only walks the pedal when op 4 is refused, so an XL that walks is an XL
+on the fallback — the same path that alone can produce issue #5's "sweep desynced". Whether op 4 is
+refused on the XL is one log line (*"op 4 refused; falling back to the goto sweep"*), asked for on
+the issue.
+
 **The backup dialog was broken in the shipped app — one argument name (2026-09-05).** The reporter
 ran the GUI and every whole-device backup died with *"command backup_device missing required key
 userDefaults"*. Tauri renames a command's Rust parameters to camelCase, so `user_defaults: bool` is

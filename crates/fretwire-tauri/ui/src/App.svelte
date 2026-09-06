@@ -1,5 +1,5 @@
 <script>
-  import { invoke, listen, IS_MOCK, IS_SERVE, INLINE_FILES } from "./lib/ipc.js";
+  import { invoke, listen, uiLog, IS_MOCK, IS_SERVE, INLINE_FILES } from "./lib/ipc.js";
   import { base64ToBytes, bytesToBase64, pickFile, saveFile } from "./lib/files.js";
   import { onMount } from "svelte";
   import Chain from "./lib/Chain.svelte";
@@ -157,6 +157,9 @@
   const TOAST_MS = { error: 18000, info: 6000 };
   function toast(msg, kind = "error") {
     const id = ++toastSeq;
+    // Everything the user is told goes to the log too, so a report can be pasted rather than
+    // photographed — a toast is gone in a few seconds (issue #5).
+    uiLog(kind === "error" ? "error" : kind === "warn" ? "warn" : "info", msg);
     toasts = [...toasts, { id, msg: String(msg), kind }];
     setTimeout(() => dismissToast(id), TOAST_MS[kind] ?? TOAST_MS.error);
   }
@@ -850,7 +853,7 @@
   const backupInline = $derived(INLINE_FILES && !backupDlg?.onServer);
   async function confirmBackupDevice() {
     const { path, irs, settings, favorites, userDefaults } = backupDlg;
-    const parts = { irs, settings, favorites, user_defaults: userDefaults };
+    const parts = { irs, settings, favorites, userDefaults };
     const inline = backupInline;
     const banks = setlists.map((_, i) => i);
     backupDlg = null;

@@ -45,7 +45,7 @@ const irsBefore = await mock.invoke("ir_list");
 const settingsBefore = await mock.invoke("settings_read", { all: false });
 const stages = [];
 const off2 = await mock.listen("backup-progress", (e) => stages.push(e.payload.stage));
-const dev = await mock.invoke("backup_device_inline", { banks: [0], irs: true, settings: true, favorites: false, user_defaults: false });
+const dev = await mock.invoke("backup_device_inline", { banks: [0], irs: true, settings: true, favorites: false, userDefaults: false });
 off2();
 ok(dev.count === list.length && dev.irs === irsBefore.length && dev.settings > settingsBefore.length,
   `device backup counts presets, IRs and every answering setting (${dev.count}/${dev.irs}/${dev.settings})`);

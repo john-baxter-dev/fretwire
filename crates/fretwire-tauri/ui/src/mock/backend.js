@@ -1798,15 +1798,15 @@ const HANDLERS = {
   restore_preset_inline: ({ json, index, slot, bank = 0 }) =>
     restoreFrom(parseBackup(json), index, slot, bank),
   // ---- whole-device backup / restore ----
-  // `favorites` / `user_defaults` default on, as the real dispatcher's do for an older client.
-  backup_device: async ({ path, banks, irs, settings, favorites = true, user_defaults = true }) => {
-    await sweepBackup(banks, { irs, settings, favorites, userDefaults: user_defaults });
+  // `favorites` / `userDefaults` default on, as the real dispatcher's do for an older client.
+  backup_device: async ({ path, banks, irs, settings, favorites = true, userDefaults = true }) => {
+    await sweepBackup(banks, { irs, settings, favorites, userDefaults });
     console.info(`[fretwire mock] would write ${path}`);
     const { presets, irs: i, settings: s, favorites: f, user_defaults: u } = backupInfo(lastBackup);
     return { presets, irs: i, settings: s, favorites: f, user_defaults: u };
   },
-  backup_device_inline: async ({ banks, irs, settings, favorites = true, user_defaults = true }) => {
-    await sweepBackup(banks, { irs, settings, favorites, userDefaults: user_defaults });
+  backup_device_inline: async ({ banks, irs, settings, favorites = true, userDefaults = true }) => {
+    await sweepBackup(banks, { irs, settings, favorites, userDefaults });
     const { presets, irs: i, settings: s, favorites: f, user_defaults: u } = backupInfo(lastBackup);
     return { count: presets, irs: i, settings: s, favorites: f, user_defaults: u, json: JSON.stringify(lastBackup, null, 2) };
   },

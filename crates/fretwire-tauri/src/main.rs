@@ -9,6 +9,7 @@
 
 mod commands;
 
+use std::io::IsTerminal;
 use tauri::Manager;
 
 /// Shrink the configured window size to fit the screen it opens on, then re-centre.
@@ -98,6 +99,11 @@ fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(fretwire_log_filter())
         .with_writer(std::io::stderr)
+        // Colors only when a person is looking (issue #19), and not when `NO_COLOR` is set.
+        .with_ansi(
+            std::io::stderr().is_terminal()
+                && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()),
+        )
         .init();
     // First line of every log, so a pasted log says which build produced it.
     tracing::info!(

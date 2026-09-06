@@ -22,6 +22,7 @@ mod summary;
 use clap::Parser;
 use rmcp::ServiceExt;
 use rmcp::transport::stdio;
+use std::io::IsTerminal;
 
 #[derive(Parser)]
 #[command(name = "fretwire-mcp", version, about)]
@@ -40,6 +41,11 @@ fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(log_filter())
         .with_writer(std::io::stderr)
+        // Colors only when a person is looking (issue #19), and not when `NO_COLOR` is set.
+        .with_ansi(
+            std::io::stderr().is_terminal()
+                && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()),
+        )
         .init();
     tracing::info!(
         version = fretwire_core::VERSION,

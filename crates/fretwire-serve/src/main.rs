@@ -20,6 +20,7 @@ mod token;
 use clap::Parser;
 use fretwire_commands::AppState;
 use fretwire_commands::events::{Event, EventSink};
+use std::io::IsTerminal;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
@@ -62,6 +63,11 @@ fn main() {
     let args = Args::parse();
     tracing_subscriber::fmt()
         .with_env_filter(log_filter())
+        // Colors only when a person is looking (issue #19), and not when `NO_COLOR` is set.
+        .with_ansi(
+            std::io::stdout().is_terminal()
+                && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()),
+        )
         .init();
     tracing::info!(
         version = fretwire_core::VERSION,

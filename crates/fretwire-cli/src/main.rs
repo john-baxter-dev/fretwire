@@ -7,6 +7,7 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
+use std::io::IsTerminal;
 
 /// Bypass state in **pedal** semantics, which are inverted from "block enabled".
 ///
@@ -69,9 +70,35 @@ enum Row {
 // `--version` carries the commit too, so a bug report that quotes it identifies the build exactly.
 #[command(name = "fretwire", version = fretwire_core::BUILD_BANNER)]
 struct Cli {
+    /// Color the log lines: only when stdout is a terminal (and `NO_COLOR` is unset), always,
+    /// or never.
+    #[arg(long, global = true, value_enum, default_value_t = Color::Auto)]
+    color: Color,
     /// Defaults to `detect` when omitted, so a bare `fretwire` still reports what's plugged in.
     #[command(subcommand)]
     command: Option<Command>,
+}
+
+/// `--color`, the same three-way switch `grep` and `ls` have (issue #19: a log captured to a
+/// file was full of escape sequences).
+#[derive(Clone, Copy, ValueEnum)]
+enum Color {
+    Auto,
+    Always,
+    Never,
+}
+
+impl Color {
+    fn ansi(self, stream: &impl IsTerminal) -> bool {
+        match self {
+            Color::Always => true,
+            Color::Never => false,
+            // https://no-color.org: set and non-empty means off.
+            Color::Auto => {
+                stream.is_terminal() && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())
+            }
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -591,12 +618,13 @@ fn log_filter() -> tracing_subscriber::EnvFilter {
 }
 
 fn main() -> Result<()> {
+    // Parse first: `--color` decides how the subscriber is built, and `--version`/`--help` exit
+    // inside `parse` without a log line on top of their output.
+    let cli = Cli::parse();
     tracing_subscriber::fmt()
         .with_env_filter(log_filter())
+        .with_ansi(cli.color.ansi(&std::io::stdout()))
         .init();
-    // After `parse`, not before: `--version` and `--help` exit inside it, and neither wants a log
-    // line on top of its output.
-    let cli = Cli::parse();
     // First line of every real run, so a pasted log says which build produced it.
     tracing::info!(
         version = fretwire_core::VERSION,

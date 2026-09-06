@@ -2241,15 +2241,26 @@
   }
   main {
     padding: 20px 16px;
+    /* The last row of the app column: takes the leftover window height and hands it to the
+       workspace. `min-height: 0` so a tall preset chain scrolls inside instead of stretching it. */
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
   }
   .workspace {
     display: flex;
     gap: 16px;
-    align-items: flex-start;
+    /* Both columns run the full height of <main>: the sidebar fills it rather than ending
+       wherever the preset list happens to stop, and each column scrolls on its own. */
+    align-items: stretch;
+    flex: 1;
+    min-height: 0;
   }
   .content {
     flex: 1;
     min-width: 0;
+    overflow-y: auto;
   }
   .snapshots {
     display: flex;

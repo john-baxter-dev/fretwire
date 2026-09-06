@@ -1,8 +1,16 @@
 :root { color-scheme: dark; }
 * { box-sizing: border-box; }
+html, body { height: 100%; }
 body {
   margin: 0;
   font: 14px/1.4 system-ui, sans-serif;
   background: #16181d;
   color: #e6e8ec;
+}
+/* The app is one full-window column: header, status bar, then <main> taking whatever is left.
+   That gives the workspace a real height to divide, so the preset list can fill it. */
+#app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }

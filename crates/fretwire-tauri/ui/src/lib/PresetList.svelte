@@ -172,7 +172,10 @@
     background: #1b1e25;
     display: flex;
     flex-direction: column;
-    max-height: 70vh;
+    /* Fills the workspace column — the preset list below takes whatever the tool rows leave,
+       so the sidebar ends at the bottom of the window instead of part-way up it. */
+    height: 100%;
+    min-height: 0;
   }
   .setlist {
     display: flex;
@@ -305,6 +308,8 @@
     color: #c3c9d4;
   }
   .list {
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 6px;
   }

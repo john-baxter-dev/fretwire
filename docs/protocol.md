@@ -1297,6 +1297,21 @@ follows what the user has — a list grows with the number of favorites (21 did 
 record grows with the model's parameter count — so the bug is invisible on a lightly-used pedal and
 total on a full one. Op 13's IR directory is the same shape and the same trap.
 
+**And a complete reply can still decode as nothing, when its declared length is a MessagePack
+container marker** [solid — issue #5, 2026-09-06]. The length is a `u32` LE at offset 4, so its low
+byte sits directly in front of the envelope. Two values in every 256 are container markers the
+decoder can satisfy from what follows — `0x82` (`fixmap{2}`) and `0x94` (`fixarray{4}`) each eat the
+three remaining length bytes plus the envelope itself as their last element — and the resulting
+decoy root ends where the real one does, starts four bytes earlier, and therefore *wins* a
+longest-match scan. Its keys are `{26: 0, 0: <the real envelope>}`: no `104`, so the payload is
+gone. Scan for a root that carries the key you came for (`locate_root_where`), not the longest one.
+
+The tester's XL made this concrete: after reassembly landed, four favorites still read as nothing,
+all of them **exactly 138 bytes — declared 130 = `0x82`** — arriving whole, in one frame, matching
+the declared length. Every other record on the pedal was a length that happens not to be a marker.
+Same trap as the 6794-byte preset stream of 2026-08-01 (`0x1A82`); the browse-side reply reader was
+simply the last caller still scanning unfiltered.
+
 The record (op 113's `64`, op 45's `24`):
 ```
 {19: 6, 28: <index>,

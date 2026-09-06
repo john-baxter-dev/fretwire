@@ -2501,13 +2501,10 @@ impl Session {
     pub fn read_setting(&mut self, id: i64) -> crate::Result<Option<fretwire_data::rmpv::Value>> {
         let txn = self.bump_txn();
         let ack = self.send_edit(edit::read_setting(id, txn))?;
-        Ok(
-            fretwire_data::stream::locate_root(&ack.body, 32).and_then(|r| {
-                fretwire_data::stream::map_get(&r.value, 104)
-                    .and_then(|p| fretwire_data::stream::map_get(p, 119))
-                    .cloned()
-            }),
-        )
+        Ok(Self::reply_payload(&ack.body)
+            .as_ref()
+            .and_then(|p| fretwire_data::stream::map_get(p, 119))
+            .cloned())
     }
 
     /// Read every setting id in `ids`, keeping the ones the device answers. **Reads only.**
@@ -4837,8 +4834,20 @@ impl Session {
     }
 
     /// Envelope key 104 out of a complete browse-side reply.
+    ///
+    /// The scan is **restricted to a root that carries key 104**, because longest-match alone picks
+    /// the wrong one whenever the declared length's low byte is itself a container marker: the byte
+    /// at offset 4 sits directly in front of the real root, and `0x82` (fixmap, 2 pairs) or `0x94`
+    /// (fixarray, 4) swallows the envelope as its own last element, consuming four bytes more and
+    /// winning. See [`fretwire_data::stream::locate_root_where`].
+    ///
+    /// That is two lengths in every 256, and it is what was still eating a tester's favorites after
+    /// the reassembly fix: four records of exactly 138 bytes — declared 130, `0x82` — read whole
+    /// off the wire and decoded to nothing. [solid — issue #5, 2026-09-06]
     fn reply_payload(bytes: &[u8]) -> Option<fretwire_data::rmpv::Value> {
-        let root = fretwire_data::stream::locate_root(bytes, 32)?;
+        let root = fretwire_data::stream::locate_root_where(bytes, 32, |v| {
+            fretwire_data::stream::map_get(v, 104).is_some()
+        })?;
         fretwire_data::stream::map_get(&root.value, 104).cloned()
     }
 
@@ -4970,19 +4979,21 @@ impl Session {
 
             // The stream carries the same `marker/type/len` prefix a preset document does, so the
             // blob is what follows the MessagePack header rather than the whole payload.
-            let blob = fretwire_data::stream::locate_root(&payload, 64)
-                .and_then(|root| {
-                    fretwire_data::stream::map_get(&root.value, 104)
-                        .and_then(fretwire_data::stream::value_bytes)
-                        .map(<[u8]>::to_vec)
-                })
-                .ok_or_else(|| {
-                    fretwire_data::Error::Stream(format!(
-                        "IR slot {slot}: the stream carried no blob at key 104 \
+            let blob = fretwire_data::stream::locate_root_where(&payload, 64, |v| {
+                fretwire_data::stream::map_get(v, 104).is_some()
+            })
+            .and_then(|root| {
+                fretwire_data::stream::map_get(&root.value, 104)
+                    .and_then(fretwire_data::stream::value_bytes)
+                    .map(<[u8]>::to_vec)
+            })
+            .ok_or_else(|| {
+                fretwire_data::Error::Stream(format!(
+                    "IR slot {slot}: the stream carried no blob at key 104 \
                          ({} bytes reassembled)",
-                        payload.len()
-                    ))
-                })?;
+                    payload.len()
+                ))
+            })?;
 
             if blob.len() != fretwire_data::ir::IR_BLOB_LEN {
                 return Err(fretwire_data::Error::Stream(format!(
@@ -6101,8 +6112,62 @@ mod reorder_tests_legacy {
 
 #[cfg(test)]
 mod tests {
-    use super::{edit, edit_op_txn, identity_confirms, op_name, reject_hint, reply_txn};
+    use super::{Session, edit, edit_op_txn, identity_confirms, op_name, reject_hint, reply_txn};
     use fretwire_data::stream::{PresetInfo, parse_edit_rejection};
+
+    /// A browse-side reply of `total` bytes: the `marker/type/len` prefix the device sends, then an
+    /// envelope `{102: txn, 104: <payload>}` padded with a filler string to fill it exactly.
+    fn reply_of(total: usize) -> Vec<u8> {
+        use fretwire_data::rmpv::Value;
+        let body = (0..)
+            .map(|n| {
+                let mut buf = Vec::new();
+                let v = Value::Map(vec![
+                    (Value::from(102), Value::from(7)),
+                    (
+                        Value::from(104),
+                        Value::Map(vec![(Value::from(28), Value::from("x".repeat(n)))]),
+                    ),
+                ]);
+                fretwire_data::rmpv::encode::write_value(&mut buf, &v).unwrap();
+                buf
+            })
+            .find(|buf| buf.len() >= total - 8)
+            .unwrap();
+        assert_eq!(
+            body.len(),
+            total - 8,
+            "no filler makes a {total}-byte reply exactly"
+        );
+        let mut out = vec![0x00, 0x00, 0x00, 0x00];
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.extend_from_slice(&body);
+        out
+    }
+
+    /// A reply whose declared length is itself a MessagePack container marker must still decode.
+    ///
+    /// The byte at offset 4 is the length's low byte and sits directly in front of the real root,
+    /// so `0x82` (fixmap, 2 pairs) and `0x94` (fixarray, 4) swallow the envelope as their own last
+    /// element — four bytes more than the real root, which wins an unfiltered longest-match scan
+    /// and carries no key 104. Two lengths in every 256, and both of them land on real records.
+    ///
+    /// This is what was still eating a tester's favorites after the reassembly fix: four records of
+    /// exactly 138 bytes — declared 130 = `0x82` — arrived whole and decoded to nothing.
+    /// [solid — issue #5, 2026-09-06]
+    #[test]
+    fn a_length_that_looks_like_a_container_marker_does_not_hide_the_payload() {
+        // 138 is the size the tester's four amp records actually were.
+        for total in [138, 156, 100, 119] {
+            let reply = reply_of(total);
+            assert_eq!(reply.len(), total);
+            assert!(
+                Session::reply_payload(&reply).is_some(),
+                "{total}-byte reply (declared {:#04x}) lost its payload",
+                total - 8
+            );
+        }
+    }
 
     fn info(bank: i64, index: i64, name: &str) -> PresetInfo {
         PresetInfo {

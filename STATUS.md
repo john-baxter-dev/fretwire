@@ -2,6 +2,23 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Four favorites were still skipped — and it was never truncation (2026-09-06, issue #5).** With
+the records reassembled, the reporter's XL still logged *"favorite could not be read"* for four of
+twenty-two, and the diagnostic put in for exactly this said the reply had arrived **whole**: `138
+bytes read, 138 in the first frame, device declared 138`. All four were 138 bytes, and `138 - 8 =
+130 = 0x82` — a `fixmap{2}` marker, sitting in the length field directly in front of the envelope.
+`locate_root`'s longest-match then decodes the whole reply as that decoy map's last element,
+consuming four bytes more than the real root and winning, and the decoy carries no key `104`. This
+trap is documented in `locate_root_where`, which exists to defeat it and which every other reader
+already used; `Session::reply_payload` — every browse-side reply, so favorites, favorite records,
+IR select and the IR directory — was the last caller still scanning unfiltered. Two lengths in 256
+hit it, which is why one pedal's favorites were fine and another's were not, and why the four that
+failed were the four that happened to be that size. Fixed there and in `read_setting` and the IR
+blob read; the regression test builds a reply of a given total size and asserts both marker lengths
+(`0x82`, `0x94`) still find their payload. **Proven against the bug**: it fails with the old scan,
+naming 138 and `0x82`. The **parameter-count hypothesis in the entry below is refuted** — record
+size had nothing to do with it.
+
 **Device backup runs in HX Edit's order — presets last (2026-09-06, issue #18).** The XL's owner
 noticed `backup-device` walks the sections as presets → IRs → settings → favorites → user defaults,
 where HX Edit does settings → IRs → favorites → user defaults → presets, and asked whether the order
@@ -34,12 +51,14 @@ checks every `invoke()` call site (63) and every mock handler (53) against them 
 `...spread` to its nearest declaration, which is exactly where this one hid. **Proven against the
 bug**: put the old name back and the test names both call sites.
 
-**Three favorites of twenty-one were skipped (2026-09-05).** Same first-frame bug as the listing,
+**Three favorites of twenty-one were skipped (2026-09-05).** *Superseded by the entry above — the
+reassembly below is right and stays, but it was not what was skipping the records.* Read as the
+same first-frame bug as the listing,
 one level down: with the list fixed the reporter's XL backed up 18 of 21, logging *"favorite
 answered nothing — skipped"* for three amps. The per-record read (op 113) still went through
 `ir_reply_payload`, which reads the frame as it came; a record's size is the favorite's parameter
-count, so a big amp outgrows a frame where a small stomp does not [hypothesis — the shape fits, but
-only the reporter's XL can confirm it]. `Session::favorite_record` reassembles, **retries once**,
+count, so a big amp outgrows a frame where a small stomp does not [**refuted** — the shape fit, and
+the reporter's XL then showed the replies arriving whole; see above]. `Session::favorite_record` reassembles, **retries once**,
 and says in the log how many bytes came and what the device declared, so a record that still will
 not come names its own symptom. A record that never arrives is skipped rather than fatal — one
 unreadable favorite should not throw away the presets and IRs already read — but the count is now

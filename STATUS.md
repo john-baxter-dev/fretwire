@@ -29,9 +29,11 @@ each — what sizes the job), reads the four cheap sections, and runs the sweep 
 `export_listed` over those listings, so a partial backup already holds everything but the presets it
 did not reach. The mock and `backup-mock.mjs` follow. **What the reorder does not do:** the pedal's
 "Transferring data" screen, which the reporter saw during the user-defaults stage and guessed was
-suppressing the per-preset "ghost navigation", is the IR session (`in_ir_session`, which favorites,
-user defaults and the IR passes all open and close around themselves) — it is gone by the time the
-sweep starts, so the panel still walks. The walking itself is the finding: `export_setlists` reads
+suppressing the per-preset "ghost navigation", is the browse session (`in_ir_session`, which
+favorites, user defaults and the IR passes all open and close around themselves) — it is gone by
+the time the sweep starts, so the panel still walks. **[solid]** on a Stomp: a lone `favorites`
+(one session, ~40 ms open to close) flashes the screen exactly once, and the reporter's XL shows it
+"a few times" before the walk, one per session as the order predicts. The walking itself is the finding: `export_setlists` reads
 slots in place with op 4 and only walks the pedal when op 4 is refused, so an XL that walks is an XL
 on the fallback — the same path that alone can produce issue #5's "sweep desynced". Whether op 4 is
 refused on the XL is one log line (*"op 4 refused; falling back to the goto sweep"*), asked for on

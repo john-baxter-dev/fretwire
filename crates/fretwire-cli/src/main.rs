@@ -1292,12 +1292,17 @@ fn main() -> Result<()> {
                     .collect::<Vec<_>>()
                     .join(", ")
             );
+            let mut unpopulated = 0usize;
             let backup = s.export_setlists(&banks, |p| {
-                println!("  [{:>4}/{}] {}: {}", p.done, p.total, p.setlist, p.name);
+                print_sweep_line(&p, &mut unpopulated);
                 true
             })?;
             std::fs::write(&path, backup.to_json())?;
-            println!("wrote {} presets to {path}", backup.presets.len());
+            println!(
+                "wrote {} presets{} to {path}",
+                backup.presets.len(),
+                unpopulated_note(unpopulated)
+            );
         }
         Command::BackupShow { backup: path } => {
             let backup =
@@ -1400,6 +1405,7 @@ fn main() -> Result<()> {
                     ", the user defaults"
                 }
             );
+            let mut unpopulated = 0usize;
             let backup = s.backup_device(
                 &banks,
                 !no_irs,
@@ -1407,14 +1413,15 @@ fn main() -> Result<()> {
                 !no_favorites,
                 !no_user_defaults,
                 |p| {
-                    println!("  [{:>4}/{}] {}: {}", p.done, p.total, p.setlist, p.name);
+                    print_sweep_line(&p, &mut unpopulated);
                     true
                 },
             )?;
             std::fs::write(&out, backup.to_json())?;
             println!(
-                "wrote {out}: {} presets, {} IRs, {} settings, {} favorites, {} user defaults (format v{})",
+                "wrote {out}: {} presets{}, {} IRs, {} settings, {} favorites, {} user defaults (format v{})",
                 backup.presets.len(),
+                unpopulated_note(unpopulated),
                 backup.irs.len(),
                 backup.settings.len(),
                 backup.favorites.len(),
@@ -2000,6 +2007,28 @@ fn install_udev() -> Result<()> {
          group — `sudo usermod -aG plugdev $USER` — then log out and back in."
     );
     Ok(())
+}
+
+/// One progress line of a preset sweep. An unpopulated slot is named as such rather than as a
+/// preset, and counted, because it is not going into the file.
+fn print_sweep_line(p: &fretwire_core::ExportProgress, unpopulated: &mut usize) {
+    if p.stage == "unpopulated" {
+        *unpopulated += 1;
+        println!(
+            "  [{:>4}/{}] {}: {} — unpopulated slot, not stored",
+            p.done, p.total, p.setlist, p.name
+        );
+    } else {
+        println!("  [{:>4}/{}] {}: {}", p.done, p.total, p.setlist, p.name);
+    }
+}
+
+/// The clause a summary line adds when a sweep left unpopulated slots out, and nothing otherwise.
+fn unpopulated_note(unpopulated: usize) -> String {
+    match unpopulated {
+        0 => String::new(),
+        n => format!(" ({n} unpopulated slots left out, as HX Edit does)"),
+    }
 }
 
 /// Perform the privileged install in one `sudo` shell: stage the rule to a user-owned temp file,

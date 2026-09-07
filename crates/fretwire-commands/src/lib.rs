@@ -1057,7 +1057,7 @@ pub async fn export_setlists(
     banks: Vec<i64>,
 ) -> R<i64> {
     let target = backup_path(&path);
-    sweep_setlists(state, sink, banks, move |backup| {
+    sweep_setlists(state, sink, banks, move |backup, _unpopulated| {
         std::fs::write(&target, backup.to_json()).map_err(|e| {
             fretwire_core::Error::Backup(format!("writing {}: {e}", target.display()))
         })?;
@@ -1074,13 +1074,14 @@ pub async fn export_setlists_inline(
     sink: impl EventSink,
     banks: Vec<i64>,
 ) -> R<BackupFileDto> {
-    sweep_setlists(state, sink, banks, |backup| {
+    sweep_setlists(state, sink, banks, |backup, unpopulated| {
         Ok(BackupFileDto {
             count: backup.presets.len() as i64,
             irs: 0,
             settings: 0,
             favorites: 0,
             user_defaults: 0,
+            unpopulated,
             json: backup.to_json(),
         })
     })
@@ -1118,7 +1119,7 @@ pub async fn backup_device(
         settings,
         favorites,
         user_defaults,
-        move |backup| {
+        move |backup, unpopulated| {
             std::fs::write(&target, backup.to_json()).map_err(|e| {
                 fretwire_core::Error::Backup(format!("writing {}: {e}", target.display()))
             })?;
@@ -1128,6 +1129,7 @@ pub async fn backup_device(
                 settings: backup.settings.len() as i64,
                 favorites: backup.favorites.len() as i64,
                 user_defaults: backup.user_defaults.len() as i64,
+                unpopulated,
             })
         },
     )
@@ -1152,13 +1154,14 @@ pub async fn backup_device_inline(
         settings,
         favorites,
         user_defaults,
-        |backup| {
+        |backup, unpopulated| {
             Ok(BackupFileDto {
                 count: backup.presets.len() as i64,
                 irs: backup.irs.len() as i64,
                 settings: backup.settings.len() as i64,
                 favorites: backup.favorites.len() as i64,
                 user_defaults: backup.user_defaults.len() as i64,
+                unpopulated,
                 json: backup.to_json(),
             })
         },
@@ -1179,16 +1182,21 @@ async fn sweep_device<T, F>(
 ) -> R<T>
 where
     T: Send + 'static,
-    F: FnOnce(Backup) -> fretwire_core::Result<T> + Send + 'static,
+    F: FnOnce(Backup, i64) -> fretwire_core::Result<T> + Send + 'static,
 {
     let cancel = state.cancel_export.clone();
     cancel.store(false, Ordering::Relaxed);
     run(state, move |s| {
+        // The file cannot say how many slots were left out of it, so count them off the progress.
+        let mut unpopulated = 0i64;
         let backup = s.backup_device(&banks, irs, settings, favorites, user_defaults, |p| {
+            if p.stage == "unpopulated" {
+                unpopulated += 1;
+            }
             sink.emit(progress_event(&p));
             !cancel.load(Ordering::Relaxed)
         })?;
-        finish(backup)
+        finish(backup, unpopulated)
     })
     .await
 }
@@ -1301,12 +1309,16 @@ async fn sweep_setlists<T, F>(
 ) -> R<T>
 where
     T: Send + 'static,
-    F: FnOnce(Backup) -> fretwire_core::Result<T> + Send + 'static,
+    F: FnOnce(Backup, i64) -> fretwire_core::Result<T> + Send + 'static,
 {
     let cancel = state.cancel_export.clone();
     cancel.store(false, Ordering::Relaxed);
     run(state, move |s| {
+        let mut unpopulated = 0i64;
         let backup = s.export_setlists(&banks, |p| {
+            if p.stage == "unpopulated" {
+                unpopulated += 1;
+            }
             sink.emit(Event::BackupProgress {
                 done: p.done,
                 total: p.total,
@@ -1317,7 +1329,7 @@ where
             });
             !cancel.load(Ordering::Relaxed)
         })?;
-        finish(backup)
+        finish(backup, unpopulated)
     })
     .await
 }

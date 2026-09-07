@@ -754,6 +754,8 @@ pub struct BackupFileDto {
     pub favorites: i64,
     /// User defaults in the file (format v4).
     pub user_defaults: i64,
+    /// Unpopulated slots the sweep met and left out — see [`BackupSummaryDto::unpopulated`].
+    pub unpopulated: i64,
     /// The file's text, exactly what the path variant would have written.
     pub json: String,
 }
@@ -766,6 +768,9 @@ pub struct BackupSummaryDto {
     pub settings: i64,
     pub favorites: i64,
     pub user_defaults: i64,
+    /// Preset slots the device holds nothing in — counted in the sweep's progress, left out of the
+    /// file, as HX Edit's own backup leaves them out. `0` from a pedal with every slot written.
+    pub unpopulated: i64,
 }
 
 /// What a backup file holds, before anything is restored from it (`backup_info`).

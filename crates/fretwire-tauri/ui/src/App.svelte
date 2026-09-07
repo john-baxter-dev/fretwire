@@ -867,14 +867,17 @@
       let where;
       if (inline) {
         const file = await invoke("backup_device_inline", { banks, ...parts });
-        counts = { presets: file.count, irs: file.irs, settings: file.settings, favorites: file.favorites, user_defaults: file.user_defaults };
+        counts = { presets: file.count, irs: file.irs, settings: file.settings, favorites: file.favorites, user_defaults: file.user_defaults, unpopulated: file.unpopulated };
         where = path.trim().split(/[\\/]/).pop() || backupDefault;
         saveFile(where, new Blob([file.json], { type: "application/json" }));
       } else {
         counts = await invoke("backup_device", { path: path.trim(), banks, ...parts });
         where = path.trim();
       }
-      const what = `${counts.presets} presets, ${counts.irs} IRs, ${counts.settings} settings, ${counts.favorites} favorites, ${counts.user_defaults} user defaults`;
+      // Slots the pedal holds nothing in are left out of the file, as HX Edit leaves them out; say
+      // so, or a pedal with 81 of them reads as a backup that lost 81 presets.
+      const skipped = counts.unpopulated ? ` (${counts.unpopulated} unpopulated slots left out)` : "";
+      const what = `${counts.presets} presets${skipped}, ${counts.irs} IRs, ${counts.settings} settings, ${counts.favorites} favorites, ${counts.user_defaults} user defaults`;
       const how = exportCancelling ? "Cancelled —" : "Backed up";
       toast(`${how} ${what} to ${where}`, exportCancelling ? "warn" : "info");
       status = `${how} ${what}.`;

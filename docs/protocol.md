@@ -937,34 +937,57 @@ preset, which is why a full sweep took tens of minutes — and it walks the user
 128. **Measured on an HX Stomp: 126 presets in 10.7 s**, against a sweep that had to be given a
 several-hundred-second timeout.
 
-### An empty answer is not an error [solid]
+### An empty answer means the slot is unpopulated [solid — 2026-09-07]
 
 Some slots answer `{102: txn, 103: 0, 104: nil}` — seventeen bytes, status **0**, no document. It has
 to be told apart from a desynced read, because both fail to parse and only one is worth retrying:
-`fretwire_data::stream::is_empty_slot_reply` does that, and the backup drops to select-and-read for
-those slots rather than lose them. Fixture: `captures/empty_slot_reply.msgpack.bin`.
+`fretwire_data::stream::is_empty_slot_reply` does that. Fixture: `captures/empty_slot_reply.msgpack.bin`.
 
 That shape is not op 4's own — **op 36 answers an unassigned parameter with exactly the same
 `{102, 103: 0, 104: nil}`** (2026-08-22). It is the device's general "nothing here", so read it as an
 answer, not a fault.
 
-**Corrected 2026-08-22.** This was first written up as one odd slot (bank 0 slot 102), from a sample
-of five neighbours. Enumerating the whole setlist found **twelve** of 126 — 102, 105, 108-111, 113,
-114, 116, 121, 122, 124 — and a thirteenth, 117, that answered nil in one sweep and streamed normally
-in the next. Every one is an empty `New Preset`; **no preset with a block in it has ever answered
-nil**, across three full sweeps. Cold single-slot reads reproduce each one, so it is a property of
-the slot rather than of sweep position or device fatigue.
+**What "nothing here" means for a preset slot: flash holds no document for it.** That is a different
+state from a *stored* preset whose content happens to be the default, and the two were conflated
+here for two weeks. The identification rests on HX Edit's own backup, which records a setlist as
+`N/128 slots used` and omits the rest, matched against op 4 on the same pedal over time:
 
-What separates them is visible in the documents, once you have both: the nil slots differ from their
-working same-size neighbours in **three bytes and nothing else**, all `false` where the working ones
-hold `nil`, at `/10/10[N]/2[0][2]` for each of the three snapshots. That path is a snapshot's
-remembered value for controller entry 0 — assigning a parameter writes the value there and removing
-the assignment leaves it behind (see "Controller assignments" below). So the nil-answering slots are
-the ones whose snapshot controller array was initialised `false` rather than left empty. Twelve of
-twelve match; the flaky slot 117 also carries `false`, which is consistent with it being the marginal
-case. **Whether that is the cause or merely a co-symptom is not established**, and nothing yet
-explains why the firmware would decline to stream such a document. Correctness is unaffected either
-way: the fallback reads them.
+| date | reader | slots with nothing stored (owner's HX Stomp) |
+|---|---|---|
+| 2026-06-23 | HX Edit `.hxb` | 102, 103, 105, 106–124 (22) |
+| 2026-08-22 | op 4 nil | 102, 105, 108–111, 113, 114, 116, 121, 122, 124 (12) |
+| 2026-09-02 | HX Edit `.hxb` | 102, 105, 108, 110, 111, 121, 122, 124 (8) |
+| 2026-09-04 | HX Edit `.hxb` | none — 126/126 |
+| 2026-09-07 | op 4 nil | none — 126 of 126 read in place |
+
+Each set is a subset of the one before, and the two readers name the same set wherever both were
+sampled: **op 4's nil is HX Edit's "not in the backup"**. The set only ever shrank because slots got
+written — the owner's saves, and a `restore-device` on 2026-09-03 that wrote the last eight (the
+restore's own comment records it). A tester's HX Stomp XL says the same thing from the other side:
+81 of 128 slots answered nil, all 81 listed as `New Preset`, while every one of the 47 presets with
+content read in place [solid — issue #5, 2026-09-06].
+
+**Selecting an unpopulated slot makes the firmware synthesize a preset on the spot.** The document a
+loaded read then returns is the same for every such slot (81 × 2868 bytes on the XL; the owner's
+former nil slots are byte-identical to each other today) and it carries the *running* firmware's
+version string — `v3.71-32-g1039661` in a slot the firmware synthesized, against `v3.15-207-g09aad57`
+in slot 125, a default the factory image actually stored. The three-byte `false`-where-`nil`
+fingerprint noted here on 2026-08-22, and the in-use flag at `10/10[0]/0`, are both marks of a
+synthesized document, not causes of the nil.
+
+**Consequences.** A backup that "recovers" a nil slot by selecting it is fetching a synthesized
+document one panel-load at a time — 22 s of the XL's 25 s sweep, and the walk the tester watched —
+and a restore of that file then writes the synthesized documents into flash, turning slots Line 6's
+tool reports as empty into populated ones (which is exactly what happened to the owner's last eight).
+Since 2026-09-07 the sweep leaves a nil slot **out of the file**, as HX Edit does, reports it as
+`unpopulated` in progress, and says how many at the end. The previous reading of this section — that
+the nil set was a stable property of particular slots, with one "flaky" slot 117 — was an artefact
+of the set shrinking under the owner's own writes; 117 was simply written between two sweeps.
+
+**The preset listing carries no populated flag.** Op 1's rows are `{109: name, 123: false, 124: false,
+125: 0}` and those three were identical on all 126 rows of the owner's Stomp, 99 of them unpopulated
+`New Preset`s [solid — 2026-09-07, `fretwire dump-list` + `cargo run -p fretwire-data --example
+list_rows`]. Emptiness has to be learned from op 4 itself.
 
 ### Op 4 is unverified outside the Stomp
 

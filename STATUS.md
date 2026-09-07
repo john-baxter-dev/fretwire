@@ -2,6 +2,27 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Backup no longer walks the pedal through unpopulated slots (2026-09-07, issue #5).** The XL's
+owner reported that a backup still steps through every preset on the panel, where HX Edit does not,
+and that *"op 4 refused"* never appears. It does not: op 4 works on his XL. What his log showed was
+the *other* fallback — **op 4 answered `nil` for 81 of 128 slots, all named `New Preset`**, and each
+one was then selected and read loaded, 275 ms a slot against 56 ms for the 47 read in place; 22 s of
+a 25 s sweep, and all 81 came back as the same 2868-byte document. Untangling what nil means took
+the owner's Stomp and three HX Edit backups of it: **nil is "nothing stored in this slot"**, and the
+set of nil slots is exactly the set HX Edit's `.hxb` leaves out, at every point where both were
+sampled (22 → 12 → 8 → 0 as slots were written — the last eight by our own restore on 2026-09-03,
+which is why the Stomp answers nil nowhere today). Loading such a slot makes the firmware synthesize
+a default stamped with the running firmware's version; that is what the walk was fetching, 81 times,
+and what a restore then wrote into flash. `export_listed` now leaves a nil slot **out of the file**,
+as HX Edit does, reports it under a new progress stage `unpopulated`, and the CLI summary says
+*"47 presets (81 unpopulated slots left out, as HX Edit does)"*. **Two things were ruled out on the
+way**: treating nil as "the preset is empty" (99 empty presets on the Stomp stream fine — stored is
+not the same as populated with content), and a populated flag in the op-1 listing (its rows carry
+`123`, `124`, `125`, identical across all 126 slots; `fretwire-data/examples/list_rows.rs` dumps
+them). `docs/protocol.md`'s "empty answer" section is rewritten around the table. **Not covered by
+a test**: there is no scripted transport for `Session`, so the skip is exercised only by a pedal
+that has an unpopulated slot — the owner's no longer does.
+
 **Four favorites were still skipped — and it was never truncation (2026-09-06, issue #5).** With
 the records reassembled, the reporter's XL still logged *"favorite could not be read"* for four of
 twenty-two, and the diagnostic put in for exactly this said the reply had arrived **whole**: `138

@@ -281,7 +281,8 @@ pub struct ExportProgress<'a> {
     /// one tick for the settings when the sweep covers those.
     pub total: usize,
     /// Which part of the device this item belongs to: `"presets"`, `"irs"`, `"settings"`,
-    /// `"favorites"` or `"user_defaults"`.
+    /// `"favorites"` or `"user_defaults"` — or `"unpopulated"`, a preset slot the device holds
+    /// nothing in, counted in `done` and left out of the file (see [`Session::export_listed`]).
     pub stage: &'static str,
     /// The setlist this preset came from.
     pub bank: i64,
@@ -3389,6 +3390,8 @@ impl Session {
 
         let mut presets = Vec::with_capacity(total);
         let mut done = 0usize;
+        // Slots the device answered nil for — unpopulated, and not in the file.
+        let mut unpopulated = 0usize;
         let mut cancelled = false;
         for (bank, listing) in listings {
             let bank = *bank;
@@ -3404,13 +3407,32 @@ impl Session {
                 let (raw, info) = if slot_read_works {
                     match self.read_preset_at(bank, index) {
                         Ok(Some(raw)) => (raw, None),
-                        // The device has no document for this slot but the slow path does get one,
-                        // so drop to it for this slot alone rather than lose it from the backup.
+                        // Nil means the slot is **unpopulated** — flash holds no document for it —
+                        // and that is a slot HX Edit's own backup leaves out too. This used to
+                        // select the slot and read it loaded "rather than lose it", which fetched
+                        // a document the firmware synthesizes on load (all of them identical, all
+                        // stamped with the running firmware) one panel-load at a time: a tester's
+                        // XL with 81 such slots walked for 22 s of a 25 s backup, and a restore of
+                        // that file then wrote all 81 into flash — turning slots Line 6's tool
+                        // reports as empty into populated ones. [solid — issue #5, 2026-09-07; the
+                        // set of nil slots on the owner's Stomp matched the set HX Edit's `.hxb`
+                        // omits at each of three points in time, shrinking as slots were written]
                         Ok(None) => {
-                            tracing::info!(bank, index, "slot answered nil — selecting it instead");
-                            self.goto_preset(bank, index)?;
-                            moved = true;
-                            self.read_preset_confirmed()?
+                            unpopulated += 1;
+                            done += 1;
+                            tracing::info!(bank, index, name = %listed_name, "slot is unpopulated — not stored");
+                            if !progress(ExportProgress {
+                                done,
+                                total,
+                                stage: "unpopulated",
+                                bank,
+                                setlist,
+                                name: listed_name,
+                            }) {
+                                cancelled = true;
+                                break;
+                            }
+                            continue;
                         }
                         Err(e) if done == 0 => {
                             // Fall back for the whole job, not slot by slot: if op 4 is not there,
@@ -3479,6 +3501,14 @@ impl Session {
             }
         }
 
+        if unpopulated > 0 {
+            tracing::info!(
+                listed = total,
+                stored = presets.len(),
+                unpopulated,
+                "unpopulated slots are not in this backup — HX Edit's format leaves them out too"
+            );
+        }
         // Only if the sweep actually moved the pedal. On the op-4 path it never left the preset it
         // was on, and a `goto` here would be the one thing in the whole backup that changed device
         // state.
@@ -4080,10 +4110,12 @@ impl Session {
             // counter, and two exports of one untouched slot differ there (byte 12) whenever the
             // sessions' request sequences drift apart. [measured — two bank-0 exports on an HX
             // Stomp, 2026-09-03: 26 slots differed in the raw, none in the document.] A slot the
-            // device answers nil for is read the way the export read it — selected, then read
-            // confirmed — since the write would select it anyway; the first live restore wrote
-            // eight untouched "New Preset" slots for want of this. A device without op 4 simply
-            // writes.
+            // device answers nil for is unpopulated; a backup written since 2026-09-07 holds no
+            // preset for it, so this branch meets only older files, which carry the document the
+            // firmware synthesized when the sweep loaded the slot. It is read the same way — selected,
+            // then read confirmed — since the write would select it anyway; the first live restore
+            // wrote eight untouched "New Preset" slots for want of this. A device without op 4
+            // simply writes.
             //
             // One corner stays: saving a preset flips its active snapshot's in-use flag (key
             // `10/10[n]/0`) on, so a slot backed up while virgin (in-use false) and written once

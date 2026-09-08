@@ -21,7 +21,8 @@ not the same as populated with content), and a populated flag in the op-1 listin
 `123`, `124`, `125`, identical across all 126 slots; `fretwire-data/examples/list_rows.rs` dumps
 them). `docs/protocol.md`'s "empty answer" section is rewritten around the table. **Not covered by
 a test**: there is no scripted transport for `Session`, so the skip is exercised only by a pedal
-that has an unpopulated slot — the owner's no longer does.
+that has an unpopulated slot — the owner's no longer does. **Confirmed on the XL the same day**: the
+walk is gone, and HX Edit's backup and `backup-device` both report 47 presets.
 
 **Four favorites were still skipped — and it was never truncation (2026-09-06, issue #5).** With
 the records reassembled, the reporter's XL still logged *"favorite could not be read"* for four of

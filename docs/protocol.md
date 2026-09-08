@@ -965,7 +965,8 @@ sampled: **op 4's nil is HX Edit's "not in the backup"**. The set only ever shra
 written — the owner's saves, and a `restore-device` on 2026-09-03 that wrote the last eight (the
 restore's own comment records it). A tester's HX Stomp XL says the same thing from the other side:
 81 of 128 slots answered nil, all 81 listed as `New Preset`, while every one of the 47 presets with
-content read in place [solid — issue #5, 2026-09-06].
+content read in place [solid — issue #5, 2026-09-06] — and a same-day pair on that XL closed it:
+HX Edit's backup and `backup-device` both report **47** [solid — issue #5, 2026-09-07].
 
 **Selecting an unpopulated slot makes the firmware synthesize a preset on the spot.** The document a
 loaded read then returns is the same for every such slot (81 × 2868 bytes on the XL; the owner's

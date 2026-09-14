@@ -1809,11 +1809,11 @@ pub fn parse_status_push(frame_body: &[u8]) -> Option<StatusPush> {
     // type, because `{98, 26}` is a *subset* of the bypass and param payloads — an ungated check
     // here would swallow any future push that names a slot and nothing else we recognize.
     // [solid — 2026-09-13, HX Stomp: `{105:39, 106:{82:1, 68:3, 121:19, 106:{98: slot, 26: 0}}}`]
-    if typ == 39 {
-        if let Some(slot) = map_get(inner, 98).and_then(Value::as_i64) {
-            let paired = map_get(inner, 26).and_then(Value::as_i64) == Some(1);
-            return Some(StatusPush::Selected { slot, paired });
-        }
+    if typ == 39
+        && let Some(slot) = map_get(inner, 98).and_then(Value::as_i64)
+    {
+        let paired = map_get(inner, 26).and_then(Value::as_i64) == Some(1);
+        return Some(StatusPush::Selected { slot, paired });
     }
     Some(StatusPush::Other(typ))
 }

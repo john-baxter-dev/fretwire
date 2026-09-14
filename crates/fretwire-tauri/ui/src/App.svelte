@@ -495,6 +495,19 @@
         pendingBypasses.set(p.slot, !p.enabled);
       } else if (p.kind === "Param") {
         pendingParams.set(paramKey(p.slot, p.param, p.extra, p.paired), p.value);
+      } else if (p.kind === "Selected") {
+        // The pedal's block cursor moved — follow it. Assigned directly rather than through
+        // selectSlot(): sending an op 78 back for a selection the device just told us about is a
+        // feedback loop. The cursor also visits the empty slots past the end of the chain, which
+        // have no block to show, so leave the editor's selection alone rather than blanking it.
+        // Resolved against blocks *and* structural nodes, the same two collections (and order)
+        // `selectedBlock` uses — `allNodes` alone is only the split/mixer/IO nodes, so checking it
+        // by itself rejects every ordinary block.
+        if (
+          preset?.blocks.some((b) => b.slot === p.slot) ||
+          allNodes.some((n) => n?.slot === p.slot)
+        )
+          selectedSlot = p.slot;
       }
     }
     if (pendingPresetChange) {

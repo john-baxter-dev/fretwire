@@ -28,9 +28,23 @@ HX Edit. Written up in `docs/protocol.md`.
 **A correction fell out of the probe**: status push type **39** was tabled as *"block added"*,
 undecoded. It is **"block selected"** — the mirror of op 78, payload
 `{105:39, 106:{82:1, 68:3, 121:19, 106:{98: slot, 26: sub}}}`, captured walking the panel across
-slots 2–9 (the last two being the empty slots past the chain). Nothing is added. That makes the
-**reverse direction implementable** — the GUI could follow the pedal's selection the way it already
-follows its bypasses and knobs — which is not done and is the obvious next step on this thread. Their third point
+slots 2–9 (the last two being the empty slots past the chain). Nothing is added. **The reverse direction now works too**: turning the encoder on the
+pedal moves the editor's selection, the way the GUI already follows its bypasses and knobs
+(`StatusPush::Selected` → `PushDto::Selected`). Verified live in the built GUI, both directions, no
+feedback loop — the push assigns `selectedSlot` directly instead of going through `selectSlot()`,
+which would echo an op 78 back at the device for a selection it just reported. The pedal's cursor
+also visits the **empty slots past the end of the chain**; those resolve to no block, so the editor
+holds its selection rather than blanking the panel.
+
+**Two things went wrong on the way, both worth remembering.** The follow silently did nothing at
+first because the guard checked `allNodes` — which is only the split/mixer/IO nodes — so every
+*ordinary block* failed it. `selectedBlock` resolves against `preset.blocks` **and** `allNodes`, in
+that order, and anything selecting a slot has to do the same. And the first diagnosis of that
+failure was wrong: the binary was checked for the new frontend string, found nothing, and the build
+was blamed as a stale embedded `dist/`. Tauri **compresses** the embedded assets — no JS string
+greps out of `fretwire-gui`, so that check can only ever come back negative and proves nothing. The
+evidence that actually found the bug was `FRETWIRE_TRACE_STATUS=1` on the GUI itself, which showed
+the pushes arriving and decoding correctly and moved the search to the frontend. Their third point
 (make it an option) was deliberately declined, as they themselves leaned: the pedal already follows
 fretwire's parameter edits, so having it not follow the selection was the inconsistency.
 

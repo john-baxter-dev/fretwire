@@ -1888,6 +1888,11 @@ if (typeof window !== "undefined") {
       if (e && e.kind === "effect") e.bypassed = !enabled;
       emit("device-pushes", [{ kind: "Bypass", slot, enabled }]);
     },
+    /** Move the pedal's own block cursor, as if the encoder were turned on the hardware. The
+     *  editor's selection should follow — and must NOT echo a select_block back at the device. */
+    select(slot, paired = false) {
+      emit("device-pushes", [{ kind: "Selected", slot, paired }]);
+    },
     /**
      * Turn a parameter with the pedal's own knob. `extra` and `paired` select the index space:
      * with both `false` (the default) `param` indexes the model's own param list, `extra` means

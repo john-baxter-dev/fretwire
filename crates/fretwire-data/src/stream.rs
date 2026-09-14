@@ -1719,6 +1719,21 @@ pub enum StatusPush {
     /// continuously. Distinct from [`StatusPush::Other`] so logging the undecoded pushes doesn't
     /// mean logging this several times a second.
     Idle,
+    /// The **panel's block cursor moved** (`type 39`) — the user turned the encoder or otherwise
+    /// selected a different block *on the pedal*. The mirror of the op-78 `select_block` we send
+    /// when the editor's selection moves, and it carries the same target: slot + sub-model.
+    ///
+    /// This push was tabled as *"block added"* until 2026-09-13 (issue #21), decoded from a capture
+    /// of HX Edit adding a block. That reading was the wrong half of the event: adding a block moves
+    /// the panel cursor onto it, so an add *contains* one of these — but so does plain cursor
+    /// movement with nothing added, which is how it was caught (walking the encoder across slots 2–9
+    /// on an untouched preset emitted one per slot). Following it as a selection is right either way.
+    Selected {
+        slot: i64,
+        /// `true` when the cursor is on the block's **paired cab/IR** rather than its own model
+        /// (wire key `26`, the sub-model selector the edit ops take).
+        paired: bool,
+    },
     /// A recognized push `type` we don't decode further (kept so callers can log/ignore).
     Other(i64),
 }
@@ -1789,6 +1804,16 @@ pub fn parse_status_push(frame_body: &[u8]) -> Option<StatusPush> {
             extra,
             paired,
         });
+    }
+    // The panel's block cursor (type 39). Checked after the richer shapes above and gated on the
+    // type, because `{98, 26}` is a *subset* of the bypass and param payloads — an ungated check
+    // here would swallow any future push that names a slot and nothing else we recognize.
+    // [solid — 2026-09-13, HX Stomp: `{105:39, 106:{82:1, 68:3, 121:19, 106:{98: slot, 26: 0}}}`]
+    if typ == 39 {
+        if let Some(slot) = map_get(inner, 98).and_then(Value::as_i64) {
+            let paired = map_get(inner, 26).and_then(Value::as_i64) == Some(1);
+            return Some(StatusPush::Selected { slot, paired });
+        }
     }
     Some(StatusPush::Other(typ))
 }
@@ -2266,6 +2291,48 @@ mod list_tests {
             0, 0, 4, 0, 13, 0, 0, 0, 130, 105, 22, 106, 132, 82, 0, 68, 10, 121, 27, 106, 192,
         ];
         assert_eq!(parse_status_push(&frame), Some(StatusPush::Idle));
+    }
+
+    /// The panel's block cursor (type 39), byte-for-byte as an HX Stomp sent it while the encoder
+    /// was walked across the chain — issue #21, 2026-09-13. Eight of these arrived in one 20 s
+    /// window, identical but for key 98, running slots 2..=9 (the last two the empty slots past the
+    /// end of the preset). Nothing was added: this push had been tabled as "block added".
+    #[test]
+    fn the_panel_cursor_moving_is_a_selection_not_an_add() {
+        let frame = |slot: u8| {
+            [
+                0, 0, 4, 0, 17, 0, 0, 0, 130, 105, 39, 106, 132, 82, 1, 68, 3, 121, 19, 106, 130,
+                98, slot, 26, 0,
+            ]
+        };
+        for slot in 2..=9u8 {
+            assert_eq!(
+                parse_status_push(&frame(slot)),
+                Some(StatusPush::Selected {
+                    slot: slot as i64,
+                    paired: false
+                }),
+                "slot {slot}"
+            );
+        }
+    }
+
+    /// `26:1` is the cursor sitting on an amp block's **paired cab**, the same sub-model selector
+    /// the edit ops carry. A consumer that drops it moves the editor's selection to the amp when
+    /// the pedal is showing the cab.
+    #[test]
+    fn the_cursor_on_a_paired_cab_says_so() {
+        let frame = [
+            0, 0, 4, 0, 17, 0, 0, 0, 130, 105, 39, 106, 132, 82, 1, 68, 3, 121, 19, 106, 130, 98,
+            5, 26, 1,
+        ];
+        assert_eq!(
+            parse_status_push(&frame),
+            Some(StatusPush::Selected {
+                slot: 5,
+                paired: true
+            })
+        );
     }
 
     /// The other type 22: same outer key, a real payload under the inner 106, and different

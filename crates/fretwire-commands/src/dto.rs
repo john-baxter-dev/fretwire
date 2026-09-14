@@ -21,6 +21,12 @@ pub enum PushDto {
     Preset {
         index: i64,
     },
+    /// The **pedal's** block cursor moved — the user selected a block on the hardware, so the
+    /// editor's selection follows it (the reverse of the op-78 `select_block` we send).
+    Selected {
+        slot: i64,
+        paired: bool,
+    },
     Param {
         slot: i64,
         param: i64,
@@ -43,6 +49,10 @@ pub fn push_dtos(pushes: &[StatusPush]) -> Vec<PushDto> {
                 enabled: *enabled,
             }),
             StatusPush::Snapshot(i) => Some(PushDto::Snapshot { index: *i }),
+            StatusPush::Selected { slot, paired } => Some(PushDto::Selected {
+                slot: *slot,
+                paired: *paired,
+            }),
             StatusPush::Preset(i) => Some(PushDto::Preset { index: *i }),
             // The frontend renders every parameter as a number, so flatten the three wire types the
             // same way the param DTOs do rather than teaching the UI a tagged value.

@@ -15,10 +15,22 @@ slots 2/5/7 in one session walked the panel to Bucket Brigade, US Princess and D
 then end-to-end through the built GUI. Nothing is written: no flash, no edit buffer, no param.
 Wired as a fire-and-forget command (`select_block`, 84th on the dispatch surface) off the GUI's one
 selection path in `App.svelte` — no history entry and no re-read, since the preset doesn't change and
-this fires on every click; it is skipped when offline or when the slot is unchanged. **Not done**:
-the reporter's second suggestion, telling the pedal to *scroll to the parameter's page* so edits to
-params past the first page are visible on the device. No op for that is known — the panel-page
-number is not in any capture we have, and it may not be addressable over USB at all. Their third point
+this fires on every click; it is skipped when offline or when the slot is unchanged. **The page-scroll half was probed and came back negative**: the
+reporter also asked for the pedal to *scroll to the parameter's page*, so an edit to a param past
+page 1 is visible on the device. Three angles, all no — op 78's target is strictly `{98, 26}` and
+refuses a param index or any extra key with `-3`; the device **never pushes a page change** (two 20 s
+`watch` runs, one thing each: ~5 page presses → 0 pushes, ~5 block moves → 4, one per move); and the
+preset stores the focused *slot* and a *footswitch* page but no parameter page. The page looks like
+transient panel state the firmware does not expose. Absence of evidence rather than proof, but
+across three angles, and HX Edit does not do it either — which was the reporter's own complaint about
+HX Edit. Written up in `docs/protocol.md`.
+
+**A correction fell out of the probe**: status push type **39** was tabled as *"block added"*,
+undecoded. It is **"block selected"** — the mirror of op 78, payload
+`{105:39, 106:{82:1, 68:3, 121:19, 106:{98: slot, 26: sub}}}`, captured walking the panel across
+slots 2–9 (the last two being the empty slots past the chain). Nothing is added. That makes the
+**reverse direction implementable** — the GUI could follow the pedal's selection the way it already
+follows its bypasses and knobs — which is not done and is the obvious next step on this thread. Their third point
 (make it an option) was deliberately declined, as they themselves leaned: the pedal already follows
 fretwire's parameter edits, so having it not follow the selection was the inconsistency.
 

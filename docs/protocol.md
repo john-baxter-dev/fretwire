@@ -767,6 +767,23 @@ we implement):
   `Session::set_node_pos` (guards: bracket must enclose the occupied B row, split < mixer). [solid]
 - **op 78** `{98:slot, 26:0}` precedes moves/add in some captures but **not** in
   `move_simple_eq_to_parallel` — so it's an optional preamble, not required for the op to take effect.
+- **The panel's parameter *page* is not addressable, on the evidence we have** [2026-09-13, issue
+  #21]. Asked for: scroll the pedal to the page holding the parameter just edited, so an edit to a
+  param past page 1 is visible on the device. Three independent probes all came back negative:
+  1. **op 78 takes `{98, 26}` and nothing else** — adding a param index (`28`) or a speculative page
+     key both drew a `-3` refusal, so the selection op cannot carry a page.
+  2. **The device never pushes a page change.** Two 20 s `watch` runs on an HX Stomp, one thing
+     each: ~5 page presses on one block produced **0 status pushes**; ~5 block moves produced
+     **4** (and 8 in a repeat), one per move. Whatever the page is, the protocol does not mirror it —
+     and every other panel action we know of *is* mirrored.
+  3. **The preset stores no page.** It carries the **focused slot** (`6 → 98`, op 78's state) and a
+     *footswitch* page (`3 → 7`), but nothing for the parameter page — see `docs/preset-format.md`.
+
+  Together: the page looks like transient panel state the firmware never exposes. That is an absence
+  of evidence across three angles, not a proof that no op exists — a capture of HX Edit doing it
+  would settle it, but HX Edit does not do it either (it is the reporter's complaint about HX Edit
+  too). Selecting the block, which we now do, puts the edit on the right screen; the page within it
+  is where the trail stops.
 - **op 78 sent bare is "the editor selected this block"** [solid — live on an HX Stomp 2026-09-13,
   issue #21]. With no operation behind it, the marker is the whole message: the device moves its
   **panel cursor** to that slot and answers `{102: txn, 103: 0, 104: nil}`. Sent for slots 2, 5 and 7
@@ -805,7 +822,7 @@ is usually nested under an inner key `106`. Decoded:
 | **idle mirror** | `{105:22, 106:{82:0, 68:10, 121:27, 106:nil}}` | none — `StatusPush::Idle`, sent continuously |
 | footswitch press | `{105:41, 106:{70:fs_index, 63:bool, 66:int}}` | key 70 = **footswitch**, 63 = new state |
 | snapshot committed | `{105:23, 106:{23:0}}` | none — payload is constant |
-| block added | `{105:39, 106:{82:1, …, 106:{98:slot, 26:_}}}` | (not decoded further) |
+| **block selected** (panel) | `{105:39, 106:{82:1, 68:3, 121:19, 106:{98:slot, 26:sub}}}` | `98` = slot, `26` = sub-model — the **mirror of op 78** |
 
 Types 41, 23 and 39 arrive *alongside* pushes we already decode and carry nothing the editor needs:
 a footswitch press emits type 49 (the bypass we use) plus a type 41, a snapshot switch emits type 42

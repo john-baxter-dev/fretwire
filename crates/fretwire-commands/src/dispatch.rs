@@ -44,6 +44,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "undo",
     "redo",
     "history_jump",
+    "select_block",
     "preview_param",
     "preview_paired_param",
     "set_bypass",
@@ -189,6 +190,7 @@ pub async fn dispatch(
         "set_param" => {
             ok(c::set_param(state, a.req("slot")?, a.req("paramIndex")?, a.req("value")?).await?)
         }
+        "select_block" => ok(c::select_block(state, a.req("slot")?).await?),
         "preview_param" => {
             ok(
                 c::preview_param(state, a.req("slot")?, a.req("paramIndex")?, a.req("value")?)
@@ -442,7 +444,7 @@ mod tests {
     /// pinned by `connect_is_matched_without_running`.
     #[tokio::test]
     async fn every_name_dispatches() {
-        assert_eq!(COMMAND_NAMES.len(), 83, "the surface was 83 commands");
+        assert_eq!(COMMAND_NAMES.len(), 84, "the surface was 84 commands");
         for name in COMMAND_NAMES {
             if *name == "connect" {
                 continue;

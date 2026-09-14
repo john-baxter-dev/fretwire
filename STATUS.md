@@ -2,6 +2,26 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**The pedal's panel now follows the GUI's block selection — op 78, bare (2026-09-13, issue #21).**
+A reporter noticed the HX Stomp's View-mode cursor tracks HX Edit's block selection but not
+fretwire's: you could edit a parameter and the pedal would still be showing a different block, with
+nothing on the device to say the edit had landed. They guessed HX Edit sends a message we don't, and
+that is exactly it — **the message was already in the codebase**. `op 78 {98: slot, 26: 0}` was
+decoded as the begin-structural preamble to a move/add/delete, and the user-defaults notes had even
+recorded it firing "once when a block is selected" without drawing the conclusion. Sent **bare**,
+with no operation behind it, the marker *is* the message: `Session::select_block` sends one and the
+device moves its cursor, answering `{103: 0, 104: nil}`. **[solid]** — live on a Stomp the same day,
+slots 2/5/7 in one session walked the panel to Bucket Brigade, US Princess and Dynamic Hall in turn,
+then end-to-end through the built GUI. Nothing is written: no flash, no edit buffer, no param.
+Wired as a fire-and-forget command (`select_block`, 84th on the dispatch surface) off the GUI's one
+selection path in `App.svelte` — no history entry and no re-read, since the preset doesn't change and
+this fires on every click; it is skipped when offline or when the slot is unchanged. **Not done**:
+the reporter's second suggestion, telling the pedal to *scroll to the parameter's page* so edits to
+params past the first page are visible on the device. No op for that is known — the panel-page
+number is not in any capture we have, and it may not be addressable over USB at all. Their third point
+(make it an option) was deliberately declined, as they themselves leaned: the pedal already follows
+fretwire's parameter edits, so having it not follow the selection was the inconsistency.
+
 **Backup no longer walks the pedal through unpopulated slots (2026-09-07, issue #5).** The XL's
 owner reported that a backup still steps through every preset on the panel, where HX Edit does not,
 and that *"op 4 refused"* never appears. It does not: op 4 works on his XL. What his log showed was

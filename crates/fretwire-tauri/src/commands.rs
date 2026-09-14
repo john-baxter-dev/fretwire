@@ -169,6 +169,12 @@ pub async fn set_param(
     fretwire_commands::set_param(&state, slot, param_index, value).await
 }
 
+/// Tell the pedal which block the GUI selected (op 78), so its panel cursor follows (issue #21).
+#[tauri::command]
+pub async fn select_block(state: State<'_, AppState>, slot: i64) -> R<()> {
+    fretwire_commands::select_block(&state, slot).await
+}
+
 #[tauri::command]
 pub async fn preview_param(
     state: State<'_, AppState>,

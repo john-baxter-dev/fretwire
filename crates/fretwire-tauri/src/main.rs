@@ -163,6 +163,7 @@ fn main() {
             commands::undo,
             commands::redo,
             commands::history_jump,
+            commands::select_block,
             commands::preview_param,
             commands::preview_paired_param,
             commands::set_bypass,

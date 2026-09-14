@@ -767,6 +767,15 @@ we implement):
   `Session::set_node_pos` (guards: bracket must enclose the occupied B row, split < mixer). [solid]
 - **op 78** `{98:slot, 26:0}` precedes moves/add in some captures but **not** in
   `move_simple_eq_to_parallel` — so it's an optional preamble, not required for the op to take effect.
+- **op 78 sent bare is "the editor selected this block"** [solid — live on an HX Stomp 2026-09-13,
+  issue #21]. With no operation behind it, the marker is the whole message: the device moves its
+  **panel cursor** to that slot and answers `{102: txn, 103: 0, 104: nil}`. Sent for slots 2, 5 and 7
+  in one session, the pedal's View-mode screen walked to Bucket Brigade, US Princess and Dynamic Hall
+  in turn. This is what makes the HX Stomp's display follow HX Edit's block selection, and it is what
+  `Session::select_block` sends on every block click in the GUI. Nothing is written — no flash, no
+  edit buffer, no param change. It also explains the sighting under *User Defaults* below, where a
+  block selection in the capture shows up as "op 78 on slot 5 → op 109 for that block's model": the
+  op 78 is the selection, the op 109 is HX Edit fetching that model's user default for its panel.
 - **The ACK precedes the param rewrite [solid — live 2026-07-20]:** op 40 / op 39 are ACKed once the
   device has taken the new **model reference**, but it rewrites that block's **parameter area** a
   moment later. A read issued straight after the ACK therefore returns the new model's identity

@@ -1502,6 +1502,8 @@ const HANDLERS = {
     if (p) p.value = value;
     return toDto(current);
   },
+  // Selection only moves the pedal's panel cursor (op 78) — no model state to mirror here.
+  select_block: ({ slot }) => null,
   // Mid-drag previews: value only, no history entry, no DTO (mirrors the fire-and-forget commands).
   preview_param: ({ slot, paramIndex, value }) => {
     const p = findParam(slot, false, paramIndex);

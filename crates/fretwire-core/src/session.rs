@@ -2308,6 +2308,22 @@ impl Session {
         self.read_preset()
     }
 
+    /// Tell the pedal which block the editor has selected (op 78 on `slot`), so the panel's
+    /// View-mode cursor follows the GUI the way it follows HX Edit.
+    ///
+    /// Op 78 is the begin-structural marker we already send ahead of a move/add/delete, and HX Edit
+    /// also sends it **bare** when a block is selected — with no operation behind it, it is purely
+    /// that: the device moves its cursor and answers `{103: 0, 104: nil}`. Nothing is written.
+    /// [solid — live on an HX Stomp 2026-09-13, issue #21: op 78 on slots 2, 5, 7 walked the panel
+    /// to Bucket Brigade, US Princess, Dynamic Hall in turn.]
+    ///
+    /// Does **not** re-read — the preset is unchanged, and selection happens on every click.
+    pub fn select_block(&mut self, slot: i64) -> crate::Result<()> {
+        let txn = self.bump_txn();
+        self.send_edit(edit::begin_structural(slot, txn))?;
+        Ok(())
+    }
+
     /// Delete the block at `slot` (op 28 — **surgical**). HX Edit precedes the delete with a
     /// begin-structural marker (op 78), which we mirror; both ride the edit channel. Unlike the old
     /// whole-preset-write approach (op 21), this **preserves the footswitch layout** of the remaining

@@ -526,6 +526,15 @@
   // on release is authoritative and will surface real failures).
   const onPreview = (slot, paired, index, value) =>
     invoke(paired ? "preview_paired_param" : "preview_param", { slot, paramIndex: index, value }).catch(() => {});
+  // Tell the pedal which block is selected (op 78) so its View-mode cursor follows the editor the
+  // way it follows HX Edit (issue #21). Fire-and-forget: it writes nothing, and a failure must
+  // never stop the block selecting in the UI.
+  function selectSlot(slot) {
+    if (slot === selectedSlot) return;
+    selectedSlot = slot;
+    if (connected && slot != null) invoke("select_block", { slot }).catch(() => {});
+  }
+
   const onEnum = (slot, paired, index, value) =>
     apply(invoke("set_param_enum", { slot, paired, paramIndex: index, value }));
   const onBypass = (slot, bypassed) => apply(invoke("set_bypass", { slot, bypassed }));
@@ -1491,7 +1500,7 @@
             dsp={dspView}
             {selectedSlot}
             {catColors}
-            onselect={(slot) => (selectedSlot = slot)}
+            onselect={selectSlot}
             onplace={onPlace}
             oninsert={onInsert}
             onmovenode={onMoveNode}

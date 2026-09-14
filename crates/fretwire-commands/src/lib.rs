@@ -501,6 +501,13 @@ pub async fn preview_param(state: &AppState, slot: i64, param_index: i64, value:
     run(state, move |s| s.set_param(slot, param_index, value)).await
 }
 
+/// Tell the pedal which block the GUI has selected (op 78), so its View-mode cursor follows the
+/// editor as it follows HX Edit (issue #21). Fire-and-forget: no history entry, no re-read — the
+/// preset does not change, and this fires on every block click.
+pub async fn select_block(state: &AppState, slot: i64) -> R<()> {
+    run(state, move |s| s.select_block(slot)).await
+}
+
 /// [`preview_param`] for the paired cab/IR params.
 pub async fn preview_paired_param(
     state: &AppState,

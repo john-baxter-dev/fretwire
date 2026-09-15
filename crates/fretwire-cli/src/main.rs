@@ -538,6 +538,10 @@ enum Command {
         set: Vec<(i64, rmpv::Value)>,
         #[arg(long)]
         nil: bool,
+        /// Send it after the plain browse prologue instead of inside an op-255 transfer session —
+        /// the way HX Edit sends ops 112 and 13 at connect. No "Transferring data…" on the screen.
+        #[arg(long)]
+        no_session: bool,
     },
     /// Ask the device what a footswitch carries (op 33). The number is **one-based**: 1 = FS1.
     ReadSwitch { switch: i64 },
@@ -1799,7 +1803,12 @@ fn main() -> Result<()> {
                 Err(e) => println!("  refused: {e}"),
             }
         }
-        Command::ProbeBrowse { op, set, nil } => {
+        Command::ProbeBrowse {
+            op,
+            set,
+            nil,
+            no_session,
+        } => {
             let mut s = fretwire_core::Session::connect()?;
             let target: Option<Vec<(rmpv::Value, rmpv::Value)>> = if nil {
                 None
@@ -1811,7 +1820,7 @@ fn main() -> Result<()> {
                 )
             };
             println!("op {op} target {target:?}");
-            match s.browse_probe(op, target) {
+            match s.browse_probe(op, target, !no_session) {
                 Ok(Some(v)) => println!("  reply: {v}"),
                 Ok(None) => println!("  accepted, empty reply"),
                 Err(e) => println!("  error: {e}"),

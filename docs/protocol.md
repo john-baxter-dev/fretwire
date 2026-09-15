@@ -1340,6 +1340,26 @@ saving one on the owner's Stomp differed in nothing but Stomp Mode. It has its o
 `HD2_CabMicIr_1x12USDeluxe`, 636 = `VIC_DynPlateStereo`, checked against the file. HX Edit lists
 (op 112) once at connect, between the preset listing (op 1) and the IR directory (op 13).
 
+**Read them outside the op-255 session, or the pedal says "Transferring data…"** [solid — live on
+the owner's Stomp, 2026-09-14, issue #22]. Reading a record inside a transfer session puts the
+transfer banner on the device's screen, which is right for a backup and wrong for opening the
+editor. It is the *pair* that does it — neither the session nor the record read alone:
+
+| sent (ten runs each) | screen |
+|---|---|
+| connect and hang up | clean |
+| 255 open, 112, 254 close | clean |
+| op 113 record reads, no session | clean |
+| 255 open, 112, 113 per favorite, 254 close | **flashes** |
+
+The banner therefore scales with the favorite count: the reporter's 28-favorite XL showed it on a
+single connect, where the owner's two-favorite Stomp needed ten connects in a row to be sure of it.
+This is also why HX Edit's connect prologue sends op 112 straight after the 254/0 browse-open and
+saves the 255 session for the backup sweep. `Session::read_favorites` runs through
+`in_browse_prologue` for exactly this reason. Op 13's IR directory is read the same way by HX Edit
+and is still wrapped in a session here — the same banner, on an explicit `ir-list` where it is less
+surprising, and untested.
+
 **Both replies can span frames, and must be reassembled** [solid — issue #5, 2026-09-05]. They are
 ordinary chunked streams: the first 8 bytes declare the length, and a reader that takes the frame
 as it came gets a truncated buffer that decodes as *nothing at all* rather than as an error. Size

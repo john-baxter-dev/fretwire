@@ -3818,12 +3818,14 @@ impl Session {
     }
 
     /// The favorites the device holds, each with its record: op 112 for the list, op 113 per entry,
-    /// in one browse session. **Reads only.** A device that refuses op 112 has no favorites store
-    /// and answers an empty list here, with a warning.
+    /// after one browse prologue and **not** inside a 255 transfer session. **Reads only.** A device
+    /// that refuses op 112 has no favorites store and answers an empty list here, with a warning.
     pub fn read_favorites(&mut self) -> crate::Result<Vec<crate::backup::BackupFavorite>> {
         use fretwire_data::rmpv::Value;
         use fretwire_data::stream::map_get;
-        self.in_ir_session(|s| {
+        // Outside a 255 session, or the per-favorite record reads below flash "Transferring data…"
+        // on the pedal every time the editor connects — see `in_browse_prologue` (issue #22).
+        self.in_browse_prologue(|s| {
             let txn = s.bump_txn();
             let ack = match s.ir_request(cmd::STREAM, edit::favorites_list(txn), txn) {
                 Ok(ack) => ack,
@@ -4856,6 +4858,43 @@ impl Session {
         out
     }
 
+    /// Run `f` after the plain **browse prologue** — a drain and one op-254 browse-open — with no
+    /// op-255 transfer session around it.
+    ///
+    /// This is how HX Edit reads the favorites list and the IR directory at connect: ops 112 and 13
+    /// go out straight after the same 254/0 prologue the preset listing uses, and only the backup
+    /// sweep (the IR blobs, the favorite records, the user defaults) gets wrapped in a 255 session.
+    ///
+    /// **A read inside a 255 session puts "Transferring data…" on the device's screen** — which is
+    /// right for a backup and wrong for opening the editor (issue #22). It is the pair that does it,
+    /// not either half [solid — live on the owner's Stomp, 2026-09-14, ten runs per cell]:
+    ///
+    /// | sent | screen |
+    /// |---|---|
+    /// | connect and hang up | clean |
+    /// | 255 open, 112, 254 close | clean |
+    /// | op 113 record reads, no session | clean |
+    /// | 255 open, 112, 113 per favorite, 254 close | **flashes** |
+    ///
+    /// So the records are not the problem and the session is not the problem; moving a record
+    /// *inside* a session is. Reads that do not need the session run through here instead.
+    fn in_browse_prologue<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> crate::Result<T>,
+    ) -> crate::Result<T> {
+        // Start aligned, for the same reason the preset listing does: a state push or a prior
+        // stream's leftovers would otherwise be reassembled as this reply.
+        self.transport.drain();
+        self.transport
+            .drain_wire(std::time::Duration::from_millis(30), 128);
+
+        let txn = self.bump_txn();
+        self.ir_request(cmd::OPEN, edit::browse_open(txn), txn)?;
+        let out = f(self);
+        self.transport.drain();
+        out
+    }
+
     /// Send one IR-session command and hand back the reply, refusals included.
     fn ir_request(&mut self, command: u8, body: Vec<u8>, txn: u16) -> crate::Result<Frame> {
         let tlv = Tlv::command(op::SESSION_OPEN, body).to_bytes();
@@ -5134,35 +5173,52 @@ impl Session {
     ///
     /// `target` is the op's key-101 map; `None` sends `101: nil`, which is what op 112 takes. Same
     /// warning as [`Self::ir_probe`]: an unmapped opcode can do anything.
+    ///
+    /// `session` picks the framing: an op-255 transfer session, or the plain browse prologue HX Edit
+    /// uses at connect. It is a probe knob with a real answer behind it — flipping it is how issue
+    /// #22's "Transferring data…" was pinned to the framing rather than to the ops.
     pub fn browse_probe(
+        &mut self,
+        op_id: i64,
+        target: Option<Vec<(fretwire_data::rmpv::Value, fretwire_data::rmpv::Value)>>,
+        session: bool,
+    ) -> crate::Result<Option<fretwire_data::rmpv::Value>> {
+        let run = |s: &mut Self| Self::browse_probe_once(s, op_id, target);
+        if session {
+            self.in_ir_session(run)
+        } else {
+            self.in_browse_prologue(run)
+        }
+    }
+
+    /// One probe send, with whatever framing the caller has already opened.
+    fn browse_probe_once(
         &mut self,
         op_id: i64,
         target: Option<Vec<(fretwire_data::rmpv::Value, fretwire_data::rmpv::Value)>>,
     ) -> crate::Result<Option<fretwire_data::rmpv::Value>> {
         use fretwire_data::rmpv::Value;
-        self.in_ir_session(|s| {
-            let txn = s.bump_txn();
-            let body = Value::Map(vec![
-                (Value::from(102), Value::from(txn)),
-                (Value::from(100), Value::from(op_id)),
-                (
-                    Value::from(101),
-                    target.map(Value::Map).unwrap_or(Value::Nil),
-                ),
-            ]);
-            let mut encoded = Vec::new();
-            fretwire_data::rmpv::encode::write_value(&mut encoded, &body)
-                .expect("msgpack encode to Vec is infallible");
-            let tlv = Tlv::command(op::SESSION_OPEN, encoded).to_bytes();
-            let ack = s.edit_request_txn(cmd::STREAM, tlv, txn)?;
-            if let Some((rejected, code)) = fretwire_data::stream::parse_edit_rejection(&ack.body)
-                && rejected == txn
-            {
-                tracing::warn!(op_id, code, "browse probe refused");
-                return Ok(Some(Value::from(format!("REFUSED code {code}"))));
-            }
-            Ok(Self::ir_reply_payload(&ack))
-        })
+        let txn = self.bump_txn();
+        let body = Value::Map(vec![
+            (Value::from(102), Value::from(txn)),
+            (Value::from(100), Value::from(op_id)),
+            (
+                Value::from(101),
+                target.map(Value::Map).unwrap_or(Value::Nil),
+            ),
+        ]);
+        let mut encoded = Vec::new();
+        fretwire_data::rmpv::encode::write_value(&mut encoded, &body)
+            .expect("msgpack encode to Vec is infallible");
+        let tlv = Tlv::command(op::SESSION_OPEN, encoded).to_bytes();
+        let ack = self.edit_request_txn(cmd::STREAM, tlv, txn)?;
+        if let Some((rejected, code)) = fretwire_data::stream::parse_edit_rejection(&ack.body)
+            && rejected == txn
+        {
+            tracing::warn!(op_id, code, "browse probe refused");
+            return Ok(Some(Value::from(format!("REFUSED code {code}"))));
+        }
+        Ok(Self::ir_reply_payload(&ack))
     }
 
     /// Upload an IR into slot `slot` (op 9, then the op-13 commit).

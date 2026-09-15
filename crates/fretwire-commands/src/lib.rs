@@ -195,10 +195,16 @@ fn dto(s: &Session, p: &EditorPreset) -> PresetDto {
     d
 }
 
-/// The device's favorites, for the picker. Read at connect; this re-reads them (two cheap ops).
+/// The device's favorites, for the picker.
+///
+/// Served from the list read at connect. It used to re-read, on the idea that the ops were cheap —
+/// they are not: the list is one ask plus **one per favorite**, so a pedal with 28 of them paid for
+/// 58 round trips at startup because the frontend asks right after connecting (issue #22). Nothing
+/// on our side writes the store, so the cache only goes stale if the player saves a favorite on the
+/// pedal itself, which arrives as a type-56 push.
 pub async fn favorites(state: &AppState) -> R<Vec<FavoriteDto>> {
     run(state, |s| {
-        let favs: Vec<fretwire_core::Favorite> = s.refresh_favorites()?.to_vec();
+        let favs: Vec<fretwire_core::Favorite> = s.favorites()?.to_vec();
         Ok(favs.iter().map(|f| favorite_dto(s, f)).collect())
     })
     .await

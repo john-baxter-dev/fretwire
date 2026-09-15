@@ -2,6 +2,26 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Connecting no longer flashes "Transferring data…" on the pedal (2026-09-14, issue #22).** A
+reporter saw the transfer banner every time the editor connected, which HX Edit never does. The
+minimal repro was `fretwire favorites`, and the cause was the framing rather than the ops: reading a
+favorite's record (op 113) **inside** an op-255 transfer session raises the banner. Neither half does
+it alone — ten connects are clean, ten `255/112/254` sessions are clean, twenty bare op-113 reads are
+clean, and ten full favorites reads flash every time [live, owner's Stomp]. So the banner scales with
+the favorite count, which is why the reporter's 28-favorite XL showed it on a single connect and a
+two-favorite Stomp needed ten in a row to be sure. `read_favorites` now runs after the plain browse
+prologue instead — the same framing HX Edit uses for op 112 at connect, which it sends straight after
+the 254/0 open, saving the 255 session for the backup sweep. Verified by rerunning the flashing loop
+against the fix: clean, with both records and every value unchanged.
+
+Second, independent bug in the same report: the GUI read every favorite **twice** at startup, because
+`connect` reads them and the frontend then invokes the `favorites` command, which re-read. That
+command now serves the list `connect` already read — 58 round trips down to 29 on the reporter's XL.
+Nothing on our side writes the store, so the cache only goes stale if the player saves a favorite on
+the pedal itself, which arrives as a type-56 push. Op 13's IR directory is read the same way as op 112
+by HX Edit and is still session-wrapped here; same banner, on an explicit `ir-list` where it is less
+surprising, and untested.
+
 **The pedal's panel now follows the GUI's block selection — op 78, bare (2026-09-13, issue #21).**
 A reporter noticed the HX Stomp's View-mode cursor tracks HX Edit's block selection but not
 fretwire's: you could edit a parameter and the pedal would still be showing a different block, with

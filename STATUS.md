@@ -2,6 +2,26 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**POD Go: the picker priced only the unsuffixed models, and offered an Amp+Cab list the pedal
+refuses (2026-09-17, issue #15).** The owner, with live-follow confirmed on v0.5.1, reported two
+leftovers. Most models showed no DSP load, and the ones that did were exactly the symbols without a
+`Mono`/`Stereo` suffix — POD Go Edit's `.models` key each entry by the full device symbol with one
+`load`, where HX Edit's key by the base with `load` + `load_stereo`. The picker's names learned
+that on 2026-08-26 (`tests/model_picker_symbols.rs`); the load lookup still stripped the suffix,
+so 393 of the POD Go's 627 symbols had no load and "DSP free" summed the rest. `model_load` now
+tries the suffixed spelling first, which also prices HX Edit's eight DL4 legacy delays, keyed the
+same way (they listed since 08-26 but showed "—"). The "~2% less than the file" he saw is the
+display scale — raw loads shown so that the Stomp's measured ceiling of 75 reads 100% — and the
+POD Go's own ceiling is unmeasured; a `-306` at a known load would calibrate it. Second, the
+synthetic Amp+Cab category sent a paired op 40 (`{23: true, 25: 600, 26: 537}`) and the pedal
+answered `-3`: the POD Go has no amp+cab block, its amp and cab/IR are two slots and the pedal's
+own Link Amp/Cab setting pairs them. `Catalog` now knows whose data it holds (`pod_go`, from the
+family `from_data_dir` detects) and omits the category; `swap_model` refuses a paired index on a
+POD Go before sending, for the CLI and MCP. Three data-gated tests on the P34 catalog: Adriatic
+Delay prices at 12.5, nine in ten delays carry a load, no Amp+Cab category (and the HX keeps
+its). Also: POD Go Edit's fill of an empty slot was captured on 09-04 — op 39, same block spec as
+ours — and the add-block comment that said "not captured" now says so. 391 tests, clippy clean.
+
 **Connecting no longer flashes "Transferring data…" on the pedal (2026-09-14, issue #22).** A
 reporter saw the transfer banner every time the editor connected, which HX Edit never does. The
 minimal repro was `fretwire favorites`, and the cause was the framing rather than the ops: reading a

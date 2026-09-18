@@ -902,7 +902,7 @@ impl Session {
         model_index: i64,
         paired_index: i64,
     ) -> crate::Result<()> {
-        self.guard_pod_go_swap(slot, model_index)?;
+        self.guard_pod_go_swap(slot, model_index, paired_index)?;
         let txn = self.bump_txn();
         let body = edit::swap_model(slot, model_index, paired_index, txn);
         self.send_edit(body)?;
@@ -913,9 +913,26 @@ impl Session {
     /// Consults the last-read stream — every swap flow we ship reads first — and stays out of the
     /// way when the slot's occupant is unknown: this protects against a known wedge, it does not
     /// second-guess ops we haven't seen fail.
-    fn guard_pod_go_swap(&mut self, slot: i64, model_index: i64) -> crate::Result<()> {
+    fn guard_pod_go_swap(
+        &mut self,
+        slot: i64,
+        model_index: i64,
+        paired_index: i64,
+    ) -> crate::Result<()> {
         if self.device().pid != fretwire_protocol::PID_POD_GO {
             return Ok(());
+        }
+        // No amp+cab block on a POD Go: the amp and the cab/IR are two slots of the fixed chain,
+        // and the pedal pairs them itself when its Link Amp/Cab setting is on. A paired op 40 is
+        // refused with `-3` (owner, 2026-09-16, `{98:6, 100:{23:true, 25:600, 26:537}}`). The
+        // picker no longer offers the Amp+Cab list on a POD Go; this catches the CLI and the MCP.
+        if paired_index >= 0 {
+            return Err(fretwire_data::Error::Stream(format!(
+                "the POD Go has no amp+cab block — slot {slot} takes an amp on its own, and the \
+                 pedal picks the cab itself when its Link Amp/Cab setting is on (a paired swap is \
+                 refused with device code -3). Choose the amp from the Amp category"
+            ))
+            .into());
         }
         let Some(ps) = self
             .last_raw
@@ -1012,9 +1029,9 @@ impl Session {
             // it, and the crash of 2026-08-26 was an add into slot **11**, past the chain). So the
             // guard is the chain's edge, not a slot inside it; occupancy — including the wah,
             // volume, amp and cab slots — is `add_block_at`'s check, and the pedal's own refusals
-            // surface as errors and are recoverable (a same-slot goto reloads from flash). What
-            // POD Go Edit sends to fill an empty slot has not been captured, so this is the
-            // measured path rather than the native one — see docs/pod-go.md.
+            // surface as errors and are recoverable (a same-slot goto reloads from flash). It is
+            // also the native path: POD Go Edit's own fill of an empty slot is op 39 with this
+            // block spec, one value apart in key 9 (captured 2026-09-04) — see docs/pod-go.md.
             if !(1..=10).contains(&slot) {
                 return Err(fretwire_data::Error::Stream(format!(
                     "the POD Go's chain is slots 1 to 10; adding into slot {slot} is past its \

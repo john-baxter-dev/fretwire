@@ -292,6 +292,27 @@ swap and produced presets it then mishandled). A rejection that corrupts device 
 safe probe, so `Session::swap_model` refuses wah→non-wah and volume→non-volume swaps client-side
 before anything is sent. The EQ and FX loop blocks swap freely (owner-verified).
 
+**There is no amp+cab block.** [solid — 2026-09-16, owner] The amp and the cab/IR are two slots
+of the fixed chain, and the pedal pairs them itself when its **Link Amp/Cab** setting is on
+(changing the amp, on the pedal or from fretwire, swaps the cab to the amp's linked one). A paired
+op 40 — `{98: 6, 100: {23: true, 25: 600, 26: 537}}`, what the synthetic Amp+Cab picker category
+sends — is refused with **`-3`**. So the catalog built from POD Go Edit's data offers no Amp+Cab
+category (`Catalog::pod_go`), and `Session::swap_model` refuses a paired index on a POD Go before
+sending, which is what the CLI's and the MCP's amp+cab paths hit. The 106 amps still carry their
+`cablink`s in `amp.models`; the pedal is what uses them.
+
+**DSP loads are keyed by the full symbol.** [solid — 2026-09-16, owner's report + data] POD Go
+Edit's `.models` files spell each entry as the device symbol — `HD2_DelayAdriaticDelayStereo`
+with one `load` (12.5) and no `load_stereo` — where HX Edit's key by the base name with both
+costs. The picker's *names* learned this on 2026-08-26; the load lookup had not, so 393 of the
+POD Go's 627 symbols (every suffixed model) showed no load and the "DSP free" figure summed only
+the rest. Fixed by trying the suffixed spelling first; the same change prices HX Edit's eight
+DL4 legacy delays, keyed the same way. The percentages shown are the raw `load` scaled so that
+the HX Stomp's measured ceiling (75) reads as 100% — the "~2% less" the owner saw against the
+file is that scale (×1.33), not a discrepancy. Whether the POD Go's ceiling is the Stomp's 75 is
+**[hypothesis]**: a `-306` refusal at a known load (`fretwire pull` prints the raw sum) would
+calibrate it.
+
 **Op 39 (add) fills any of the ten slots — and it is POD Go Edit's own fill.** [solid —
 2026-09-04 capture] Picking a model for the emptied slot 10 in POD Go Edit sends
 `{102: txn, 100: 39, 101: {98: 10, 99: {19: 6, 20: {24: {23: false, 25: 421, 26: -1}, 9: 8,
@@ -409,5 +430,7 @@ question closed on 2026-09-04 from the webview's console rather than any log. Wh
 
 - **`RUST_LOG=debug fretwire ir-list`** — the op-13 reply, so the IR directory can be decoded
   rather than scanned around.
-- **A footswitch press with the rebuilt GUI connected** — the first look at live-follow on a POD
-  Go since the ACL came back; expected to just work, since `watch` already decodes the pushes.
+- **A `-306` at a known load** — the raw sum `fretwire pull` prints when the pedal refuses a
+  block for DSP, to calibrate the POD Go's ceiling (assumed the Stomp's 75).
+- ~~A footswitch press with the rebuilt GUI connected~~ — "footswitches in the UI now perfectly
+  follow the pedal" (owner, 2026-09-16, v0.5.1).

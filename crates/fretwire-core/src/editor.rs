@@ -72,6 +72,11 @@ pub struct Catalog {
     /// Model `symbolicID` → its tempo-sync groups as `[tempo, note, governed]` param symbols,
     /// from `HX_ModelCatalog.json`'s nested param lists. See [`SyncLink`].
     sync_groups: std::collections::HashMap<String, Vec<[String; 3]>>,
+    /// Whether this is POD Go Edit's data, i.e. the catalog for a POD Go. The one thing the picker
+    /// does differently there: no synthetic Amp+Cab list, because the POD Go has no amp+cab
+    /// block — its amp and its cab/IR are two slots of the fixed chain, and a paired swap is
+    /// refused by the pedal (`-3`, owner-measured 2026-09-16, issue #15).
+    pod_go: bool,
 }
 
 /// Synthetic picker category: every amp paired with its suggested cab (HX Edit's "Amp+Cab" list).
@@ -833,7 +838,7 @@ impl Catalog {
                 .filter_map(|&n| std::fs::read(dir.join(n)).ok().map(|b| (n.to_string(), b)))
                 .collect(),
         };
-        Catalog::from_raw(&raw)
+        Catalog::from_raw(&raw, family.label == crate::import::POD_GO.label)
     }
 
     /// Load the catalog from the reference data embedded in the binary at build time. Only available
@@ -876,11 +881,12 @@ impl Catalog {
                 model!("wah.models"),
             ],
         };
-        Catalog::from_raw(&raw)
+        Catalog::from_raw(&raw, false)
     }
 
-    /// Parse a [`RawData`] set (however sourced) into a `Catalog`.
-    fn from_raw(raw: &RawData) -> crate::Result<Catalog> {
+    /// Parse a [`RawData`] set (however sourced) into a `Catalog`. `pod_go` says whose data it is;
+    /// see [`Catalog::pod_go`].
+    fn from_raw(raw: &RawData, pod_go: bool) -> crate::Result<Catalog> {
         Ok(Catalog {
             models: ModelDefs::parse(&raw.model_defs).map_err(crate::Error::Data)?,
             symbols: DeviceSymbols::parse(&raw.symbols).map_err(crate::Error::Data)?,
@@ -889,7 +895,13 @@ impl Catalog {
             cab_links: cab_links_from(&raw.models),
             category_colors: category_colors_from(&raw.catalog_json),
             sync_groups: sync_groups_from(&raw.catalog_json),
+            pod_go,
         })
+    }
+
+    /// Whether this catalog is the POD Go's (POD Go Edit's data). See the field.
+    pub fn pod_go(&self) -> bool {
+        self.pod_go
     }
 
     /// A model's parameters at their **defaults**, named and described as a block of it would be
@@ -965,7 +977,21 @@ impl Catalog {
 
     /// The block's DSP load (% of budget) for the given `Helix.sym` variant: the stereo cost for a
     /// `Stereo` block, else the mono cost — falling back to whichever the model defines.
+    ///
+    /// `symbolic_id` is the **base** symbol. HX Edit's `.models` key by it and carry `load` +
+    /// `load_stereo`; POD Go Edit's key by the device symbol itself — `…DelayStereo`, one `load`,
+    /// no `load_stereo` — and so do HX Edit's eight DL4 legacy delays. The suffixed spelling is
+    /// tried first, then the base: the same lesson the picker's names learned on 2026-08-26
+    /// (`tests/model_picker_symbols.rs`), which this lookup had not — on a POD Go it left every
+    /// suffixed model, 393 of 627 symbols, with no load, and the "DSP free" figure summed the
+    /// rest. [issue #15, 2026-09-16]
     fn model_load(&self, symbolic_id: &str, variant: Option<&str>) -> Option<f64> {
+        if let Some(v) = variant
+            && let Some((mono, stereo)) = self.loads.get(&format!("{symbolic_id}{v}"))
+            && let Some(load) = mono.or(*stereo)
+        {
+            return Some(load);
+        }
         let (mono, stereo) = self.loads.get(symbolic_id)?;
         match variant {
             Some("Stereo") => stereo.or(*mono),
@@ -1035,8 +1061,9 @@ impl Catalog {
                 seen.insert(canonical_category(cat));
             }
         }
-        // The synthetic Amp+Cab list exists whenever there are amps to pair.
-        if seen.contains(&1) {
+        // The synthetic Amp+Cab list exists whenever there are amps to pair — except on a POD Go,
+        // which has no amp+cab block to pair them into (see [`Catalog::pod_go`]).
+        if seen.contains(&1) && !self.pod_go {
             seen.insert(CATEGORY_AMP_CAB);
         }
         let mut out: Vec<(i64, &'static str)> = seen
@@ -1056,6 +1083,9 @@ impl Catalog {
         // Synthetic Amp+Cab: the amp list, each entry pre-paired with its `amp.models`-suggested
         // cab (combined DSP cost). Amps with no cab link (none today) just fall out of the list.
         if category == CATEGORY_AMP_CAB {
+            if self.pod_go {
+                return Vec::new();
+            }
             return self
                 .models_in_category(1, variant)
                 .into_iter()

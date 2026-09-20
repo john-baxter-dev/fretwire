@@ -85,11 +85,14 @@ Needs **Rust 1.96 or newer** (`rustup update` if your distro's toolchain is olde
 cargo build
 cargo test
 cargo run -p fretwire-cli -- detect                 # is an HX Stomp connected?
-cargo run -p fretwire-cli -- show-preset <stream>   # decode a reassembled device preset stream
+cargo run -p fretwire-cli -- show-preset <stream>   # decode a preset stream (needs imported data)
 ```
 
 The CLI binary is `fretwire`. `show-preset` takes a reassembled preset MessagePack stream and prints
-its blocks with resolved model ids, device param order (Mono/Stereo), and current values — offline.
+its blocks with resolved model ids, device param order (Mono/Stereo), and current values — offline,
+meaning no pedal. It still resolves those names against the [reference data](#the-reference-data),
+so on a fresh checkout it errors out until you import that; `tree` prints the same stream's raw
+structure with no reference data at all.
 
 `cargo build` deliberately skips the GUI, so it needs no system libraries beyond a Rust toolchain.
 
@@ -291,11 +294,14 @@ detect` saying `Helix Rack: present (untested device)` is itself the report we a
 
 ## The reference data
 
-The wire protocol edits by raw parameter index, so the tool works with **no** Line 6 data at all —
-you just get numeric indices instead of names. To get model/param names, the DSP meter, and control
-ranges, import the reference data from **your own** HX Edit installation (POD Go Edit for a POD
-Go, which indexes its own symbol table). Nothing is redistributed:
-the data goes Line 6 → you → the tool, and never through us.
+The wire protocol edits by raw parameter index, so none of Line 6's data ever goes over the wire.
+Decoding a preset into named blocks and parameters is another matter: the symbol table is the one
+file fretwire cannot do without, so **`show-preset` and every live command need the reference data
+imported first** — opening a session loads it, and fails without it. What still works untouched:
+`detect`, `tree`, `decode-edit`, `show-backup` and `backup-show`, which read the raw stream and
+never consult it. Importing is also what brings the DSP meter and control ranges. Import from
+**your own** HX Edit installation (POD Go Edit for a POD Go, which indexes its own symbol table).
+Nothing is redistributed: the data goes Line 6 → you → the tool, and never through us.
 
 The GUI asks for it on first run. From the CLI:
 

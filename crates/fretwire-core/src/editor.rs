@@ -328,6 +328,12 @@ pub struct EditorPreset {
     /// op 33 answers switches 1..=5 and refuses 6 with code `-3` (2026-08-22). Reading it from the
     /// preset means a Floor reports its own number without anything here being told about Floors.
     pub footswitch_count: usize,
+    /// How many footswitch **sources** the parameter-controller table (key `4`) holds — the count
+    /// `fretwire_protocol::edit::source` sizes its ordinals by. Read from the table's own length;
+    /// the same as [`Self::footswitch_count`] on the HX devices, **7 against 9** on a POD Go, whose
+    /// layout counts the toe switch and whose table does not (issue #15, 2026-09-23). Falls back
+    /// to `footswitch_count` for a stream with no table.
+    pub assign_switch_count: usize,
     /// Active snapshot index and snapshot names (preset key `10`).
     pub active_snapshot: Option<i64>,
     pub snapshot_names: Vec<String>,
@@ -1236,6 +1242,10 @@ impl Catalog {
             blocks,
             assignments: ps.assignments(),
             footswitch_count: ps.footswitch_layout().len(),
+            assign_switch_count: ps
+                .controller_table_len()
+                .map(fretwire_protocol::edit::source::switches_for_table)
+                .unwrap_or_else(|| ps.footswitch_layout().len()),
             active_snapshot: ps.snapshots().0,
             snapshot_names: ps.snapshots().1,
             dsp_load,

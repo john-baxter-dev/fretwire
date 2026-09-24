@@ -1038,7 +1038,7 @@ opcodes.
 |---|---|---|
 | 56 | `{98: slot, 102: switch}` | put a block's bypass on a footswitch |
 | 57 | `{98: slot, 102: switch}` | take it off again |
-| 37 | `{98: slot, 26: paired, 28: param, 29: true, 74: source, 71: 4, 129: false}` | put a parameter under a controller |
+| 37 | `{98: slot, 26: paired, 28: param, 29: true, 74: source, 71: 4, 129: false}` | put a parameter under a controller (**POD Go**: `{98, 29: true, 26, 28, 74, 71: 0}`, no `129` — see `docs/pod-go.md`) |
 | 65 | `{98, 26, 28, 29: true, 119: value}` | that assignment's **Min** |
 | 66 | same | its **Max** |
 | 33 | `{102: switch}` | read a footswitch's configuration |

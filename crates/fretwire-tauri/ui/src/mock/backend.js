@@ -971,6 +971,7 @@ function toDto(p) {
     // number without the UI knowing any model. Mirrored per mock device for the same reason — issue
     // #13 was the bypass picker capping this at 5, which an XL owner hit and no mock run could.
     footswitch_count: DEVICES[deviceMode].footswitches,
+    assign_switch_count: DEVICES[deviceMode].footswitches,
   };
 }
 

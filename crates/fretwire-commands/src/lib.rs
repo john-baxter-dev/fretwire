@@ -860,7 +860,7 @@ pub async fn assign_param(
             } else {
                 format!(
                     "{} \u{2192} {p}",
-                    crate::dto::source_name(source, s.footswitch_count())
+                    crate::dto::source_name(source, s.assign_switch_count())
                 )
             }
         },

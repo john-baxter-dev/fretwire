@@ -32,6 +32,10 @@
     // naming the IR block's `IR Select` choices. Empty until the parent has read it.
     irSlots = [],
     footswitchCount = 0,
+    // Footswitches that can drive a *parameter* — the controller table's run, not the bypass
+    // layout's. The same number on the HX devices; 7 against 9 on a POD Go, whose layout counts
+    // the expression toe switch (issue #15, 2026-09-23). Sizes SOURCES below.
+    assignSwitchCount = 0,
     onBypassSwitch,
     onSwitchLabel,
     onSwitchColor,
@@ -81,11 +85,11 @@
     { value: 0, label: "—" },
     { value: 1, label: "EXP1" },
     { value: 2, label: "EXP2" },
-    ...Array.from({ length: footswitchCount }, (_, i) => ({
+    ...Array.from({ length: assignSwitchCount }, (_, i) => ({
       value: 3 + i,
       label: `FS${i + 1}`,
     })),
-    ...(footswitchCount > 0 ? [{ value: 4 + footswitchCount, label: "Snapshots" }] : []),
+    ...(assignSwitchCount > 0 ? [{ value: 4 + assignSwitchCount, label: "Snapshots" }] : []),
   ]);
 
   // A bypass this block has on an **expression pedal**, or undefined.

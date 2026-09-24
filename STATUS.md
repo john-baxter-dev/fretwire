@@ -2,6 +2,19 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**POD Go: parameter assignments were refused, and Snapshots was labelled "FS9" (2026-09-23,
+issue #15).** With the DSP and Amp+Cab fixes confirmed, the owner found every op 37 refused with
+`-3`, whatever the source, and sent POD Go Edit assigning a parameter to Snapshots:
+`{98: 1, 29: true, 26: 0, 28: 0, 74: 11, 71: 0}` — the POD Go's set-value key order, `71: 0`, no
+key `129`. `edit::assign_param_pod_go` reproduces those bytes (golden in `pod_go_writes.rs`) and
+the session sends it on a POD Go. The second half explains an old oddity: the source ordinals were
+sized from the bypass layout, nine long on a POD Go because it counts the expression toe switch,
+so Snapshots computed to 13 and the pedal's own 11 read as "FS9". The controller table is 12 long
+on every POD Go preset held, Snapshots its last entry as on the Stomp and XL, so ordinals are now
+sized from the table (`assign_switch_count`, 7 there, the layout count on HX, pinned by a test on
+both). The picker lists FS1–FS7 and Snapshots on a POD Go. Which physical switch each of 3..=9
+is remains a hypothesis until a footswitch assignment is captured. 394 tests, clippy clean.
+
 **POD Go: the picker priced only the unsuffixed models, and offered an Amp+Cab list the pedal
 refuses (2026-09-17, issue #15).** The owner, with live-follow confirmed on v0.5.1, reported two
 leftovers. Most models showed no DSP load, and the ones that did were exactly the symbols without a

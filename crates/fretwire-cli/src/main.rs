@@ -2572,7 +2572,7 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
             };
             println!(
                 "  {} -> {}{}{}",
-                source_name(a.controller, preset.footswitch_count),
+                source_name(a.controller, preset.assign_switch_count),
                 slot,
                 param,
                 travel

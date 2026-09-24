@@ -277,6 +277,34 @@ wah and the volume pedal both carry `@fs_index: 9` (one enabled at a time — th
 between them), so wire layout position 8 is the toe switch, not a ninth stomp. The status push
 after the assignment is the familiar type 31: `{98: slot, 70: switch, 79: assigned}`.
 
+## Parameter assignments: POD Go Edit's op 37, and a table that does not count the toe  [solid — 2026-09-23 capture]
+
+Every op-37 assignment fretwire sent was refused with **`-3`**, for every source in the picker
+(owner, 2026-09-23). POD Go Edit putting slot 1's parameter 0 under **Snapshots** sends
+
+    {102: txn, 100: 37, 101: {98: 1, 29: true, 26: 0, 28: 0, 74: 11, 71: 0}}
+
+against the HX body `{98, 26, 28, 29, 74, 71: 4, 129: false}`: another key order (the POD Go's
+set-value order), key `71` as `0` rather than `4`, and **no key `129`**. The pedal answers with
+the new assignment entry (`{0: 11, 1: 0, 2: 0.0, 3: 1.0, …}`), pushes type 34 twice, and POD Go
+Edit re-reads it with op 36. `edit::assign_param_pod_go` reproduces the captured bytes exactly and
+`Session::assign_param` sends it on a POD Go. Which of the three differences the pedal objects to
+is not isolated; `71: 0` for the other sources and for removal is the capture's value carried
+over **[hypothesis]**.
+
+**Snapshots is 11, and our "FS9" was it.** The controller table (preset key `4`) is **12** long on
+all four POD Go presets held, and Snapshots sits at its last index, as on the Stomp (9 of 10) and
+the XL (12 of 13). fretwire sized the ordinals from the bypass layout, which has **nine** positions
+on a POD Go because the ninth is the expression toe switch (see "The footswitch map"), so it
+computed Snapshots at 13 and labelled the pedal's 11 as "FS9". The toe switch takes a bypass but
+cannot drive a parameter (owner: no such option on the pedal, and Learn will not take it), and the
+table has no entry for it. Ordinals are now sized from the table itself
+(`EditorPreset::assign_switch_count`, 7 on a POD Go, equal to the layout count on the HX devices).
+That makes 3..=9 seven footswitch sources, 10 the entry the HX layout calls MIDI and 11 Snapshots.
+**Which physical switch each of 3..=9 is, and whether 10 is MIDI, is [hypothesis]**: it follows
+the HX rule (FS`n` = 2 + `n`), which the bypass map obeys here, but no POD Go footswitch
+assignment has been captured.
+
 ## The fixed chain  [reported — 2026-08-27, issue #15; op-40 hazard measured 2026-08-31]
 
 Per the owner, POD Go Edit and the pedal both enforce that every preset contains exactly one each
@@ -332,8 +360,7 @@ mandated blocks in it, and the 2026-08-26 crash-at-next-preset-change was an add
 Go; occupancy — including the wah, volume, amp and cab slots — is `add_block_at`'s existing
 empty-slot check. (History: it refused every add between 2026-08-31 and 2026-09-02, which took
 the GUI's only way of filling an empty slot with it, then 9 and 10 for a day on a misreading of
-the two incidents.) What POD Go Edit itself sends when a model is picked for an empty slot has
-**not** been captured; the owner has offered one.
+the two incidents.)
 
 ## The wire slot array  [solid — read from the 2026-08-27 capture's preset]
 
@@ -430,6 +457,8 @@ question closed on 2026-09-04 from the webview's console rather than any log. Wh
 
 - **`RUST_LOG=debug fretwire ir-list`** — the op-13 reply, so the IR directory can be decoded
   rather than scanned around.
+- **The names POD Go Edit's Controller list gives**, in order — or one parameter put under a
+  footswitch — to pin which switch each ordinal 3..=10 is.
 - **A `-306` at a known load** — the raw sum `fretwire pull` prints when the pedal refuses a
   block for DSP, to calibrate the POD Go's ceiling (assumed the Stomp's 75).
 - ~~A footswitch press with the rebuilt GUI connected~~ — "footswitches in the UI now perfectly

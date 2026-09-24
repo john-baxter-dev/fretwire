@@ -970,6 +970,19 @@ pub mod source {
         footswitch_count + 5
     }
 
+    /// The inverse: how many footswitch **sources** a controller table of `len` entries holds —
+    /// the count every function in this module means by `footswitch_count`.
+    ///
+    /// On the HX devices this equals the footswitch layout's length, which is where the count was
+    /// read from. **On a POD Go it does not**: the layout has nine positions (the ninth is the
+    /// expression toe switch, which takes a bypass but not a parameter), and the controller table
+    /// is **12** long on all four presets held, with Snapshots at **11** — POD Go Edit's own op 37
+    /// for Snapshots (issue #15, 2026-09-23). Sized from the layout, Snapshots computed to 13 and
+    /// the pedal's 11 was labelled "FS9". So size from the table when there is one.
+    pub fn switches_for_table(len: usize) -> usize {
+        len.saturating_sub(5)
+    }
+
     /// Ordinal of footswitch `n`, one-based. `None` if the device has no such switch.
     pub fn footswitch(n: usize, footswitch_count: usize) -> Option<i64> {
         (1..=footswitch_count)
@@ -1040,6 +1053,38 @@ pub fn assign_param(slot: i64, paired: bool, param_index: i64, source: i64, txn:
                 // HX Edit sends. See [`K_ASSIGN_CC`].
                 (Value::from(K_ASSIGN_CC), Value::from(4)),
                 (Value::from(K_ASSIGN_FLAG129), Value::from(false)),
+            ]),
+        ),
+    ]))
+}
+
+/// [`assign_param`] as **POD Go Edit** sends it: `{98: slot, 29: true, 26: paired, 28: param,
+/// 74: source, 71: 0}` — its own key order, key `71` as `0`, and **no key `129`**. The HX body is
+/// refused by a POD Go with `-3` for every source (owner, 2026-09-23, issue #15); this one is the
+/// captured bytes of POD Go Edit putting slot 1's parameter 0 under Snapshots, reproduced exactly
+/// (`tests/pod_go_writes.rs`). The same key order as the POD Go's set-value.
+///
+/// Only the Snapshots assignment has been captured. `71: 0` for the other sources, and for removal
+/// (source [`SOURCE_NONE`]), is the capture's value carried over — [hypothesis].
+pub fn assign_param_pod_go(
+    slot: i64,
+    paired: bool,
+    param_index: i64,
+    source: i64,
+    txn: u16,
+) -> Vec<u8> {
+    encode(Value::Map(vec![
+        (Value::from(K_TXN), Value::from(txn)),
+        (Value::from(K_OP), Value::from(OP_ASSIGN_PARAM)),
+        (
+            Value::from(K_TARGET),
+            Value::Map(vec![
+                (Value::from(K_SLOT), Value::from(slot)),
+                (Value::from(K_ASSIGN_IS_PARAM), Value::from(true)),
+                (Value::from(K_MODEL_SEL), Value::from(i64::from(paired))),
+                (Value::from(K_PARAM_INDEX), Value::from(param_index)),
+                (Value::from(K_ASSIGN_SOURCE), Value::from(source)),
+                (Value::from(K_ASSIGN_CC), Value::from(0)),
             ]),
         ),
     ]))

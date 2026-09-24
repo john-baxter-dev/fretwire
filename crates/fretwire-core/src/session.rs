@@ -1596,6 +1596,16 @@ impl Session {
             .map_or(0, |p| p.footswitch_count)
     }
 
+    /// Footswitch **sources** in the cached preset's controller table — what op 37's ordinals are
+    /// sized by. See [`crate::editor::EditorPreset::assign_switch_count`]; differs from
+    /// [`Self::footswitch_count`] on a POD Go.
+    pub fn assign_switch_count(&self) -> usize {
+        self.last_raw
+            .as_ref()
+            .and_then(|raw| self.catalog.load_preset(raw).ok())
+            .map_or(0, |p| p.assign_switch_count)
+    }
+
     /// Human name for the block at `slot` — the user label if set, else the model name — resolved
     /// from the cached pre-edit preset. Falls back to `"slot N"` when nothing is cached (or the
     /// slot is empty/structural). For history-entry labels.
@@ -2674,7 +2684,7 @@ impl Session {
         param_index: i64,
         source: i64,
     ) -> crate::Result<()> {
-        let switches = self.footswitch_count();
+        let switches = self.assign_switch_count();
         let last = edit::source::table_len(switches) as i64 - 1;
         // With no preset cached there is no device to size against; 0 (remove) is still meaningful,
         // and anything else would be bounded against a number we do not have.
@@ -2684,7 +2694,13 @@ impl Session {
             )));
         }
         let txn = self.bump_txn();
-        self.send_edit(edit::assign_param(slot, paired, param_index, source, txn))?;
+        // The POD Go refuses the HX body with `-3`; it takes POD Go Edit's (see the builder).
+        let body = if self.device().pid == fretwire_protocol::PID_POD_GO {
+            edit::assign_param_pod_go(slot, paired, param_index, source, txn)
+        } else {
+            edit::assign_param(slot, paired, param_index, source, txn)
+        };
+        self.send_edit(body)?;
         Ok(())
     }
 

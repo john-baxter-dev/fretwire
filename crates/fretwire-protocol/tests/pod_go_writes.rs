@@ -78,3 +78,20 @@ fn the_footswitch_assignment_matches_the_pod_go_bytes() {
     );
     assert_eq!(edit::read_switch(3, 1017), hex("8366cd03f9642165816603"));
 }
+
+/// Putting slot 1's parameter 0 under **Snapshots** in POD Go Edit (issue #15, 2026-09-23).
+/// `{102: 1007, 100: 37, 101: {98: 1, 29: true, 26: 0, 28: 0, 74: 11, 71: 0}}` — not the HX body:
+/// another key order, `71` as 0 and no `129`. The HX body is refused by the POD Go with `-3` for
+/// every source, Snapshots at 11 included.
+#[test]
+fn assign_param_matches_the_pod_go_bytes() {
+    assert_eq!(
+        edit::assign_param_pod_go(1, false, 0, 11, 1007),
+        hex("8366cd03ef6425658662011dc31a001c004a0b4700")
+    );
+    assert_ne!(
+        edit::assign_param(1, false, 0, 11, 1007),
+        edit::assign_param_pod_go(1, false, 0, 11, 1007),
+        "the HX body is what the pedal refused"
+    );
+}

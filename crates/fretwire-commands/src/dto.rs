@@ -434,6 +434,11 @@ pub struct PresetDto {
     /// the external jack). Read from the preset's own layout, so it is right without the UI knowing
     /// anything about device models.
     pub footswitch_count: usize,
+    /// How many footswitches can **drive a parameter** — the run of footswitch sources in the
+    /// controller table, which the UI's controller picker lists. Equal to `footswitch_count` on the
+    /// HX devices; smaller on a POD Go, whose layout counts the toe switch (see
+    /// `EditorPreset::assign_switch_count`).
+    pub assign_switch_count: usize,
     /// `true` when the edit buffer has changes not saved to flash — stamped by the command layer.
     pub dirty: bool,
 }
@@ -542,7 +547,7 @@ impl From<&EditorPreset> for PresetDto {
                 .iter()
                 .map(|a| AssignmentDto {
                     source: a.controller,
-                    source_name: source_name(a.controller, p.footswitch_count),
+                    source_name: source_name(a.controller, p.assign_switch_count),
                     target_slot: a.target_slot,
                     param_index: a.param_index,
                     paired: a.paired(),
@@ -565,6 +570,7 @@ impl From<&EditorPreset> for PresetDto {
                 })
                 .collect(),
             footswitch_count: p.footswitch_count,
+            assign_switch_count: p.assign_switch_count,
         }
     }
 }

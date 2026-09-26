@@ -972,6 +972,7 @@ function toDto(p) {
     // #13 was the bypass picker capping this at 5, which an XL owner hit and no mock run could.
     footswitch_count: DEVICES[deviceMode].footswitches,
     assign_switch_count: DEVICES[deviceMode].footswitches,
+    snapshots_source: DEVICES[deviceMode].footswitches + 4,
   };
 }
 

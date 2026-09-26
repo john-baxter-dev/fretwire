@@ -2,6 +2,17 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**POD Go: the controller table has no MIDI entry (2026-09-25, issue #15).** Asked which
+controllers POD Go Edit offers, the owner sent its picker: None, FS1–FS8, EXP 1, EXP 2, Snapshots,
+with Mode, Tap and EXP Toe greyed out and no MIDI. Twelve, the table's length — so 3..=10 are eight
+footswitches and 11 is Snapshots, not seven plus MIDI as the 09-23 fix assumed (which dropped FS8
+from the picker and would have named 10 "MIDI"). `edit::source::Layout { switches, midi }` now
+carries the shape, sized from the table with `midi: false` for a `P34` preset, and replaces the
+bare count on `EditorPreset` (`assign_sources`), the session's bound check, the DTO (which also
+sends `snapshots_source`, since it is no longer `switches + 4` everywhere), the history label and
+the CLI. The HX free functions are unchanged, and a test sizes `Layout` from the Stomp and XL
+captures and checks it names every ordinal as they do. 394 tests, clippy clean.
+
 **POD Go: parameter assignments were refused, and Snapshots was labelled "FS9" (2026-09-23,
 issue #15).** With the DSP and Amp+Cab fixes confirmed, the owner found every op 37 refused with
 `-3`, whatever the source, and sent POD Go Edit assigning a parameter to Snapshots:

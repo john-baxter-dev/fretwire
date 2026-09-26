@@ -970,17 +970,78 @@ pub mod source {
         footswitch_count + 5
     }
 
-    /// The inverse: how many footswitch **sources** a controller table of `len` entries holds —
-    /// the count every function in this module means by `footswitch_count`.
+    /// One device's controller table, as op 37's ordinals index it: `0` none, `1`/`2` the
+    /// expression inputs, `switches` footswitches from [`super::SOURCE_FS1`], then MIDI **if the
+    /// device has one**, then Snapshots. The free functions in this module are the HX shape
+    /// (`midi: true`); this carries the POD Go's too.
     ///
-    /// On the HX devices this equals the footswitch layout's length, which is where the count was
-    /// read from. **On a POD Go it does not**: the layout has nine positions (the ninth is the
-    /// expression toe switch, which takes a bypass but not a parameter), and the controller table
-    /// is **12** long on all four presets held, with Snapshots at **11** — POD Go Edit's own op 37
-    /// for Snapshots (issue #15, 2026-09-23). Sized from the layout, Snapshots computed to 13 and
-    /// the pedal's 11 was labelled "FS9". So size from the table when there is one.
-    pub fn switches_for_table(len: usize) -> usize {
-        len.saturating_sub(5)
+    /// **The POD Go has no MIDI entry.** Its table is 12 long on all four presets held, Snapshots
+    /// at 11 (POD Go Edit's own op 37, 2026-09-23), and POD Go Edit's controller picker offers
+    /// exactly None, FS1–FS8, EXP 1, EXP 2 and Snapshots — Mode, Tap and EXP Toe greyed out, no
+    /// MIDI (owner's screenshot, 2026-09-25). Twelve entries, eight switches: 3..=10 are FS1–FS8,
+    /// the six on the panel and the two on the external jack [solid for the set and the count;
+    /// the order is the HX rule, which the POD Go's bypass map also follows]. Sized the HX way
+    /// from its bypass layout — nine long, the ninth the toe switch — Snapshots computed to 13
+    /// and the pedal's 11 read as "FS9" (issue #15).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub struct Layout {
+        /// Footswitches that can drive a parameter.
+        pub switches: usize,
+        /// Whether the table has a MIDI entry between the footswitches and Snapshots.
+        pub midi: bool,
+    }
+
+    impl Layout {
+        /// The HX shape: MIDI present, so the table is `switches + 5`.
+        pub fn hx(switches: usize) -> Layout {
+            Layout {
+                switches,
+                midi: true,
+            }
+        }
+
+        /// Size a layout from the table's own length. `midi` is the device's — `false` on a POD
+        /// Go, `true` on the HX devices.
+        pub fn from_table(len: usize, midi: bool) -> Layout {
+            let fixed = if midi { 5 } else { 4 };
+            Layout {
+                switches: len.saturating_sub(fixed),
+                midi,
+            }
+        }
+
+        /// Entries in the table.
+        pub fn table_len(&self) -> usize {
+            self.switches + if self.midi { 5 } else { 4 }
+        }
+
+        /// The MIDI ordinal, if the device has one.
+        pub fn midi_ordinal(&self) -> Option<i64> {
+            self.midi.then(|| super::SOURCE_FS1 + self.switches as i64)
+        }
+
+        /// The Snapshots ordinal — the table's last entry on every device held.
+        pub fn snapshots(&self) -> i64 {
+            self.table_len() as i64 - 1
+        }
+
+        /// Name an ordinal for display. A layout with no switches (no preset loaded) names only
+        /// the expression inputs, as [`name`] does.
+        pub fn name(&self, ordinal: i64) -> String {
+            if self.midi {
+                return name(ordinal, self.switches);
+            }
+            match ordinal {
+                1 => "EXP1".into(),
+                2 => "EXP2".into(),
+                _ if self.switches == 0 => format!("Controller {ordinal}"),
+                n if (super::SOURCE_FS1..super::SOURCE_FS1 + self.switches as i64).contains(&n) => {
+                    format!("FS{}", n - super::SOURCE_FS1 + 1)
+                }
+                n if n == self.snapshots() => "Snapshots".into(),
+                n => format!("Controller {n}"),
+            }
+        }
     }
 
     /// Ordinal of footswitch `n`, one-based. `None` if the device has no such switch.

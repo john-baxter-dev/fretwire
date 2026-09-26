@@ -33,9 +33,12 @@
     irSlots = [],
     footswitchCount = 0,
     // Footswitches that can drive a *parameter* — the controller table's run, not the bypass
-    // layout's. The same number on the HX devices; 7 against 9 on a POD Go, whose layout counts
-    // the expression toe switch (issue #15, 2026-09-23). Sizes SOURCES below.
+    // layout's. The same number on the HX devices; 8 against 9 on a POD Go, whose layout counts
+    // the expression toe switch (issue #15, 2026-09-23/25). Sizes SOURCES below.
     assignSwitchCount = 0,
+    // The Snapshots ordinal, from the backend. `assignSwitchCount + 4` on the HX devices, where
+    // MIDI sits between; one lower on a POD Go, which has no MIDI entry.
+    snapshotsSource = undefined,
     onBypassSwitch,
     onSwitchLabel,
     onSwitchColor,
@@ -89,7 +92,9 @@
       value: 3 + i,
       label: `FS${i + 1}`,
     })),
-    ...(assignSwitchCount > 0 ? [{ value: 4 + assignSwitchCount, label: "Snapshots" }] : []),
+    ...(assignSwitchCount > 0
+      ? [{ value: snapshotsSource ?? 4 + assignSwitchCount, label: "Snapshots" }]
+      : []),
   ]);
 
   // A bypass this block has on an **expression pedal**, or undefined.

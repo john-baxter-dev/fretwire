@@ -250,17 +250,19 @@ fn a_source_may_hold_several_entries_and_one_may_be_orphaned() {
     );
 }
 
-/// The **POD Go** breaks the layout-sized rule: its footswitch layout has nine positions (the
-/// ninth is the expression toe switch, which takes a bypass and not a parameter), but its
-/// controller table is 12 long, and POD Go Edit put a parameter under Snapshots at **11** — the
-/// table's last entry, as on the Stomp (9 of 10) and the XL (12 of 13). Sized from the layout,
-/// Snapshots computed to 13 and a snapshot-driven parameter was labelled "FS9". [issue #15,
-/// 2026-09-23]
+/// The **POD Go** breaks both HX rules. Its bypass layout has nine positions (the ninth is the
+/// expression toe switch, which takes a bypass and not a parameter), and its controller table has
+/// **no MIDI entry**: 12 long on every preset held, POD Go Edit's own op 37 put Snapshots at
+/// **11**, and its controller picker offers exactly None, FS1–FS8, EXP 1, EXP 2 and Snapshots
+/// (owner's screenshot, 2026-09-25). So eight footswitches at 3..=10, then Snapshots. Sized the HX
+/// way from the layout, Snapshots computed to 13 and the pedal's 11 was labelled "FS9". [issue
+/// #15]
 ///
 /// The fixtures are the contributor's presets, kept untracked in `captures/pod-go/`; skipped on
 /// a clean clone.
 #[test]
-fn a_pod_go_is_sized_by_its_table_not_its_layout() {
+fn a_pod_go_is_sized_by_its_table_and_has_no_midi() {
+    use source::Layout;
     let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../captures/pod-go");
     let mut seen = 0;
     for name in [
@@ -273,6 +275,7 @@ fn a_pod_go_is_sized_by_its_table_not_its_layout() {
             continue;
         };
         let ps = PresetStream::parse(&bytes).expect("parse POD Go stream");
+        assert_eq!(ps.device_model().as_deref(), Some("P34"), "{name}");
         let len = ps.controller_table_len().expect("a controller table");
         assert_eq!(len, 12, "{name}");
         assert_eq!(
@@ -280,14 +283,13 @@ fn a_pod_go_is_sized_by_its_table_not_its_layout() {
             9,
             "{name}: layout counts the toe"
         );
-        let switches = source::switches_for_table(len);
-        assert_eq!(switches, 7, "{name}");
-        assert_eq!(
-            source::snapshots(switches),
-            11,
-            "POD Go Edit's Snapshots ordinal"
-        );
-        assert_eq!(source::name(11, switches), "Snapshots");
+        let layout = Layout::from_table(len, false);
+        assert_eq!(layout.switches, 8, "{name}: FS1-FS8");
+        assert_eq!(layout.snapshots(), 11, "POD Go Edit's Snapshots ordinal");
+        assert_eq!(layout.midi_ordinal(), None);
+        assert_eq!(layout.name(3), "FS1");
+        assert_eq!(layout.name(10), "FS8");
+        assert_eq!(layout.name(11), "Snapshots");
         seen += 1;
     }
     if seen == 0 {
@@ -295,19 +297,23 @@ fn a_pod_go_is_sized_by_its_table_not_its_layout() {
     }
 }
 
-/// On the HX devices the table-sized count is the layout count, so switching the sizing over
-/// changes nothing there.
+/// The layout type keeps the HX shape exactly: sized from each HX table with MIDI present, it
+/// gives the layout count, MIDI and Snapshots where the free functions put them.
 #[test]
-fn on_hx_devices_the_table_and_the_layout_agree() {
+fn on_hx_devices_the_layout_matches_the_free_functions() {
+    use source::Layout;
     for name in [
         "assign_two_footswitches.msgpack.bin",
         "xl_assign_midi_and_snapshots.msgpack.bin",
     ] {
         let ps = capture(name);
-        assert_eq!(
-            source::switches_for_table(ps.controller_table_len().unwrap()),
-            ps.footswitch_layout().len(),
-            "{name}"
-        );
+        let layout = Layout::from_table(ps.controller_table_len().unwrap(), true);
+        let n = ps.footswitch_layout().len();
+        assert_eq!(layout, Layout::hx(n), "{name}");
+        assert_eq!(layout.midi_ordinal(), Some(source::midi(n)), "{name}");
+        assert_eq!(layout.snapshots(), source::snapshots(n), "{name}");
+        for o in 0..layout.table_len() as i64 {
+            assert_eq!(layout.name(o), source::name(o, n), "{name} ordinal {o}");
+        }
     }
 }

@@ -1596,14 +1596,14 @@ impl Session {
             .map_or(0, |p| p.footswitch_count)
     }
 
-    /// Footswitch **sources** in the cached preset's controller table — what op 37's ordinals are
-    /// sized by. See [`crate::editor::EditorPreset::assign_switch_count`]; differs from
-    /// [`Self::footswitch_count`] on a POD Go.
-    pub fn assign_switch_count(&self) -> usize {
+    /// The cached preset's controller-table shape — what op 37's ordinals index. See
+    /// [`crate::editor::EditorPreset::assign_sources`]; differs from the footswitch layout on a
+    /// POD Go. Empty (no switches) with nothing cached.
+    pub fn assign_sources(&self) -> edit::source::Layout {
         self.last_raw
             .as_ref()
             .and_then(|raw| self.catalog.load_preset(raw).ok())
-            .map_or(0, |p| p.assign_switch_count)
+            .map_or_else(Default::default, |p| p.assign_sources)
     }
 
     /// Human name for the block at `slot` — the user label if set, else the model name — resolved
@@ -2684,8 +2684,9 @@ impl Session {
         param_index: i64,
         source: i64,
     ) -> crate::Result<()> {
-        let switches = self.assign_switch_count();
-        let last = edit::source::table_len(switches) as i64 - 1;
+        let layout = self.assign_sources();
+        let switches = layout.switches;
+        let last = layout.table_len() as i64 - 1;
         // With no preset cached there is no device to size against; 0 (remove) is still meaningful,
         // and anything else would be bounded against a number we do not have.
         if source < 0 || (switches > 0 && source > last) {

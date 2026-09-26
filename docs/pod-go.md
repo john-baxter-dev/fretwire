@@ -298,12 +298,18 @@ the XL (12 of 13). fretwire sized the ordinals from the bypass layout, which has
 on a POD Go because the ninth is the expression toe switch (see "The footswitch map"), so it
 computed Snapshots at 13 and labelled the pedal's 11 as "FS9". The toe switch takes a bypass but
 cannot drive a parameter (owner: no such option on the pedal, and Learn will not take it), and the
-table has no entry for it. Ordinals are now sized from the table itself
-(`EditorPreset::assign_switch_count`, 7 on a POD Go, equal to the layout count on the HX devices).
-That makes 3..=9 seven footswitch sources, 10 the entry the HX layout calls MIDI and 11 Snapshots.
-**Which physical switch each of 3..=9 is, and whether 10 is MIDI, is [hypothesis]**: it follows
-the HX rule (FS`n` = 2 + `n`), which the bypass map obeys here, but no POD Go footswitch
-assignment has been captured.
+table has no entry for it.
+
+**And there is no MIDI entry.** [solid — owner's screenshot, 2026-09-25] POD Go Edit's "Select a
+controller" picker offers exactly **None, FS1–FS6** (the panel), **FS7, FS8** (the external
+footswitch jack), **EXP 1, EXP 2** and **Snapshots**; Mode, Tap and EXP Toe are drawn but greyed
+out, and MIDI is not offered at all. That is twelve entries, the table's length, so the POD Go's
+table is `0` none, `1`/`2` the expression inputs, **3..=10 FS1–FS8**, **11 Snapshots** — the HX
+shape with the MIDI entry missing (`edit::source::Layout { switches: 8, midi: false }`, carried
+on `EditorPreset::assign_sources`). A first pass on 2026-09-23 assumed the HX shape and read
+seven switches plus MIDI at 10, which left FS8 out of the picker. The order of 3..=10 is the HX
+rule, which the POD Go's bypass map also follows; the set and the count are read, the order is
+inferred.
 
 ## The fixed chain  [reported — 2026-08-27, issue #15; op-40 hazard measured 2026-08-31]
 
@@ -457,8 +463,8 @@ question closed on 2026-09-04 from the webview's console rather than any log. Wh
 
 - **`RUST_LOG=debug fretwire ir-list`** — the op-13 reply, so the IR directory can be decoded
   rather than scanned around.
-- **The names POD Go Edit's Controller list gives**, in order — or one parameter put under a
-  footswitch — to pin which switch each ordinal 3..=10 is.
+- **One parameter put under FS7 or FS8 in POD Go Edit** — would confirm the order of 3..=10
+  (the set and count are read off POD Go Edit's picker; the order follows the HX rule).
 - **A `-306` at a known load** — the raw sum `fretwire pull` prints when the pedal refuses a
   block for DSP, to calibrate the POD Go's ceiling (assumed the Stomp's 75).
 - ~~A footswitch press with the rebuilt GUI connected~~ — "footswitches in the UI now perfectly

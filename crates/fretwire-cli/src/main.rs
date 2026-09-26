@@ -2572,24 +2572,13 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
             };
             println!(
                 "  {} -> {}{}{}",
-                source_name(a.controller, preset.assign_switch_count),
+                preset.assign_sources.name(a.controller),
                 slot,
                 param,
                 travel
             );
         }
     }
-}
-
-/// Name the physical control an assignment's source ordinal refers to, for a device with
-/// `footswitch_count` switches.
-///
-/// The count decides the answer: ordinal `8` is MIDI on a Stomp and FS6 on an XL. FS1 = 3 is
-/// [solid] on both. The names for 1, 2 and MIDI are `tonepush`'s, inferred from the footswitch run
-/// leaving them, so anything unproven prints as a bare ordinal rather than a confident label — the
-/// caveat lives in `docs/preset-format.md`.
-fn source_name(ordinal: i64, footswitch_count: usize) -> String {
-    fretwire_core::fretwire_protocol::edit::source::name(ordinal, footswitch_count)
 }
 
 /// A parameter as a human reads it, with the raw value kept alongside because that is what

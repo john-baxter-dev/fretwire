@@ -435,10 +435,13 @@ pub struct PresetDto {
     /// anything about device models.
     pub footswitch_count: usize,
     /// How many footswitches can **drive a parameter** — the run of footswitch sources in the
-    /// controller table, which the UI's controller picker lists. Equal to `footswitch_count` on the
-    /// HX devices; smaller on a POD Go, whose layout counts the toe switch (see
-    /// `EditorPreset::assign_switch_count`).
+    /// controller table, which the UI's controller picker lists as FS1..FS`n`. Equal to
+    /// `footswitch_count` on the HX devices; 8 against 9 on a POD Go, whose layout counts the toe
+    /// switch (see `EditorPreset::assign_sources`).
     pub assign_switch_count: usize,
+    /// The Snapshots source ordinal. Not `assign_switch_count + 4` everywhere: the POD Go has no
+    /// MIDI entry before it, so there it is one lower.
+    pub snapshots_source: i64,
     /// `true` when the edit buffer has changes not saved to flash — stamped by the command layer.
     pub dirty: bool,
 }
@@ -474,8 +477,11 @@ pub struct AssignmentDto {
 /// The count is not optional decoration: ordinal `8` is MIDI on a Stomp and **FS6** on an XL, and
 /// naming it without one showed an XL owner's front-panel assignment as "Driven by MIDI" (issue
 /// #13). See `fretwire_protocol::edit::source`, which owns the arithmetic.
-pub fn source_name(ordinal: i64, footswitch_count: usize) -> String {
-    fretwire_core::fretwire_protocol::edit::source::name(ordinal, footswitch_count)
+pub fn source_name(
+    ordinal: i64,
+    layout: fretwire_core::fretwire_protocol::edit::source::Layout,
+) -> String {
+    layout.name(ordinal)
 }
 
 /// A travel end as a number. The wire keeps these in the parameter's own type — `false`/`true` for
@@ -547,7 +553,7 @@ impl From<&EditorPreset> for PresetDto {
                 .iter()
                 .map(|a| AssignmentDto {
                     source: a.controller,
-                    source_name: source_name(a.controller, p.assign_switch_count),
+                    source_name: source_name(a.controller, p.assign_sources),
                     target_slot: a.target_slot,
                     param_index: a.param_index,
                     paired: a.paired(),
@@ -570,7 +576,8 @@ impl From<&EditorPreset> for PresetDto {
                 })
                 .collect(),
             footswitch_count: p.footswitch_count,
-            assign_switch_count: p.assign_switch_count,
+            assign_switch_count: p.assign_sources.switches,
+            snapshots_source: p.assign_sources.snapshots(),
         }
     }
 }

@@ -1541,6 +1541,7 @@
             assignments={preset?.assignments ?? []}
             footswitchCount={preset?.footswitch_count ?? 0}
             assignSwitchCount={preset?.assign_switch_count ?? preset?.footswitch_count ?? 0}
+            snapshotsSource={preset?.snapshots_source}
             {irSlots}
             {onBypassSwitch}
             {onSwitchLabel}

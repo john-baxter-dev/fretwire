@@ -2831,8 +2831,8 @@ impl Session {
                     .any(|q| q.index as i64 == param_index && q.name.eq_ignore_ascii_case("bypass"))
         };
         p.dsps.iter().any(|d| {
-            d.split_node.as_ref().is_some_and(&is_bypass)
-                || d.mixer_node.as_ref().is_some_and(&is_bypass)
+            d.split_node.as_ref().is_some_and(is_bypass)
+                || d.mixer_node.as_ref().is_some_and(is_bypass)
         })
     }
 

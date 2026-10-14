@@ -2,8 +2,7 @@
 
 An independent, from-scratch **Linux editor for Line 6's HX family** — Helix Floor, LT and Rack,
 HX Stomp and HX Stomp XL, HX Effects, and the POD Go — written in Rust. How far each one is
-proven on real hardware is in [Devices](#devices); the Rack is recognised but nobody has plugged
-one in yet.
+proven on real hardware is in [Devices](#devices).
 
 **[fretwire.org](https://fretwire.org)** — screenshots, supported devices, and the FAQ.
 
@@ -269,7 +268,7 @@ covers a local desktop session. The rule also grants the `plugdev` group for exa
 | HX Stomp XL | `0x4253` | **reported working** — an owner runs it, reads `01A`-`32D` (32 banks of 4) off its screen, and its handshake identifies it as `P36`. Two preset streams off one (issue #13) settle one DSP, four snapshots, eight footswitches and a 13-entry controller table; they are reads, so no edit builder has been checked against an XL and its setlist count is still unknown |
 | HX Effects  | `0x4245` | **reported working** — an owner runs it and reports it works; that report is the whole of what we hold. Its `lsusb` line arrived first (issue #10), so `detect` finds one and the udev rule covers it. No capture and no logged session, and it is effects-only, so none of its preset geometry is assumed from a Stomp |
 | POD Go      | `0x4247` | **verified** — an owner's captures, `.pgb` backup and hardware reports (issue #15) filled in every field: our edit builders reproduce its parameter, bypass, model-swap and footswitch-assignment bytes exactly, and they have driven one from the editor in both directions ([`docs/pod-go.md`](docs/pod-go.md)). It identifies as `P34`, has two setlists (`Factory`/`User`, 128 slots each, numbered `01A`-`32D`), and indexes its own symbol table, so it needs POD Go Edit's reference data imported, not HX Edit's. Its fixed chain means add/move/delete are not mapped |
-| Helix Rack  | `0x4249` | **untested** — recognised and covered by the udev rule, but nobody has run fretwire against one. The PID is the Linux kernel's Line 6 quirk table, not a reading off a unit; the two ids either side of it there are the Floor's `0x4248` and the LT's `0x424a`, which we did measure. Nothing else about the Rack is assumed — not even the Floor's `P21`. **On firmware older than 2.82 a Rack enumerates as `0x4242` instead** and is not listed, as no pre-2.82 Helix is |
+| Helix Rack  | `0x4249` | **reads verified, edits untested** — surveyed read-only by an owner on fw 3.80.0 ([`docs/helix-rack.md`](docs/helix-rack.md), issue #24): it identifies as the Floor's `P21`, and handshake, preset read, setlists, preset browse and settings dump all reconcile. Two DSPs, eight snapshots, eight setlists of 128, numbered `01A`-`32D`. No edit has been sent to one. **On firmware older than 2.82 a Rack enumerates as `0x4242` instead** and is not listed, as no pre-2.82 Helix is |
 
 An unverified device logs a caveat when opened, and is only picked after a verified one. Nothing in
 the device table is guessed: a field we have not seen is `None`, and the editor falls back rather
@@ -287,10 +286,6 @@ lsusb -d 0e41:            # e.g. Bus 001 Device 007: ID 0e41:42xx Line 6 ...
 
 Open an issue with that line. Adding it is a table entry plus a udev rule; it would start as
 **untested**, and become **verified** once someone captures HX Edit talking to one.
-
-**Helix Rack owners:** the entry is already there and we would like to hear either way — `fretwire
-detect` saying `Helix Rack: present (untested device)` is itself the report we are missing, and
-`lsusb -d 0e41:` saying `4242` instead would tell us the unit predates firmware 2.82.
 
 ## The reference data
 

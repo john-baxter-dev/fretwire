@@ -36,17 +36,17 @@ pub const PID_HELIX_FLOOR: u16 = 0x4248;
 /// The unit identifies itself as `P21` — the Floor's model code — and every read path
 /// reconciles against it unchanged. See `docs/helix-lt.md`.
 pub const PID_HELIX_LT: u16 = 0x424A;
-/// USB Product ID for the Helix Rack. **Not read off a unit** — it comes from the Linux kernel's
-/// Line 6 rate quirk (`sound/usb/format.c`, `line6_parse_audio_format_rates_quirk`), whose table
-/// labels it `/* Line6 Helix Rack >= fw 2.82 */`.
+/// USB Product ID for the Helix Rack. First taken from the Linux kernel's Line 6 rate quirk
+/// (`sound/usb/format.c`, `line6_parse_audio_format_rates_quirk`), whose table labels it
+/// `/* Line6 Helix Rack >= fw 2.82 */`, and since **confirmed on a unit**: `lsusb` on an owner's
+/// Rack (fw 3.80.0) reads `ID 0e41:4249 Line6, Inc. HELIX` (2026-10-14, issue #24). It reports
+/// `P21`, like the LT. See `docs/helix-rack.md`.
 ///
 /// That "`>= fw 2.82`" is the whole reason this is `0x4249` and not the `0x4242` a search turns up
 /// first. The three original Helix units changed product id at firmware 2.82 — the same table
 /// carries `0x4241` "Helix", `0x4242` "Helix Rack" and `0x4244` "Helix LT" for the old ids, and
-/// `0x4248`, `0x4249`, `0x424A` for the new ones — and **we have measured two of the three new
-/// ones on real hardware**: the Floor answered on `0x4248` (fw 3.82) and the LT on `0x424A`. Both
-/// endpoints of the kernel's new-id row check out, so the value between them is the one a Rack on
-/// any firmware fretwire has ever spoken to will present.
+/// `0x4248`, `0x4249`, `0x424A` for the new ones — and all three new ones have now answered on
+/// real hardware: the Floor on `0x4248` (fw 3.82), the LT on `0x424A` and the Rack on `0x4249`.
 ///
 /// The pre-2.82 ids are deliberately **not** in [`DEVICES`], this device's `0x4242` included: the
 /// protocol here was recovered from firmware 3.x, no pre-2.82 unit of any model is listed (the
@@ -190,10 +190,10 @@ pub struct Device {
 /// the whole of the evidence — no capture, no session, no panel readings — so every other field is
 /// still empty.
 ///
-/// The **Helix Rack** is the table's only [`Support::Untested`] entry and the only one that got
-/// here without a single person: its id was read out of the Linux kernel's Line 6 quirk table (see
-/// [`PID_HELIX_RACK`]), corroborated by our own measurements of the two ids either side of it. No
-/// owner has ever run fretwire against one, so it is listed last, opened last, and warns loudly.
+/// The **Helix Rack** got into the table without a single person: its id was read out of the Linux
+/// kernel's Line 6 quirk table (see [`PID_HELIX_RACK`]) as [`Support::Untested`]. An owner has since
+/// surveyed one read-only (issue #24) and it reached [`Support::Reported`] the LT's way — reports
+/// `P21`, two DSPs, eight setlists of 128 — so the `Untested` tier is empty again.
 pub const DEVICES: &[Device] = &[
     Device {
         pid: PID_HX_STOMP,
@@ -388,24 +388,40 @@ pub const DEVICES: &[Device] = &[
     Device {
         pid: PID_HELIX_RACK,
         name: "Helix Rack",
-        // Empty across the board, and this one is emptier than it looks. The Rack is a Floor in a
-        // 19" box — same DSPs, same setlists, near-certainly the same `P21` — and that is exactly
-        // why none of it is written down here. A guessed `P21` would make `by_model_code` ambiguous
-        // and would let a Rack pass the handshake's identity check on a code nobody has read off
-        // one; leaving it `None` sends `session::handshake` down its "accept any P##" path, which
-        // is what an unobserved device should get. If it does report `P21`, it joins the Floor's
-        // data class and these fields can be filled in from a single session.
-        model_code: None,
+        // The Floor's code, like the LT's: the handshake identity reply reported "P21" and a
+        // pulled preset carries key `7 → 36` = "P21\0". It joins the Floor's data class, and
+        // `by_model_code("P21")` keeps resolving to the Floor, which is listed first.
+        // [solid — 2026-10-14, owner survey, issue #24]
+        model_code: Some("P21"),
+        // Unknown: the wire carries no `0x0021xxxx` id, and we have no backup from a Rack.
         preset_device_id: None,
-        dsps: None,
-        snapshots: None,
-        setlists: None,
-        setlist_size: None,
-        presets_per_bank: None,
-        // The tier's literal definition: only the USB IDs are known, and here even those are
-        // second-hand. Below the HX Effects, which at least has an owner saying it works.
-        // [2026-09-01 — the Linux kernel's quirk table, see `PID_HELIX_RACK`]
-        support: Support::Untested,
+        // Both DSPs — a pulled preset held blocks in slots 35..38 (the unit reported DSP1 71.8% /
+        // DSP2 74.5%).
+        dsps: Some(2),
+        // The pulled presets carry SNAPSHOT 1..SNAPSHOT 8.
+        snapshots: Some(8),
+        // Banks 0..7 each list and bank 8 is refused (code -3); bank 0 holds 128 factory amp
+        // presets. The names are the Floor's, as for the LT: only the arity and bank 0 were
+        // observed, not the names themselves.
+        setlists: Some(&[
+            "FACTORY 1",
+            "FACTORY 2",
+            "USER 1",
+            "USER 2",
+            "USER 3",
+            "USER 4",
+            "USER 5",
+            "TEMPLATES",
+        ]),
+        setlist_size: Some(128),
+        // Read off the unit by its owner: `01A`, `01B`, `01C`, `01D`, `02A`… — the first bank size
+        // anyone has read off a Floor-class device. Not copied to the Floor or the LT: that is the
+        // inference this table refuses to make. [2026-10-14 owner report, issue #24]
+        presets_per_bank: Some(4),
+        // Handshake, preset read, setlist and preset-list browse, settings dump and teardown all
+        // ran against a physical Rack on fw 3.80.0, read-only. No edit has been sent to one, so it
+        // stops at `Reported`, like the LT. [2026-10-14, issue #24]
+        support: Support::Reported,
     },
 ];
 

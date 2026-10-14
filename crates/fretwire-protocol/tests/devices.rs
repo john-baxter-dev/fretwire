@@ -146,23 +146,26 @@ fn the_hx_effects_carries_no_geometry_it_has_not_been_shown() {
     assert_eq!(fx.preset_label(0), None);
 }
 
-/// The Helix Rack is in the table on a line of kernel source and nothing else — no owner, no
-/// capture, no `lsusb` from a real unit. `Untested` is the tier that says so, and every field
-/// stays empty even though the Rack is a Floor in a rack box: "obviously the same as its sibling"
-/// is precisely the inference this table refuses to make.
+/// The Helix Rack came into the table on a line of kernel source and stayed empty until an owner
+/// surveyed one read-only (issue #24). What that survey showed is filled in; what it could not show
+/// stays `None` rather than being copied from the Floor.
 #[test]
-fn the_helix_rack_is_a_usb_id_and_nothing_more() {
+fn the_helix_rack_claims_only_what_its_survey_showed() {
     let rack = Device::by_pid(PID_HELIX_RACK).unwrap();
-    assert_eq!(rack.support, Support::Untested);
+    // Reads reconciled on a real unit, but no edit has been sent to one.
+    assert_eq!(rack.support, Support::Reported);
     assert!(rack.support.caveat().is_some());
-    assert!(rack.model_code.is_none());
+    assert_eq!(rack.model_code, Some("P21"));
+    assert_eq!(rack.dsps, Some(2));
+    assert_eq!(rack.snapshots, Some(8));
+    assert_eq!(rack.setlist_names().len(), 8);
+    assert_eq!(rack.setlist_size, Some(128));
+    // Read off the Rack's screen: 01A, 01B, 01C, 01D, 02A.
+    assert_eq!(rack.preset_label(3).as_deref(), Some("01D"));
+    assert_eq!(rack.preset_label(4).as_deref(), Some("02A"));
+    // Never on the wire, and no backup from a Rack.
     assert!(rack.preset_device_id.is_none());
-    assert!(rack.dsps.is_none());
-    assert!(rack.snapshots.is_none());
-    assert!(rack.setlists.is_none());
-    assert!(rack.setlist_size.is_none());
-    assert!(rack.presets_per_bank.is_none());
-    // Not the Floor's `P21`, so a preset stamped `P21` still resolves to the Floor.
+    // It stamps the Floor's `P21`, and a `P21` preset still resolves to the Floor, listed first.
     assert_eq!(
         Device::by_model_code("P21").map(|d| d.pid),
         Some(PID_HELIX_FLOOR)

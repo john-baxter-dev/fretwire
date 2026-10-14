@@ -2,6 +2,19 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Helix Rack: surveyed by an owner, `Untested` → `Reported` (2026-10-14, issue #24).** A Rack
+owner ran 0.6.0 read-only on fw 3.80.0, and everything worked unmodified. `lsusb` confirms the
+kernel-table PID `0x4249`. It reports the Floor's `P21`, has two DSPs (blocks in slots 35..38), 8
+snapshots and banks 0..7 of 128 (bank 8 refused `-3`), and its screen numbers presets `01A`-`01D`,
+`02A`… So the entry gets `P21`, 2, 8, the Floor's setlist names (arity observed, names not), 128 and
+`presets_per_bank: Some(4)`. That is the first bank size read off a Floor-class unit; it isn't copied
+to the Floor or the LT. `preset_device_id` stays `None`. Survey: `docs/helix-rack.md`. The report also
+turned up a CLI bug that isn't Rack-specific: `pull`'s bracket line read an inactive node's column 0
+as a real position. So a bracket spanning both DSPs (`SAB`/`ABJ`, or `AB`) flagged every path-B
+block "past-mixer!", and the Floor's Pull Me Under did the same. It now says "no mixer on this DSP".
+The GUI's `Chain.svelte` draws the same case from `mixer_pos` 0 and is still open. Still wanted from
+the owner: a `dump-raw` with Plush Garden loaded, whose DSP2 is the first `AB` sample on the wire.
+
 **POD Go: the controller table has no MIDI entry (2026-09-25, issue #15).** Asked which
 controllers POD Go Edit offers, the owner sent its picker: None, FS1–FS8, EXP 1, EXP 2, Snapshots,
 with Mode, Tap and EXP Toe greyed out and no MIDI. Twelve, the table's length — so 3..=10 are eight

@@ -2467,6 +2467,10 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
     // Where each DSP's bracket actually sits. "Is this block inside the parallel path?" is the
     // question behind most of the field reports about blocks going silent, and answering it from a
     // dump used to mean decoding key 13 by hand.
+    //
+    // An inactive node sits at column 0: a bracket that opens on DSP1 and closes on DSP2 (`SAB`
+    // then `ABJ`) has no mixer on the first DSP and no split on the second, and a DSP the paths
+    // only pass through (`AB`) has neither. Column 0 there is not a position, so it flags nothing.
     for d in &preset.dsps {
         if let (Some(sp), Some(mp)) = (d.split_pos, d.mixer_pos) {
             let inside: Vec<String> = d
@@ -2474,9 +2478,9 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
                 .iter()
                 .filter(|c| c.row == 1 && c.occupied)
                 .map(|c| {
-                    let where_ = if c.column < sp {
+                    let where_ = if sp > 0 && c.column < sp {
                         " before-split!"
-                    } else if c.column >= mp {
+                    } else if mp > 0 && c.column >= mp {
                         " past-mixer!"
                     } else {
                         ""
@@ -2484,11 +2488,17 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
                     format!("slot {} @col {}{where_}", c.slot, c.column)
                 })
                 .collect();
+            let split = match sp {
+                0 => "no split on this DSP".to_string(),
+                _ => format!("split before col {sp}"),
+            };
+            let mixer = match mp {
+                0 => "no mixer on this DSP".to_string(),
+                _ => format!("mixer before col {mp}"),
+            };
             println!(
-                "  DSP{} bracket: split before col {sp}, mixer before col {mp} → path B spans cols \
-                 {sp}..={}  [{}]",
+                "  DSP{} bracket: {split}, {mixer}  [{}]",
                 d.dsp + 1,
-                mp - 1,
                 inside.join(", ")
             );
         }

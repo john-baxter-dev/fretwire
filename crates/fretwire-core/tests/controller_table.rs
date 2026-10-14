@@ -317,3 +317,56 @@ fn on_hx_devices_the_layout_matches_the_free_functions() {
         }
     }
 }
+
+/// The expression pedal's toe switch is the **last** bypass-layout position on the two devices
+/// with a built-in pedal, and absent on the two without. On every POD Go and `P21` preset held, a
+/// wah or a volume pedal sits there: the pair the toe flips between.
+///
+/// The Stomp and XL fixtures are tracked; the POD Go, Floor and Rack ones are contributors' and
+/// untracked, so those are skipped on a clean clone.
+#[test]
+fn the_toe_switch_is_the_last_position_on_a_device_with_a_pedal() {
+    for name in ["preset1_stream.msgpack.bin", "xl_exp_bypass.msgpack.bin"] {
+        let ps = capture(name);
+        let len = ps.footswitch_layout().len();
+        assert_eq!(
+            source::toe_position(ps.device_model().as_deref(), len),
+            None,
+            "{name}: no built-in pedal"
+        );
+    }
+
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../captures");
+    let mut seen = 0;
+    for (name, code, len) in [
+        ("pod-go/ac30ambient-user04a.msgpack.bin", "P34", 9),
+        ("helix-floor/floor-pullmeunder.msgpack.bin", "P21", 13),
+        ("helix-floor/floor-sultans.msgpack.bin", "P21", 13),
+        ("helix-rack/rack-plushgarden.msgpack.bin", "P21", 13),
+        ("helix-rack/rack-usdoublenrm.msgpack.bin", "P21", 13),
+    ] {
+        let Ok(bytes) = std::fs::read(root.join(name)) else {
+            continue;
+        };
+        let ps = PresetStream::parse(&bytes).expect("parse stream");
+        assert_eq!(ps.device_model().as_deref(), Some(code), "{name}");
+        let layout = ps.footswitch_layout();
+        assert_eq!(layout.len(), len, "{name}");
+        let toe = source::toe_position(Some(code), len).expect("a toe switch");
+        assert_eq!(toe, len - 1, "{name}");
+        let model = &layout[toe]
+            .as_ref()
+            .expect("something on the toe")
+            .model_name;
+        // Display names, as the layout stores them: the wahs and the volume pedal these presets
+        // put on the toe.
+        assert!(
+            ["Fassel", "Weeper", "Volume", "Volume Pedal"].contains(&model.as_str()),
+            "{name}: expected a wah or volume on the toe, got {model:?}"
+        );
+        seen += 1;
+    }
+    if seen == 0 {
+        eprintln!("skipping: no POD Go, Floor or Rack presets in captures/");
+    }
+}

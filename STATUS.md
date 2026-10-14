@@ -2,6 +2,19 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**The toe switch is "EXP Toe", and the CLI's save/rename respect the setlist gate (2026-10-14).**
+Two leftovers from the issue #24 round. First: a block on the expression pedal's toe switch read
+"FS13" on every Floor/LT/Rack preset and "FS9" on a POD Go. The toe is the last bypass-layout
+position on the two devices with a built-in pedal (13 and 9 positions; the Stomp's 5 and XL's 8
+have none), and every `P21` and POD Go preset held puts a wah or volume there.
+`edit::source::toe_position` names it, `EditorPreset::toe_switch`/`switch_label` and the DTO carry
+it, and the CLI, the chain badge, the bypass picker and the history labels say "EXP Toe" / "Toe".
+Hunter has been asked what HX Edit calls it on the Rack. Second: the GUI refuses a save or rename
+into a setlist the device isn't in unless `FRETWIRE_SETLISTS=1`, but the CLI's `save` and `rename`
+skipped the check. The guard moved into `Session::check_cross_setlist_write`, taking the current
+bank as an argument because a fresh CLI session has no cached identity; the CLI reads it with
+`read_identity` first. 401 tests, clippy clean.
+
 **Helix Rack follow-up: topology `AB` is split type 4 (2026-10-14, issue #24).** The owner sent
 `dump-raw` of Plush Garden: key 21 reads `2` on DSP1 (`SAB`) and `4` on DSP2, where the paths only
 pass through. `tone::topology_code("AB")` is now `Some(4)`, and `hxb-convert` refuses no topology

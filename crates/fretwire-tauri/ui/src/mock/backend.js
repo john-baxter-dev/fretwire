@@ -407,8 +407,10 @@ const DEVICES = {
     // what a Floor shows today. See Device::presets_per_bank.
     presetsPerBank: null,
     setlistSize: 128,
-    // Unread. The Floor has eight preset footswitches, but how many positions its layout carries
-    // has never been looked at, so this keeps the Stomp's number rather than inventing one.
+    // A real Floor's layout has 13 positions, the last the expression pedal's toe switch (every
+    // P21 preset held, Floor and Rack). Kept at the Stomp's 5 here because the mock sizes its
+    // controller picker from the same number, and the Floor's controller table has not been
+    // mirrored.
     footswitches: 5,
   },
 };

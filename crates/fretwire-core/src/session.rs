@@ -845,6 +845,29 @@ impl Session {
         Ok(())
     }
 
+    /// Refuse a flash write into `bank` when the device is in a different setlist, `here`, unless
+    /// [`cross_setlist_write_enabled`]. `None` for `here` means nothing to compare against, and
+    /// passes: [`Self::check_preset_addr`] still bounds the address.
+    ///
+    /// `here` is a parameter rather than [`Self::last_identity`] so a caller with a fresh session
+    /// — the CLI, which has read nothing — can pass [`Self::read_identity`]'s answer instead of
+    /// a `None` that would wave every write through.
+    pub fn check_cross_setlist_write(
+        &self,
+        here: Option<i64>,
+        bank: i64,
+        what: &str,
+    ) -> crate::Result<()> {
+        cross_setlist_refusal(
+            self.device(),
+            cross_setlist_write_enabled(),
+            here,
+            bank,
+            what,
+        )
+        .map_or(Ok(()), |e| Err(fretwire_data::Error::Stream(e).into()))
+    }
+
     /// Save the current edit buffer to a preset slot (op 71). **Persistent write — overwrites
     /// `slot` in device flash.** `bank` is normally 0; `slot` is the flat preset index (as `goto`
     /// and `list_presets` use). `name` is stored NUL-terminated. Rides the edit channel like an edit.
@@ -1618,6 +1641,16 @@ impl Session {
                     .map(|b| b.user_label.clone().unwrap_or_else(|| b.model_name.clone()))
             })
             .unwrap_or_else(|| format!("slot {slot}"))
+    }
+
+    /// How the loaded preset names bypass footswitch `n` (one-based): `"EXP Toe"` for the
+    /// expression pedal's toe switch, `"FS{n}"` otherwise. See [`EditorPreset::switch_label`].
+    pub fn switch_label(&self, n: i64) -> String {
+        self.last_raw
+            .as_ref()
+            .and_then(|raw| self.catalog.load_preset(raw).ok())
+            .map(|p| p.switch_label(n))
+            .unwrap_or_else(|| format!("FS{n}"))
     }
 
     /// `"<param> — <block>"` for history labels (e.g. `"Drive — US Princess"`); falls back through
@@ -6517,4 +6550,87 @@ mod tests {
         let body = hex("c093c240c093c240c093c240c093c240");
         assert_eq!(reply_txn(&body), None);
     }
+}
+
+/// The decision behind [`Session::check_cross_setlist_write`], apart from the session and the
+/// environment so it can be tested: the refusal message, or `None` when the write may go ahead.
+fn cross_setlist_refusal(
+    device: &fretwire_protocol::Device,
+    enabled: bool,
+    here: Option<i64>,
+    bank: i64,
+    what: &str,
+) -> Option<String> {
+    let here = here.filter(|&h| !enabled && h != bank)?;
+    let name = |b: i64| {
+        device
+            .setlist_names()
+            .get(b as usize)
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| format!("bank {b}"))
+    };
+    Some(format!(
+        "{what}: refusing to write into {} while the device is in {} — writing across setlists \
+         is untested on this hardware. Set FRETWIRE_SETLISTS=1 to allow it.",
+        name(bank),
+        name(here),
+    ))
+}
+
+#[cfg(test)]
+mod cross_setlist_tests {
+    use super::cross_setlist_refusal;
+    use fretwire_protocol::{Device, PID_HELIX_RACK};
+
+    fn rack() -> &'static Device {
+        Device::by_pid(PID_HELIX_RACK).unwrap()
+    }
+
+    /// The case the CLI's `save` used to wave through: the device is in FACTORY 1 and the write
+    /// targets USER 1.
+    #[test]
+    fn a_write_into_another_setlist_is_refused_by_name() {
+        let e = cross_setlist_refusal(rack(), false, Some(0), 2, "save").unwrap();
+        assert!(
+            e.starts_with("save: refusing to write into USER 1 while the device is in FACTORY 1"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn a_write_into_the_current_setlist_goes_ahead() {
+        assert!(cross_setlist_refusal(rack(), false, Some(2), 2, "save").is_none());
+    }
+
+    #[test]
+    fn fretwire_setlists_lifts_it() {
+        assert!(cross_setlist_refusal(rack(), true, Some(0), 2, "save").is_none());
+    }
+
+    /// No identity to compare against passes; the address bound still applies separately.
+    #[test]
+    fn an_unknown_current_setlist_passes() {
+        assert!(cross_setlist_refusal(rack(), false, None, 2, "save").is_none());
+    }
+}
+
+/// Whether a **flash write** may target a setlist other than the one the device is in.
+/// **Off unless `FRETWIRE_SETLISTS=1`.** Enforced by [`Session::check_cross_setlist_write`], which
+/// the GUI's commands, the MCP server and the CLI all go through.
+///
+/// Browsing other setlists is not gated — the numbering that originally motivated the gate is
+/// settled (a browse index is global, `bank * setlist_size + slot`; verified across all 1024 slots
+/// of a Helix Floor against that unit's own `.hxb`, see `docs/helix-floor.md`), and browsing writes
+/// nothing.
+///
+/// What stays gated is the one irreversible thing: **a save or rename into a setlist the device
+/// isn't in.** Reading and navigating are recoverable; overwriting someone's preset is not, and the
+/// cross-setlist write path has never run against a Helix Floor, one of which has already been
+/// wedged once (`STATUS.md`, INCIDENT 2026-07-26). Lift this once a Floor gets through a session
+/// cleanly.
+pub fn cross_setlist_write_enabled() -> bool {
+    matches!(
+        std::env::var("FRETWIRE_SETLISTS").as_deref(),
+        Ok("1") | Ok("true")
+    )
 }

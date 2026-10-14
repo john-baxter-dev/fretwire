@@ -468,6 +468,11 @@ of a `Map{7}` node:
   lists **only footswitch-bound blocks**, in FS order — it is empty when nothing's on a switch (a
   preset meant to be driven by snapshots/preset-changes), which is why block enumeration must come
   from the slot array, not here. Key `4` is the **separate** parameter-controller table.
+  **On a device with a built-in expression pedal the last position is its toe switch**, not a
+  footswitch: nine positions on a POD Go, thirteen on a Helix (`P21`), where every preset held puts
+  a wah or volume pedal there (the toe flips between the two). The Stomp's five and the XL's eight
+  have no such position. Named "EXP Toe" via `edit::source::toe_position`. [solid for the position
+  — issue #15 and the Floor/Rack presets of issue #24]
 - **Snapshots: key `10`.** `8` = stored active index, `9` = slot count (20), `10` = `Array` of
   snapshot objects, `13` = `Array[20]` of per-slot flags (all `true` in every fixture).
   Each snapshot object is `{0: in-use, 1: Array[11], 2: Array[64], 3: Array[20], 4: name,

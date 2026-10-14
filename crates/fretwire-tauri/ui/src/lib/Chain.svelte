@@ -346,10 +346,16 @@
           <span class="slot">slot {c.slot}</span>
         </span>
         {#if c.footswitch > 0}
-          <span
-            class="fs"
-            title="Toggled by footswitch {c.footswitch} on the pedal"
-          >FS{c.footswitch}</span>
+          <!-- The last layout position on a POD Go or a Helix is the expression pedal's toe
+               switch, not a footswitch (`toe_switch`, see EditorPreset::toe_switch). -->
+          {#if c.footswitch === preset.toe_switch}
+            <span class="fs" title="Toggled by the expression pedal's toe switch">EXP Toe</span>
+          {:else}
+            <span
+              class="fs"
+              title="Toggled by footswitch {c.footswitch} on the pedal"
+            >FS{c.footswitch}</span>
+          {/if}
         {/if}
         {#if c.stranded != null}<span class="unfed">outside path B</span>{/if}
       </button>

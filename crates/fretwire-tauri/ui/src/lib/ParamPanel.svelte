@@ -32,6 +32,9 @@
     // naming the IR block's `IR Select` choices. Empty until the parent has read it.
     irSlots = [],
     footswitchCount = 0,
+    // Which of those positions is the expression pedal's toe switch (one-based), or null on a
+    // device without a pedal. Listed as "Toe" in the bypass picker rather than as a switch number.
+    toeSwitch = null,
     // Footswitches that can drive a *parameter* — the controller table's run, not the bypass
     // layout's. The same number on the HX devices; 8 against 9 on a POD Go, whose layout counts
     // the expression toe switch (issue #15, 2026-09-23/25). Sizes SOURCES below.
@@ -433,7 +436,7 @@
                    controller SOURCES above, ops 56/57 take a plain switch index with no table to
                    overrun. -->
               {#each Array.from({ length: footswitchCount }, (_, i) => i + 1) as n}
-                <option value={n}>{n}</option>
+                <option value={n}>{n === toeSwitch ? "Toe" : n}</option>
               {/each}
             </select>
           </label>

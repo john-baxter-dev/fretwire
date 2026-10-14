@@ -276,7 +276,9 @@ FS label for the stomp switches.
 The `FS9`-on-a-small-pedal display was the **expression toe switch**: in the backup's tones the
 wah and the volume pedal both carry `@fs_index: 9` (one enabled at a time — the toe toggles
 between them), so wire layout position 8 is the toe switch, not a ninth stomp. The status push
-after the assignment is the familiar type 31: `{98: slot, 70: switch, 79: assigned}`.
+after the assignment is the familiar type 31: `{98: slot, 70: switch, 79: assigned}`. Since
+2026-10-14 fretwire labels that position "EXP Toe" instead of "FS9", on the POD Go and the Helix
+alike (`edit::source::toe_position`).
 
 ## Parameter assignments: POD Go Edit's op 37, and a table that does not count the toe  [solid — 2026-09-23 capture]
 

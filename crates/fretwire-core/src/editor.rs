@@ -328,6 +328,11 @@ pub struct EditorPreset {
     /// op 33 answers switches 1..=5 and refuses 6 with code `-3` (2026-08-22). Reading it from the
     /// preset means a Floor reports its own number without anything here being told about Floors.
     pub footswitch_count: usize,
+    /// The footswitch number (one-based, like [`EditorBlock::footswitch`]) that is really the
+    /// expression pedal's toe switch, or `None` on a device without one. The last layout position
+    /// on a POD Go and on a Helix — see `edit::source::toe_position`. Name it with
+    /// [`Self::switch_label`].
+    pub toe_switch: Option<i64>,
     /// The parameter-controller table's shape (key `4`), which op 37's ordinals index: how many
     /// footswitches can drive a parameter, and whether there is a MIDI entry. Sized from the
     /// table's own length. The same switch count as [`Self::footswitch_count`] on the HX devices;
@@ -405,6 +410,15 @@ impl DspView {
 }
 
 impl EditorPreset {
+    /// How to name bypass footswitch `n` (one-based, as [`EditorBlock::footswitch`]): `"EXP Toe"`
+    /// for the expression pedal's toe switch, `"FS{n}"` otherwise.
+    pub fn switch_label(&self, n: i64) -> String {
+        match self.toe_switch {
+            Some(toe) if toe == n => "EXP Toe".to_string(),
+            _ => format!("FS{n}"),
+        }
+    }
+
     /// The routing view of one DSP.
     pub fn dsp(&self, dsp: usize) -> Option<&DspView> {
         self.dsps.iter().find(|d| d.dsp == dsp)
@@ -1243,6 +1257,11 @@ impl Catalog {
             blocks,
             assignments: ps.assignments(),
             footswitch_count: ps.footswitch_layout().len(),
+            toe_switch: fretwire_protocol::edit::source::toe_position(
+                ps.device_model().as_deref(),
+                ps.footswitch_layout().len(),
+            )
+            .map(|p| p as i64 + 1),
             assign_sources: {
                 use fretwire_protocol::edit::source::Layout;
                 // The POD Go's table has no MIDI entry; every HX device's does.

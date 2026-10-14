@@ -1165,6 +1165,8 @@ fn main() -> Result<()> {
         }
         Command::Rename { slot, name, bank } => {
             let mut s = fretwire_core::Session::connect()?;
+            let here = s.read_identity()?.map(|i| i.bank);
+            s.check_cross_setlist_write(here, bank, "rename")?;
             s.rename_preset(bank, slot, &name)?;
             println!(
                 "renamed bank {bank} slot {slot} to {name:?} (name-only; edit buffer not saved)"
@@ -1234,6 +1236,8 @@ fn main() -> Result<()> {
             eprintln!("⚠  PERSISTENT WRITE: overwriting bank {bank} slot {slot} with the current");
             eprintln!("   edit buffer as {name:?}. Back up first; use a scratch slot to test.");
             let mut s = fretwire_core::Session::connect()?;
+            let here = s.read_identity()?.map(|i| i.bank);
+            s.check_cross_setlist_write(here, bank, "save")?;
             s.save_preset(bank, slot, &name)?;
             println!("saved current edit buffer to bank {bank} slot {slot} as {name:?}");
         }
@@ -2525,7 +2529,7 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
         }
         let row = if b.row == 1 { " (row B)" } else { "" };
         let fs = if b.footswitch > 0 {
-            format!("FS{} · ", b.footswitch)
+            format!("{} · ", preset.switch_label(b.footswitch))
         } else {
             String::new()
         };

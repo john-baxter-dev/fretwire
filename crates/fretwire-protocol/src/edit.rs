@@ -965,6 +965,30 @@ pub const SOURCE_FS1: i64 = 3;
 /// op-37 write that was accepted at index 9 — the arithmetic agrees, but nobody has read 8 or 9 off
 /// that panel, and it is the XL that carries the weight here.
 pub mod source {
+    /// Which position of the bypass layout (preset key `3 → 8`, zero-based) is the **expression
+    /// pedal's toe switch**, or `None` on a device without a built-in pedal.
+    ///
+    /// The toe takes a block's bypass like a footswitch, so it has a layout position, but it is not
+    /// a footswitch and labelling it "FS9" or "FS13" names a switch the pedal doesn't have. It is
+    /// the **last** position on both devices that have one:
+    ///
+    /// - **POD Go** (`P34`): nine positions, eight switches. Its backup's tones put the wah and the
+    ///   volume pedal both on `@fs_index: 9`, one enabled at a time, because the toe toggles
+    ///   between them, and POD Go Edit's controller picker lists "EXP Toe". [solid — issue #15]
+    /// - **Helix Floor / LT / Rack** (`P21`): thirteen positions, twelve switches, and the same
+    ///   signature at `@fs_index: 13` (Plush Garden's Fassel and Volume Pedal in the Floor backup).
+    ///   Every `P21` preset we hold, from a Floor and a Rack, binds its wah or volume there.
+    ///   [solid for the position; that HX Edit calls it "EXP Toe" on these units is unconfirmed]
+    ///
+    /// The Stomp (5) and XL (8) have no built-in pedal and no extra position: an XL's EXP bypasses
+    /// live in the controller table instead (`xl_exp_bypass.msgpack.bin`).
+    pub fn toe_position(model_code: Option<&str>, layout_len: usize) -> Option<usize> {
+        match model_code {
+            Some("P34" | "P21") => layout_len.checked_sub(1),
+            _ => None,
+        }
+    }
+
     /// Number of entries in the key-`4` controller table.
     pub fn table_len(footswitch_count: usize) -> usize {
         footswitch_count + 5

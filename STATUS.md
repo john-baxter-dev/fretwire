@@ -2,6 +2,16 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Helix Rack follow-up: topology `AB` is split type 4 (2026-10-14, issue #24).** The owner sent
+`dump-raw` of Plush Garden: key 21 reads `2` on DSP1 (`SAB`) and `4` on DSP2, where the paths only
+pass through. `tone::topology_code("AB")` is now `Some(4)`, and `hxb-convert` refuses no topology
+anywhere in the Floor backup. `tone_to_wire::topology_ab_comes_across` pins it by converting
+the Floor backup's tone of the same preset (dumps kept in the ignored `captures/helix-rack/`). Also
+from the round: HX Edit's setlist pane confirms the Floor's eight names on the Rack; a factory
+reset left FACTORY 1 identical and its 36 out-of-slot stored keys in place, so `presets` no longer
+calls those "reordered on the device"; and the Rack's Pull Me Under matches the Floor capture
+except for 34 floats one ULP apart. The owner offers write testing.
+
 **Helix Rack: surveyed by an owner, `Untested` → `Reported` (2026-10-14, issue #24).** A Rack
 owner ran 0.6.0 read-only on fw 3.80.0, and everything worked unmodified. `lsusb` confirms the
 kernel-table PID `0x4249`. It reports the Floor's `P21`, has two DSPs (blocks in slots 35..38), 8

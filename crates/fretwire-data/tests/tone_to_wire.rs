@@ -343,3 +343,55 @@ fn the_report_names_what_it_did_not_carry() {
         );
     }
 }
+
+/// Topology `AB`, a DSP the two paths only pass through, from a second preset held in both forms:
+/// the Floor backup's `tone` of the factory "Plush Garden" (`FACTORY 1` slot 47, `SAB`/`AB`) and a
+/// Helix Rack owner's dump of the same factory preset (issue #24). Both units report `P21`.
+///
+/// The dump is in `captures/helix-rack/`, ignored like the Floor's; the test skips without it.
+#[test]
+fn topology_ab_comes_across() {
+    let Some(syms) = symbols() else {
+        return;
+    };
+    let (Some(oracle), Some(mut donor), Some(hxb)) = (
+        PresetStream::parse(
+            &std::fs::read(captures().join("../helix-rack/rack-plushgarden.msgpack.bin"))
+                .unwrap_or_default(),
+        )
+        .ok(),
+        stream("floor-sultans.msgpack.bin"),
+        backup(),
+    ) else {
+        eprintln!("skipping: needs the Rack's Plush Garden dump + the Floor capture and backup");
+        return;
+    };
+    let tone = hxb.setlists()[0].presets[47]
+        .clone()
+        .expect("Plush Garden")
+        .tone;
+    let tone = tone.as_object().unwrap().clone();
+    assert_eq!(
+        tone["global"]["@topology1"], "AB",
+        "the backup's slot 47 should be Plush Garden"
+    );
+    let report = apply_tone(&mut donor, &tone, &syms).expect("conversion");
+    assert!(
+        !report.not_carried.iter().any(|n| n.contains("topology")),
+        "every topology should carry: {:?}",
+        report.not_carried
+    );
+    let split_type = |ps: &PresetStream, dsp: i64| {
+        map_get(&ps.preset, dsp)
+            .and_then(|m| map_get(m, 21))
+            .and_then(Value::as_i64)
+    };
+    assert_eq!(
+        (split_type(&donor, 0), split_type(&donor, 1)),
+        (split_type(&oracle, 0), split_type(&oracle, 1)),
+    );
+    assert_eq!(
+        (split_type(&oracle, 0), split_type(&oracle, 1)),
+        (Some(2), Some(4))
+    );
+}

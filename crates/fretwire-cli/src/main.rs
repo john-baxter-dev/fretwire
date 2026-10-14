@@ -782,14 +782,16 @@ fn main() -> Result<()> {
             // A row's stored key is the preset's index before it was last moved on the pedal. It
             // addresses nothing, but a disagreement is worth saying out loud: this is the device
             // state that used to make the editor list presets in the wrong order, and it is the
-            // first thing to check when a remote report says the numbers don't line up.
+            // first thing to check when a remote report says the numbers don't line up. It is not
+            // proof the owner moved anything: a freshly factory-reset Helix Rack shows 36 such
+            // entries in FACTORY 1 and 12 in FACTORY 2 (issue #24).
             let base = bank * s.device().setlist_stride();
             let moved = presets.iter().filter(|p| p.key_disagrees(base)).count();
             if moved > 0 {
                 println!(
                     "  note: {moved} of {} entries carry a stored key other than their slot — \
-                     presets in this setlist have been reordered on the device. The slots above \
-                     are the ones the pedal shows.",
+                     they were moved at some point, on the device or before it left the factory. \
+                     The slots above are the ones the pedal shows.",
                     presets.len()
                 );
             }

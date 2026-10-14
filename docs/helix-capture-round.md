@@ -290,7 +290,7 @@ sudo dumpcap -i usbmon3 -w B1-path2-input.pcapng   # usbmon<bus number>; Ctrl-C 
 | Capture | Open question it answers | Where it goes |
 |---|---|---|
 | `before.hxb` (LT) | the LT's `preset_device_id`, never on the wire (the Floor's came from its `.hxb`); and its setlist names | `fretwire_protocol::DEVICES`, `docs/helix-lt.md` |
-| A1 + `before.hxb` | **topology `AB`'s key-21 value**: Trademark / Plush Garden are `SAB`/`AB`, GARBAGE BASS `AB`/`A`, Unicorns Forever `SABJ`/`AB`, 4 Tone Switcher and Stereo Mixer `AB`/`AB` (from the 2026-07-22 Floor backup). Each loaded stream pairs with its tone in the backup; Pull Me Under is the known control | `tone::topology_code` |
+| A1 + `before.hxb` | ~~**topology `AB`'s key-21 value**~~ — **answered: `4`**, from a Helix Rack's Plush Garden (issue #24, 2026-10-14). Originally: Trademark / Plush Garden are `SAB`/`AB`, GARBAGE BASS `AB`/`A`, Unicorns Forever `SABJ`/`AB`, 4 Tone Switcher and Stereo Mixer `AB`/`AB` (from the 2026-07-22 Floor backup). Each loaded stream pairs with its tone in the backup; Pull Me Under is the known control | `tone::topology_code` |
 | A1 + `before.hxb` | more tone+wire pairs for the **input/output nodes' ragged prefix** rule (two samples so far) | `tone.rs` I/O nodes; `tests/tone_to_wire.rs` `claimed()` |
 | A2 | the LT's `presets_per_bank` (`None` today) | `DEVICES` |
 | B1–B3 | how the **Input `@input` / Output To `@output`** selectors are written: plain op 30 on slot 0/9 (and 20/29), or something else; plus what the pedal does to Path 2's input on its own. `Output To` is `HD2_AppDSPFlowOutput` param 2, `output_type` enum (0 None, 1 Multi, 2 Path 2A, 3 Path 2B, 4 Path 2A+B, …) | new session op, GUI I/O node panel |

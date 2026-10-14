@@ -400,9 +400,9 @@ pub const DEVICES: &[Device] = &[
         dsps: Some(2),
         // The pulled presets carry SNAPSHOT 1..SNAPSHOT 8.
         snapshots: Some(8),
-        // Banks 0..7 each list and bank 8 is refused (code -3); bank 0 holds 128 factory amp
-        // presets. The names are the Floor's, as for the LT: only the arity and bank 0 were
-        // observed, not the names themselves.
+        // Banks 0..7 each list 128 and bank 8 is refused (code -3). The names are the Floor's, and
+        // here they are observed: the owner's HX Edit setlist pane shows exactly these eight.
+        // [solid — 2026-10-14, issue #24]
         setlists: Some(&[
             "FACTORY 1",
             "FACTORY 2",

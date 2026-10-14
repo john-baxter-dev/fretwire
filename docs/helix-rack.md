@@ -46,6 +46,13 @@ never closes (`SAB`, then `AB` on DSP2, per the Floor backup's copy of the same 
 inactive node is written at column 0. The CLI read that 0 as a real position. The Floor's Pull Me
 Under printed the same false "past-mixer!". Fixed in the same change.
 
+**Topology `AB` is split type `4`** [solid]. The owner's `dump-raw` of Plush Garden reads key 21
+= `2` on DSP1 (`SAB`, as the table already had) and `4` on DSP2, where the paths only pass through.
+Converting the Floor backup's `tone` of the same preset now carries both
+(`tests/tone_to_wire.rs`, `topology_ab_comes_across`). The owner also sent Pull Me Under: same
+length as the Floor's capture, same structure, split types `2`/`3`, and its only differences are
+34 float values one ULP apart (`0.14999998` against `0.15`).
+
 The one real flag left is DSP1's slot 12 at column 2, left of a split at column 4. HX Edit's tone
 JSON for the preset puts it there too (`@path 1, @position 1`), so the factory preset really does
 store a path-B block before its split.
@@ -54,22 +61,29 @@ store a path-B block before its split.
 and the device's own read-info (`snapshot: Some(0)`), both say 0. The stored index is whatever was
 active when the preset was last saved. The live readout is consistent, so this is not a bug.
 
-## Setlists  [arity solid; names not corroborated]
+## Setlists  [solid]
 
-Banks 0..7 each returned a listing and bank 8 was refused with code `-3`. Bank 0 holds 128 factory
-amp presets (`US Double Nrm`, `Essex A30`, `Brit Plexi Brt`, …). That makes **eight banks of 128**,
-the Floor's and the LT's layout, so `DEVICES` uses the Floor's setlist names with the same caveat as
-the LT: only the arity and bank 0 were observed.
+Banks 0..7 each list 128 slots and bank 8 is refused with code `-3`: **eight banks of 128**, the
+Floor's and the LT's layout. The names are the Floor's, confirmed by the owner's HX Edit setlist
+pane: FACTORY 1, FACTORY 2, USER 1–5, TEMPLATES. (The first survey's `fretwire setlists` printed one
+setlist named `Presets`. That was the old entry's fallback, not the device.)
 
-The survey's `fretwire setlists` printed one setlist named `Presets`. That was the old entry's
-fallback (`setlists: None`), not the device.
+After a factory reset (2026-10-14) the owner listed every bank: FACTORY 1 and 2 full (FACTORY 2
+ends in 24 `New Preset` slots), USER 1–5 all `New Preset`, TEMPLATES 38 templates (`Quick Start`
+… `FPS Video Game`) plus one stray user preset at slot 127.
 
-Bank 0 is **not** the same list as `FACTORY 1` in our Floor backup (2026-07-22): 105 of 128 slots
-differ, and 23 names appear only on the Rack and 23 only on the Floor, not counting `No:thing` vs
-`No:Thing` (Plush Garden is index 53 here and 47 there). The
-listing also says 36 entries carry a stored key other than their slot, and the owner has not
-reordered anything. Both are unexplained so far. They could be a different factory set, or a
-quirk of how the factory bank is stored.
+**The factory order is not the Floor backup's.** Bank 0 matched the pre-reset listing exactly, and
+it still differs from `FACTORY 1` in our Floor backup (2026-07-22) in 105 of 128 slots. Presets
+that are in bank 0 on the Rack (Plush Garden at 53, Stone Cold Loco at 52) sit at other indices
+there, and a run of the Floor's FACTORY 1 (Pull Me Under, AUS Flood, Lonely Hearts, the `SFX:`
+presets) is in the Rack's FACTORY 2. The likeliest reading is that the Floor's factory banks were
+last reset on an older firmware with a different factory lineup; firmware updates don't rewrite
+presets. Unconfirmed.
+
+**Stored keys other than the slot are factory state.** `presets` reports 36 such entries in
+FACTORY 1 and 12 in FACTORY 2 on the freshly reset unit, so they are not evidence the owner moved
+anything. The CLI note used to say "have been reordered on the device"; it now says they were moved
+on the device or before it left the factory.
 
 ## Preset numbering  [solid]
 
@@ -85,11 +99,7 @@ against `settings::SETTINGS` yet.
 ## Not observed
 
 - **`preset_device_id`.** No backup from a Rack.
-- **Every write path.**
-- **Topology `AB`'s key-21 value.** The Rack's Plush Garden *is* an `AB` sample on DSP2: `pull`
-  drew a DSP2 bracket, so the value there is non-zero. But `pull` doesn't print it, and the raw dump
-  attached was taken on a different preset. A `fretwire dump-raw` with Plush Garden loaded closes
-  the open question in `tone::topology_code` (see `docs/helix-capture-round.md`).
+- **Every write path.** The owner has offered to run write tests and doesn't mind a factory reset.
 
 ## Reproducing
 

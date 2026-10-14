@@ -36,6 +36,7 @@ __pycache__/
 # preset data; keep them local, never commit them. Distilled findings go in docs/ instead.
 /captures/helix-floor/
 /captures/pod-go/
+/captures/helix-rack/
 *.hxb
 *.pgb
 # Scratch build dir for the panel SSR test (tests/panel-ssr.mjs cleans it up itself).

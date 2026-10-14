@@ -1539,6 +1539,10 @@ carries **no** index/name). Parsed by `fretwire_data::stream::parse_preset_info`
 > banks (1024 entries) matches that unit's own `.hxb` backup **position**-for-position, and not at
 > all by key; the three rows where the two numbers disagree are exactly his three moved presets. The
 > full argument, and what the key probably is, are in `docs/helix-floor.md`.
+>
+> A disagreement doesn't mean the *owner* moved anything: a Helix Rack straight out of a factory
+> reset lists 36 such rows in FACTORY 1 and 12 in FACTORY 2 (issue #24, 2026-10-14). Whatever moved
+> those, it happened before the reset image was built.
 
 `open_two_presets_one_after_another.pcapng` is HX Edit **selecting** presets (op 20) — that's why an
 earlier draft mistook op 20 for "open for read". The **non-destructive read** is what HX Edit does on

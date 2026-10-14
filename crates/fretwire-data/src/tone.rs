@@ -300,19 +300,22 @@ pub fn pod_go_block_class(tone_type: i64, symbol: &str) -> Option<i64> {
 /// | `SABJ` | 1 | both Stomp parallel fixtures read `1`, and a Stomp has one DSP, so a preset that splits at all must split and rejoin on it |
 /// | `SAB` | 2 | "Pull Me Under" DSP1 |
 /// | `ABJ` | 3 | "Pull Me Under" DSP2 |
+/// | `AB` | 4 | "Plush Garden" DSP2, read off a Helix Rack |
 ///
-/// `AB` — a DSP the paths merely pass through, on four presets in the backup — has no dump behind
-/// it and so gets no number. The three-DSP-spanning shapes it appears in are rare and a wrong split
-/// type is a preset whose two paths don't go where its owner put them.
+/// `AB` is a DSP the paths only pass through: the split opened on DSP1 and nothing rejoins them.
+/// Its number came from a Rack owner's dump of the factory "Plush Garden" (issue #24), paired with
+/// the Floor backup's `tone` of the same preset (`SAB`/`AB`); the same dump's DSP1 reads `2`, as
+/// `SAB` should.
 ///
-/// [solid for `A`/`SAB`/`ABJ`, each read off a preset held in both forms; `SABJ` is one inference
-/// from the Stomp's single DSP — 2026-08-25]
+/// [solid for `A`/`SAB`/`ABJ`/`AB`, each read off a preset held in both forms; `SABJ` is one
+/// inference from the Stomp's single DSP — 2026-08-25, `AB` 2026-10-14]
 pub fn topology_code(topology: &str) -> Option<i64> {
     match topology {
         "A" => Some(0),
         "SABJ" => Some(1),
         "SAB" => Some(2),
         "ABJ" => Some(3),
+        "AB" => Some(4),
         _ => None,
     }
 }

@@ -771,8 +771,8 @@ real session.
       > still skipped is MIDI (its row carries a CC number no tone we hold shows). Bonus decode:
       > the Floor's switch ordinals run from 6 (`switch = ordinal − 5`), not the Stomp/XL's 3.
       **A converted preset has still never been sent to a pedal.** What is left:
-      - **Topology `AB`** (a DSP the paths merely pass through, Floor-only) still has no wire
-        evidence and stays a refusal.
+      - ~~**Topology `AB`**~~ — split type `4`, from a Helix Rack owner's Plush Garden dump
+        (issue #24, 2026-10-14), pinned by `tone_to_wire::topology_ab_comes_across`.
       - The four **input/output nodes** store a ragged prefix of their symbol's parameter list and
         the rule is unknown; they keep the target's values.
       - **MIDI-sourced controller rows** (the CC number, key `1` under a MIDI source) — needs one

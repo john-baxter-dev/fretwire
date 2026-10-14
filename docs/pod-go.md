@@ -311,8 +311,9 @@ table is `0` none, `1`/`2` the expression inputs, **3..=10 FS1–FS8**, **11 Sna
 shape with the MIDI entry missing (`edit::source::Layout { switches: 8, midi: false }`, carried
 on `EditorPreset::assign_sources`). A first pass on 2026-09-23 assumed the HX shape and read
 seven switches plus MIDI at 10, which left FS8 out of the picker. The order of 3..=10 is the HX
-rule, which the POD Go's bypass map also follows; the set and the count are read, the order is
-inferred.
+rule, which the POD Go's bypass map also follows. A second owner put a Parametric parameter on
+FS7 in POD Go Edit and `pull` named it FS7 (issue #15, 2026-10-14), so ordinal 9 is FS7 as
+computed [solid at that point; the rest of the run follows from it being in order].
 
 ## The fixed chain  [reported — 2026-08-27, issue #15; op-40 hazard measured 2026-08-31]
 
@@ -466,12 +467,11 @@ question closed on 2026-09-04 from the webview's console rather than any log. Wh
 
 - ~~`RUST_LOG=debug fretwire ir-list`~~ — answered by a second owner (2026-10-14): op 13 lists
   every IR, see "What is still unknown".
-- **One *parameter* put under FS7 or FS8 in POD Go Edit** — would confirm the order of 3..=10
-  (the set and count are read off POD Go Edit's picker; the order follows the HX rule). The
-  second owner put a block's *bypass* on FS7, then FS8 (2026-10-14), and `pull` named both
-  correctly — that confirms the bypass layout's positions 7 and 8, a different numbering from the
-  controller table's ordinals.
+- ~~One parameter put under FS7 or FS8~~ — a second owner's FS7 assignment came back at the
+  computed ordinal (2026-10-14).
 - **A `-306` at a known load** — the raw sum `fretwire pull` prints when the pedal refuses a
-  block for DSP, to calibrate the POD Go's ceiling (assumed the Stomp's 75).
+  block for DSP, to calibrate the POD Go's ceiling (assumed the Stomp's 75). The GUI can't get
+  there: its picker greys out anything past that assumed 75, which is what stopped the second
+  owner at 57.9 (2026-10-14). The CLI's `add-block` doesn't check, so it can make the attempt.
 - ~~A footswitch press with the rebuilt GUI connected~~ — "footswitches in the UI now perfectly
   follow the pedal" (owner, 2026-09-16, v0.5.1).

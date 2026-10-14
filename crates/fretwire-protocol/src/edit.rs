@@ -1003,7 +1003,8 @@ pub mod source {
     /// at 11 (POD Go Edit's own op 37, 2026-09-23), and POD Go Edit's controller picker offers
     /// exactly None, FS1–FS8, EXP 1, EXP 2 and Snapshots — Mode, Tap and EXP Toe greyed out, no
     /// MIDI (owner's screenshot, 2026-09-25). Twelve entries, eight switches: 3..=10 are FS1–FS8,
-    /// the six on the panel and the two on the external jack [solid for the set and the count;
+    /// the six on the panel and the two on the external jack [solid for the set and the count,
+    /// and for FS7 at 9 (a parameter assigned in POD Go Edit, issue #15, 2026-10-14); the rest of
     /// the order is the HX rule, which the POD Go's bypass map also follows]. Sized the HX way
     /// from its bypass layout — nine long, the ninth the toe switch — Snapshots computed to 13
     /// and the pedal's 11 read as "FS9" (issue #15).

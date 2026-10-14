@@ -5041,12 +5041,11 @@ impl Session {
     /// does not. One round trip instead of 128, so this is the listing; [`Self::ir_scan`] is for
     /// when the empty slots matter too.
     ///
-    /// **On a POD Go the op-13 reply lists nothing** — the owner's IR panel came up empty until
-    /// the per-slot scan ran, and a refresh emptied it again (issue #15, 2026-09-02). Whether the
-    /// pedal answers with a shape [`fretwire_data::ir::parse_directory`] does not read or with a
-    /// genuinely empty directory is not yet known: the reply has never been captured, which is
-    /// why [`Self::ir_commit`] logs it. Until it is, an empty directory on that pedal falls back to
-    /// the scan, which its owner has seen work.
+    /// **One POD Go's op-13 reply listed nothing** — its owner's IR panel came up empty until the
+    /// per-slot scan ran (issue #15, 2026-09-02). A second owner's pedal lists all seven of its
+    /// IRs in the ordinary shape (2026-10-14), chunked past the first frame, so the first was
+    /// likely the chunked-reply bug [`Self::browse_reply_bytes`] fixed on 09-05. Unconfirmed, so
+    /// an empty directory on a POD Go still falls back to the scan.
     pub fn ir_directory(&mut self) -> crate::Result<Vec<fretwire_data::ir::IrSlot>> {
         let dir = self.in_ir_session(Self::ir_commit)?;
         if dir.is_empty() && self.device().pid == fretwire_protocol::PID_POD_GO {

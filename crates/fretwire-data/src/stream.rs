@@ -617,7 +617,8 @@ pub struct Block {
     /// index the 681-model `.models`, it indexes the 833-symbol `Helix.sym`.)
     pub model_ref: Option<i64>,
     /// `24 → 26` — paired model index (also into `Helix.sym`): the cab/IR fused into an amp+cab
-    /// block. `-1` (→ `None`) when the block has no paired model.
+    /// block. `-1` (→ `None`) when the block has no paired model, as is any value too large to be
+    /// an index.
     pub paired_ref: Option<i64>,
     /// `11 → 4` — ordered parameter values, in the model's `Helix.sym` order.
     pub params: Vec<ParamValue>,
@@ -768,11 +769,13 @@ impl PresetStream {
                     (model, None, param_vec(7), Vec::new())
                 } else {
                     let model = meta.and_then(|m| map_get(m, 25)).and_then(Value::as_i64);
-                    // `26` = paired cab/IR index; -1 means "none".
+                    // `26` = paired cab/IR index; -1 means "none". A POD Go has also been seen
+                    // storing `0x44000001` there on a Volume and a Wah (issue #15), which indexes
+                    // nothing, so anything past a `Helix.sym`-sized range is "none" too.
                     let paired = meta
                         .and_then(|m| map_get(m, 26))
                         .and_then(Value::as_i64)
-                        .filter(|&r| r >= 0);
+                        .filter(|r| (0..=i64::from(u16::MAX)).contains(r));
                     (model, paired, param_vec(11), param_vec(12))
                 };
                 Block {

@@ -121,11 +121,12 @@ and 537/627 POD Go symbols where stripping alone got 372.
   spelling has been measured being accepted. Sending a device its own bytes back is the same
   bet the HX restore path proved out on hardware, but on a POD Go it awaits a live test.
 - **Preset key `12`** (`Array[128]`).
-- **The op-13 IR directory reply.** On this pedal it lists nothing — the owner's IR panel was
-  empty until the per-slot scan ran, and "Refresh" (op 13 again) emptied it (2026-09-02). Whether
-  the pedal answers in a shape `fretwire_data::ir::parse_directory` does not read, or reports a
-  genuinely empty directory, needs the bytes: `RUST_LOG=debug fretwire ir-list` now logs the
-  reply. Until then `Session::ir_directory` falls back to the scan on a POD Go.
+- **Why the first owner's op-13 IR directory listed nothing.** A second owner's pedal answers it
+  correctly (issue #15, 2026-10-14): seven records, 470 bytes, so chunked past the first 256-byte
+  frame and reassembled — the shape `fretwire_data::ir::parse_directory` already reads. The empty
+  listing (2026-09-02) predates the 09-05 fix that reassembles chunked browse replies, which would
+  explain it if that pedal held four or more IRs; unconfirmed. `Session::ir_directory` keeps the
+  scan fallback for an empty directory on a POD Go, which costs nothing when it lists something.
 - ~~Why the GUI stopped following the pedal.~~ **Found, 2026-09-04, and not a POD Go matter at
   all.** The owner opened the webview's devtools: `event.listen not allowed. Plugin not found`,
   three times — one per `listen` in `App.svelte` — and the same editor under `fretwire-serve` in
@@ -461,10 +462,13 @@ rounds (2026-09-02 and -03) answered the write asks — **restore works, and so 
 the Helix credit guard was out of its way (see "The write path, live") — and the live-follow
 question closed on 2026-09-04 from the webview's console rather than any log. What's open:
 
-- **`RUST_LOG=debug fretwire ir-list`** — the op-13 reply, so the IR directory can be decoded
-  rather than scanned around.
-- **One parameter put under FS7 or FS8 in POD Go Edit** — would confirm the order of 3..=10
-  (the set and count are read off POD Go Edit's picker; the order follows the HX rule).
+- ~~`RUST_LOG=debug fretwire ir-list`~~ — answered by a second owner (2026-10-14): op 13 lists
+  every IR, see "What is still unknown".
+- **One *parameter* put under FS7 or FS8 in POD Go Edit** — would confirm the order of 3..=10
+  (the set and count are read off POD Go Edit's picker; the order follows the HX rule). The
+  second owner put a block's *bypass* on FS7, then FS8 (2026-10-14), and `pull` named both
+  correctly — that confirms the bypass layout's positions 7 and 8, a different numbering from the
+  controller table's ordinals.
 - **A `-306` at a known load** — the raw sum `fretwire pull` prints when the pedal refuses a
   block for DSP, to calibrate the POD Go's ceiling (assumed the Stomp's 75).
 - ~~A footswitch press with the rebuilt GUI connected~~ — "footswitches in the UI now perfectly

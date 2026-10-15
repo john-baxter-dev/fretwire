@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use fretwire_data::{
     stream::{PresetStream, map_get},
     symbols::DeviceSymbols,
-    tone::apply_tone,
+    tone::{ValueTypes, apply_tone},
 };
 use rmpv::Value;
 use serde_json::json;
@@ -28,17 +28,34 @@ fn fixture(name: &str) -> PresetStream {
         .expect("fixture parses")
 }
 
-fn symbols() -> Option<DeviceSymbols> {
-    // Same resolution order as build.rs, which is what set `have_bundled_data`.
-    let dir = std::env::var_os("FRETWIRE_DATA_DIR")
+fn data_dir() -> Option<PathBuf> {
+    std::env::var_os("FRETWIRE_DATA_DIR")
         .map(PathBuf::from)
         .or_else(|| {
             std::env::var_os("XDG_DATA_HOME")
                 .map(PathBuf::from)
                 .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
                 .map(|b| b.join("fretwire").join("data"))
-        })?;
-    DeviceSymbols::parse(&std::fs::read(dir.join("Helix.sym")).ok()?).ok()
+        })
+}
+
+fn symbols() -> Option<DeviceSymbols> {
+    DeviceSymbols::parse(&std::fs::read(data_dir()?.join("Helix.sym")).ok()?).ok()
+}
+
+/// The family's `.models` value types, which decide how a `tone` number is encoded.
+fn types() -> ValueTypes {
+    let dir = data_dir();
+    let files: Vec<Vec<u8>> = dir
+        .and_then(|d| std::fs::read_dir(d).ok())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "models"))
+        .filter_map(|p| std::fs::read(p).ok())
+        .collect();
+    ValueTypes::from_model_files(files.iter().map(Vec::as_slice))
 }
 
 fn slot_1(ps: &PresetStream) -> Value {
@@ -56,7 +73,7 @@ fn converted(name: &str, dsp0: serde_json::Value) -> (Value, Value) {
     let oracle = fixture(name);
     let mut donor = oracle.clone();
     let tone = json!({ "dsp0": dsp0 });
-    apply_tone(&mut donor, tone.as_object().unwrap(), &syms).expect("conversion");
+    apply_tone(&mut donor, tone.as_object().unwrap(), &syms, &types()).expect("conversion");
     (slot_1(&donor), slot_1(&oracle))
 }
 
@@ -284,7 +301,7 @@ fn a_looper_matches_the_device() {
         return;
     };
     let mut donor = oracle.clone();
-    apply_tone(&mut donor, tone.as_object().unwrap(), &syms).expect("conversion");
+    apply_tone(&mut donor, tone.as_object().unwrap(), &syms, &types()).expect("conversion");
     let slot = |ps: &PresetStream| match map_get(&ps.preset, 0).and_then(|m| map_get(m, 22)) {
         Some(Value::Array(slots)) => slots[8].clone(),
         other => panic!("no slot array: {other:?}"),
@@ -306,7 +323,7 @@ fn a_mixed_family_dual_cab_is_refused() {
         },
         "cab0": { "@model": "HD2_CabMicIr_1x12USDeluxe" },
     }});
-    let err = apply_tone(&mut donor, tone.as_object().unwrap(), &syms).unwrap_err();
+    let err = apply_tone(&mut donor, tone.as_object().unwrap(), &syms, &types()).unwrap_err();
     assert!(
         err.to_string().contains("mixes the families"),
         "wrong refusal: {err}"

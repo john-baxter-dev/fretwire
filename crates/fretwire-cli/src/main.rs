@@ -885,7 +885,9 @@ fn main() -> Result<()> {
 
             // The two id spaces meet here and nowhere else: a `.hxb` names its device numerically,
             // a preset stream by model code. Overlaying across devices produces a blob that parses
-            // and means something else, so refuse rather than write it.
+            // and means something else, so refuse rather than write it. Compared by model code,
+            // not by name: the Floor, LT and Rack all stamp `P21` and share slot geometry and
+            // model indices, and a `P21` stream always resolves to the Floor.
             let backup_device = fretwire_usb::DEVICES
                 .iter()
                 .find(|d| d.preset_device_id == Some(hxb.device_id));
@@ -893,7 +895,7 @@ fn main() -> Result<()> {
                 .device_model()
                 .and_then(|c| fretwire_usb::Device::by_model_code(&c));
             if let (Some(b), Some(d)) = (backup_device, donor_device)
-                && b.name != d.name
+                && b.model_code != d.model_code
             {
                 anyhow::bail!(
                     "the backup is from a {} and the donor preset from a {} — slot geometry and \
@@ -926,7 +928,12 @@ fn main() -> Result<()> {
                         continue;
                     };
                     let mut target = donor_stream.clone();
-                    match fretwire_data::tone::apply_tone(&mut target, tone, syms) {
+                    match fretwire_data::tone::apply_tone(
+                        &mut target,
+                        tone,
+                        syms,
+                        &catalog.value_types,
+                    ) {
                         Ok(report) => {
                             eprintln!(
                                 "[{}/{:>3}] {:<20} {} blocks, {} snapshots",

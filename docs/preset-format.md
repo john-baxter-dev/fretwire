@@ -152,9 +152,24 @@ entry's position recorded at `10`. [solid — the oracle preset has both cases]
 
 **Path B's input and output nodes live inside the structural slots**: the split slot's key `14` is
 the tone's `inputB` and the mixer slot's key `16` is `outputB`, the same shape as slot 0 (`inputA`)
-and slot 9 (`outputA`). All four store a **ragged prefix** of their symbol's parameter list — DSP1's
-input keeps 3 of 8, DSP2's keeps none — and the rule behind the prefix length is not known, which is
-why `tone` leaves those four alone.
+and slot 9 (`outputA`). **A node stores parameters only while it is routed somewhere**: with its
+source (`5`, `@input`) or destination (`6`, `@output`) at `0` = None the value list is empty, and
+otherwise it holds the head of the symbol's list, an input's gate (`noiseGate`, `threshold`,
+`decay`, 3 of 8) and an output's `pan` and `gain` (2 of 3), all `f32` but the gate's bool. The
+`tone` carries exactly those keys on every node whatever the source. [solid — 40 of 40 nodes across
+five presets held in both forms, Floor and Rack, issue #24; the Stomp, XL and POD Go wire show the
+same shape] `tone::apply_io_nodes` writes the Helix's from the backup.
+
+**HX Edit's JSON does not type its numbers reliably.** The Mac build writes a whole-number knob as
+`455` where the Windows build writes `455.0` (10,878 such values in a Rack owner's backup, none in
+the Floor's), and a few floats come back a few ULP off the stored value (`0.1499999761581421` for a
+stored `0.15`). The device's type for each parameter is the `.models` file's `valueType`: 0 enum
+(integer), 1 knob (`f32`), 2 switch (bool), matching every stored value we hold (1,025 across five
+device types). `tone::ValueTypes` encodes by it.
+
+**Two `global` fields have a known home**: `@tempo` is preset key `5 → 16` (`f32`), and the
+`@cursor_dsp`/`@cursor_path`/`@cursor_position` focus is `6 → 98`, the focused block's wire slot.
+[solid for the tempo, five of five; the focus four of five, see `tone::apply_globals`]
 
 ## Preset map (integer keys)
 | key | value | meaning (inferred) |

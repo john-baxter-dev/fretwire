@@ -125,6 +125,22 @@ The thirteenth bypass-layout position is the expression pedal's toe switch: HX E
 on the Rack shows Plush Garden's Fassel *and* both Volume blocks on "EXP Pedal Toe". fretwire
 printed it as "FS13" and now uses HX Edit's name.
 
+## The backup, against the Rack's own dumps  [solid]
+
+The backup and the owner's `dump-raw`s of Plush Garden, Pull Me Under and US Double Nrm are the
+same presets in both forms, off one unit. Converting each with `hxb-convert` onto another of the
+three reproduces what the Rack stored, apart from float noise and the stored active snapshot. Four
+things came out of making that true (`tests/tone_to_wire.rs`):
+
+- **The input/output nodes**: stored only while routed (gate 3, pan/gain 2, nothing for None).
+  See `docs/preset-format.md`.
+- **HX Edit on a Mac writes whole-number knobs as JSON integers**: 10,878 values across all 307
+  presets of this backup, against none in the Floor's Windows backup. Converted as written, they
+  would have reached the device as integers. Numbers are now typed by `.models` `valueType`.
+- **The preset tempo** is `5 → 16` and the **focused block** `6 → 98`, both from `global`.
+- `hxb-convert` refused every Rack backup once the Rack had a device id: it compared device names,
+  and a `P21` donor always reads as a Floor. It compares model codes now.
+
 ## Not observed
 
 - **A capture of HX Edit talking to a Rack.** Not needed for `Verified` (see the top), but

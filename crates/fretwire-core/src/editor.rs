@@ -52,6 +52,9 @@ pub fn dsp_percent(load: f64) -> f64 {
 pub struct Catalog {
     pub models: ModelDefs,
     pub symbols: DeviceSymbols,
+    /// Each model parameter's `valueType`, from the `.models` files: how a backup's `tone` numbers
+    /// are encoded when converting one (`fretwire_data::tone::apply_tone`).
+    pub value_types: fretwire_data::tone::ValueTypes,
     /// `symbolicID` → (mono DSP load, stereo DSP load), as a percentage of the device's DSP budget.
     /// Sourced from the `.models` files' `load`/`load_stereo` fields. Drives the "% DSP" meter.
     loads: std::collections::HashMap<String, (Option<f64>, Option<f64>)>,
@@ -918,6 +921,9 @@ impl Catalog {
         Ok(Catalog {
             models: ModelDefs::parse(&raw.model_defs).map_err(crate::Error::Data)?,
             symbols: DeviceSymbols::parse(&raw.symbols).map_err(crate::Error::Data)?,
+            value_types: fretwire_data::tone::ValueTypes::from_model_files(
+                raw.models.iter().map(|(_, bytes)| bytes.as_slice()),
+            ),
             loads: loads_from(&raw.models),
             param_meta: param_meta_from(&raw.models, &raw.controls),
             cab_links: cab_links_from(&raw.models),

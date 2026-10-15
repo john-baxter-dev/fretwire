@@ -37,6 +37,14 @@
 //! | `@type` | content key `9`, the block class |
 //! | `footswitch.dspN.blockM` | preset key `3 → 8`, with its labels and LED colours |
 //! | `snapshotN` | preset key `10`, including the per-slot bypass matrix |
+//! | `inputA`/`outputA`/`inputB`/`outputB` | slots 0 and 9, split `14`, mixer `16` ([`apply_io_nodes`]) |
+//! | `global.@tempo` | preset key `5 → 16`, an `f32` |
+//! | `global.@cursor_*` | preset key `6 → 98`, the focused block's wire slot |
+//!
+//! **Numbers are typed by the `.models` `valueType`, not by the JSON** ([`ValueTypes`]): HX Edit
+//! on a Mac writes a whole-number knob as `455`, which the device stores as `f32`. Three presets
+//! from a Helix Rack's backup and dumps (issue #24, 2026-10-14) pin that, alongside the I/O nodes,
+//! the tempo and the focus; `tests/tone_to_wire.rs` holds both comparisons.
 //!
 //! The two counts beside the value vector say exactly this: `11 → 3` is the **symbol's** parameter
 //! count and `11 → 2` the number of values **stored**, and they differ precisely on the blocks that
@@ -46,9 +54,9 @@
 //!
 //! Conversion is an **overlay onto a preset the device itself wrote** — the caller supplies a
 //! [`PresetStream`] read from the target unit, and this replaces the parts the `tone` tree
-//! determines. Everything else keeps the device's own bytes: preset key `5` (86 fields, most
-//! undecoded), key `2`, the device-info stamp at key `7`, and the input/output nodes, whose stored
-//! parameter vector is a ragged prefix of its symbol's list that two samples cannot pin down.
+//! determines. Everything else keeps the device's own bytes: preset key `5` apart from the tempo
+//! (86 fields, most undecoded), key `2`, the device-info stamp at key `7`, and a POD Go's or a
+//! Stomp's input/output nodes, which no preset held in both forms has pinned down.
 //!
 //! The **controller-assignment table** (key `4`) is rebuilt from the `tone`'s `controller`
 //! section — the donor's own rows address blocks by slot and every slot has just been rewritten —
@@ -88,6 +96,7 @@
 //! therefore match names with spaces stripped and case folded, not byte-for-byte.
 
 use serde_json::{Map as JsonMap, Value as Json};
+use std::collections::HashMap;
 
 use crate::stream::{
     DSP_GROUP_KEYS, DSP_SLOT_STRIDE, PresetStream, map_get, map_get_mut, set_map_key, slot_kind,
@@ -334,6 +343,7 @@ pub fn apply_tone(
     donor: &mut PresetStream,
     tone: &JsonMap<String, Json>,
     syms: &DeviceSymbols,
+    types: &ValueTypes,
 ) -> Result<Conversion> {
     let mut out = Conversion::default();
     let chain = Chain::of(donor)?;
@@ -377,7 +387,7 @@ pub fn apply_tone(
                     format!("{tone_key}.{name}: no usable @path/@position for this chain")
                 })
             })?;
-            let encoded = encode_block(block, tone_dsp, syms, chain)
+            let encoded = encode_block(block, tone_dsp, syms, types, chain)
                 .map_err(|e| Error::Stream(format!("{tone_key}.{name}: {e}")))?;
             write_slot(donor, group_key, index, encoded)?;
             out.blocks += 1;
@@ -394,6 +404,7 @@ pub fn apply_tone(
                 Node::SPLIT,
                 topology,
                 syms,
+                types,
                 &mut out,
             );
             apply_node(
@@ -403,14 +414,24 @@ pub fn apply_tone(
                 Node::MIXER,
                 topology,
                 syms,
+                types,
                 &mut out,
             );
             apply_topology(donor, group_key, topology, dsp, &mut out);
+            apply_io_nodes(donor, group_key, tone_dsp, dsp, &mut out);
+        } else {
+            // POD Go Edit names them `input`/`output`, and the one preset held in both forms
+            // disagrees on the source (`@input` 1 against a stored 3), so nothing is assumed.
+            out.not_carried.push(format!(
+                "dsp{dsp}: input and output nodes: gate, gain and routing left as the target's"
+            ));
         }
     }
 
-    let (placed, controller_switch_rows) = apply_controllers(donor, tone, syms, chain, &mut out);
-    apply_snapshots(donor, tone, &placed, chain, &mut out);
+    let (placed, controller_switch_rows) =
+        apply_controllers(donor, tone, syms, types, chain, &mut out);
+    apply_snapshots(donor, tone, &placed, types, chain, &mut out);
+    apply_globals(donor, tone, chain);
     apply_footswitches(donor, tone, controller_switch_rows, chain, &mut out);
     note_omissions(tone, &mut out);
     Ok(out)
@@ -663,6 +684,7 @@ fn apply_controllers(
     donor: &mut PresetStream,
     tone: &JsonMap<String, Json>,
     syms: &DeviceSymbols,
+    types: &ValueTypes,
     chain: Chain,
     out: &mut Conversion,
 ) -> (Vec<PlacedController>, Vec<(usize, bool, Value)>) {
@@ -728,7 +750,9 @@ fn apply_controllers(
                     continue;
                 }
                 let on_switch = ordinal > switch_offset && ordinal < midi_ordinal;
-                match controller_row(target, param, spec, ordinal, dsp, tone_dsp, syms, chain) {
+                match controller_row(
+                    target, param, spec, ordinal, dsp, tone_dsp, syms, types, chain,
+                ) {
                     Ok(row) => {
                         // The layout half of a switch-sourced binding, at the switch the ordinal
                         // names. The slot is the row's own (key 5).
@@ -819,6 +843,7 @@ fn controller_row(
     dsp: usize,
     tone_dsp: &JsonMap<String, Json>,
     syms: &DeviceSymbols,
+    types: &ValueTypes,
     chain: Chain,
 ) -> std::result::Result<Value, String> {
     let index = match (chain, target) {
@@ -857,11 +882,17 @@ fn controller_row(
         (Value::from(1), Value::from(4)),
         (
             Value::from(2),
-            json_to_msgpack(spec.get("@min").unwrap_or(&Json::Null)),
+            typed(
+                spec.get("@min").unwrap_or(&Json::Null),
+                types.of(model, param),
+            ),
         ),
         (
             Value::from(3),
-            json_to_msgpack(spec.get("@max").unwrap_or(&Json::Null)),
+            typed(
+                spec.get("@max").unwrap_or(&Json::Null),
+                types.of(model, param),
+            ),
         ),
         (Value::from(4), Value::from(0)),
         (Value::from(5), Value::from(slot as i64)),
@@ -917,6 +948,7 @@ fn apply_snapshots(
     donor: &mut PresetStream,
     tone: &JsonMap<String, Json>,
     placed: &[PlacedController],
+    types: &ValueTypes,
     chain: Chain,
     out: &mut Conversion,
 ) {
@@ -950,7 +982,12 @@ fn apply_snapshots(
             ("@custom_name", 14),
         ] {
             if let Some(v) = from.get(tone_key) {
-                set_map_key(snapshot, wire_key, json_to_msgpack(v));
+                // The tempo is an `f32` on the device even where the tone writes `120`.
+                let value = match tone_key {
+                    "@tempo" => typed(v, Some(VALUE_FLOAT)),
+                    _ => json_to_msgpack(v),
+                };
+                set_map_key(snapshot, wire_key, value);
             }
         }
         if let Some(name) = from.get("@name").and_then(Json::as_str) {
@@ -989,10 +1026,19 @@ fn apply_snapshots(
                     .and_then(Json::as_bool)
                     .unwrap_or(false);
                 let value = spec.and_then(|s| s.get("@value"));
+                // Typed as the parameter it drives, like the controller row's min and max.
+                let model = tone
+                    .get(&format!("dsp{}", pc.dsp))
+                    .and_then(|d| d.get(&pc.target))
+                    .and_then(|b| b.get("@model"))
+                    .and_then(Json::as_str)
+                    .unwrap_or("");
                 rows[pc.place] = Value::Array(vec![
                     Value::from(fs_enabled),
                     Value::from(pc.place as i64),
-                    value.map(json_to_msgpack).unwrap_or(Value::Nil),
+                    value
+                        .map(|v| typed(v, types.of(model, &pc.param)))
+                        .unwrap_or(Value::Nil),
                 ]);
             }
             set_map_key(snapshot, 2, Value::Array(rows));
@@ -1128,6 +1174,7 @@ fn encode_block(
     block: &Json,
     siblings: &JsonMap<String, Json>,
     syms: &DeviceSymbols,
+    types: &ValueTypes,
     chain: Chain,
 ) -> Result<Value> {
     let model = block
@@ -1141,11 +1188,11 @@ fn encode_block(
         Chain::SingleRow { .. } => 4,
     };
     if tone_type == looper_type {
-        return encode_looper(block, model, syms);
+        return encode_looper(block, model, syms, types);
     }
 
     let (index, symbol, params) = resolve_symbol(model, block, syms)?;
-    let (values, symbol_count) = param_values(block, params);
+    let (values, symbol_count) = param_values(block, model, params, types);
 
     // The paired model, where the type carries one. `@cab` on a type this has never been seen on
     // stays a refusal: the pairing classes were measured per type, not assumed transferable.
@@ -1179,7 +1226,8 @@ fn encode_block(
                      preset we hold mixes the families in one block"
                 )));
             }
-            let (sib_values, sib_symbol_count) = param_values(sibling, sib_params);
+            let (sib_values, sib_symbol_count) =
+                param_values(sibling, sib_model, sib_params, types);
             Some((sib_index, sib_symbol, sib_values, sib_symbol_count, sibling))
         }
         (_, Some(name)) => {
@@ -1296,12 +1344,16 @@ fn encode_block(
 /// identical shape — its `@type` 4: the 2026-09-01 startup capture holds `HD2_LooperMono` at
 /// slot 3 as `{8: 127, 9: 22, 10: false, 7: {2: 4, 3: 4, 4: [...]}}`, index 127 being the
 /// symbol's `PodGo.sym` position; `tests/pgb_to_wire.rs` pins it]
-fn encode_looper(block: &Json, model: &str, syms: &DeviceSymbols) -> Result<Value> {
+fn encode_looper(
+    block: &Json,
+    model: &str,
+    syms: &DeviceSymbols,
+    types: &ValueTypes,
+) -> Result<Value> {
     let (index, _, params) = resolve_symbol(model, block, syms)?;
     let values: Vec<Value> = params
         .iter()
-        .filter_map(|name| get_param(block, name))
-        .map(json_to_msgpack)
+        .filter_map(|name| get_param(block, name).map(|v| typed(v, types.of(model, name))))
         .collect();
     let count = values.len() as i64;
     let content = Value::Map(vec![
@@ -1336,11 +1388,21 @@ fn encode_looper(block: &Json, model: &str, syms: &DeviceSymbols) -> Result<Valu
 ///
 /// Parameter names are matched with spaces stripped and case folded — the tone spells the same
 /// parameter `HighCut` or `High Cut` depending on which HX Edit era wrote it.
-fn param_values(block: &Json, params: &[String]) -> (Vec<Value>, i64) {
+fn param_values(
+    block: &Json,
+    model: &str,
+    params: &[String],
+    types: &ValueTypes,
+) -> (Vec<Value>, i64) {
     let mut values: Vec<Value> = params
         .iter()
         .filter(|name| *name != "IrData")
-        .map(|name| json_to_msgpack(get_param(block, name).unwrap_or(&Json::Null)))
+        .map(|name| {
+            typed(
+                get_param(block, name).unwrap_or(&Json::Null),
+                types.of(model, name),
+            )
+        })
         .collect();
     let symbol_count = values.len() as i64;
     if let Some(mic) = block.get("@mic") {
@@ -1467,6 +1529,7 @@ fn write_slot(donor: &mut PresetStream, group_key: i64, index: usize, slot: Valu
 /// `@enabled` is the node's own bypass and lands on the holder's key `10`. [solid — 2026-08-25]
 ///
 /// An inactive node carries column 0 whatever its `@position` says, which is what the device writes.
+#[allow(clippy::too_many_arguments)] // the symbol table and the value types travel together
 fn apply_node(
     donor: &mut PresetStream,
     group_key: i64,
@@ -1474,6 +1537,7 @@ fn apply_node(
     node_kind: Node,
     topology: Option<&str>,
     syms: &DeviceSymbols,
+    types: &ValueTypes,
     out: &mut Conversion,
 ) {
     let tone_key = node_kind.tone_key;
@@ -1498,7 +1562,12 @@ fn apply_node(
     };
     let values: Vec<Value> = params
         .iter()
-        .map(|p| json_to_msgpack(node.get(p.as_str()).unwrap_or(&Json::Null)))
+        .map(|p| {
+            typed(
+                node.get(p.as_str()).unwrap_or(&Json::Null),
+                types.of(model, p),
+            )
+        })
         .collect();
     let count = values.len() as i64;
     let active = topology.contains(node_kind.marker);
@@ -1539,6 +1608,134 @@ fn apply_node(
     set_map_key(content, 18, Value::from(active));
 }
 
+/// Overlay a DSP's four input/output nodes: path A's input and output (slots 0 and 9) and path B's,
+/// which ride inside the split slot (key `14`) and the mixer slot (key `16`).
+///
+/// **A node stores its parameters only while it is routed somewhere.** The node's own content is
+/// `{5 or 6: source, 7: {2: n, 3: n, 4: values}}`, key `5` an input's source (`@input`) and `6` an
+/// output's destination (`@output`). With the source `0` (None) the value list is empty; with any
+/// other it holds the head of the symbol's list: an input's gate (`noiseGate`, `threshold`,
+/// `decay`, 3 of 8) and an output's `pan` and `gain` (2 of 3). The `tone` carries exactly those
+/// keys on every node, whatever the source, so the source alone decides whether they are written.
+/// The numbers are stored as `f32` even where the `tone` writes `-70` as an integer.
+///
+/// [solid for inputs sourced `0`/`1` and outputs `0`..=`3`: all 40 nodes of five presets held in
+/// both forms, from a Helix Floor and a Helix Rack — issue #24, 2026-10-14. The Stomp, XL and POD
+/// Go wire show the same shape, a POD Go input on source `3` included. The rarer sources a backup
+/// holds (2, 4, 6, 11, 12, 14 and outputs 4..=8, 56 of 6,215 nodes) follow the same rule by
+/// hypothesis.]
+///
+/// **Helix only.** Nodes named by any symbol other than `HD2_AppDSPFlow…` — a Stomp's — keep the
+/// target's, and say so: no Stomp preset is held in both forms, so its `@input` numbering has never
+/// been compared with its wire.
+fn apply_io_nodes(
+    donor: &mut PresetStream,
+    group_key: i64,
+    tone_dsp: &JsonMap<String, Json>,
+    dsp: usize,
+    out: &mut Conversion,
+) {
+    /// Where one node lives and what it stores.
+    struct IoNode {
+        tone_key: &'static str,
+        /// Index in the 20-slot array.
+        index: usize,
+        /// The key inside that slot's content, or `None` when the node is the content itself.
+        inner: Option<i64>,
+        /// `5` for an input's source, `6` for an output's destination.
+        source_key: i64,
+        /// The parameters stored while routed.
+        params: &'static [&'static str],
+    }
+    const INPUT: &[&str] = &["noiseGate", "threshold", "decay"];
+    const OUTPUT: &[&str] = &["pan", "gain"];
+    let nodes = [
+        IoNode {
+            tone_key: "inputA",
+            index: 0,
+            inner: None,
+            source_key: 5,
+            params: INPUT,
+        },
+        IoNode {
+            tone_key: "outputA",
+            index: 9,
+            inner: None,
+            source_key: 6,
+            params: OUTPUT,
+        },
+        IoNode {
+            tone_key: "inputB",
+            index: 10,
+            inner: Some(14),
+            source_key: 5,
+            params: INPUT,
+        },
+        IoNode {
+            tone_key: "outputB",
+            index: 19,
+            inner: Some(16),
+            source_key: 6,
+            params: OUTPUT,
+        },
+    ];
+    for IoNode {
+        tone_key,
+        index,
+        inner,
+        source_key,
+        params,
+    } in nodes
+    {
+        let Some(node) = tone_dsp.get(tone_key) else {
+            continue;
+        };
+        let model = node.get("@model").and_then(Json::as_str).unwrap_or("");
+        let source_name = if source_key == 5 { "@input" } else { "@output" };
+        let source = node.get(source_name).and_then(Json::as_i64);
+        let (true, Some(source)) = (model.starts_with("HD2_AppDSPFlow"), source) else {
+            out.not_carried.push(format!(
+                "dsp{dsp}.{tone_key}: {model:?} is not a Helix I/O node with a {source_name}, \
+                 left as the target's"
+            ));
+            continue;
+        };
+        let values: Option<Vec<Value>> = match source {
+            0 => Some(Vec::new()),
+            _ => params
+                .iter()
+                .map(|p| match node.get(*p)? {
+                    Json::Bool(b) => Some(Value::from(*b)),
+                    n => Some(Value::F32(n.as_f64()? as f32)),
+                })
+                .collect(),
+        };
+        let Some(values) = values else {
+            out.not_carried.push(format!(
+                "dsp{dsp}.{tone_key}: missing one of {params:?}, left as the target's"
+            ));
+            continue;
+        };
+        let n = values.len() as i64;
+        let content = Value::Map(vec![
+            (Value::from(source_key), Value::from(source)),
+            (Value::from(7), param_bank(n, n, values)),
+        ]);
+        let Some(Value::Array(slots)) =
+            map_get_mut(&mut donor.preset, group_key).and_then(|g| map_get_mut(g, 22))
+        else {
+            return;
+        };
+        let Some(slot_content) = slots.get_mut(index).and_then(|s| map_get_mut(s, 20)) else {
+            continue;
+        };
+        match inner {
+            None => *slot_content = content,
+            Some(key) => set_map_key(slot_content, key, content),
+        }
+    }
+}
+
 /// This DSP's entry in `global.@topologyN`.
 fn dsp_topology(tone: &JsonMap<String, Json>, dsp: usize) -> Option<&str> {
     tone.get("global")?.get(format!("@topology{dsp}"))?.as_str()
@@ -1569,6 +1766,45 @@ fn apply_topology(
     }
 }
 
+/// The two `global` fields the wire is known to hold: the **preset tempo** at preset key
+/// `5 → 16`, an `f32` (the tone writes `73` or `102.0` depending on the HX Edit build), and the
+/// **focused block** at `6 → 98`, the wire slot of `@cursor_dsp`/`@cursor_path`/`@cursor_position`
+/// (`dsp × 20 + 1 + position` on path A, `+ 11` on path B).
+///
+/// [solid for the tempo: all five Floor and Rack presets held in both forms, and the POD Go's one.
+/// The focus matches on four of the five; the fifth, the Floor's "Sultans", has slot 5 focused
+/// where its backup says position 2, and that capture was taken through HX Edit fifteen hours
+/// after the backup, so the cursor had room to move. Issue #24, 2026-10-14]
+///
+/// The focus is written on the Helix's two-row chain only: a POD Go tone carries no cursor.
+fn apply_globals(donor: &mut PresetStream, tone: &JsonMap<String, Json>, chain: Chain) {
+    let Some(global) = tone.get("global") else {
+        return;
+    };
+    if let Some(tempo) = global.get("@tempo").filter(|t| t.is_number())
+        && let Some(group) = map_get_mut(&mut donor.preset, 5)
+    {
+        set_map_key(group, 16, typed(tempo, Some(VALUE_FLOAT)));
+    }
+    let cursor = |k: &str| global.get(k).and_then(Json::as_i64);
+    if chain == Chain::HxRows
+        && let (Some(dsp), Some(path), Some(position)) = (
+            cursor("@cursor_dsp"),
+            cursor("@cursor_path"),
+            cursor("@cursor_position"),
+        )
+        && (0..ROW_WIDTH as i64).contains(&position)
+        && let Some(group) = map_get_mut(&mut donor.preset, 6)
+    {
+        let row = if path == 1 { 1 + ROW_STRIDE as i64 } else { 1 };
+        set_map_key(
+            group,
+            98,
+            Value::from(dsp * DSP_SLOT_STRIDE + row + position),
+        );
+    }
+}
+
 /// One line per part of the `tone` tree this does not write.
 fn note_omissions(tone: &JsonMap<String, Json>, out: &mut Conversion) {
     if out.snapshots > 0 {
@@ -1581,7 +1817,7 @@ fn note_omissions(tone: &JsonMap<String, Json>, out: &mut Conversion) {
     for (key, what) in [
         (
             "global",
-            "preset tempo, input impedance/pad and the focused block",
+            "input impedance/pad and the other global settings",
         ),
         ("irUuidTable", "the IR slot references"),
         ("variax", "Variax settings"),
@@ -1590,8 +1826,72 @@ fn note_omissions(tone: &JsonMap<String, Json>, out: &mut Conversion) {
             out.not_carried.push(format!("{key}: {what}"));
         }
     }
-    out.not_carried
-        .push("input and output nodes: gate, gain and routing left as the target preset's".into());
+}
+
+/// `valueType` 1 in a `.models` file: a knob, stored as `f32`.
+const VALUE_FLOAT: i64 = 1;
+/// `valueType` 0: an enum, stored as an integer.
+const VALUE_ENUM: i64 = 0;
+/// `valueType` 2: a switch, stored as a bool.
+const VALUE_BOOL: i64 = 2;
+
+/// Every model parameter's `valueType`, read from the `.models` files: `0` an enum (integer), `1` a
+/// knob (`f32`), `2` a switch (bool), `3` a string.
+///
+/// **The `tone` cannot be trusted to say.** HX Edit on a Mac writes a whole-number knob as `455`
+/// where the Windows build writes `455.0`: a Helix Rack owner's backup holds 10,878 knob values
+/// spelled as JSON integers, in all 307 of its presets, against none in the Floor backup's 363
+/// (issue #24, 2026-10-14). Typed from the JSON, every one of those would reach the device as an
+/// integer where it stores an `f32`. `valueType` agrees with the stored type on every parameter of
+/// every preset stream we hold: 1,025 values from a Stomp, an XL, a Floor, a Rack and a POD Go.
+#[derive(Debug, Clone, Default)]
+pub struct ValueTypes(HashMap<String, HashMap<String, i64>>);
+
+impl ValueTypes {
+    /// Build the table from the raw bytes of a family's `.models` files. A file that fails to
+    /// parse is skipped; its models fall back to the JSON's own typing.
+    pub fn from_model_files<'a>(files: impl IntoIterator<Item = &'a [u8]>) -> ValueTypes {
+        let mut map = HashMap::new();
+        for bytes in files {
+            let Ok(file) = crate::models::ModelFile::from_slice(bytes) else {
+                continue;
+            };
+            for m in file.models {
+                let params = m
+                    .params
+                    .iter()
+                    .filter_map(|p| Some((fold_param_name(&p.symbolic_id), p.value_type?)))
+                    .collect();
+                map.insert(m.symbolic_id, params);
+            }
+        }
+        ValueTypes(map)
+    }
+
+    /// The `valueType` of `param` on `model` (a `tone` `@model`, i.e. the symbol without its
+    /// `Mono`/`Stereo` suffix), or `None` when the `.models` files don't say.
+    pub fn of(&self, model: &str, param: &str) -> Option<i64> {
+        let base = model
+            .strip_suffix("Mono")
+            .or_else(|| model.strip_suffix("Stereo"))
+            .unwrap_or(model);
+        let params = self.0.get(model).or_else(|| self.0.get(base))?;
+        params.get(&fold_param_name(param)).copied()
+    }
+}
+
+/// A `tone` value encoded as the parameter's `valueType` says, falling back to the JSON's own
+/// typing ([`json_to_msgpack`]) when the type is unknown or the value doesn't fit it.
+fn typed(v: &Json, value_type: Option<i64>) -> Value {
+    match (value_type, v) {
+        (Some(VALUE_FLOAT), Json::Number(n)) => Value::F32(n.as_f64().unwrap_or(0.0) as f32),
+        (Some(VALUE_ENUM), Json::Number(n)) => match n.as_i64() {
+            Some(i) => Value::from(i),
+            None => Value::from(n.as_f64().unwrap_or(0.0).round() as i64),
+        },
+        (Some(VALUE_BOOL), Json::Bool(b)) => Value::from(*b),
+        _ => json_to_msgpack(v),
+    }
 }
 
 /// A `tone` parameter value in the encoding the wire uses.

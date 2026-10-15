@@ -773,8 +773,12 @@ real session.
       **A converted preset has still never been sent to a pedal.** What is left:
       - ~~**Topology `AB`**~~ — split type `4`, from a Helix Rack owner's Plush Garden dump
         (issue #24, 2026-10-14), pinned by `tone_to_wire::topology_ab_comes_across`.
-      - The four **input/output nodes** store a ragged prefix of their symbol's parameter list and
-        the rule is unknown; they keep the target's values.
+      - ~~The four **input/output nodes**~~ — a node stores its gate (3) or pan/gain (2) only while
+        its source isn't None; written for the Helix from 2026-10-14 (issue #24). The POD Go's and
+        the Stomp's still keep the target's: no preset of theirs is held in both forms with a
+        matching source. Same round: numbers typed by `.models` `valueType` (a Mac backup writes
+        `455` for a knob the device stores as `f32`), and the preset tempo and focused block
+        carried from `global`.
       - **MIDI-sourced controller rows** (the CC number, key `1` under a MIDI source) — needs one
         tone+wire pair with a MIDI assignment.
 

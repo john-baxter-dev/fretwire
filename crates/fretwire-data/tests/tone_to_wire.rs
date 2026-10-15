@@ -27,7 +27,7 @@ use fretwire_data::{
     hxb::Hxb,
     stream::{PresetStream, map_get},
     symbols::DeviceSymbols,
-    tone::apply_tone,
+    tone::{ValueTypes, apply_tone},
 };
 use rmpv::Value;
 
@@ -39,17 +39,34 @@ fn captures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../captures/helix-floor")
 }
 
-fn symbols() -> Option<DeviceSymbols> {
-    // Same resolution order as build.rs, which is what set `have_bundled_data`.
-    let dir = std::env::var_os("FRETWIRE_DATA_DIR")
+fn data_dir() -> Option<PathBuf> {
+    std::env::var_os("FRETWIRE_DATA_DIR")
         .map(PathBuf::from)
         .or_else(|| {
             std::env::var_os("XDG_DATA_HOME")
                 .map(PathBuf::from)
                 .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
                 .map(|b| b.join("fretwire").join("data"))
-        })?;
-    DeviceSymbols::parse(&std::fs::read(dir.join("Helix.sym")).ok()?).ok()
+        })
+}
+
+fn symbols() -> Option<DeviceSymbols> {
+    DeviceSymbols::parse(&std::fs::read(data_dir()?.join("Helix.sym")).ok()?).ok()
+}
+
+/// The family's `.models` value types, which decide how a `tone` number is encoded.
+fn types() -> ValueTypes {
+    let dir = data_dir();
+    let files: Vec<Vec<u8>> = dir
+        .and_then(|d| std::fs::read_dir(d).ok())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "models"))
+        .filter_map(|p| std::fs::read(p).ok())
+        .collect();
+    ValueTypes::from_model_files(files.iter().map(Vec::as_slice))
 }
 
 /// The contributor's backup, whatever it is called — the file name carries its date.
@@ -81,7 +98,7 @@ fn converted_and_oracle() -> Option<(PresetStream, PresetStream)> {
         .clone()?
         .tone;
     let tone = tone.as_object()?.clone();
-    let report = apply_tone(&mut donor, &tone, &syms).expect("conversion");
+    let report = apply_tone(&mut donor, &tone, &syms, &types()).expect("conversion");
     assert_eq!(report.blocks, 15, "every block in the tone should convert");
     Some((donor, oracle))
 }
@@ -93,47 +110,12 @@ fn slots(ps: &PresetStream, dsp: i64) -> Vec<Value> {
     }
 }
 
-/// Strip the parts of a slot the conversion deliberately does not write, so the comparison is over
-/// exactly what it claims.
-///
-/// Those are the four **input/output** nodes, whose stored parameter vector is a ragged prefix of
-/// the symbol's list — DSP1's input keeps 3 of its 8 parameters and DSP2's keeps none — and two
-/// samples do not pin down the rule. Path A's pair are whole slots (0 = input, 9 = output); path
-/// B's ride *inside* the structural slots, as key `14` of the split and key `16` of the mixer.
-/// [solid — the split's `14 → 5` is the tone's `inputB.@input` and the mixer's `16 → 6` is
-/// `outputB.@output`, on both DSPs]
-fn claimed(index: usize, slot: &Value) -> Option<Value> {
-    let strip = |slot: &Value, key: i64| {
-        let mut slot = slot.clone();
-        if let Some(Value::Map(content)) = map_get_mut(&mut slot, 20) {
-            content.retain(|(k, _)| k.as_i64() != Some(key));
-        }
-        slot
-    };
-    match index {
-        0 | 9 => None,               // input A, output A — whole slots we don't touch
-        10 => Some(strip(slot, 14)), // the split, minus input B
-        19 => Some(strip(slot, 16)), // the mixer, minus output B
-        _ => Some(slot.clone()),
-    }
-}
-
-/// `rmpv` has no public mutable map accessor, and the test needs one to strip a key.
-fn map_get_mut(v: &mut Value, key: i64) -> Option<&mut Value> {
-    match v {
-        Value::Map(m) => m
-            .iter_mut()
-            .find(|(k, _)| k.as_i64() == Some(key))
-            .map(|(_, v)| v),
-        _ => None,
-    }
-}
-
 /// The whole point: converting the backup's JSON reproduces the device's own preset, slot for slot.
 ///
 /// This covers all 15 blocks across both DSPs — model index, paired cab, block class, enabled flag,
-/// and every one of the 106 stored parameter values — plus the split and mixer nodes. A failure
-/// here names the exact slot, which is what makes the mapping debuggable at all.
+/// and every one of the 106 stored parameter values — plus the split and mixer nodes and, since
+/// 2026-10-14, the four input/output nodes, so every slot is compared whole. A failure here names
+/// the exact slot, which is what makes the mapping debuggable at all.
 #[test]
 fn converting_the_backup_reproduces_the_device_preset() {
     let Some((converted, oracle)) = converted_and_oracle() else {
@@ -144,7 +126,7 @@ fn converting_the_backup_reproduces_the_device_preset() {
         let (got, want) = (slots(&converted, dsp), slots(&oracle, dsp));
         assert_eq!(got.len(), want.len(), "dsp{dsp}: slot array length");
         for (i, (got, want)) in got.iter().zip(&want).enumerate() {
-            assert_eq!(claimed(i, got), claimed(i, want), "dsp{dsp} slot {i}");
+            assert_eq!(got, want, "dsp{dsp} slot {i}");
         }
     }
 }
@@ -329,19 +311,19 @@ fn the_report_names_what_it_did_not_carry() {
         .clone()
         .unwrap()
         .tone;
-    let report = apply_tone(&mut donor, tone.as_object().unwrap(), &syms).unwrap();
+    let report = apply_tone(&mut donor, tone.as_object().unwrap(), &syms, &types()).unwrap();
     let said = report.not_carried.join("\n");
-    for expected in [
-        "snapshot",
-        "controller assignments",
-        "irUuidTable",
-        "input and output",
-    ] {
+    for expected in ["snapshot", "controller assignments", "irUuidTable"] {
         assert!(
             said.contains(expected),
             "no mention of {expected} in:\n{said}"
         );
     }
+    // The Helix's input/output nodes are written now, so the report must not claim otherwise.
+    assert!(
+        !said.contains("input and output"),
+        "the I/O nodes are carried:\n{said}"
+    );
 }
 
 /// Topology `AB`, a DSP the two paths only pass through, from a second preset held in both forms:
@@ -375,7 +357,7 @@ fn topology_ab_comes_across() {
         tone["global"]["@topology1"], "AB",
         "the backup's slot 47 should be Plush Garden"
     );
-    let report = apply_tone(&mut donor, &tone, &syms).expect("conversion");
+    let report = apply_tone(&mut donor, &tone, &syms, &types()).expect("conversion");
     assert!(
         !report.not_carried.iter().any(|n| n.contains("topology")),
         "every topology should carry: {:?}",
@@ -394,4 +376,100 @@ fn topology_ab_comes_across() {
         (split_type(&oracle, 0), split_type(&oracle, 1)),
         (Some(2), Some(4))
     );
+}
+
+/// `a == b`, except that two `f32`s may differ in the sixth significant figure. HX Edit's JSON does
+/// not always round-trip the device's float: this Rack's own backup has Plush Garden's gate decay
+/// as `0.1499999761581421` where the Rack stores `0.15`, and its worst value across three presets
+/// is a predelay of `0.011000037` against a stored `0.011` (40 ULP, 3e-6 relative). Types must
+/// still match exactly, so an integer written where the device has an `f32` fails.
+fn same_to_float_noise(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Map(x), Value::Map(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .zip(y)
+                    .all(|((ka, va), (kb, vb))| ka == kb && same_to_float_noise(va, vb))
+        }
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(a, b)| same_to_float_noise(a, b))
+        }
+        (Value::F32(x), Value::F32(y)) => (x - y).abs() <= y.abs().max(1.0) * 1e-5,
+        _ => a == b,
+    }
+}
+
+/// Three more presets held in both forms, all from **one Helix Rack**: its owner's HX Edit backup
+/// and `dump-raw`s of the same presets (issue #24, 2026-10-14). Each converts onto a different one
+/// of the three as donor, and every slot of both DSPs, the four input/output nodes included, must
+/// come out as the device stored it, along with the preset tempo and the focused block. This
+/// backup writes whole-number knobs as JSON integers, so it also pins the `valueType` typing. Pull Me Under is a cross-DSP bracket (`SAB`/`ABJ`), Plush
+/// Garden passes through DSP2 (`SAB`/`AB`) and US Double Nrm is serial.
+///
+/// Untracked like the Floor's: `captures/helix-rack/` holds the owner's files. Skips without them.
+#[test]
+fn three_rack_presets_convert_to_what_the_rack_stored() {
+    let rack = captures().join("../helix-rack");
+    let (Some(syms), Ok(bytes)) = (
+        symbols(),
+        std::fs::read(rack.join("Helix Rack Backup 2026-Oct-14.hxb")),
+    ) else {
+        eprintln!("skipping: needs the Rack backup and dumps in captures/helix-rack");
+        return;
+    };
+    let hxb = Hxb::parse(&bytes).expect("Rack backup");
+    let read = |name: &str| {
+        PresetStream::parse(&std::fs::read(rack.join(name)).expect("Rack dump")).expect("parse")
+    };
+    for (bank, index, oracle, donor) in [
+        (
+            0,
+            53,
+            "rack-plushgarden.msgpack.bin",
+            "rack-pullmeunder.msgpack.bin",
+        ),
+        (
+            1,
+            83,
+            "rack-pullmeunder.msgpack.bin",
+            "rack-usdoublenrm.msgpack.bin",
+        ),
+        (
+            0,
+            0,
+            "rack-usdoublenrm.msgpack.bin",
+            "rack-plushgarden.msgpack.bin",
+        ),
+    ] {
+        let oracle = read(oracle);
+        let mut donor = read(donor);
+        let tone = hxb.setlists()[bank].presets[index]
+            .clone()
+            .expect("a preset")
+            .tone;
+        apply_tone(&mut donor, tone.as_object().unwrap(), &syms, &types()).expect("conversion");
+        // The preset tempo and the focused block, out of the tone's `global`.
+        for (group, key) in [(5, 16), (6, 98)] {
+            let at = |ps: &PresetStream| {
+                map_get(&ps.preset, group)
+                    .and_then(|g| map_get(g, key))
+                    .cloned()
+            };
+            assert_eq!(at(&donor), at(&oracle), "{bank}/{index} /{group}/{key}");
+        }
+        for dsp in 0..2i64 {
+            let (got, want) = (slots(&donor, dsp), slots(&oracle, dsp));
+            assert_eq!(
+                got.len(),
+                want.len(),
+                "{bank}/{index} dsp{dsp}: slot array length"
+            );
+            for (i, (got, want)) in got.iter().zip(&want).enumerate() {
+                assert!(
+                    same_to_float_noise(got, want),
+                    "{bank}/{index} dsp{dsp} slot {i}:\n  got {got:?}\n want {want:?}"
+                );
+            }
+        }
+    }
 }

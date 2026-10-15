@@ -15,7 +15,7 @@ use fretwire_data::{
     hxb::Hxb,
     stream::{PresetStream, map_get},
     symbols::DeviceSymbols,
-    tone::apply_tone,
+    tone::{ValueTypes, apply_tone},
 };
 use rmpv::Value;
 use std::path::PathBuf;
@@ -25,16 +25,34 @@ fn captures() -> PathBuf {
 }
 
 /// The POD Go's own symbol table, from the imported reference data.
-fn symbols() -> Option<DeviceSymbols> {
-    let dir = std::env::var_os("FRETWIRE_DATA_DIR")
+fn data_dir() -> Option<PathBuf> {
+    std::env::var_os("FRETWIRE_DATA_DIR")
         .map(PathBuf::from)
         .or_else(|| {
             std::env::var_os("XDG_DATA_HOME")
                 .map(PathBuf::from)
                 .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
                 .map(|b| b.join("fretwire").join("data"))
-        })?;
-    DeviceSymbols::parse(&std::fs::read(dir.join("pod-go/PodGo.sym")).ok()?).ok()
+        })
+}
+
+fn symbols() -> Option<DeviceSymbols> {
+    DeviceSymbols::parse(&std::fs::read(data_dir()?.join("pod-go/PodGo.sym")).ok()?).ok()
+}
+
+/// The family's `.models` value types, which decide how a `tone` number is encoded.
+fn types() -> ValueTypes {
+    let dir = data_dir().map(|d| d.join("pod-go"));
+    let files: Vec<Vec<u8>> = dir
+        .and_then(|d| std::fs::read_dir(d).ok())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "models"))
+        .filter_map(|p| std::fs::read(p).ok())
+        .collect();
+    ValueTypes::from_model_files(files.iter().map(Vec::as_slice))
 }
 
 fn backup() -> Option<Hxb> {
@@ -102,7 +120,7 @@ fn converted_and_oracle() -> Option<(PresetStream, PresetStream)> {
     vandalise(&mut donor);
     let tone = backup()?.setlists().first()?.presets.first()?.clone()?.tone;
     let tone = tone.as_object()?.clone();
-    let report = apply_tone(&mut donor, &tone, &syms).expect("conversion");
+    let report = apply_tone(&mut donor, &tone, &syms, &types()).expect("conversion");
     assert_eq!(report.blocks, 10, "all ten fixed-chain blocks convert");
     for line in &report.not_carried {
         eprintln!("not carried: {line}");
@@ -230,7 +248,7 @@ fn the_second_preset_reproduces_too_including_the_ir() {
 
     let mut donor = oracle.clone();
     vandalise(&mut donor);
-    let report = apply_tone(&mut donor, &tone, &syms).expect("conversion");
+    let report = apply_tone(&mut donor, &tone, &syms, &types()).expect("conversion");
     assert_eq!(report.blocks, 10, "all ten blocks convert, the IR included");
     let slots = |ps: &PresetStream| match map_get(&ps.preset, 0).and_then(|m| map_get(m, 22)) {
         Some(Value::Array(a)) => a.clone(),
@@ -363,7 +381,8 @@ fn the_looper_converts_in_the_captured_shape() {
         let tone = tone.as_object().expect("tone object").clone();
         let mut donor = oracle.clone();
         vandalise(&mut donor);
-        let report = apply_tone(&mut donor, &tone, &syms).expect("the looper preset converts");
+        let report =
+            apply_tone(&mut donor, &tone, &syms, &types()).expect("the looper preset converts");
         assert!(report.blocks >= 1, "SL01[{idx}] converts its blocks");
         let got = slot(&donor, 1);
         let got_content = map_get(&got, 20).expect("converted looper content");

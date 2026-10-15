@@ -2,6 +2,26 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Backup conversion: I/O nodes, value types, tempo and focus, from the Rack's backup (2026-10-14,
+issue #24).** The Rack backup plus three dumps of its presets are a second set of presets held in
+both forms, off one unit. Four results:
+(1) **I/O nodes**: a node stores parameters only while routed. Source/destination `0` (None) →
+empty; otherwise an input's gate (3 of 8) or an output's pan/gain (2 of 3). 40 of 40 nodes across
+five Floor/Rack pairs; same shape on Stomp, XL and POD Go wire. `tone::apply_io_nodes` writes the
+Helix's; POD Go and Stomp still keep the target's (the one POD Go pair disagrees on the source).
+(2) **Mac HX Edit writes whole-number knobs as JSON integers** — 10,878 values in all 307 presets of
+this backup, none in the Floor's — and the converter typed by the JSON, so it would have written
+integers where the device stores `f32`. `tone::ValueTypes` types every value by `.models`
+`valueType`, which matched 1,025 of 1,025 stored values across five device types; `@tempo` too.
+`apply_tone` takes it; `Catalog::value_types` carries it.
+(3) **`global`**: `@tempo` → `5 → 16` (5/5) and the cursor → `6 → 98` as a wire slot (4/5, the
+fifth plausibly moved between backup and capture). Written by `tone::apply_globals`.
+(4) **`hxb-convert` refused every Rack backup** since `7f38e39` gave the Rack a device id: it
+compared device names, and a `P21` donor reads as a Floor. Now compares model codes.
+Converted Plush Garden now matches the Rack's own copy except float noise (≤40 ULP, from the
+backup) and the stored active snapshot. `tone_to_wire` compares whole slots now (no I/O exclusion)
+and adds a three-preset Rack oracle. 402 tests, clippy clean.
+
 **Helix Rack: verified — edits work, device id `0x00210002`, and HX Edit calls the toe "EXP
 Pedal Toe" (2026-10-14, issue #24).** The owner's third round. Writes: `set` on DSP1 and DSP2, a `bypass` and
 a `revert`, each confirmed on the unit's screen and by `pull` — the first edits ever sent to a Rack.

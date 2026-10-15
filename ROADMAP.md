@@ -685,10 +685,10 @@ real session.
       Rack is a Floor in a rack box, because a guessed code would make `by_model_code` ambiguous.
       The **pre-2.82 ids are deliberately absent** (`0x4241` Helix, `0x4242` Helix Rack, `0x4244`
       Helix LT): this protocol was recovered from firmware 3.x.
-      **Closed 2026-10-14 (issue #24): `Reported`.** An owner surveyed a Rack read-only on fw
-      3.80.0: `lsusb` confirms `0x4249`, it reports `P21`, two DSPs, 8 snapshots, banks 0..7 of
-      128 (bank 8 refused `-3`), numbered `01A`-`32D`. `preset_device_id` stays `None` (no
-      backup). See `docs/helix-rack.md`.
+      **Closed 2026-10-14 (issue #24): `Verified`.** An owner surveyed a Rack on fw 3.80.0:
+      `lsusb` confirms `0x4249`, it reports `P21`, two DSPs, 8 snapshots, banks 0..7 of 128
+      (bank 8 refused `-3`), numbered `01A`-`32D`, device id `0x00210002` from its backup. The
+      Floor's builders edited it live on both DSPs. See `docs/helix-rack.md`.
 - [x] **Global settings — op 24 reads, op 25 writes, 27 ids named (2026-08-22, and eight Ins/Outs
       ids from an HX Stomp XL owner on 2026-08-23).** The namespace is
       flat and numbered; a 601-id sweep costs 1.4 s, so `settings-dump` / `settings-diff` maps it

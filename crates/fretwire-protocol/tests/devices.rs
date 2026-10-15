@@ -152,9 +152,9 @@ fn the_hx_effects_carries_no_geometry_it_has_not_been_shown() {
 #[test]
 fn the_helix_rack_claims_only_what_its_survey_showed() {
     let rack = Device::by_pid(PID_HELIX_RACK).unwrap();
-    // Reads reconciled on a real unit, but no edit has been sent to one.
-    assert_eq!(rack.support, Support::Reported);
-    assert!(rack.support.caveat().is_some());
+    // `P21`, so the Floor's byte-verified builders, and those worked on the unit live.
+    assert_eq!(rack.support, Support::Verified);
+    assert!(rack.support.caveat().is_none());
     assert_eq!(rack.model_code, Some("P21"));
     assert_eq!(rack.dsps, Some(2));
     assert_eq!(rack.snapshots, Some(8));

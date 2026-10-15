@@ -81,7 +81,10 @@ pub const EP_IN: u8 = 0x81;
 /// How much of a device we've actually confirmed, as opposed to inferred from the family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Support {
-    /// Wire traffic from this exact device has been observed and reconciled against our builders.
+    /// Wire traffic from this exact device has been observed and reconciled against our builders —
+    /// or the device shares a verified sibling's model code, so it takes builders already checked
+    /// that way, and edits from them have been confirmed on the unit itself. The second route is
+    /// the Helix Rack's: `P21` like the Floor, edited live on both DSPs (issue #24).
     Verified,
     /// Someone has run the editor against one and reported back, but the device is not yet fully
     /// described — so some field below is still honestly unknown. Sits between the other two on
@@ -171,6 +174,7 @@ pub struct Device {
 ///
 /// The HX Stomp, Helix Floor and POD Go are [`Support::Verified`] — the handshake is
 /// byte-identical across them and every edit builder reproduces each device's own wire bytes. The
+/// Helix Rack is too, by the second route [`Support::Verified`] allows (see below). The
 /// POD Go is the interesting one: it is not even marketed as an HX device, and it still speaks the
 /// identical protocol (issue #15).
 ///
@@ -191,9 +195,10 @@ pub struct Device {
 /// still empty.
 ///
 /// The **Helix Rack** got into the table without a single person: its id was read out of the Linux
-/// kernel's Line 6 quirk table (see [`PID_HELIX_RACK`]) as [`Support::Untested`]. An owner has since
-/// surveyed one read-only (issue #24) and it reached [`Support::Reported`] the LT's way — reports
-/// `P21`, two DSPs, eight setlists of 128 — so the `Untested` tier is empty again.
+/// kernel's Line 6 quirk table (see [`PID_HELIX_RACK`]) as [`Support::Untested`]. An owner then
+/// surveyed one (issue #24): it reports the Floor's `P21`, every field was read off the unit or its
+/// backup, and the Floor's verified edit builders worked on it live, which made it
+/// [`Support::Verified`] without a capture of its own. The `Untested` tier is empty again.
 pub const DEVICES: &[Device] = &[
     Device {
         pid: PID_HX_STOMP,
@@ -281,6 +286,49 @@ pub const DEVICES: &[Device] = &[
         // from the Stomp's captured one in exactly one byte, the slot number. The last unknown
         // field, `preset_device_id`, arrived with their backup. What remains open is geometry, not
         // protocol: the fixed chain's add/move/delete semantics. [solid — 2026-08-28, issue #15]
+        support: Support::Verified,
+    },
+    Device {
+        pid: PID_HELIX_RACK,
+        name: "Helix Rack",
+        // The Floor's code, like the LT's: the handshake identity reply reported "P21" and a
+        // pulled preset carries key `7 → 36` = "P21\0". It joins the Floor's data class, and
+        // `by_model_code("P21")` keeps resolving to the Floor, which is listed first.
+        // [solid — 2026-10-14, owner survey, issue #24]
+        model_code: Some("P21"),
+        // From the owner's HX Edit backup: the `.hxb` header's device field reads `0x00210002`,
+        // next to the Floor's `0x00210001`. Same evidence as every other device's id.
+        // [solid — 2026-10-14, issue #24]
+        preset_device_id: Some(0x0021_0002),
+        // Both DSPs — a pulled preset held blocks in slots 35..38 (the unit reported DSP1 71.8% /
+        // DSP2 74.5%).
+        dsps: Some(2),
+        // The pulled presets carry SNAPSHOT 1..SNAPSHOT 8.
+        snapshots: Some(8),
+        // Banks 0..7 each list 128 and bank 8 is refused (code -3). The names are the Floor's, and
+        // here they are observed: the owner's HX Edit setlist pane shows exactly these eight.
+        // [solid — 2026-10-14, issue #24]
+        setlists: Some(&[
+            "FACTORY 1",
+            "FACTORY 2",
+            "USER 1",
+            "USER 2",
+            "USER 3",
+            "USER 4",
+            "USER 5",
+            "TEMPLATES",
+        ]),
+        setlist_size: Some(128),
+        // Read off the unit by its owner: `01A`, `01B`, `01C`, `01D`, `02A`… — the first bank size
+        // anyone has read off a Floor-class device. Not copied to the Floor or the LT: that is the
+        // inference this table refuses to make. [2026-10-14 owner report, issue #24]
+        presets_per_bank: Some(4),
+        // Handshake, preset read, setlist and preset-list browse, settings dump and teardown all
+        // ran against a physical Rack on fw 3.80.0, and so did a write round: two `set_value`s
+        // (one on DSP2), a bypass and a revert, each confirmed on the unit's screen and by a
+        // re-read. No HX Edit capture from a Rack exists, and none is needed: it is `P21`, so it
+        // takes the Floor's builders, which were checked byte-for-byte against a Floor's own
+        // traffic, and the Rack accepted them. [2026-10-14, issue #24]
         support: Support::Verified,
     },
     Device {
@@ -383,49 +431,6 @@ pub const DEVICES: &[Device] = &[
         // was read off a screen, nothing was pasted back — so it fills in none of the fields above.
         // It is still `Reported` rather than `Untested`: "a user has this working" is real
         // information about the protocol, confirmed by outcome. [2026-08-24 owner report]
-        support: Support::Reported,
-    },
-    Device {
-        pid: PID_HELIX_RACK,
-        name: "Helix Rack",
-        // The Floor's code, like the LT's: the handshake identity reply reported "P21" and a
-        // pulled preset carries key `7 → 36` = "P21\0". It joins the Floor's data class, and
-        // `by_model_code("P21")` keeps resolving to the Floor, which is listed first.
-        // [solid — 2026-10-14, owner survey, issue #24]
-        model_code: Some("P21"),
-        // From the owner's HX Edit backup: the `.hxb` header's device field reads `0x00210002`,
-        // next to the Floor's `0x00210001`. Same evidence as every other device's id.
-        // [solid — 2026-10-14, issue #24]
-        preset_device_id: Some(0x0021_0002),
-        // Both DSPs — a pulled preset held blocks in slots 35..38 (the unit reported DSP1 71.8% /
-        // DSP2 74.5%).
-        dsps: Some(2),
-        // The pulled presets carry SNAPSHOT 1..SNAPSHOT 8.
-        snapshots: Some(8),
-        // Banks 0..7 each list 128 and bank 8 is refused (code -3). The names are the Floor's, and
-        // here they are observed: the owner's HX Edit setlist pane shows exactly these eight.
-        // [solid — 2026-10-14, issue #24]
-        setlists: Some(&[
-            "FACTORY 1",
-            "FACTORY 2",
-            "USER 1",
-            "USER 2",
-            "USER 3",
-            "USER 4",
-            "USER 5",
-            "TEMPLATES",
-        ]),
-        setlist_size: Some(128),
-        // Read off the unit by its owner: `01A`, `01B`, `01C`, `01D`, `02A`… — the first bank size
-        // anyone has read off a Floor-class device. Not copied to the Floor or the LT: that is the
-        // inference this table refuses to make. [2026-10-14 owner report, issue #24]
-        presets_per_bank: Some(4),
-        // Handshake, preset read, setlist and preset-list browse, settings dump and teardown all
-        // ran against a physical Rack on fw 3.80.0, and so did a write round: two `set_value`s
-        // (one on DSP2), a bypass and a revert, each confirmed on the unit's screen and by a
-        // re-read. Still `Reported`: `Verified` means the builders were checked against the
-        // device's own HX Edit traffic, and no capture from a Rack exists. They are the Floor's
-        // builders, which were. [2026-10-14, issue #24]
         support: Support::Reported,
     },
 ];

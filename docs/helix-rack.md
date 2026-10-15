@@ -2,17 +2,18 @@
 
 What we know about the **Helix Rack**, from an owner's unit on Linux (2026-10-14, issue #24,
 firmware 3.80.0 build `7d01f5e`, fretwire 0.6.0 unmodified). Like the LT survey, this rests on no
-USB captures and no device backup: everything below was read by fretwire itself over `MI_00`.
+USB captures: everything below was read by fretwire itself over `MI_00`, apart from the device id,
+which came from the owner's HX Edit backup.
 
 **Bottom line: the Rack needs no protocol change.** The handshake, the preset read, the snapshot
 decode, the setlist and preset-list browses, the settings dump and the teardown all ran unmodified
 against the entry that had been in the table, untested, since 2026-09-01.
 
-**Edits work** (second round, 2026-10-14): two parameter sets, one on each DSP, a bypass and a
-revert, each confirmed on the unit's screen and by a re-read. The entry is still
-`Support::Reported`, not `Support::Verified`: that tier means the edit builders were checked
-against the device's own HX Edit traffic, and the owner is on a Mac, where USB capture isn't
-practical. The builders are the Floor's, which were checked that way.
+**Edits work** (third round, 2026-10-14): two parameter sets, one on each DSP, a bypass and a
+revert, each confirmed on the unit's screen and by a re-read. That makes the entry
+`Support::Verified` without an HX Edit capture from a Rack: it reports `P21`, so it takes the
+Floor's builders, which were checked byte-for-byte against a Floor's own traffic, and the Rack
+accepted them.
 
 ## USB identity  [solid]
 
@@ -126,13 +127,14 @@ printed it as "FS13" and now uses HX Edit's name.
 
 ## Not observed
 
-- **A capture of HX Edit talking to a Rack**, the evidence `Verified` needs.
+- **A capture of HX Edit talking to a Rack.** Not needed for `Verified` (see the top), but
+  it would be the only way to spot a Rack-specific byte if one ever turned up.
 - **Structural writes and saves** (see Writes).
 
 ## Reproducing
 
 ```
-fretwire detect                 # Helix Rack: present (reported working, unverified)
+fretwire detect                 # Helix Rack: present
 fretwire connect                # handshake OK — device reports "P21"
 fretwire pull                   # the loaded preset, blocks and params resolved
 fretwire setlists               # 8 setlists

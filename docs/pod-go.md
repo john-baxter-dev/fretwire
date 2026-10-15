@@ -472,6 +472,10 @@ question closed on 2026-09-04 from the webview's console rather than any log. Wh
 - **A `-306` at a known load** — the raw sum `fretwire pull` prints when the pedal refuses a
   block for DSP, to calibrate the POD Go's ceiling (assumed the Stomp's 75). The GUI can't get
   there: its picker greys out anything past that assumed 75, which is what stopped the second
-  owner at 57.9 (2026-10-14). The CLI's `add-block` doesn't check, so it can make the attempt.
+  owner at 57.9 (2026-10-14). Through the CLI's `add-block`, which doesn't check, the pedal
+  **accepted 77.9** (two Hot Springs, slots 3 and 4) [solid], so the ceiling is above the Stomp's.
+  A third Hot Springs (97.9) and then a Deluxe Comp (79.65) were refused; the error and the slot
+  weren't posted, so that the refusal was DSP and not the slot is [hypothesis] — asked for, with a
+  control add of the comp at the lower load.
 - ~~A footswitch press with the rebuilt GUI connected~~ — "footswitches in the UI now perfectly
   follow the pedal" (owner, 2026-09-16, v0.5.1).

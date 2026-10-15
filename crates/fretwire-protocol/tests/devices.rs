@@ -147,8 +147,8 @@ fn the_hx_effects_carries_no_geometry_it_has_not_been_shown() {
 }
 
 /// The Helix Rack came into the table on a line of kernel source and stayed empty until an owner
-/// surveyed one read-only (issue #24). What that survey showed is filled in; what it could not show
-/// stays `None` rather than being copied from the Floor.
+/// surveyed one (issue #24). Every field is now read off that unit or its backup, none copied from
+/// the Floor.
 #[test]
 fn the_helix_rack_claims_only_what_its_survey_showed() {
     let rack = Device::by_pid(PID_HELIX_RACK).unwrap();
@@ -163,8 +163,8 @@ fn the_helix_rack_claims_only_what_its_survey_showed() {
     // Read off the Rack's screen: 01A, 01B, 01C, 01D, 02A.
     assert_eq!(rack.preset_label(3).as_deref(), Some("01D"));
     assert_eq!(rack.preset_label(4).as_deref(), Some("02A"));
-    // Never on the wire, and no backup from a Rack.
-    assert!(rack.preset_device_id.is_none());
+    // Never on the wire; read out of the owner's `.hxb` header.
+    assert_eq!(rack.preset_device_id, Some(0x0021_0002));
     // It stamps the Floor's `P21`, and a `P21` preset still resolves to the Floor, listed first.
     assert_eq!(
         Device::by_model_code("P21").map(|d| d.pid),

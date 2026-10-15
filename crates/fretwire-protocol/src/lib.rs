@@ -393,8 +393,10 @@ pub const DEVICES: &[Device] = &[
         // `by_model_code("P21")` keeps resolving to the Floor, which is listed first.
         // [solid — 2026-10-14, owner survey, issue #24]
         model_code: Some("P21"),
-        // Unknown: the wire carries no `0x0021xxxx` id, and we have no backup from a Rack.
-        preset_device_id: None,
+        // From the owner's HX Edit backup: the `.hxb` header's device field reads `0x00210002`,
+        // next to the Floor's `0x00210001`. Same evidence as every other device's id.
+        // [solid — 2026-10-14, issue #24]
+        preset_device_id: Some(0x0021_0002),
         // Both DSPs — a pulled preset held blocks in slots 35..38 (the unit reported DSP1 71.8% /
         // DSP2 74.5%).
         dsps: Some(2),
@@ -419,8 +421,11 @@ pub const DEVICES: &[Device] = &[
         // inference this table refuses to make. [2026-10-14 owner report, issue #24]
         presets_per_bank: Some(4),
         // Handshake, preset read, setlist and preset-list browse, settings dump and teardown all
-        // ran against a physical Rack on fw 3.80.0, read-only. No edit has been sent to one, so it
-        // stops at `Reported`, like the LT. [2026-10-14, issue #24]
+        // ran against a physical Rack on fw 3.80.0, and so did a write round: two `set_value`s
+        // (one on DSP2), a bypass and a revert, each confirmed on the unit's screen and by a
+        // re-read. Still `Reported`: `Verified` means the builders were checked against the
+        // device's own HX Edit traffic, and no capture from a Rack exists. They are the Floor's
+        // builders, which were. [2026-10-14, issue #24]
         support: Support::Reported,
     },
 ];

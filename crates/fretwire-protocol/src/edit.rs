@@ -978,7 +978,8 @@ pub mod source {
     /// - **Helix Floor / LT / Rack** (`P21`): thirteen positions, twelve switches, and the same
     ///   signature at `@fs_index: 13` (Plush Garden's Fassel and Volume Pedal in the Floor backup).
     ///   Every `P21` preset we hold, from a Floor and a Rack, binds its wah or volume there.
-    ///   [solid for the position; that HX Edit calls it "EXP Toe" on these units is unconfirmed]
+    ///   HX Edit's own assign list on a Rack names it "EXP Pedal Toe" for the Fassel and both
+    ///   Volume blocks of Plush Garden. [solid — issue #24, 2026-10-14]
     ///
     /// The Stomp (5) and XL (8) have no built-in pedal and no extra position: an XL's EXP bypasses
     /// live in the controller table instead (`xl_exp_bypass.msgpack.bin`).
@@ -986,6 +987,15 @@ pub mod source {
         match model_code {
             Some("P34" | "P21") => layout_len.checked_sub(1),
             _ => None,
+        }
+    }
+
+    /// What the device's own editor calls the toe switch: "EXP Pedal Toe" in HX Edit (Helix Rack
+    /// screenshot, issue #24) and "EXP Toe" in POD Go Edit (its controller picker, issue #15).
+    pub fn toe_label(model_code: Option<&str>) -> &'static str {
+        match model_code {
+            Some("P34") => "EXP Toe",
+            _ => "EXP Pedal Toe",
         }
     }
 

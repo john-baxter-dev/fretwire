@@ -8,8 +8,11 @@ USB captures and no device backup: everything below was read by fretwire itself 
 decode, the setlist and preset-list browses, the settings dump and the teardown all ran unmodified
 against the entry that had been in the table, untested, since 2026-09-01.
 
-**Nothing was written to this device.** That is why the entry is `Support::Reported` and not
-`Support::Verified`, the same as the LT.
+**Edits work** (second round, 2026-10-14): two parameter sets, one on each DSP, a bypass and a
+revert, each confirmed on the unit's screen and by a re-read. The entry is still
+`Support::Reported`, not `Support::Verified`: that tier means the edit builders were checked
+against the device's own HX Edit traffic, and the owner is on a Mac, where USB capture isn't
+practical. The builders are the Floor's, which were checked that way.
 
 ## USB identity  [solid]
 
@@ -96,10 +99,35 @@ The Floor's and the LT's stay `None`: it is likely the same on both, but nobody 
 `settings-dump` answered 177 of 261 ids. The dump is attached to issue #24 and has not been mapped
 against `settings::SETTINGS` yet.
 
+## Device id  [solid]
+
+The owner's HX Edit backup (2026-10-14) has `0x00210002` in its header's device field, beside the
+Floor's `0x00210001`, with fw `0x03800000`. `show-backup` now names it a Helix Rack.
+
+## Writes  [solid]
+
+With Plush Garden loaded (`goto 53 0`), each step confirmed on the Rack's screen:
+
+| command | result |
+|---|---|
+| `set 5 0 0.8` | Essex A30 Drive 4.5 → 8.0 |
+| `bypass 4 off` | Valve Driver on |
+| `set 35 0 0.6` | Revv Gen Red Drive 4.1 → 6.0, on DSP2 |
+| `pull` | all three, and the bypass edit carried into snapshot 1's stored state |
+| `revert` | back to the saved preset, confirmed by a second `pull` |
+
+Not exercised: save, rename, add/delete/move, swap, footswitch assignment.
+
+## The toe switch  [solid]
+
+The thirteenth bypass-layout position is the expression pedal's toe switch: HX Edit's assign list
+on the Rack shows Plush Garden's Fassel *and* both Volume blocks on "EXP Pedal Toe". fretwire
+printed it as "FS13" and now uses HX Edit's name.
+
 ## Not observed
 
-- **`preset_device_id`.** No backup from a Rack.
-- **Every write path.** The owner has offered to run write tests and doesn't mind a factory reset.
+- **A capture of HX Edit talking to a Rack**, the evidence `Verified` needs.
+- **Structural writes and saves** (see Writes).
 
 ## Reproducing
 

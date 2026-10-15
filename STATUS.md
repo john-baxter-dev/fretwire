@@ -2,6 +2,17 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Helix Rack: edits work, device id `0x00210002`, and HX Edit calls the toe "EXP Pedal Toe"
+(2026-10-14, issue #24).** The owner's third round. Writes: `set` on DSP1 and DSP2, a `bypass` and
+a `revert`, each confirmed on the unit's screen and by `pull` — the first edits ever sent to a Rack.
+His HX Edit backup's header reads `0x00210002`, filling the Rack's last empty field (`show-backup`
+now names it). And HX Edit's assign list puts Plush Garden's Fassel and both Volume blocks on "EXP
+Pedal Toe", confirming the toe position; `edit::source::toe_label` now uses each editor's own name
+("EXP Pedal Toe" on `P21`, POD Go Edit's "EXP Toe" on `P34`), and the GUI badge says "Toe" with the
+full name in its tooltip. Tier stays `Reported`: no HX Edit capture from a Rack, and he's on a Mac.
+The backup is in the ignored `captures/helix-rack/`, beside dumps of three of its presets — tone and
+wire from one unit, which the input/output-node prefix rule could use.
+
 **The toe switch is "EXP Toe", and the CLI's save/rename respect the setlist gate (2026-10-14).**
 Two leftovers from the issue #24 round. First: a block on the expression pedal's toe switch read
 "FS13" on every Floor/LT/Rack preset and "FS9" on a POD Go. The toe is the last bypass-layout

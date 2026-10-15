@@ -1643,7 +1643,8 @@ impl Session {
             .unwrap_or_else(|| format!("slot {slot}"))
     }
 
-    /// How the loaded preset names bypass footswitch `n` (one-based): `"EXP Toe"` for the
+    /// How the loaded preset names bypass footswitch `n` (one-based): `"EXP Pedal Toe"` (or the POD
+    /// Go's `"EXP Toe"`) for the
     /// expression pedal's toe switch, `"FS{n}"` otherwise. See [`EditorPreset::switch_label`].
     pub fn switch_label(&self, n: i64) -> String {
         self.last_raw

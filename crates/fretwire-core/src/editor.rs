@@ -410,13 +410,20 @@ impl DspView {
 }
 
 impl EditorPreset {
-    /// How to name bypass footswitch `n` (one-based, as [`EditorBlock::footswitch`]): `"EXP Toe"`
-    /// for the expression pedal's toe switch, `"FS{n}"` otherwise.
+    /// How to name bypass footswitch `n` (one-based, as [`EditorBlock::footswitch`]): the toe
+    /// switch by its editor's name ([`Self::toe_label`]), `"FS{n}"` otherwise.
     pub fn switch_label(&self, n: i64) -> String {
-        match self.toe_switch {
-            Some(toe) if toe == n => "EXP Toe".to_string(),
+        match (self.toe_switch, self.toe_label()) {
+            (Some(toe), Some(label)) if toe == n => label.to_string(),
             _ => format!("FS{n}"),
         }
+    }
+
+    /// The toe switch's name as this device's own editor writes it — "EXP Pedal Toe" on a Helix,
+    /// "EXP Toe" on a POD Go — or `None` on a device without one.
+    pub fn toe_label(&self) -> Option<&'static str> {
+        self.toe_switch
+            .map(|_| fretwire_protocol::edit::source::toe_label(self.device_model.as_deref()))
     }
 
     /// The routing view of one DSP.

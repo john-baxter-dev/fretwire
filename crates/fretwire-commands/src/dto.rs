@@ -435,9 +435,12 @@ pub struct PresetDto {
     /// anything about device models.
     pub footswitch_count: usize,
     /// The footswitch number (one-based, as `BlockDto::footswitch`) that is the expression pedal's
-    /// toe switch, labelled "EXP Toe" rather than "FS13"; `None` on a device without a pedal. See
+    /// toe switch, rather than "FS13"; `None` on a device without a pedal. See
     /// `EditorPreset::toe_switch`.
     pub toe_switch: Option<i64>,
+    /// What to call it: "EXP Pedal Toe" on a Helix, "EXP Toe" on a POD Go, as each device's own
+    /// editor does. `None` with `toe_switch`.
+    pub toe_label: Option<String>,
     /// How many footswitches can **drive a parameter** — the run of footswitch sources in the
     /// controller table, which the UI's controller picker lists as FS1..FS`n`. Equal to
     /// `footswitch_count` on the HX devices; 8 against 9 on a POD Go, whose layout counts the toe
@@ -581,6 +584,7 @@ impl From<&EditorPreset> for PresetDto {
                 .collect(),
             footswitch_count: p.footswitch_count,
             toe_switch: p.toe_switch,
+            toe_label: p.toe_label().map(str::to_string),
             assign_switch_count: p.assign_sources.switches,
             snapshots_source: p.assign_sources.snapshots(),
         }

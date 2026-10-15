@@ -349,7 +349,11 @@
           <!-- The last layout position on a POD Go or a Helix is the expression pedal's toe
                switch, not a footswitch (`toe_switch`, see EditorPreset::toe_switch). -->
           {#if c.footswitch === preset.toe_switch}
-            <span class="fs" title="Toggled by the expression pedal's toe switch">EXP Toe</span>
+            <!-- Short, like the bypass picker's entry: the badge is sized for "FS13". The
+                 editor's own name ("EXP Pedal Toe" on a Helix) is in the tooltip. -->
+            <span class="fs" title="Toggled by {preset.toe_label ?? 'the expression pedal toe'}"
+              >Toe</span
+            >
           {:else}
             <span
               class="fs"

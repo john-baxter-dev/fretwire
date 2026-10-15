@@ -471,8 +471,9 @@ of a `Map{7}` node:
   **On a device with a built-in expression pedal the last position is its toe switch**, not a
   footswitch: nine positions on a POD Go, thirteen on a Helix (`P21`), where every preset held puts
   a wah or volume pedal there (the toe flips between the two). The Stomp's five and the XL's eight
-  have no such position. Named "EXP Toe" via `edit::source::toe_position`. [solid for the position
-  — issue #15 and the Floor/Rack presets of issue #24]
+  have no such position. Named as each editor does — "EXP Pedal Toe" in HX Edit, "EXP Toe" in POD Go Edit — via
+  `edit::source::{toe_position, toe_label}`. [solid — issue #15, and issue #24's Floor/Rack
+  presets plus an HX Edit screenshot from a Rack]
 - **Snapshots: key `10`.** `8` = stored active index, `9` = slot count (20), `10` = `Array` of
   snapshot objects, `13` = `Array[20]` of per-slot flags (all `true` in every fixture).
   Each snapshot object is `{0: in-use, 1: Array[11], 2: Array[64], 3: Array[20], 4: name,

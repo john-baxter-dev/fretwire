@@ -265,6 +265,7 @@ impl Fretwire {
     async fn catalog_models(&self, Parameters(a): Parameters<CatalogModelsArgs>) -> R {
         self.catalog_call(move |cat| {
             let models = cat.models_in_category(a.category, a.variant.as_deref());
+            let ceiling = cat.dsp_ceiling();
             if models.is_empty() {
                 return Err(format!("no models in category {}", a.category));
             }
@@ -276,10 +277,7 @@ impl Fretwire {
                         s.push_str(&format!(" ({v})"));
                     }
                     if let Some(l) = m.dsp_load {
-                        s.push_str(&format!(
-                            "  {:.0}% DSP",
-                            fretwire_core::editor::dsp_percent(l)
-                        ));
+                        s.push_str(&format!("  {:.0}% DSP", l / ceiling * 100.0));
                     }
                     if let Some(p) = m.default_paired_index {
                         s.push_str(&format!("  cab {p}"));
@@ -459,7 +457,7 @@ impl Fretwire {
     async fn block_params(&self, Parameters(a): Parameters<SlotArgs>) -> R {
         let p = c::read_preset(&self.state).await?;
         let b = find_block(&p, a.slot)?;
-        Ok(summary::block_params(b))
+        Ok(summary::block_params(b, p.dsp_ceiling))
     }
 
     /// The presets in a setlist on the pedal.
@@ -520,7 +518,7 @@ impl Fretwire {
         self.need_writes().await?;
         let p = c::set_bypass(&self.state, a.slot, a.bypassed).await?;
         let b = find_block(&p, a.slot)?;
-        Ok(format!("OK: {}", summary::block_line(b)))
+        Ok(format!("OK: {}", summary::block_line(b, p.dsp_ceiling)))
     }
 
     /// Set one parameter of a block, in display units (see block_params for names, ranges and
@@ -619,7 +617,7 @@ impl Fretwire {
         };
         let p = c::swap_model(&self.state, a.slot, a.model_index, paired).await?;
         let b = find_block(&p, a.slot)?;
-        Ok(format!("OK: {}", summary::block_line(b)))
+        Ok(format!("OK: {}", summary::block_line(b, p.dsp_ceiling)))
     }
 
     /// Remove a block from the preset. An edit-buffer change; undo brings it back.

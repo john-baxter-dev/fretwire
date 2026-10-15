@@ -400,8 +400,8 @@ pub struct PresetDto {
     pub build_stamp: Option<String>,
     pub split: bool,
     pub dsp_load: f64,
-    /// The load a DSP fills up at, on `dsp_load`'s scale — **~75, not 100** (see
-    /// `fretwire_core::editor::DSP_CEILING`). Sent so the UI's meters and "does it fit" greying
+    /// The load a DSP fills up at, on `dsp_load`'s scale — **~75, not 100**, and 78 on a POD Go
+    /// (see `fretwire_core::editor::DSP_CEILING`). Sent so the UI's meters and "does it fit" greying
     /// read the measured ceiling instead of carrying their own copy of the number.
     pub dsp_ceiling: f64,
     pub split_pos: Option<i64>,
@@ -513,7 +513,7 @@ impl From<&EditorPreset> for PresetDto {
             build_stamp: p.build_stamp.clone(),
             split: p.split(),
             dsp_load: fin(p.dsp_load),
-            dsp_ceiling: fretwire_core::editor::DSP_CEILING,
+            dsp_ceiling: p.dsp_ceiling(),
             split_pos: p.split_pos(),
             mixer_pos: p.mixer_pos(),
             active_snapshot: p.active_snapshot,

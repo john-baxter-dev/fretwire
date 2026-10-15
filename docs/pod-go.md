@@ -347,9 +347,9 @@ POD Go's 627 symbols (every suffixed model) showed no load and the "DSP free" fi
 the rest. Fixed by trying the suffixed spelling first; the same change prices HX Edit's eight
 DL4 legacy delays, keyed the same way. The percentages shown are the raw `load` scaled so that
 the HX Stomp's measured ceiling (75) reads as 100% — the "~2% less" the owner saw against the
-file is that scale (×1.33), not a discrepancy. Whether the POD Go's ceiling is the Stomp's 75 is
-**[hypothesis]**: a `-306` refusal at a known load (`fretwire pull` prints the raw sum) would
-calibrate it.
+file is that scale (×1.33), not a discrepancy. The POD Go's own ceiling turned out higher:
+it accepted 77.9 and refused 79.6 (2026-10-14/15, see "What would still help"), so a POD Go
+preset is scaled against 78 instead.
 
 **Op 39 (add) fills any of the ten slots — and it is POD Go Edit's own fill.** [solid —
 2026-09-04 capture] Picking a model for the emptied slot 10 in POD Go Edit sends
@@ -469,13 +469,11 @@ question closed on 2026-09-04 from the webview's console rather than any log. Wh
   every IR, see "What is still unknown".
 - ~~One parameter put under FS7 or FS8~~ — a second owner's FS7 assignment came back at the
   computed ordinal (2026-10-14).
-- **A `-306` at a known load** — the raw sum `fretwire pull` prints when the pedal refuses a
-  block for DSP, to calibrate the POD Go's ceiling (assumed the Stomp's 75). The GUI can't get
-  there: its picker greys out anything past that assumed 75, which is what stopped the second
-  owner at 57.9 (2026-10-14). Through the CLI's `add-block`, which doesn't check, the pedal
-  **accepted 77.9** (two Hot Springs, slots 3 and 4) [solid], so the ceiling is above the Stomp's.
-  A third Hot Springs (97.9) and then a Deluxe Comp (79.65) were refused; the error and the slot
-  weren't posted, so that the refusal was DSP and not the slot is [hypothesis] — asked for, with a
-  control add of the comp at the lower load.
+- ~~A `-306` at a known load~~ — **answered, 2026-10-14/15.** Through the CLI's unchecked
+  `add-block` the pedal accepted **77.9** (two Hot Springs) and, after a control add of a Deluxe
+  Comp went through in slot 9 at 59.6, refused the second Hot Springs at **79.6** with `-306`
+  [solid]. So the ceiling is in (77.9, 79.6): `editor::POD_GO_DSP_CEILING` is 78, read off the
+  preset's `P34`, and the GUI's meter and picker now grey out against it rather than the
+  Stomp's 75, which had stopped the owner at 57.9.
 - ~~A footswitch press with the rebuilt GUI connected~~ — "footswitches in the UI now perfectly
   follow the pedal" (owner, 2026-09-16, v0.5.1).

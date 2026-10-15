@@ -6,7 +6,7 @@
 //! order, a parameter as HX Edit would display it, a diff as the lines that changed.
 
 use fretwire_commands::dto::{BlockDto, NumFormatDto, ParamDto, PresetDto, PresetListItem};
-use fretwire_core::editor::{FormatRule, NumFormat, category_name, dsp_percent};
+use fretwire_core::editor::{FormatRule, NumFormat, category_name};
 
 /// A parameter's value the way HX Edit shows it: an enum's label, a switch's On/Off, a segmented
 /// control's stop, a scaled number with its unit — or the raw number when nothing describes it.
@@ -157,8 +157,9 @@ fn params_line(params: &[ParamDto]) -> String {
         .join(" · ")
 }
 
-/// One block as a line: slot, model (with its paired cab), label, footswitch, bypass, DSP cost.
-pub fn block_line(b: &BlockDto) -> String {
+/// One block as a line: slot, model (with its paired cab), label, footswitch, bypass, DSP cost
+/// as a share of `ceiling` (the preset's `dsp_ceiling`).
+pub fn block_line(b: &BlockDto, ceiling: f64) -> String {
     let mut s = format!("slot {:<2}", b.slot);
     if b.row == 1 {
         s.push_str(" (path B)");
@@ -183,7 +184,7 @@ pub fn block_line(b: &BlockDto) -> String {
         s.push_str(" — BYPASSED");
     }
     if let Some(l) = b.dsp_load {
-        s.push_str(&format!(" ({:.0}% DSP)", dsp_percent(l)));
+        s.push_str(&format!(" ({:.0}% DSP)", l / ceiling * 100.0));
     }
     s
 }
@@ -245,7 +246,7 @@ pub fn preset_summary(p: &PresetDto, params: bool) -> String {
     }
     for b in blocks {
         out.push_str("  ");
-        out.push_str(&block_line(b));
+        out.push_str(&block_line(b, p.dsp_ceiling));
         out.push('\n');
         if params {
             if !b.params.is_empty() {
@@ -265,8 +266,8 @@ pub fn preset_summary(p: &PresetDto, params: bool) -> String {
 
 /// Every parameter of one block, with what it can be set to: the range in display units, or the
 /// options of an enum. The detail `preset_summary` leaves out.
-pub fn block_params(b: &BlockDto) -> String {
-    let mut out = block_line(b);
+pub fn block_params(b: &BlockDto, ceiling: f64) -> String {
+    let mut out = block_line(b, ceiling);
     out.push('\n');
     let section = |out: &mut String, heading: &str, params: &[ParamDto]| {
         if params.is_empty() {
@@ -694,7 +695,7 @@ mod data_tests {
             .iter()
             .find(|b| !b.params.is_empty())
             .expect("a block with params");
-        let detail = block_params(b);
+        let detail = block_params(b, dto.dsp_ceiling);
         assert!(detail.contains("Parameters:"), "{detail}");
         assert!(preset_diff(&dto, &dto) == "No differences.");
     }

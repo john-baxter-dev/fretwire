@@ -125,6 +125,16 @@ enum Command {
         #[arg(default_value_t = 4)]
         depth: usize,
     },
+    /// List every model with the index `add-block`/`swap` take, its category and its DSP cost.
+    /// Offline: reads the imported reference data
+    Models {
+        /// Only models whose name or symbol contains this (case-insensitive)
+        filter: Option<String>,
+        /// List the POD Go's models. The default is the HX family's, or the POD Go's when only
+        /// that has been imported
+        #[arg(long)]
+        pod_go: bool,
+    },
     /// Inspect a device backup (HX Edit `.hxb` / POD Go Edit `.pgb`) offline. Reads only.
     ShowBackup {
         backup: String,
@@ -652,6 +662,7 @@ fn main() -> Result<()> {
             Err(e) => println!("usb error: {e}"),
         },
         Command::ShowPreset { stream } => show_preset(&stream)?,
+        Command::Models { filter, pod_go } => list_models(filter.as_deref(), pod_go)?,
         Command::DecodeEdit { hex } => decode_edit(&hex)?,
         // ---- live device commands (need Linux + the pedal) ----
         Command::Connect => {
@@ -1199,26 +1210,25 @@ fn main() -> Result<()> {
                         .catalog()
                         .model_load_by_index(index)
                         .map(|l| l + s.catalog().model_load_by_index(paired).unwrap_or(0.0));
-                    new.map(|n| (cur, cur - old + n))
+                    new.map(|n| (cur, cur - old + n, preset.dsp_ceiling()))
                 }
                 Err(e) => {
                     tracing::debug!("fit check skipped (read failed: {e})");
                     None
                 }
             };
-            if let Some((_cur, proj)) = projected
-                && proj > fretwire_core::editor::DSP_CEILING
+            if let Some((_cur, proj, ceil)) = projected
+                && proj > ceil
             {
                 eprintln!(
-                    "⚠  projected DSP ~{:.0}% of capacity [{proj:.1} of ~{:.0} raw] — past what \
-                     this pedal accepts, so expect a `-306` refusal.",
-                    fretwire_core::editor::dsp_percent(proj),
-                    fretwire_core::editor::DSP_CEILING
+                    "⚠  projected DSP ~{:.0}% of capacity [{proj:.1} of ~{ceil:.0} raw] — past \
+                     what this pedal accepts, so expect a `-306` refusal.",
+                    proj / ceil * 100.0,
                 );
             }
             s.swap_model(slot, index, paired)?;
             let delta = projected
-                .map(|(cur, proj)| format!("  (DSP ~{cur:.1}% -> ~{proj:.1}%)"))
+                .map(|(cur, proj, _)| format!("  (DSP ~{cur:.1}% -> ~{proj:.1}%)"))
                 .unwrap_or_default();
             println!(
                 "slot {slot} -> model index {index}{}{delta}",
@@ -2285,6 +2295,65 @@ fn diff_values(a: &rmpv::Value, b: &rmpv::Value, path: String, out: &mut Vec<Str
 }
 
 /// Decode a reassembled device preset stream (from a file) and print it as a block/param tree.
+/// `fretwire models`: every model, grouped by category, with its index, variant, raw DSP load (and
+/// that as a share of the device's ceiling) and symbol.
+fn list_models(filter: Option<&str>, pod_go: bool) -> Result<()> {
+    use fretwire_core::Catalog;
+    let cat = if pod_go {
+        Catalog::load_for_model("P34")?
+    } else {
+        // A POD Go owner may have imported only POD Go Edit; don't send them to the HX installer.
+        Catalog::load().or_else(|e| Catalog::load_for_model("P34").map_err(|_| e))?
+    };
+    let ceil = cat.dsp_ceiling();
+    let needle = filter.map(str::to_lowercase);
+    let mut models: Vec<_> = cat
+        .all_models()
+        .into_iter()
+        .filter(|m| {
+            needle.as_ref().is_none_or(|n| {
+                m.name.to_lowercase().contains(n) || m.symbolic_id.to_lowercase().contains(n)
+            })
+        })
+        .collect();
+    if models.is_empty() {
+        println!("no models match");
+        return Ok(());
+    }
+    let names: std::collections::HashMap<i64, &str> = cat.categories().into_iter().collect();
+    models.sort_by(|a, b| (a.category, &a.name, a.index).cmp(&(b.category, &b.name, b.index)));
+    println!(
+        "{} models · DSP % is of ~{ceil:.0} raw, the {} ceiling",
+        if cat.pod_go() { "POD Go" } else { "HX" },
+        if cat.pod_go() {
+            "POD Go's"
+        } else {
+            "HX devices'"
+        }
+    );
+    let mut current = None;
+    for m in &models {
+        if current != Some(m.category) {
+            current = Some(m.category);
+            let heading = m.category.and_then(|c| names.get(&c).copied());
+            println!("\n{}", heading.unwrap_or("Other"));
+        }
+        let load = m
+            .dsp_load
+            .map(|l| format!("{l:>6.2}  {:>5.1}%", l / ceil * 100.0))
+            .unwrap_or_else(|| format!("{:>6}  {:>6}", "—", "—"));
+        println!(
+            "  {:>4}  {:<30} {:<6} {load}  {}{}",
+            m.index,
+            m.name,
+            m.variant.unwrap_or(""),
+            m.symbolic_id,
+            m.variant.unwrap_or(""),
+        );
+    }
+    Ok(())
+}
+
 fn show_preset(path: &str) -> Result<()> {
     use fretwire_core::editor::Catalog;
     use fretwire_data::stream::PresetStream;
@@ -2447,17 +2516,18 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
         "serial"
     };
     // A two-DSP device budgets each DSP separately, so report them separately. Percentages are of
-    // *capacity* — DSP_CEILING reads 100% — with the raw sums kept in brackets, because the block
-    // costs printed below and every load figure in the docs are on the raw scale.
-    use fretwire_core::editor::{DSP_CEILING as CEIL, dsp_percent as pc};
+    // *capacity* — the device's ceiling reads 100% — with the raw sums kept in brackets, because
+    // the block costs printed below and every load figure in the docs are on the raw scale.
+    let ceil = preset.dsp_ceiling();
+    let pc = |l| preset.dsp_percent_of(l);
     let load = match preset.dsp_load_by_dsp().as_slice() {
         [(d, one)] => format!(
-            "DSP {:.1}% used · {:.1}% free  [{one:.1} of ~{CEIL:.0} raw]",
+            "DSP {:.1}% used · {:.1}% free  [{one:.1} of ~{ceil:.0} raw]",
             preset.dsp_percent_on(*d),
             pc(preset.dsp_free_on(*d)),
         ),
         many => format!(
-            "{}  [raw {} of ~{CEIL:.0}]",
+            "{}  [raw {} of ~{ceil:.0}]",
             many.iter()
                 .map(|(d, _)| format!(
                     "DSP{} {:.1}% · {:.1}% free",
@@ -2544,7 +2614,7 @@ fn print_preset(preset: &fretwire_core::EditorPreset) {
         // differently is a trap. The raw sum is in the header's brackets for `.models` lookups.
         let dsp = b
             .dsp_load
-            .map(|l| format!("  ({:.1}% DSP)", fretwire_core::editor::dsp_percent(l)))
+            .map(|l| format!("  ({:.1}% DSP)", preset.dsp_percent_of(l)))
             .unwrap_or_default();
         println!(
             "\n  {}slot {:<2}{} {}{}  [{}]{}{}{}",

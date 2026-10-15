@@ -40,6 +40,24 @@ use std::path::Path;
 /// builds right up to it, which is the best evidence there is that this is the real limit.]
 pub const DSP_CEILING: f64 = 75.0;
 
+/// [`DSP_CEILING`] for a **POD Go**, which has more room than the HX devices.
+///
+/// [solid for the bracket — owner's POD Go, fw 2.01, issue #15, 2026-10-14/15: one preset took a
+/// second Hot Springs at **77.9** through the CLI's unchecked `add-block`, then refused a third
+/// (97.9) and, after a control add at 59.6 went through in slot 9, refused the same Hot Springs
+/// at **79.6** with `-306`. The value inside (77.9, 79.6) is a hypothesis: 78 lets through
+/// everything seen accepted.]
+pub const POD_GO_DSP_CEILING: f64 = 78.0;
+
+/// The DSP ceiling for a preset's device, from the preset's own device id (`P34` is a POD Go).
+pub fn dsp_ceiling_for(device_model: Option<&str>) -> f64 {
+    if device_model == Some("P34") {
+        POD_GO_DSP_CEILING
+    } else {
+        DSP_CEILING
+    }
+}
+
 /// A raw block-load sum as the **percentage of capacity** to show a user: [`DSP_CEILING`] reads
 /// 100%. Raw loads are a percentage of a budget the hardware never hands over, so 72.7 reads as
 /// plenty of room when it is nearly none — the GUI shows only this scaled figure. The CLI prints
@@ -491,16 +509,29 @@ impl EditorPreset {
         load + 0.0
     }
 
-    /// Room left on one DSP before the device starts refusing blocks — [`DSP_CEILING`] minus what
-    /// that DSP already draws, floored at zero. This, not `100 - load`, is the headroom a user has.
+    /// The load this preset's device fills up at: [`DSP_CEILING`], or [`POD_GO_DSP_CEILING`] on
+    /// a POD Go. See [`dsp_ceiling_for`].
+    pub fn dsp_ceiling(&self) -> f64 {
+        dsp_ceiling_for(self.device_model.as_deref())
+    }
+
+    /// A raw load as the percentage of **this device's** capacity — [`dsp_percent`] against
+    /// [`Self::dsp_ceiling`].
+    pub fn dsp_percent_of(&self, load: f64) -> f64 {
+        load / self.dsp_ceiling() * 100.0
+    }
+
+    /// Room left on one DSP before the device starts refusing blocks — [`Self::dsp_ceiling`]
+    /// minus what that DSP already draws, floored at zero. This, not `100 - load`, is the
+    /// headroom a user has.
     pub fn dsp_free_on(&self, dsp: usize) -> f64 {
-        (DSP_CEILING - self.dsp_load_on(dsp)).max(0.0)
+        (self.dsp_ceiling() - self.dsp_load_on(dsp)).max(0.0)
     }
 
     /// One DSP's load as the percentage of capacity a user should see — the ceiling reads 100%.
-    /// See [`dsp_percent`].
+    /// See [`Self::dsp_percent_of`].
     pub fn dsp_percent_on(&self, dsp: usize) -> f64 {
-        dsp_percent(self.dsp_load_on(dsp))
+        self.dsp_percent_of(self.dsp_load_on(dsp))
     }
 
     /// Room left per DSP — `(dsp, free)` in DSP order. See [`Self::dsp_free_on`].
@@ -1106,6 +1137,39 @@ impl Catalog {
             .collect();
         out.sort_by(|a, b| a.1.cmp(b.1));
         out
+    }
+
+    /// Every model in the symbol table, one entry per **device symbol** and in index order, so a
+    /// model with Mono and Stereo variants appears twice, each with the index `add-block` takes
+    /// for it. [`Self::models_in_category`] keeps one per model for a picker; this is the full
+    /// listing `fretwire models` prints (asked for in issue #15).
+    pub fn all_models(&self) -> Vec<ModelChoice> {
+        (0..self.symbols.len())
+            .filter_map(|idx| {
+                let (sym, _) = self.symbols.by_index(idx)?;
+                let (base, var) = split_variant(sym);
+                let id = self.models.id_by_symbolic_id(sym)?;
+                let name = self.models.name(id).filter(|n| !n.is_empty())?;
+                (!is_dual_cab(base)).then(|| ModelChoice {
+                    index: idx as i64,
+                    symbolic_id: base.to_string(),
+                    name: name.to_string(),
+                    category: self.models.category(id).map(canonical_category),
+                    variant: var,
+                    dsp_load: self.model_load(base, var),
+                    default_paired_index: None,
+                })
+            })
+            .collect()
+    }
+
+    /// The load a DSP fills up at for this catalog's device family. See [`dsp_ceiling_for`].
+    pub fn dsp_ceiling(&self) -> f64 {
+        if self.pod_go {
+            POD_GO_DSP_CEILING
+        } else {
+            DSP_CEILING
+        }
     }
 
     /// Swap candidates in `category`: one entry per model, preferring the `variant` (Mono/Stereo) of

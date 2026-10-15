@@ -279,6 +279,21 @@ fn displayed_dsp_percent_puts_the_ceiling_at_a_hundred() {
     assert_eq!(format!("{:.1}", p.dsp_percent_on(97)), "0.0");
 }
 
+/// The POD Go took 77.9 and refused 79.6 (issue #15), so it gets its own ceiling; every other
+/// device keeps the HX one. Read off the preset's own device id.
+#[test]
+fn the_pod_go_has_its_own_dsp_ceiling() {
+    use fretwire_core::editor::{DSP_CEILING, POD_GO_DSP_CEILING, dsp_ceiling_for};
+    assert_eq!(dsp_ceiling_for(Some("P34")), POD_GO_DSP_CEILING);
+    assert!((77.9..79.6).contains(&POD_GO_DSP_CEILING));
+    assert_eq!(dsp_ceiling_for(Some("P35")), DSP_CEILING);
+    assert_eq!(dsp_ceiling_for(None), DSP_CEILING);
+
+    // An HX preset reads the HX ceiling through the same path.
+    let p = catalog().load_preset(&two_dsp_stream()).unwrap();
+    assert_eq!(p.dsp_ceiling(), DSP_CEILING);
+}
+
 #[test]
 fn grid_partitions_by_dsp_and_keeps_slots_global() {
     let p = catalog().load_preset(&two_dsp_stream()).unwrap();

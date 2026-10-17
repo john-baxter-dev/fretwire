@@ -838,13 +838,21 @@ impl PresetStream {
         // DSP block's slot (a controller assigned to one of its params), and matching that by slot
         // would wrongly reclassify the real block as a controller. Controllers are surfaced
         // separately via [`assignments`]. A kind-6 slot-array entry is always a DSP block.
-        let path: std::collections::HashMap<i64, PathBlock> = self
+        //
+        // Every node of a position counts, not just its first: a switch carrying several bypasses
+        // puts each of them on that switch (issue #25). Should one slot ever appear on two
+        // positions, the lower switch wins, so the answer doesn't depend on hash order.
+        let mut path: std::collections::HashMap<i64, PathBlock> = std::collections::HashMap::new();
+        for pb in self
             .footswitch_layout()
             .into_iter()
             .flatten()
             .filter(|pb| pb.node_kind != Some(2))
-            .filter_map(|pb| pb.slot.map(|s| (s, pb)))
-            .collect();
+        {
+            if let Some(s) = pb.slot {
+                path.entry(s).or_insert(pb);
+            }
+        }
 
         let all = self.blocks();
         // The 20-slot array is a fixed topology grid: input, row A, a split node (kind 2), row B,
@@ -1095,13 +1103,25 @@ impl PresetStream {
     }
 
     /// The **footswitch / stomp layout** (preset key `3 → 8`): one entry per footswitch position,
-    /// `None` where that switch is unbound. Each populated entry names the block whose **bypass**
-    /// that footswitch toggles, with its slot (`11 → 8`) and user label. **This is not the signal
-    /// path** — it lists only footswitch-bound blocks, in footswitch order, and is empty when
-    /// nothing is on a switch. Proven by binding a block to FS1 and watching position `[0]` go from
-    /// `nil` → that block's node (and earlier by an FS1↔FS2 swap diff). Use [`loaded_blocks`] for
-    /// the full block list.
-    pub fn footswitch_layout(&self) -> Vec<Option<PathBlock>> {
+    /// each holding **every** binding on that switch — empty where the switch is unbound. A
+    /// populated entry names the block whose **bypass** that footswitch toggles, with its slot
+    /// (`11 → 8`) and user label. **This is not the signal path** — it lists only footswitch-bound
+    /// blocks, in footswitch order, and is all-empty when nothing is on a switch. Proven by binding
+    /// a block to FS1 and watching position `[0]` go from `nil` → that block's node (and earlier by
+    /// an FS1↔FS2 swap diff). Use [`loaded_blocks`] for the full block list.
+    ///
+    /// **A position is an array, and it can hold several nodes**: a toe switch flipping between a
+    /// wah and a volume pedal, or one switch driving three parameters of a block. Each binding is
+    /// its own node, in the position's array order. This used to read only the first, so the rest
+    /// showed as on no switch at all (issue #25). Seven of the nine POD Go, Floor and Rack streams
+    /// we hold carry two or three bypass nodes on the toe position (a wah and a volume pedal), and
+    /// the POD Go `ir2-preset` has three parameter-controller nodes on FS2 and two on FS3. Those are
+    /// contributors' dumps, kept local and out of git; none of the tracked Stomp/XL fixtures has a
+    /// position with more than one node. [solid — `captures/{pod-go,helix-floor,helix-rack}`,
+    /// 2026-10-16]
+    ///
+    /// `len()` is the switch count; positions keep their index, so `[n]` is FS(n+1).
+    pub fn footswitch_layout(&self) -> Vec<Vec<PathBlock>> {
         let positions = match self.field(3).and_then(|m| map_get(m, 8)) {
             Some(Value::Array(a)) => a,
             _ => return Vec::new(),
@@ -1109,63 +1129,68 @@ impl PresetStream {
         positions
             .iter()
             .enumerate()
-            .map(|(pos_index, pos)| {
-                // each populated position is Array[1] of a Map{7} node.
-                let node = match pos {
-                    Value::Array(a) => a.first()?,
-                    _ => return None,
-                };
-                let model = map_get(node, 11)?;
-                let model_name = map_get(model, 5).and_then(value_bytes).map(|b| {
-                    String::from_utf8_lossy(b)
-                        .trim_end_matches('\0')
-                        .to_string()
-                })?;
-                let model_id = map_get(model, 6).and_then(Value::as_i64);
-                // Node type (`11 → 0`): 1 = DSP block, 2 = controller/footswitch node (e.g. an amp
-                // switch mapped to a button — its name like "OD Sw" is the footswitch label, not a
-                // model). Verified by comparing a serial preset (all type 1) to a dual-amp preset.
-                let node_kind = map_get(model, 0).and_then(Value::as_i64);
-                // Key 13 is the has-label flag, and it has to be honoured: key 14 keeps whatever
-                // string was there last, so a switch whose label was cleared still carries it.
-                // Reading 14 alone showed a Simple Delay bound to FS2 as `"Tremolo"` — the name a
-                // different block had held on that switch earlier in the preset's life. The device
-                // agrees there is none: op 33 answers `109: nil` for that switch.
-                // [solid — verified live 2026-08-22]
-                let labelled = map_get(node, 13).and_then(Value::as_bool).unwrap_or(false);
-                let user_label = map_get(node, 14)
-                    .filter(|_| labelled)
-                    .and_then(value_bytes)
-                    .map(|b| {
-                        String::from_utf8_lossy(b)
-                            .trim_end_matches('\0')
-                            .to_string()
-                    })
-                    .filter(|s| !s.is_empty());
-                let slot = map_get(model, 8).and_then(Value::as_i64);
-                // The custom LED colour rides the same value-plus-gate shape right next door:
-                // key 16 behind key 15, a palette index. [solid — live HX Stomp 2026-08-27]
-                let custom_color = map_get(node, 16)
-                    .filter(|_| map_get(node, 15).and_then(Value::as_bool) == Some(true))
-                    .and_then(Value::as_i64);
-                // Key 12: the switch type, `true` for momentary (hold), `false` for latching —
-                // what a tone calls `@fs_momentary`, and the one key of the entry with no gate.
-                // [solid as storage — the `.hxb` conversion reproduces the device's bytes with it]
-                let momentary = map_get(node, 12).and_then(Value::as_bool).unwrap_or(false);
-                // Footswitch = layout position + 1 (FS1 = pos 0); empty positions leave that switch
-                // unbound (→ global tap/tuner). Proven by an FS1↔FS2 swap diff + an FS1-bind diff.
-                Some(PathBlock {
-                    model_name,
-                    model_id,
-                    user_label,
-                    custom_color,
-                    momentary,
-                    slot,
-                    node_kind,
-                    footswitch: pos_index as i64 + 1,
-                })
+            .map(|(pos_index, pos)| match pos {
+                Value::Array(nodes) => nodes
+                    .iter()
+                    .filter_map(|node| Self::path_block(pos_index, node))
+                    .collect(),
+                _ => Vec::new(),
             })
             .collect()
+    }
+
+    /// One footswitch-layout node as a [`PathBlock`] on switch `pos_index + 1`. `None` when the
+    /// node carries no model map or name.
+    fn path_block(pos_index: usize, node: &Value) -> Option<PathBlock> {
+        let model = map_get(node, 11)?;
+        let model_name = map_get(model, 5).and_then(value_bytes).map(|b| {
+            String::from_utf8_lossy(b)
+                .trim_end_matches('\0')
+                .to_string()
+        })?;
+        let model_id = map_get(model, 6).and_then(Value::as_i64);
+        // Node type (`11 → 0`): 1 = DSP block, 2 = controller/footswitch node (e.g. an amp
+        // switch mapped to a button — its name like "OD Sw" is the footswitch label, not a
+        // model). Verified by comparing a serial preset (all type 1) to a dual-amp preset.
+        let node_kind = map_get(model, 0).and_then(Value::as_i64);
+        // Key 13 is the has-label flag, and it has to be honoured: key 14 keeps whatever
+        // string was there last, so a switch whose label was cleared still carries it.
+        // Reading 14 alone showed a Simple Delay bound to FS2 as `"Tremolo"` — the name a
+        // different block had held on that switch earlier in the preset's life. The device
+        // agrees there is none: op 33 answers `109: nil` for that switch.
+        // [solid — verified live 2026-08-22]
+        let labelled = map_get(node, 13).and_then(Value::as_bool).unwrap_or(false);
+        let user_label = map_get(node, 14)
+            .filter(|_| labelled)
+            .and_then(value_bytes)
+            .map(|b| {
+                String::from_utf8_lossy(b)
+                    .trim_end_matches('\0')
+                    .to_string()
+            })
+            .filter(|s| !s.is_empty());
+        let slot = map_get(model, 8).and_then(Value::as_i64);
+        // The custom LED colour rides the same value-plus-gate shape right next door:
+        // key 16 behind key 15, a palette index. [solid — live HX Stomp 2026-08-27]
+        let custom_color = map_get(node, 16)
+            .filter(|_| map_get(node, 15).and_then(Value::as_bool) == Some(true))
+            .and_then(Value::as_i64);
+        // Key 12: the switch type, `true` for momentary (hold), `false` for latching —
+        // what a tone calls `@fs_momentary`, and the one key of the entry with no gate.
+        // [solid as storage — the `.hxb` conversion reproduces the device's bytes with it]
+        let momentary = map_get(node, 12).and_then(Value::as_bool).unwrap_or(false);
+        // Footswitch = layout position + 1 (FS1 = pos 0); empty positions leave that switch
+        // unbound (→ global tap/tuner). Proven by an FS1↔FS2 swap diff + an FS1-bind diff.
+        Some(PathBlock {
+            model_name,
+            model_id,
+            user_label,
+            custom_color,
+            momentary,
+            slot,
+            node_kind,
+            footswitch: pos_index as i64 + 1,
+        })
     }
 }
 
@@ -1490,7 +1515,7 @@ pub struct LoadedBlock {
 /// toggles its bypass. Only blocks bound to a switch appear here. Produced by [`PresetStream::footswitch_layout`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct PathBlock {
-    /// Display name (key `3 → 8 → [i] → [0] → 11 → 5`), e.g. `"Harmonic Tremolo"`.
+    /// Display name (key `3 → 8 → [i] → [n] → 11 → 5`), e.g. `"Harmonic Tremolo"`.
     /// Matches the `name` field in the `.models` files.
     pub model_name: String,
     /// Numeric model id (key `… → 11 → 6`); exact encoding TBD.
@@ -2535,6 +2560,82 @@ mod list_tests {
             header_slots: Vec::new(),
         };
         assert_eq!(unbound.loaded_blocks()[0].footswitch, 0);
+    }
+
+    #[test]
+    fn a_switch_carrying_two_blocks_reports_both() {
+        // Two bypasses on one switch share a layout position: its array holds a node apiece
+        // (issue #25). Reading only the first left the second looking unbound.
+        let effect = |model: i64| {
+            Value::Map(vec![
+                (Value::from(19), Value::from(slot_kind::EFFECT)),
+                (
+                    Value::from(20),
+                    Value::Map(vec![
+                        (
+                            Value::from(24),
+                            Value::Map(vec![(Value::from(25), Value::from(model))]),
+                        ),
+                        (Value::from(10), Value::from(true)),
+                    ]),
+                ),
+            ])
+        };
+        let mut slots = vec![
+            Value::Map(vec![
+                (Value::from(19), Value::from(slot_kind::EMPTY)),
+                (Value::from(20), Value::Nil),
+            ]);
+            20
+        ];
+        slots[3] = effect(80);
+        slots[5] = effect(81);
+        let node = |name: &str, slot: i64| {
+            Value::Map(vec![(
+                Value::from(11),
+                Value::Map(vec![
+                    (Value::from(0), Value::from(1)),
+                    (Value::from(5), Value::from(name)),
+                    (Value::from(8), Value::from(slot)),
+                ]),
+            )])
+        };
+        let ps = PresetStream {
+            magic: "l6-helix".into(),
+            header: vec![],
+            preset: Value::Map(vec![
+                (
+                    Value::from(0),
+                    Value::Map(vec![(Value::from(22), Value::Array(slots))]),
+                ),
+                (
+                    Value::from(3),
+                    Value::Map(vec![(
+                        Value::from(8),
+                        Value::Array(vec![
+                            Value::Nil,
+                            Value::Array(vec![node("Deluxe Comp\0", 3), node("Scream 808\0", 5)]),
+                        ]),
+                    )]),
+                ),
+            ]),
+            header_slots: Vec::new(),
+        };
+
+        let layout = ps.footswitch_layout();
+        assert_eq!(layout.len(), 2, "positions keep their index");
+        assert!(layout[0].is_empty(), "FS1 is unbound");
+        let names: Vec<_> = layout[1].iter().map(|b| b.model_name.as_str()).collect();
+        assert_eq!(names, ["Deluxe Comp", "Scream 808"]);
+        assert!(layout[1].iter().all(|b| b.footswitch == 2));
+
+        // And the block list — what the CLI, MCP and GUI read — puts both on FS2.
+        let on: Vec<_> = ps
+            .loaded_blocks()
+            .iter()
+            .map(|b| (b.slot, b.footswitch))
+            .collect();
+        assert_eq!(on, [(3, 2), (5, 2)]);
     }
 
     #[test]

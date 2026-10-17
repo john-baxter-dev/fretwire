@@ -1435,16 +1435,18 @@ const HANDLERS = {
   },
   // Label and colour ride the binding entries, so they apply to whatever sits on that switch —
   // and clearing keeps nothing visible, like the device's gate flip.
+  // Every binding on the switch gets it, as `PresetStream::set_switch_label` writes it: a switch
+  // carrying two blocks shows one label (issue #25).
   set_switch_label: ({ switch: sw, label }) => {
-    const e = Object.values(current.slots).find((b) => b?.footswitch === sw + 1);
-    if (!e) throw new Error(`switch ${sw} has no bindings — bind a block first`);
-    e.user_label = label ?? null;
+    const bound = Object.values(current.slots).filter((b) => b?.footswitch === sw + 1);
+    if (!bound.length) throw new Error(`switch ${sw} has no bindings — bind a block first`);
+    for (const e of bound) e.user_label = label ?? null;
     return toDto(current);
   },
   set_switch_color: ({ switch: sw, color }) => {
-    const e = Object.values(current.slots).find((b) => b?.footswitch === sw + 1);
-    if (!e) throw new Error(`switch ${sw} has no bindings — bind a block first`);
-    e.custom_color = color ?? null;
+    const bound = Object.values(current.slots).filter((b) => b?.footswitch === sw + 1);
+    if (!bound.length) throw new Error(`switch ${sw} has no bindings — bind a block first`);
+    for (const e of bound) e.custom_color = color ?? null;
     return toDto(current);
   },
   set_switch_momentary: ({ switch: sw, momentary }) => {

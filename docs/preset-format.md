@@ -324,8 +324,9 @@ This is the same `{8: model, 10: enabled, 7: params}` shape the **structural** n
 their sub-maps (`15`/`17`), so type 7 reads more like a structural node than an effect block.
 
 ### Signal path (`3 → 8`, the block identities)
-`Array[5]`, one entry per path position (`nil` = empty). Each populated position is `Array[1]`
-of a `Map{7}` node:
+`Array[5]`, one entry per path position (`nil` = empty). Each populated position is an array of
+`Map{7}` nodes, **one per binding on that switch** — usually one, but see "A switch can carry
+several nodes" below:
 - `11` = `{0: <node type>, 5: "<name>", 6: <model id>, 8: <slot>, …}`. **`11 → 0` = node type:
   `1` = DSP block, `2` = controller/footswitch node.** For a type-1 block, `5` = model display
   name (matches `.models` `name`); for a type-2 node, `5` is the **parameter's** name, `6` is *not*
@@ -489,6 +490,18 @@ of a `Map{7}` node:
   have no such position. Named as each editor does — "EXP Pedal Toe" in HX Edit, "EXP Toe" in POD Go Edit — via
   `edit::source::{toe_position, toe_label}`. [solid — issue #15, and issue #24's Floor/Rack
   presets plus an HX Edit screenshot from a Rack]
+
+  **A switch can carry several nodes** — one per binding, in the position's array, with `10`
+  numbering them. Seven of the nine POD Go, Floor and Rack streams held put two or three bypass
+  nodes on the toe (a wah plus one or two volume pedals), and the POD Go `ir2-preset` puts three
+  parameter-controller nodes on FS2 and two on FS3. `footswitch_layout` returns every node of a
+  position and `loaded_blocks` binds each bypass node's block to that switch; it used to read only
+  the first node, so the rest showed as on no switch (issue #25). [solid — the contributors'
+  untracked dumps under `captures/{pod-go,helix-floor,helix-rack}`, 2026-10-16. None of the
+  tracked Stomp/XL fixtures has a multi-node position, so on a clean clone only the synthetic test
+  in `stream.rs` covers it.] `10` is not always 0-based: `looper-preset`'s toe pair is `10: 6`,
+  `10: 7`. What it counts beyond order is unread. [hypothesis] Whether op 56 to a switch that
+  already carries a bypass appends a node or replaces the existing one has not been captured.
 - **Snapshots: key `10`.** `8` = stored active index, `9` = slot count (20), `10` = `Array` of
   snapshot objects, `13` = `Array[20]` of per-slot flags (all `true` in every fixture).
   Each snapshot object is `{0: in-use, 1: Array[11], 2: Array[64], 3: Array[20], 4: name,

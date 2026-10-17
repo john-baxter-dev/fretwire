@@ -140,7 +140,7 @@ fn a_footswitch_bypass_is_not_in_the_assignment_table() {
     );
     // It is in the footswitch layout instead, on FS1, naming the block it toggles.
     let fs = ps.footswitch_layout();
-    let fs1 = fs[0].as_ref().expect("FS1 is bound");
+    let fs1 = fs[0].first().expect("FS1 is bound");
     assert_eq!(fs1.slot, Some(16), "the Simple Delay");
     assert_eq!(fs1.node_kind, Some(1), "a DSP block, not a controller node");
 }
@@ -165,8 +165,8 @@ fn a_bypass_and_a_parameter_can_share_one_preset() {
     // Both reach the footswitch layout, told apart by node kind: 1 is a block's bypass, 2 is a
     // parameter controller. Position 0 is FS1, position 1 is FS2.
     let layout = s.footswitch_layout();
-    let fs1 = layout[0].as_ref().expect("FS1 is bound");
-    let fs2 = layout[1].as_ref().expect("FS2 is bound");
+    let fs1 = layout[0].first().expect("FS1 is bound");
+    let fs2 = layout[1].first().expect("FS2 is bound");
     assert_eq!(fs1.node_kind, Some(2), "a parameter controller");
     assert_eq!(
         fs1.model_name, "Drive",
@@ -184,7 +184,7 @@ fn a_bypass_and_a_parameter_can_share_one_preset() {
 #[test]
 fn a_cleared_label_does_not_come_back() {
     let layout = capture("assign_bypass_and_param.msgpack.bin").footswitch_layout();
-    assert_eq!(layout[1].as_ref().expect("FS2 is bound").user_label, None);
+    assert_eq!(layout[1].first().expect("FS2 is bound").user_label, None);
 }
 
 /// A block that only has a *knob* on a footswitch is not itself on that footswitch, and must not be

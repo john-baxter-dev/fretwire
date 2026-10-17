@@ -22,7 +22,8 @@
 //!
 //! Fixtures are reassembled captures in `captures/` (tracked); no Line 6 data needed.
 
-use fretwire_data::stream::PresetStream;
+use fretwire_data::rmpv::Value;
+use fretwire_data::stream::{PresetStream, map_get};
 use fretwire_protocol::edit::source;
 
 fn capture(name: &str) -> PresetStream {
@@ -134,7 +135,7 @@ fn a_parameter_on_a_switch_is_not_a_bypass_on_it() {
     let ps = capture("xl_assign_param_fs6.msgpack.bin");
 
     let layout = ps.footswitch_layout();
-    let fs6 = layout[5].as_ref().expect("FS6 carries the controller node");
+    let fs6 = layout[5].first().expect("FS6 carries the controller node");
     assert_eq!(fs6.node_kind, Some(2), "controller node, not a DSP block");
     assert_eq!(fs6.slot, Some(1), "pointing at the Stupor OD");
 
@@ -215,7 +216,7 @@ fn a_bypass_picks_its_table_by_the_source_that_drives_it() {
         "FS7 would be ordinal 9, and a bypass on a switch never reaches this table"
     );
     let layout = ps.footswitch_layout();
-    let fs7 = layout[6].as_ref().expect("FS7 carries the Teemah's bypass");
+    let fs7 = layout[6].first().expect("FS7 carries the Teemah's bypass");
     assert_eq!(fs7.node_kind, Some(1), "a DSP block, not a controller node");
 }
 
@@ -354,19 +355,84 @@ fn the_toe_switch_is_the_last_position_on_a_device_with_a_pedal() {
         assert_eq!(layout.len(), len, "{name}");
         let toe = source::toe_position(Some(code), len).expect("a toe switch");
         assert_eq!(toe, len - 1, "{name}");
-        let model = &layout[toe]
-            .as_ref()
-            .expect("something on the toe")
-            .model_name;
+        assert!(!layout[toe].is_empty(), "{name}: something on the toe");
         // Display names, as the layout stores them: the wahs and the volume pedal these presets
-        // put on the toe.
-        assert!(
-            ["Fassel", "Weeper", "Volume", "Volume Pedal"].contains(&model.as_str()),
-            "{name}: expected a wah or volume on the toe, got {model:?}"
-        );
+        // put on the toe. Every node, not just the first — most of these carry two or three.
+        for node in &layout[toe] {
+            let model = &node.model_name;
+            assert!(
+                ["Fassel", "Weeper", "Volume", "Volume Pedal"].contains(&model.as_str()),
+                "{name}: expected a wah or volume on the toe, got {model:?}"
+            );
+        }
         seen += 1;
     }
     if seen == 0 {
         eprintln!("skipping: no POD Go, Floor or Rack presets in captures/");
+    }
+}
+
+/// A switch carrying **several** bypasses puts every one of those blocks on it (issue #25).
+///
+/// Each binding is its own node in the position's array, and the toe of a POD Go, Floor or Rack
+/// preset commonly holds two or three: a wah and a volume pedal the toe flips between. Reading only
+/// the first node left the others on no switch at all, in the CLI, the MCP summary and the GUI
+/// alike, because all three take a block's switch from `loaded_blocks`.
+///
+/// Checked as an invariant over every stream held: each bypass node's block reports that node's
+/// switch. The multi-node presets are contributors' and untracked, so on a clean clone only the
+/// single-node Stomp/XL fixtures run, and the synthetic case in `stream.rs` carries the rest.
+#[test]
+fn every_bypass_on_a_shared_switch_is_on_it() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../captures");
+    let mut shared = 0;
+    for name in [
+        "preset1_stream.msgpack.bin",
+        "split_preset_stream.msgpack.bin",
+        "assign_bypass_and_param.msgpack.bin",
+        "xl_exp_bypass.msgpack.bin",
+        "pod-go/usdeluxe-factory01a.msgpack.bin",
+        "pod-go/ac30ambient-user04a.msgpack.bin",
+        "pod-go/looper-preset.msgpack.bin",
+        "helix-floor/floor-pullmeunder.msgpack.bin",
+        "helix-rack/rack-plushgarden.msgpack.bin",
+        "helix-rack/rack-pullmeunder.msgpack.bin",
+        "helix-rack/rack-usdoublenrm.msgpack.bin",
+    ] {
+        let Ok(bytes) = std::fs::read(root.join(name)) else {
+            continue;
+        };
+        let ps = PresetStream::parse(&bytes).expect("parse stream");
+        let blocks = ps.loaded_blocks();
+        // Walk the raw `3 → 8` array rather than `footswitch_layout`, so the check doesn't share
+        // the decoder it is checking.
+        let Some(Value::Array(positions)) = map_get(&ps.preset, 3).and_then(|m| map_get(m, 8))
+        else {
+            panic!("{name}: no footswitch layout");
+        };
+        for (pos, nodes) in positions.iter().enumerate() {
+            let Value::Array(nodes) = nodes else {
+                continue;
+            };
+            let bypass_slots: Vec<i64> = nodes
+                .iter()
+                .filter_map(|n| map_get(n, 11))
+                .filter(|m| map_get(m, 0).and_then(Value::as_i64) == Some(1))
+                .filter_map(|m| map_get(m, 8).and_then(Value::as_i64))
+                .collect();
+            if bypass_slots.len() > 1 {
+                shared += 1;
+            }
+            for slot in bypass_slots {
+                let block = blocks
+                    .iter()
+                    .find(|b| b.slot == slot)
+                    .unwrap_or_else(|| panic!("{name}: FS{} points at slot {slot}", pos + 1));
+                assert_eq!(block.footswitch, pos as i64 + 1, "{name}: slot {slot}");
+            }
+        }
+    }
+    if shared == 0 {
+        eprintln!("skipping the shared-switch half: no POD Go, Floor or Rack presets in captures/");
     }
 }

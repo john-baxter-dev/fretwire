@@ -2,6 +2,23 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**A switch carrying several blocks reports all of them (2026-10-16, issue #25).** A POD Go owner
+saw a footswitch shared by two bypasses listed on only one. `footswitch_layout()` read only the
+first node of each `3 → 8` position; it now returns every node (`Vec<Vec<PathBlock>>`), and
+`loaded_blocks` binds them all. Multi-node positions are [solid] in the untracked POD Go/Floor/Rack
+dumps (the toe, 2–3 bypasses; controller nodes on `ir2-preset`), none in the tracked Stomp/XL
+fixtures; two bypasses on an ordinary switch is covered only by a synthetic test. Converters already
+wrote one node per binding. **Open [hypothesis]:** whether op 56 to an occupied switch appends or
+replaces — never captured; the UI mock assumes replace. Worth a live Stomp capture.
+
+**MCP: the POD Go's catalog when that is the pedal or the file (2026-10-16, issue #26).**
+`fretwire-mcp` always loaded the HX data, so a POD Go-only import read as "not imported", and a
+failed load was cached until restart. `Offline` now keeps a catalog per family, never caches a
+failure, and picks by model code: catalog tools take an optional `device` and default to the
+connected pedal (read via `try_lock`, so an export sweep never stalls a tokio worker); the
+`backup_*` tools pick per preset from its stream's `7 → 36`, then the file's device tag. The CLI's
+call sites already picked the family. 405 tests, clippy clean.
+
 **Backup conversion: I/O nodes, value types, tempo and focus, from the Rack's backup (2026-10-14,
 issue #24).** The Rack backup plus three dumps of its presets are a second set of presets held in
 both forms, off one unit. Four results:

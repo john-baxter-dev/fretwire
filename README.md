@@ -209,7 +209,11 @@ the HX Edit installer is about a gigabyte, so that names a path on the daemon's 
 Claude Code, Claude Desktop and the like. Not the whole command surface: a curated set of tools
 that answer in plain text (a preset as a listing of its blocks and settings, a diff as the lines
 that changed), because that is what an assistant reasons over. Half of them need no pedal: they
-read fretwire export files and the model catalog.
+read fretwire export files and the model catalog. The POD Go numbers its models differently from
+the HX family, so the catalog tools (`catalog_categories`, `catalog_models`, `model_params`) read
+the connected pedal's catalog, or the one their optional `device` argument names (`"pod-go"` or
+`"hx"`); with no pedal and no `device`, the HX family's, or the POD Go's if that is all you
+imported. `backup_describe` and `backup_diff` go by the device each preset in the file came from.
 
 ```
 cargo build --release -p fretwire-mcp                             # or the release tarball:

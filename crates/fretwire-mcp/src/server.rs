@@ -1,7 +1,7 @@
 //! The tool surface. Three routers — read, write, save — composed at startup by what the
 //! operator enabled, so an unlisted tool is not merely refused but absent.
 
-use crate::offline::{self, Offline};
+use crate::offline::{self, Offline, Pick};
 use crate::summary;
 use fretwire_commands as c;
 use fretwire_commands::AppState;
@@ -39,6 +39,8 @@ type R = Result<String, String>;
 pub struct Fretwire {
     state: Arc<AppState>,
     offline: Arc<Offline>,
+    /// The catalog the pedal last seen connected reads, for when the session is too busy to ask.
+    last_pedal: Arc<Mutex<Pick>>,
     gates: Gates,
     tool_router: ToolRouter<Fretwire>,
 }
@@ -55,6 +57,7 @@ impl Fretwire {
         Self {
             state: Arc::new(AppState::default()),
             offline: Arc::new(Offline::default()),
+            last_pedal: Arc::new(Mutex::new(Pick::Any)),
             gates,
             tool_router,
         }
@@ -65,14 +68,52 @@ impl Fretwire {
         self.state.session.clone()
     }
 
+    /// Run `f` against the catalog `device` names (a catalog tool's argument), else the connected
+    /// pedal's, else whichever family is imported.
     async fn catalog_call<T: Send + 'static>(
         &self,
+        device: Option<String>,
         f: impl FnOnce(&fretwire_core::editor::Catalog) -> Result<T, String> + Send + 'static,
     ) -> Result<T, String> {
+        let pick = match device {
+            Some(d) => offline::device_arg(&d)?,
+            None => self.pedal_pick(),
+        };
+        self.offline_call(move |off| f(off.catalog(pick)?)).await
+    }
+
+    /// Run `f` against the offline catalogs on a blocking thread — loading one takes a second.
+    async fn offline_call<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&Offline) -> Result<T, String> + Send + 'static,
+    ) -> Result<T, String> {
         let offline = self.offline.clone();
-        tokio::task::spawn_blocking(move || f(offline.catalog()?))
+        tokio::task::spawn_blocking(move || f(&offline))
             .await
             .map_err(|e| format!("task error: {e}"))?
+    }
+
+    /// The catalog the connected pedal reads: the one `Session::connect` chose for it, by the
+    /// same model code. `Pick::Any` with no pedal.
+    ///
+    /// Never waits for the session lock — an export sweep holds it for its whole run, and a
+    /// catalog lookup has no business queueing behind that on an async worker. While the lock is
+    /// busy the pedal last seen answers, which is the one being swept.
+    fn pedal_pick(&self) -> Pick {
+        use std::sync::TryLockError;
+        // Holds a `Copy` value no panic can leave half-written, so a poisoned lock is still right.
+        let mut last = self.last_pedal.lock().unwrap_or_else(|e| e.into_inner());
+        match self.state.session.try_lock() {
+            Ok(g) => {
+                *last = g
+                    .as_ref()
+                    .map_or(Pick::Any, |s| Pick::Device(s.device().model_code));
+                *last
+            }
+            Err(TryLockError::WouldBlock) => *last,
+            // The command layer treats a poisoned session as unusable; so does this.
+            Err(TryLockError::Poisoned(_)) => Pick::Any,
+        }
     }
 
     async fn need_writes(&self) -> Result<(), String> {
@@ -87,7 +128,17 @@ impl Fretwire {
 // ---------------------------------------------------------------- argument shapes
 
 #[derive(Deserialize, JsonSchema)]
+pub struct CatalogCategoriesArgs {
+    /// "pod-go" or "hx": whose catalog to read (the POD Go numbers its models differently).
+    /// Defaults to the connected pedal's; with none connected, the HX family's, or the POD Go's
+    /// when that is all that is imported.
+    pub device: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
 pub struct CatalogModelsArgs {
+    /// "pod-go" or "hx", as for catalog_categories. Defaults to the connected pedal's.
+    pub device: Option<String>,
     /// Category id, from catalog_categories.
     pub category: i64,
     /// "Mono" or "Stereo" to list one variant; omit for both.
@@ -102,6 +153,8 @@ pub struct BackupListArgs {
 
 #[derive(Deserialize, JsonSchema)]
 pub struct ModelParamsArgs {
+    /// "pod-go" or "hx", as for catalog_categories. Defaults to the connected pedal's.
+    pub device: Option<String>,
     /// Model index, as catalog_models lists it (what block_add and block_swap take).
     pub index: i64,
 }
@@ -231,9 +284,11 @@ impl Fretwire {
         Ok(format!(
             "reference data {}: {} ({} file(s))",
             if s.present {
-                "imported"
+                // Per family: the POD Go reads POD Go Edit's data and nothing else, so "imported"
+                // alone does not say whether this pedal's catalog is there.
+                format!("imported ({})", s.families.join(", "))
             } else {
-                "NOT imported — run `fretwire import-data`"
+                "NOT imported — run `fretwire import-data`".to_string()
             },
             s.dir,
             s.files
@@ -243,8 +298,8 @@ impl Fretwire {
     /// The model catalog's categories (Distortion, Amp, Cab, Delay, …) with the ids
     /// catalog_models takes. Needs no pedal.
     #[tool(annotations(read_only_hint = true))]
-    async fn catalog_categories(&self) -> R {
-        self.catalog_call(|cat| {
+    async fn catalog_categories(&self, Parameters(a): Parameters<CatalogCategoriesArgs>) -> R {
+        self.catalog_call(a.device, |cat| {
             let mut lines: Vec<String> = cat
                 .categories()
                 .into_iter()
@@ -263,7 +318,7 @@ impl Fretwire {
     /// Needs no pedal.
     #[tool(annotations(read_only_hint = true))]
     async fn catalog_models(&self, Parameters(a): Parameters<CatalogModelsArgs>) -> R {
-        self.catalog_call(move |cat| {
+        self.catalog_call(a.device.clone(), move |cat| {
             let models = cat.models_in_category(a.category, a.variant.as_deref());
             let ceiling = cat.dsp_ceiling();
             if models.is_empty() {
@@ -294,7 +349,7 @@ impl Fretwire {
     /// before it is on the pedal: what a block of it would take. Needs no pedal.
     #[tool(annotations(read_only_hint = true))]
     async fn model_params(&self, Parameters(a): Parameters<ModelParamsArgs>) -> R {
-        self.catalog_call(move |cat| {
+        self.catalog_call(a.device.clone(), move |cat| {
             let (name, variant, params) = cat
                 .model_params(a.index)
                 .ok_or_else(|| format!("no model at index {} — see catalog_models", a.index))?;
@@ -371,9 +426,9 @@ impl Fretwire {
     /// Needs no pedal.
     #[tool(annotations(read_only_hint = true))]
     async fn backup_describe(&self, Parameters(a): Parameters<BackupDescribeArgs>) -> R {
-        self.catalog_call(move |cat| {
+        self.offline_call(move |off| {
             let b = offline::read_backup(&a.path)?;
-            let p = offline::backup_preset(cat, &b, a.bank.unwrap_or(0), a.index)?;
+            let p = offline::backup_preset(off, &b, a.bank.unwrap_or(0), a.index)?;
             Ok(summary::preset_summary(&p, a.params.unwrap_or(true)))
         })
         .await
@@ -383,15 +438,15 @@ impl Fretwire {
     /// removed or swapped, bypass changes, parameter values that moved. Needs no pedal.
     #[tool(annotations(read_only_hint = true))]
     async fn backup_diff(&self, Parameters(a): Parameters<BackupDiffArgs>) -> R {
-        self.catalog_call(move |cat| {
+        self.offline_call(move |off| {
             let ba = offline::read_backup(&a.path_a)?;
-            let pa = offline::backup_preset(cat, &ba, a.bank_a.unwrap_or(0), a.index_a)?;
+            let pa = offline::backup_preset(off, &ba, a.bank_a.unwrap_or(0), a.index_a)?;
             let pb = match &a.path_b {
                 Some(path_b) if path_b.trim() != a.path_a.trim() => {
                     let bb = offline::read_backup(path_b)?;
-                    offline::backup_preset(cat, &bb, a.bank_b.unwrap_or(0), a.index_b)?
+                    offline::backup_preset(off, &bb, a.bank_b.unwrap_or(0), a.index_b)?
                 }
-                _ => offline::backup_preset(cat, &ba, a.bank_b.unwrap_or(0), a.index_b)?,
+                _ => offline::backup_preset(off, &ba, a.bank_b.unwrap_or(0), a.index_b)?,
             };
             Ok(summary::preset_diff(&pa, &pb))
         })
@@ -432,6 +487,8 @@ impl Fretwire {
     #[tool(annotations(read_only_hint = true))]
     async fn device_connect(&self) -> R {
         let p = c::connect(&self.state).await?;
+        // Note which catalog this pedal reads, for catalog calls made while an export holds it.
+        self.pedal_pick();
         Ok(summary::preset_summary(&p, false))
     }
 
@@ -440,6 +497,7 @@ impl Fretwire {
     #[tool(annotations(read_only_hint = true))]
     async fn device_disconnect(&self) -> R {
         c::disconnect(&self.state).await?;
+        self.pedal_pick();
         Ok("Disconnected.".into())
     }
 

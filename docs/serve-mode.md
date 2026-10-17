@@ -233,7 +233,12 @@ opens its own session and cannot run beside the GUI or daemon. Closed 2026-09-03
 named, ranged and sync-linked exactly as a block of it would be) and `.hxb`/`.pgb` files for
 `backup_list`, which reads names and slots straight from the container; `backup_describe` and
 `backup_diff` on one point at `fretwire hxb-convert`, because a tone is JSON and becoming a preset
-stream needs a donor from the same device.
+stream needs a donor from the same device. 2026-10-16 (issue #26): the offline tools had read
+only the HX family's catalog, so a POD Go owner with POD Go Edit imported was told to import.
+Each family now has its own lazily loaded catalog (a failed load is no longer cached); the catalog
+tools take an optional `device` (`"pod-go"` / `"hx"`, defaulting to the connected pedal's), and
+the backup tools pick per preset from the model code its stream stamps (`7 -> 36`), then the
+file's `device` tag.
 
 The survey that led here, kept as the rationale:
 

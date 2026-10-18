@@ -61,6 +61,9 @@ The setlist and preset JSON carry a numeric `device` field:
 
 `device_version` = `0x03800000` for fw 3.82 — note the mismatch: an HX Stomp on **3.80** reports the
 same word, so this is not the running firmware version. See `docs/preset-format.md`.
+(2026-10-18: a Helix LT on a stated fw **3.80** carries the same preset build `7d01f5e` and key-35
+`0x03800020` as this Floor's dump, so "3.82" here was most likely HX Edit's version
+[hypothesis]. See `docs/helix-lt.md`.)
 
 Worth knowing: the reference data we already import ships `default_preset.hlx` and
 `empty_preset.hlx` that are **already `device 0x210001` — Helix Floor presets**, with all eight

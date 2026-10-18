@@ -278,10 +278,14 @@ on the input block's second page while the input is Main.
 too that an op-25 write reaches the edit buffer (`5 → id` reads back changed, the preset turns
 dirty).
 
-**Not settable yet: the input's source.** `@input` is the input node's key `5` (`1` = Main L/R on
-every Stomp/XL preset we hold; the Floor's `input_type` list calls it Multi). It is not in the node's
-`Helix.sym` order (`noiseGate, threshold, decay, select, gain, guitarSenseL, guitarSenseR`), so op 30
-can't address it, and no capture shows what HX Edit sends. `PresetStream::dsp_input_source` reads it.
+**The input's source is op 42, on a Helix** [solid on an LT, 2026-10-18; Stomp untested].
+`@input` is the input node's key `5` (`1` = Main L/R on every Stomp/XL preset we hold; the Floor's
+`input_type` list calls it Multi). It is not in the node's `Helix.sym` order (`noiseGate, threshold,
+decay, select, gain, guitarSenseL, guitarSenseR`), so op 30 can't address it. HX Edit on a Helix LT
+sends `{98: slot, 51: source}` as op 42 instead, and the output node's destination the same way with
+key `52` — see [Structural edits](#structural-edits-move--add--split-type-solid--from-the-2026-06-26-windows-captures).
+`PresetStream::dsp_input_source` reads it. That the Stomp takes the same op, with its own
+`input_type` list, is a [hypothesis] until one write of it reads back.
 
 **Op 24 was already in this codebase under the wrong name.** The connect capture sends `{118: 128}`
 and we had it written up as `OP_READ_PREP`, a "read-sequence prepare step", because we only ever
@@ -772,12 +776,21 @@ we implement):
 | **add block** | **39** | `{98: slot, 99: {19: 6, 20: {24: {23:false, 25:model, 26:paired}, 9:1, 10:true}}}` | `add_simple_eq…` |
 | **split type** | **40** | `{98: split_slot, 100: {23:false, 25:type_idx, 26:-1}}` — *same op/shape as swap-model* | `cycle_through_split_types` |
 | **A/B join mixer** | **30** | plain set-value (`{98:slot, 28:idx, 119:val}`) | `adjust_A_B_level_and_pan_of_join` |
+| **input source** | **42** | `{98: input_slot, 51: input_type}` | Helix LT `B1-path2-input` (2026-10-18) |
+| **output destination** | **42** | `{98: output_slot, 52: output_type}` — `2`/`3`/`4` = Path 2A/2B/2A+B | Helix LT `B2-path1-output-to` |
+| **remove split** | **46** | `{98: split_slot}` — `SABJ` → `ABJ`; row B gets its own input at the split's slot | Helix LT `B2-path1-output-to` |
 
 - **Move**: the **destination slot encodes the row** — `{75:2, 76:12}` moved a block from slot 2 to a
   parallel-path slot (row B). HX Edit re-reads (op 23/22) after a move; so do we.
 - **Add**: `99` is the new block's spec — node kind 6 = a normal DSP block; `20` is the block content
   (`24` = the `{23,25,26}` model-ref, `10` = enabled). After adding, HX Edit issues `set_value`s for
   the new block's default params. The device fills defaults itself, so a bare add + re-read suffices.
+- **I/O routing (op 42)**: the device echoes each one as status type `27`, `{98, 51|52}`. Path 2's
+  input does not change when Path 1 is routed into it. Builders `set_input` / `set_output`
+  [solid, LT; see `docs/helix-lt.md`].
+- **Remove split (op 46)**: the first surgical *topology* op seen. Observed once, on DSP 2 from
+  `SABJ`; the device pushes the new row-B input as `{98: 30, 51: 0}`. Builder `remove_split`. The
+  inverse and the DSP-1/`SAB` cases are not captured.
 - **Split type** is just **swap-model on the split slot** — no new op needed; the split "models" are
   `Helix.sym` entries (observed indices 256/258/563).
 - **Split/join node position** (moving the ⋔/⋉ points along the top row) has **no surgical op** —

@@ -322,19 +322,18 @@ fn the_xl_banks_by_four_not_the_stomps_three() {
 /// A device whose screen we have not seen gets no label rather than a plausible wrong one — the
 /// editor falls back to the slot number. See `Device::presets_per_bank`.
 ///
-/// The Floor is the interesting one: it almost certainly banks by four like the XL, but "almost
-/// certainly" is what this table refuses to record. Its owner reading `01A`-`32D` off the panel is
-/// all it would take.
+/// The Floor is the interesting one: it almost certainly banks by four like the XL and the LT, but
+/// "almost certainly" is what this table refuses to record. Its owner reading `01A`-`32D` off the
+/// panel is all it would take.
 #[test]
 fn devices_we_have_not_seen_banking_for_offer_no_label() {
-    // The Floor and the LT both: the survey read the LT's presets and browsed its setlists but
-    // never says how its screen groups them, and the Floor's is unknown too, so neither has
-    // anything to inherit.
-    for pid in [PID_HELIX_FLOOR, PID_HELIX_LT] {
-        let d = Device::by_pid(pid).unwrap();
-        assert_eq!(d.presets_per_bank, None, "{}", d.name);
-        assert_eq!(d.preset_label(0), None, "{}", d.name);
-    }
+    // The LT's `21D` was read off its screen (2026-10-18); the Floor shares its data class but
+    // not that reading, so it does not inherit it.
+    let floor = Device::by_pid(PID_HELIX_FLOOR).unwrap();
+    assert_eq!(floor.presets_per_bank, None);
+    assert_eq!(floor.preset_label(0), None);
+    let lt = Device::by_pid(PID_HELIX_LT).unwrap();
+    assert_eq!(lt.preset_label(83).as_deref(), Some("21D"));
     // Belt and braces: no device may carry a bank size without the label agreeing, in either
     // direction. This is the invariant the loop above used to be here to protect.
     for d in DEVICES {
@@ -347,8 +346,8 @@ fn devices_we_have_not_seen_banking_for_offer_no_label() {
     }
 }
 
-/// The LT reports the Floor's model code and the same setlist geometry, but its own preset
-/// device id was never observed — it must stay unknown rather than inherit the Floor's.
+/// The LT reports the Floor's model code and the same setlist geometry, but has a preset device
+/// id of its own — read from its backup, not inherited from the Floor's.
 #[test]
 fn the_lt_shares_the_floors_data_class_without_inheriting_its_device_id() {
     let floor = Device::by_pid(PID_HELIX_FLOOR).unwrap();
@@ -360,8 +359,9 @@ fn the_lt_shares_the_floors_data_class_without_inheriting_its_device_id() {
     assert_eq!(lt.setlist_size, floor.setlist_size);
     assert_eq!(lt.setlists, floor.setlists);
 
-    // Never seen on the wire, so never guessed.
-    assert_eq!(lt.preset_device_id, None);
+    // From the LT's own `.hxb` header (2026-10-18), and distinct from the Floor's.
+    assert_eq!(lt.preset_device_id, Some(0x0021_0004));
+    assert_ne!(lt.preset_device_id, floor.preset_device_id);
 
     // Both stamp "P21"; the lookup keeps resolving it to the Floor, which is listed first.
     assert_eq!(
@@ -397,11 +397,11 @@ fn preset_numbering_labels_follow_each_units_own_counts() {
 }
 
 /// The same rule `presets_per_bank` states: an unmeasured bank size produces no label at all, not a
-/// plausible one. The Floor and the LT both hold 128 slots and neither has had its screen read, and
-/// 128 divides by 4 and by 8 with no evidence either way.
+/// plausible one. The Floor holds 128 slots and has not had its screen read, and 128 divides by 4
+/// and by 8 with no evidence either way.
 #[test]
 fn a_device_with_no_measured_bank_size_offers_no_labels() {
-    for pid in [PID_HELIX_FLOOR, PID_HELIX_LT, PID_HX_EFFECTS] {
+    for pid in [PID_HELIX_FLOOR, PID_HX_EFFECTS] {
         let d = Device::by_pid(pid).unwrap();
         assert_eq!(d.preset_numbering_labels(), None, "{}", d.name);
     }

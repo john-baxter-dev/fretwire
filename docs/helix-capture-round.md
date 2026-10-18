@@ -289,11 +289,11 @@ sudo dumpcap -i usbmon3 -w B1-path2-input.pcapng   # usbmon<bus number>; Ctrl-C 
 
 | Capture | Open question it answers | Where it goes |
 |---|---|---|
-| `before.hxb` (LT) | the LT's `preset_device_id`, never on the wire (the Floor's came from its `.hxb`); and its setlist names | `fretwire_protocol::DEVICES`, `docs/helix-lt.md` |
+| `before.hxb` (LT) | ~~the LT's `preset_device_id`~~ — **answered: `0x00210004`** (2026-10-18). Setlist names: FACTORY 1/2 and TEMPLATES match; the owner had renamed the USER banks | `fretwire_protocol::DEVICES`, `docs/helix-lt.md` |
 | A1 + `before.hxb` | ~~**topology `AB`'s key-21 value**~~ — **answered: `4`**, from a Helix Rack's Plush Garden (issue #24, 2026-10-14). Originally: Trademark / Plush Garden are `SAB`/`AB`, GARBAGE BASS `AB`/`A`, Unicorns Forever `SABJ`/`AB`, 4 Tone Switcher and Stereo Mixer `AB`/`AB` (from the 2026-07-22 Floor backup). Each loaded stream pairs with its tone in the backup; Pull Me Under is the known control | `tone::topology_code` |
 | A1 + `before.hxb` | ~~more tone+wire pairs for the **input/output nodes' ragged prefix** rule~~ — **answered**: stored only while routed, from a Helix Rack's backup and dumps (issue #24, 2026-10-14) | `tone::apply_io_nodes` |
-| A2 | the LT's `presets_per_bank` (`None` today) | `DEVICES` |
-| B1–B3 | how the **Input `@input` / Output To `@output`** selectors are written: plain op 30 on slot 0/9 (and 20/29), or something else; plus what the pedal does to Path 2's input on its own. `Output To` is `HD2_AppDSPFlowOutput` param 2, `output_type` enum (0 None, 1 Multi, 2 Path 2A, 3 Path 2B, 4 Path 2A+B, …) | new session op, GUI I/O node panel |
+| A2 | ~~the LT's `presets_per_bank`~~ — **answered: 4** (`21D`, 2026-10-18) | `DEVICES` |
+| B1–B3 | ~~how the **Input / Output To** selectors are written~~ — **answered by B1+B2 (2026-10-18): op 42**, `{98, 51: input}` / `{98, 52: output}`, not op 30; Path 2's input does not change by itself. B2 also caught **op 46** (remove a split, `SABJ` → `ABJ`). B3 (`1/4"` → Multi) only adds more enum values | new session op, GUI I/O node panel |
 | B5, B6, B10 | **cross-DSP block move**: whether op 43 just takes `{75: <20, 76: ≥20}` | lifts `"can't move a block between DSPs"` in `Session::{place_block, insert_block}` |
 | B7–B9 | **the cross-DSP bracket** (`SAB`/`ABJ`): whether HX Edit writes it surgically (ops 58–62?) or by op 21, and which keys change. Node position on one DSP is op 21 today (`set_node_pos`) | `Session` routing planning |
 | D1–D6, B4, C2, C3 | the **LT write path** byte-for-byte (set_value, bypass, swap incl. paired amp+cab, add, delete, save, select). Already verified on the Floor (9/9). Matching on the LT moves it from `Reported` to `Verified` | `Support::Verified`, `docs/helix-lt.md` |

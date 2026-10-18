@@ -37,6 +37,7 @@ __pycache__/
 /captures/helix-floor/
 /captures/pod-go/
 /captures/helix-rack/
+/captures/helix-lt/
 *.hxb
 *.pgb
 # Scratch build dir for the panel SSR test (tests/panel-ssr.mjs cleans it up itself).

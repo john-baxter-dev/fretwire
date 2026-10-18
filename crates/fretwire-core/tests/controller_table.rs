@@ -345,6 +345,8 @@ fn the_toe_switch_is_the_last_position_on_a_device_with_a_pedal() {
         ("helix-floor/floor-sultans.msgpack.bin", "P21", 13),
         ("helix-rack/rack-plushgarden.msgpack.bin", "P21", 13),
         ("helix-rack/rack-usdoublenrm.msgpack.bin", "P21", 13),
+        ("helix-lt/lt-plushgarden.msgpack.bin", "P21", 13),
+        ("helix-lt/lt-pullmeunder.msgpack.bin", "P21", 13),
     ] {
         let Ok(bytes) = std::fs::read(root.join(name)) else {
             continue;
@@ -368,7 +370,7 @@ fn the_toe_switch_is_the_last_position_on_a_device_with_a_pedal() {
         seen += 1;
     }
     if seen == 0 {
-        eprintln!("skipping: no POD Go, Floor or Rack presets in captures/");
+        eprintln!("skipping: no POD Go, Floor, Rack or LT presets in captures/");
     }
 }
 
@@ -398,6 +400,9 @@ fn every_bypass_on_a_shared_switch_is_on_it() {
         "helix-rack/rack-plushgarden.msgpack.bin",
         "helix-rack/rack-pullmeunder.msgpack.bin",
         "helix-rack/rack-usdoublenrm.msgpack.bin",
+        "helix-lt/lt-plushgarden.msgpack.bin",
+        "helix-lt/lt-pullmeunder.msgpack.bin",
+        "helix-lt/lt-stereomixer.msgpack.bin",
     ] {
         let Ok(bytes) = std::fs::read(root.join(name)) else {
             continue;

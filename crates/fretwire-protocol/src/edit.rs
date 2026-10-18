@@ -173,6 +173,21 @@ pub const NODE_KIND_BLOCK: i64 = 6;
 pub const K_MODEL_INDEX: i64 = 25;
 /// Model-ref key: paired cab/IR index in `Helix.sym` (`-1` = none).
 pub const K_PAIRED_INDEX: i64 = 26;
+/// Operation id 42: **route an I/O node** — `{98: slot, 51: input}` on an input node or
+/// `{98: slot, 52: output}` on an output node. The value indexes `HelixControls.json`'s
+/// `input_type` / `output_type` list (Guitar `2`; Path 2A `2`, 2B `3`, 2A+B `4`). The device echoes
+/// it as status type 27 with the same map. Decoded from a Helix LT's `B1-path2-input` and
+/// `B2-path1-output-to` (2026-10-18). Not op 30: the selector is not in the node's `Helix.sym` order.
+pub const OP_SET_IO: i64 = 42;
+/// Op-42 target key: an input node's source.
+pub const K_IO_INPUT: i64 = 51;
+/// Op-42 target key: an output node's destination.
+pub const K_IO_OUTPUT: i64 = 52;
+/// Operation id 46: **remove a DSP's split** — `{98: split_slot}`. HX Edit sends it when the Split
+/// is dragged down onto row B: the DSP goes `SABJ` → `ABJ` (preset key 21: `1` → `3`) and row B
+/// gets an input node of its own at the split's slot, starting at None. Surgical, no op-21 write.
+/// Seen once, on a Helix LT's DSP 2 (slot 30); the inverse op is not yet captured.
+pub const OP_REMOVE_SPLIT: i64 = 46;
 
 /// A decoded edit-channel command body.
 #[derive(Debug, Clone, PartialEq)]
@@ -459,6 +474,48 @@ pub fn move_block(src: i64, dst: i64, txn: u16) -> Vec<u8> {
                 (Value::from(K_MOVE_SRC), Value::from(src)),
                 (Value::from(K_MOVE_DST), Value::from(dst)),
             ]),
+        ),
+    ]))
+}
+
+/// Build a **set-input** body (op 42): route the input node at `slot` (0 or 20 for a path's
+/// input, 10 or 30 for a row B that has its own) from `source`, an index into `input_type`.
+/// (`{102:txn, 100:42, 101:{98:slot, 51:source}}`.) Reproduces device bytes exactly.
+pub fn set_input(slot: i64, source: i64, txn: u16) -> Vec<u8> {
+    set_io(slot, K_IO_INPUT, source, txn)
+}
+
+/// Build a **set-output** body (op 42): route the output node at `slot` (9 or 29) to `dest`, an
+/// index into `output_type` — `2`/`3`/`4` send Path 1 into Path 2A/2B/2A+B.
+/// (`{102:txn, 100:42, 101:{98:slot, 52:dest}}`.) Reproduces device bytes exactly.
+pub fn set_output(slot: i64, dest: i64, txn: u16) -> Vec<u8> {
+    set_io(slot, K_IO_OUTPUT, dest, txn)
+}
+
+fn set_io(slot: i64, key: i64, value: i64, txn: u16) -> Vec<u8> {
+    encode(Value::Map(vec![
+        (Value::from(K_TXN), Value::from(txn)),
+        (Value::from(K_OP), Value::from(OP_SET_IO)),
+        (
+            Value::from(K_TARGET),
+            Value::Map(vec![
+                (Value::from(K_SLOT), Value::from(slot)),
+                (Value::from(key), Value::from(value)),
+            ]),
+        ),
+    ]))
+}
+
+/// Build a **remove-split** body (op 46) on the split node at `slot` (10 or 30): row B gets its
+/// own input and the DSP's split disappears. (`{102:txn, 100:46, 101:{98:slot}}`.) Reproduces
+/// device bytes exactly.
+pub fn remove_split(slot: i64, txn: u16) -> Vec<u8> {
+    encode(Value::Map(vec![
+        (Value::from(K_TXN), Value::from(txn)),
+        (Value::from(K_OP), Value::from(OP_REMOVE_SPLIT)),
+        (
+            Value::from(K_TARGET),
+            Value::Map(vec![(Value::from(K_SLOT), Value::from(slot))]),
         ),
     ]))
 }
@@ -1714,6 +1771,17 @@ mod tests {
             0x83, 0x66, 0xcd, 0x04, 0x0c, 0x64, 0x2b, 0x65, 0x82, 0x4b, 0x07, 0x4c, 0x08,
         ];
         assert_eq!(move_block(7, 8, 0x040c), bytes);
+    }
+
+    // Helix LT, 2026-10-18 (contributor captures, kept local). B1: Path 2's input (slot 20) to
+    // Guitar. B2: Path 1's output (slot 9) to Path 2A, 2B, 2A+B, then op 46 on DSP 2's split.
+    #[test]
+    fn io_routing_reproduces_captured_bytes() {
+        assert_eq!(set_input(20, 2, 0x042b), hex("8366cd042b642a658262143302"));
+        assert_eq!(set_output(9, 2, 0x0482), hex("8366cd0482642a658262093402"));
+        assert_eq!(set_output(9, 3, 0x0483), hex("8366cd0483642a658262093403"));
+        assert_eq!(set_output(9, 4, 0x0484), hex("8366cd0484642a658262093404"));
+        assert_eq!(remove_split(30, 0x047e), hex("8366cd047e642e6581621e"));
     }
 
     #[test]

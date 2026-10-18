@@ -2,6 +2,18 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Helix LT owner captures: op 42 routes I/O nodes, op 46 removes a split (2026-10-18).** A
+second LT owner (fw 3.80) sent a backup and part of the capture round (A1, A2, B1, B2;
+`docs/helix-lt.md`). **op 42** sets an I/O node: `{98: slot, 51: input_type}` on an input and
+`{98: slot, 52: output_type}` on an output (Path 2A/2B/2A+B = 2/3/4), echoed as status type 27. That
+is the write side of the input source below, on a Helix; whether the Stomp takes it is a
+[hypothesis]. **op 46** `{98: split_slot}` turned DSP 2 from `SABJ` into `ABJ`, giving row B its own
+input, with no op-21 write. It is the first surgical topology op we've seen. Builders
+`edit::{set_input, set_output, remove_split}` match the captured bytes; nothing in `Session` uses
+them yet. The backup gives the LT `preset_device_id` `0x00210004` and its screen gives banks of 4,
+both now in `DEVICES`. All five A1 factory presets parse, and their topology codes match. The LT
+stays `Reported`: none of its set/bypass/swap/add/delete/save bytes have been compared yet.
+
 **Gtr Pad on the input block; In-Z and the input source still open (2026-10-17, issue #28).** An
 XL owner noted the Input block shows only gate/threshold/decay, missing the pedal's second page
 (In-Z, Gtr Pad) and the input source. Those two are preset globals, not node params: the preset's

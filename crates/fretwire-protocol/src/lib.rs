@@ -382,10 +382,11 @@ pub const DEVICES: &[Device] = &[
         // pulled preset carries key `7 → 36` = "P21\0". `by_model_code("P21")` therefore
         // resolves to the Floor, which is listed first — they are one data class.
         model_code: Some("P21"),
-        // Unknown, not copied across: the handshake carries no `0x0021xxxx` device id and
-        // the wire preset stream has no such field. The Floor's value came from a `.hxb`,
-        // and we have no backup from an LT.
-        preset_device_id: None,
+        // From an owner's HX Edit backup: the `.hxb` header's device field reads `0x00210004`
+        // (fw `0x03800000`). Never on the wire — the handshake and preset stream carry no such
+        // field — which is why the first survey left it unknown rather than copy the Floor's.
+        // [solid — 2026-10-18, owner backup, docs/helix-lt.md]
+        preset_device_id: Some(0x0021_0004),
         // Both DSPs — a pulled preset populates key `1` and holds blocks in slots 21..28
         // (the unit reported DSP1 71.0% / DSP2 43.0%).
         dsps: Some(2),
@@ -393,9 +394,9 @@ pub const DEVICES: &[Device] = &[
         snapshots: Some(8),
         // Banks 0..7 each list 128 presets and bank 8 is refused (code -3). Bank 0 holds the
         // factory amp presets and bank 7 the templates ("Quick Start", "Parallel Spans",
-        // "SNP:4-Amp Spill") — the Floor's layout, so the Floor's names are used. Unlike the
-        // Floor's, these names are not corroborated by a backup; only the arity and the two
-        // end banks were observed.
+        // "SNP:4-Amp Spill") — the Floor's layout, so the Floor's names are used. An LT backup
+        // (2026-10-18) agrees on FACTORY 1, FACTORY 2 and TEMPLATES; its owner had renamed
+        // banks 2..6, so the USER names are still the Floor's, not the LT's own.
         setlists: Some(&[
             "FACTORY 1",
             "FACTORY 2",
@@ -407,10 +408,9 @@ pub const DEVICES: &[Device] = &[
             "TEMPLATES",
         ]),
         setlist_size: Some(128),
-        // Unknown: the survey read presets and browsed setlists but never says how the LT's screen
-        // groups them, and the Floor's is unknown too, so there is nothing to inherit. Presets fall
-        // back to slot numbers until someone reads it off the unit. See `docs/helix-lt.md`.
-        presets_per_bank: None,
+        // Banks of four: the owner read `21D` off the LT's screen with numbering set to
+        // `01A`-`32D` (setting 27 off). [solid — 2026-10-18, docs/helix-lt.md]
+        presets_per_bank: Some(4),
         // Handshake, preset read, setlist and preset-list browse are all reconciled against a
         // physical LT, but no edit has ever been sent to one. That is more than `Untested` ("only
         // the USB IDs are known") describes — the reads are real traffic, checked against real

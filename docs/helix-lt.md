@@ -1,8 +1,13 @@
 # Helix LT — device survey
 
 What we know about the **Helix LT**, from a user's unit on Linux (2026-08-18, firmware string
-`a7e2585`). Unlike the Floor survey, this one rests on **no USB captures and no device backup**:
-everything below was read by fretwire itself over `MI_00`, with this PR's device entry applied.
+`a7e2585`). That survey rested on **no USB captures and no device backup**: it was read by
+fretwire itself over `MI_00`, with this PR's device entry applied.
+
+A second owner (2026-10-18, fw 3.80, HX Edit 3.82, Windows) then sent a **backup and three HX
+Edit captures** from part of the capture round (`docs/helix-capture-round.md`: A1, A2, B1, B2).
+Their results are in [Owner captures (2026-10-18)](#owner-captures-2026-10-18) below; the
+`.pcapng` files, the backup and the reassembled streams stay local (`captures/helix-lt/`, ignored).
 
 **Bottom line: the LT needs no protocol change.** The handshake, the preset read, the snapshot
 decode, and the setlist and preset-list browses all work unmodified once the PID is in the table.
@@ -48,9 +53,13 @@ pulled preset agrees, at key `7`:
 | `37` | `"a7e2585\0"` |
 | `35` | `57737248` = `0x03710020` |
 
-Key `35` is recorded raw on purpose. `docs/helix-floor.md` notes `device_version = 0x03800000` for
-firmware 3.82, which would make `0x03710020` read as ~3.71 — but that encoding has never been
-pinned down against two known firmware versions, so this is data, not a conclusion.
+Key `35` is recorded raw on purpose. The second LT, on a stated **fw 3.80**, carries `0x03800020`
+with build `7d01f5e`, so the high half reads as the version (`0x0380` → 3.80, `0x0371` → 3.71)
+[hypothesis: two points, one per firmware]. The low `0x0020` is not a patch level — the Stomp's
+identity reply gives `0x03800000` on 3.80 — and the `.hxb` header of the same LT says `0x03800000`.
+The Floor's dump has the same `0x03800020` and the same build `7d01f5e` as this 3.80 LT, so the
+"3.82" recorded for it in `docs/helix-floor.md` was most likely HX Edit's version, not the
+firmware's [hypothesis].
 
 ## Preset model  [solid]
 
@@ -71,7 +80,7 @@ Reading the loaded preset (8326 bytes, declared length matched):
 > and which preset key `1` being populated says independently. If you have an LT, `fretwire pull`
 > prints the slot list and settles it.
 
-## Setlists  [arity solid; names not corroborated]
+## Setlists  [arity solid; end-bank names solid, USER names not corroborated]
 
 Browsing banks 0, 1, 2, 6, 7 and 8 (3–5 were not reported, and it is not recorded whether they were
 browsed and dropped in editing or never browsed):
@@ -95,15 +104,82 @@ evidence: the Floor's names came from the eight `L6Setlist` streams of a real `.
 only the *arity* and the *character of the two end banks* were observed. If an LT backup ever turns
 up and disagrees, this is the field to fix.
 
+**Update (2026-10-18):** an LT backup turned up. It has eight setlists of 128, and `FACTORY 1`,
+`FACTORY 2` and `TEMPLATES` match. Its owner had renamed banks 2–6, so it can't confirm or rule out
+`USER 1`…`USER 5`.
+
+## Owner captures (2026-10-18)
+
+### Device facts  [solid]
+
+| | value | source |
+|---|---|---|
+| `preset_device_id` | **`0x00210004`** (Floor `0x00210001`) | `.hxb` header |
+| `presets_per_bank` | **4** | the unit's screen showed `21D` with numbering set to `01A`-`32D` |
+| setlists | `FACTORY 1`, `FACTORY 2`, …, `TEMPLATES` | `.hxb`; banks 2–6 renamed by the owner, so the `USER n` defaults are still the Floor's |
+
+Both are now in `DEVICES`. The Floor's bank size is still unread, so it does not inherit the `4`.
+
+### Factory presets read over USB (A1)  [solid]
+
+Five factory/template presets were loaded and reassembled; every one parsed, and the preset key
+`21` topology codes match `tone::topology_code` and the Floor backup's topologies:
+
+| preset | DSP 1 | DSP 2 |
+|---|---|---|
+| Plush Garden | `2` SAB | `4` AB |
+| GARBAGE BASS | `4` AB | `0` A |
+| 4 Tone Switcher | `4` AB | `4` AB |
+| Stereo Mixer | `4` AB | `4` AB |
+| Pull Me Under | `2` SAB | `3` ABJ |
+
+Plush Garden matches the Rack's dump of it except for float rounding, including the "before-split!"
+diagnostic explained in `docs/helix-rack.md`. On fw 3.80 the factory presets sit in different slots
+from the Floor's backup (Pull Me Under at FACTORY 2 21D); Trademark and Unicorns Forever were not
+found.
+
+### Input and output routing: op 42  [solid]
+
+Setting Path 2's Input to Guitar (B1) and Path 1's Output To through Path 2A → 2B → 2A+B → 2A (B2)
+each sent one **op 42**:
+
+```
+{102: txn, 100: 42, 101: {98: 20, 51: 2}}      input node, slot 20, input_type 2 = Guitar
+{102: txn, 100: 42, 101: {98: 9,  52: 3}}      output node, slot 9, output_type 3 = Path 2B
+```
+
+Key `51` is an input's source and `52` an output's destination, both indexes into
+`HelixControls.json`'s `input_type` / `output_type` lists. Each was echoed on the status channel as
+type `27` with the same map. Builders: `edit::set_input`, `edit::set_output`.
+
+**Path 2's input does not change by itself.** With Path 1 sending to Path 2A, no push named slot 20,
+and HX Edit still shows Path 2's input as `None`, with an arrow marking the feed from Path 1.
+
+**Path 2B must exist first.** HX Edit greys out `Path 2B` and `Path 2A+B` until Path 2's row B has
+an input of its own (op 46, below).
+
+### Removing a split: op 46  [solid for this one transition]
+
+To give Path 2B an input, the owner added a Simple EQ on Path 2, dragged it to row B (op 39, then
+op 43 `21 → 31`), and dragged the Split down. That last step sent `{98: 30}` as **op 46**, with no
+op-21 write. The re-read preset differs in six paths:
+
+```
+/1/21                 1 -> 3      DSP 2: SABJ -> ABJ
+/1/22[10]/20/15/13    1 -> 0      the split's position
+/1/22[10]/20/15/10    true -> false
+/1/22[10]/20/18       true -> false
+/6/98, /6/26                      focus moved to slot 30
+```
+
+The device then pushed `{98: 30, 51: 0}`: slot 30 is now Path 2B's input, starting at None. Builder:
+`edit::remove_split`. Not yet seen: op 46 on DSP 1, from `SAB`, and the inverse (dragging the
+split back up).
+
 ## Not observed
 
-- **`preset_device_id`.** The handshake identity reply carries no `0x0021xxxx` device id, and the
-  wire preset stream has no such field — the Floor's `0x210001` came from a `.hxb`. Left `None`
-  rather than copied across.
-- **Every write path.** Nothing was sent to this unit beyond reads and the handshake.
-- **How the screen banks presets.** `Device::presets_per_bank` — the `3` in an HX Stomp's
-  `01A`/`01B`/`01C`/`02A` — is `None` for the LT, so its presets are listed by slot number. One look
-  at the unit's screen settles it. The Floor's is unknown too, so there is nothing to inherit.
+- **Every write path but op 42 and op 46.** Set-value, bypass, swap, add, delete and save have not
+  been compared against an LT's own bytes, so the entry stays `Reported`.
 
 ## Reproducing
 

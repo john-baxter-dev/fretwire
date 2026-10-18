@@ -21,6 +21,18 @@ preset decoded against `Helix.sym` resolves every block to the wrong model.
 Read from the device descriptor in the capture. The PID slots between the HX Effects (`0x4245`) and
 the Helix Floor (`0x4248`).
 
+### POD Go Wireless  [solid — 2026-10-18, issue #29]
+
+The Wireless has its own PID, **`0x424b`**, and the same product string (`"POD Go"`), `bcdDevice`
+`0x0200`, and the same vendor interface 0 ahead of UAC2 audio and MIDI. On the wire it **is** a POD
+Go: the handshake reports `P34Main`, its presets carry `"P34"`, and it takes POD Go Edit's data
+and every POD Go builder unchanged. The POD Go-specific paths (fixed chain, assignment body,
+credits, IR scan) key on `Device::is_pod_go()`, i.e. the model code, not the PID. The one
+difference is its device id, `0x00210008` against the POD Go's `0x00210007`, from its own `.pgb`.
+It has one DSP, four snapshots and `Factory`/`User` setlists of 128 slots, numbered `01A`-`32D`.
+Verified live on fw 2.50: a set, a bypass and a swap read back exactly, and a revert was
+byte-identical. While flashing it shows product string `"P34"`; see `docs/safety.md`.
+
 ## The protocol is the HX family's  [solid — 2026-08-25 capture]
 
 Every one of our existing decoders parsed the capture **unmodified**:

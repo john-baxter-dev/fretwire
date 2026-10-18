@@ -16,6 +16,16 @@ Edit has no In-Z, so it isn't named. **Input source:** `@input` (node key `5`) i
 Stomp settings-diff pass (In-Z, pad, and whether op 25 dirties the buffer), then an HX Edit capture
 of Main → Return → USB 5/6.
 
+**POD Go Wireless: Verified (2026-10-18, issue #29).** It enumerates as `0e41:424b` but identifies
+as the POD Go's `P34` (handshake `P34Main`, preset `7 → 36`), so it takes POD Go Edit's data and the
+POD Go's builders. The reporter's unit (fw 1.21 and 2.50) ran reads, the IR slot scan and a device
+backup; a set, a bypass and a swap each read back exactly, and a revert restored the preset
+byte-for-byte. Device id `0x00210008` from its `.pgb`. The six POD Go branches in `Session` now key
+on `Device::is_pod_go()` (model code), not the PID; the patch is the reporter's. **Safety:** while
+POD Go Edit flashes it, the unit sits under `424b` for ~6 min with product string `"P34"`, so
+`fretwire-usb` now skips any device whose product string is its bare model code (`docs/safety.md`).
+The stored-vs-live snapshot mismatch on factory presets it also reported is #24's, already known.
+
 **A switch carrying several blocks reports all of them (2026-10-16, issue #25).** A POD Go owner
 saw a footswitch shared by two bypasses listed on only one. `footswitch_layout()` read only the
 first node of each `3 → 8` position; it now returns every node (`Vec<Vec<PathBlock>>`), and

@@ -64,6 +64,21 @@ The guardrails below still held — no flash, no firmware, full recovery from a 
 pedal came back unharmed. This is the failure mode the guardrails are *for*, and it is a normal
 outcome of this kind of work rather than a surprise. Budget for it.
 
+## What a firmware update looks like on the bus [solid — 2026-10-18, issue #29]
+Observed only, never sent or replayed: an owner watched a POD Go Wireless (`0e41:424b`) through
+POD Go Edit's 1.21 → 2.50 update. It re-enumerated four times:
+
+1. `0e41:424b`, product string `"POD Go"` — running normally;
+2. `1fc9:000c`, NXP "LPC" — the ROM loader, listed as "DFU" in Line 6's `L6WinUsb.inf`;
+3. `0e41:424b`, product string **`"P34"`** — flashing, for about six minutes;
+4. `0e41:424b`, `"POD Go"` — done.
+
+Stage 2 is never ours (wrong vendor). Stage 3 is the trap: the PID is the running device's. So
+`fretwire-usb` treats a product string equal to the device's bare model code as mid-update. Such a
+device is left out of `present_devices()`, and `Transport::open_device` refuses it with
+`Error::Updating`. Whether other devices flash under the same pattern is [hypothesis]. The guard is
+keyed on the model code so that it covers them if they do.
+
 ## Why the brick risk is low here
 The control protocol we're implementing moves the same kinds of messages HX Edit exchanges
 constantly. A malformed control frame, at worst, makes the device's parser reboot — recovered by

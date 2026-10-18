@@ -85,6 +85,14 @@ const cases = [
   ["a governed param whose group members are missing", block("Half a group", [
     param(0, "Time", { sync: { governed: 0, note: 9, tempo: 10, role: "governed" } }),
   ])],
+  // Gtr Pad: a dropdown on the input node, written by `setting_id` (issue #28).
+  ["the input node's preset settings", block("Input", [
+    param(0, "Input Gate", { kind: "bool", value_type: 2, value: 0 }),
+    param(3, "Gtr Pad", {
+      kind: "int", value_type: 0, value: 0, min: 0, max: 2, setting_id: 134,
+      enum_labels: ["Global", "Off", "On"],
+    }),
+  ], { slot: 0, model_index: null, symbolic_id: "HelixStomp_AppDSPFlowInput", category: null, bypassed: null })],
 ];
 
 for (const [what, b] of cases) {
@@ -96,10 +104,17 @@ for (const [what, b] of cases) {
         onFloat: noop, onEnum: noop, onPreview: noop, onBypass: noop, onSwap: noop,
         onSplitType: noop, onDelete: noop, onCopyBlock: noop, onPasteBlock: noop,
         onBypassSwitch: noop, onSwitchLabel: noop, onSwitchColor: noop, onSwitchType: noop,
-        onAssignParam: noop, onAssignTravel: noop,
+        onAssignParam: noop, onAssignTravel: noop, onSetting: noop,
       },
     });
     ok(body.includes(b.model_name), `${what}: panel renders`);
+    // A preset setting is not a block param, so it has no controller to put it under.
+    const settings = b.params.filter((p) => p.setting_id != null).length;
+    if (settings) {
+      ok(body.includes(">Global<") && body.includes(">On<"), `${what}: dropdown renders`);
+      const asgButtons = (body.match(/class="asgbtn/g) || []).length;
+      ok(asgButtons === b.params.length - settings, `${what}: no assign button on a setting (${asgButtons})`);
+    }
   } catch (e) {
     ok(false, `${what}: ${String(e).split("\n")[0]}`);
   }

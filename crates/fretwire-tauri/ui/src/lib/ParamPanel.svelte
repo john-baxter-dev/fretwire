@@ -16,6 +16,8 @@
     splitTypes = [],
     onFloat,
     onEnum,
+    // Writes a value that carries a `setting_id` (Gtr Pad): a preset global, not a param.
+    onSetting,
     onPreview,
     onBypass,
     onSwap,
@@ -631,6 +633,7 @@
                 title={sync.on ? "Synced to tempo — click for a free value" : "Sync to the tempo (note values)"}
                 onclick={() => onEnum(block.slot, paired, sync.tempoIndex, sync.on ? 0 : 1)}>♩</button>
             {/if}
+            {#if p.setting_id == null}
             <button
               class="asgbtn"
               class:on={!!asg}
@@ -639,6 +642,7 @@
                 : "Put this parameter under a footswitch or expression pedal"}
               onclick={() => (openAssign = openAssign === k ? null : k)}>{asg ? asg.source_name : "\u21e2"}</button
             >
+            {/if}
           </span>
           {#if sync?.on}
             <!-- The note value in place of the knob, written to the `SyncSelect` param — the
@@ -664,7 +668,14 @@
                  `Note Sync` labels 1..=19. Offsetting here keeps read and write on the same entry;
                  indexing the list from 0 displayed one note past the pedal and wrote one short of
                  the pick (issue #8). -->
-            <select value={p.value} onchange={(e) => onEnum(block.slot, paired, p.index, Number(e.currentTarget.value))}>
+            <select
+              value={p.value}
+              onchange={(e) => {
+                const v = Number(e.currentTarget.value);
+                if (p.setting_id != null) onSetting(p.setting_id, v);
+                else onEnum(block.slot, paired, p.index, v);
+              }}
+            >
               {#each p.enum_labels as lbl, i}<option value={i + (p.enum_base ?? 0)}>{lbl}</option>{/each}
             </select>
           {:else if c === "bool"}

@@ -2,6 +2,20 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Gtr Pad on the input block; In-Z and the input source still open (2026-10-17, issue #28).** An
+XL owner noted the Input block shows only gate/threshold/decay, missing the pedal's second page
+(In-Z, Gtr Pad) and the input source. Those two are preset globals, not node params: the preset's
+key `5` uses the op-24/25 settings ids (tempo is `5 → 16` and setting 16). **Gtr Pad is `5 → 134`**
+[near-solid: the 3-state op-25 write in the pad capture, and present on every Stomp/XL preset and
+no Floor/Rack/POD Go one]. The input node now carries it as a dropdown with a `setting_id`
+(`editor::INPUT_SETTINGS`), shown while the source is Main; GUI and MCP write it via
+`set_preset_setting` (op 25, allow-listed ids only), never op 30, whose index 3 on the node is
+`select`. **In-Z: id unknown.** The only candidate, `5 → 30`, is also in POD Go presets, and POD Go
+Edit has no In-Z, so it isn't named. **Input source:** `@input` (node key `5`) is readable
+(`dsp_input_source`) but has no known write op and no Stomp labels beyond `1` = Main L/R. Next: a
+Stomp settings-diff pass (In-Z, pad, and whether op 25 dirties the buffer), then an HX Edit capture
+of Main → Return → USB 5/6.
+
 **A switch carrying several blocks reports all of them (2026-10-16, issue #25).** A POD Go owner
 saw a footswitch shared by two bypasses listed on only one. `footswitch_layout()` read only the
 first node of each `3 → 8` position; it now returns every node (`Vec<Vec<PathBlock>>`), and

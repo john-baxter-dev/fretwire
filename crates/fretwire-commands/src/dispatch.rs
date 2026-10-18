@@ -51,6 +51,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "set_param",
     "set_paired_param",
     "set_param_enum",
+    "set_preset_setting",
     "swap_model",
     "add_block",
     "add_block_at",
@@ -218,6 +219,9 @@ pub async fn dispatch(
             a.req("value")?,
         )
         .await?),
+        "set_preset_setting" => {
+            ok(c::set_preset_setting(state, a.req("id")?, a.req("value")?).await?)
+        }
         "swap_model" => ok(c::swap_model(
             state,
             a.req("slot")?,
@@ -444,7 +448,7 @@ mod tests {
     /// pinned by `connect_is_matched_without_running`.
     #[tokio::test]
     async fn every_name_dispatches() {
-        assert_eq!(COMMAND_NAMES.len(), 84, "the surface was 84 commands");
+        assert_eq!(COMMAND_NAMES.len(), 85, "the surface was 85 commands");
         for name in COMMAND_NAMES {
             if *name == "connect" {
                 continue;

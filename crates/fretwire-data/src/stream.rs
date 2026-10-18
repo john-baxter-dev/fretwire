@@ -699,6 +699,31 @@ impl PresetStream {
             })
     }
 
+    /// One of the preset's **global values** (preset key `5`), by id. These ids are the device
+    /// settings namespace (op 24 reads, op 25 writes): the preset's tempo is `5 → 16` here and
+    /// setting `16` there. `134` is `@guitarpad` (Gtr Pad, Global/Off/On), which the pedal shows on
+    /// the input block's second page: it is the 3-state write in
+    /// `switch_input_gate_and_guitar_pad.pcapng`, and the only key here that every Stomp and XL
+    /// preset has and no Floor, Rack or POD Go one does. [near-solid, issue #28]
+    pub fn preset_global(&self, id: i64) -> Option<ParamValue> {
+        self.field(5)
+            .and_then(|m| map_get(m, id))
+            .and_then(ParamValue::from_value)
+    }
+
+    /// Where a DSP's path-A input node takes its signal from (`@input`, the node's key `5`) — `1`
+    /// on every preset we hold, which is Main L/R on a Stomp (`HelixControls.json`'s `input_type`
+    /// calls it Multi). The other values' Stomp meaning is not pinned yet.
+    pub fn dsp_input_source(&self, dsp: usize) -> Option<i64> {
+        let slots = self.dsp_slots(dsp)?;
+        let node = slots
+            .iter()
+            .find(|s| map_get(s, 19).and_then(Value::as_i64) == Some(0))?;
+        map_get(node, 20)
+            .and_then(|c| map_get(c, 5))
+            .and_then(Value::as_i64)
+    }
+
     /// The slot array of one DSP group (`DSP_GROUP_KEYS[dsp] → 22`), if that DSP is populated.
     fn dsp_slots(&self, dsp: usize) -> Option<&Vec<Value>> {
         let key = *DSP_GROUP_KEYS.get(dsp)?;

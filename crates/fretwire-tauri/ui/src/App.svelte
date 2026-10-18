@@ -550,6 +550,8 @@
 
   const onEnum = (slot, paired, index, value) =>
     apply(invoke("set_param_enum", { slot, paired, paramIndex: index, value }));
+  // Gtr Pad sits on the input block but is a preset global, written by id (issue #28).
+  const onSetting = (id, value) => apply(invoke("set_preset_setting", { id, value }));
   const onBypass = (slot, bypassed) => apply(invoke("set_bypass", { slot, bypassed }));
   const onSwap = (slot, modelIndex, pairedIndex) =>
     apply(invoke("swap_model", { slot, modelIndex, pairedIndex }));
@@ -1530,6 +1532,7 @@
             {splitTypes}
             {onFloat}
             {onEnum}
+            {onSetting}
             {onPreview}
             {onBypass}
             {onSwap}

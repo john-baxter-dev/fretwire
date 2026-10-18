@@ -217,6 +217,11 @@ pub async fn set_param_enum(
 }
 
 #[tauri::command]
+pub async fn set_preset_setting(state: State<'_, AppState>, id: i64, value: i64) -> R<PresetDto> {
+    fretwire_commands::set_preset_setting(&state, id, value).await
+}
+
+#[tauri::command]
 pub async fn swap_model(
     state: State<'_, AppState>,
     slot: i64,

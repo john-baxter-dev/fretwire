@@ -627,7 +627,11 @@ impl Fretwire {
                     p.enum_labels.join(" | ")
                 ));
             };
-            let after = c::set_param_enum(&self.state, a.slot, paired, idx, v).await?;
+            // Gtr Pad: shown on the input block, but a preset global written by id.
+            let after = match p.setting_id {
+                Some(id) => c::set_preset_setting(&self.state, id, v).await?,
+                None => c::set_param_enum(&self.state, a.slot, paired, idx, v).await?,
+            };
             return Ok(report(&after, a.slot, paired, idx));
         }
 

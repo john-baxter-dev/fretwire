@@ -555,6 +555,24 @@ pub async fn set_param_enum(
     .await
 }
 
+/// Set one of the preset globals the input block shows — Gtr Pad, by the `setting_id` its
+/// `ParamDto` carries — with op 25. An edit like any other: on the timeline, and the preset is
+/// re-read. Refuses any other id, so this can't become a back door to the global settings.
+pub async fn set_preset_setting(state: &AppState, id: i64, value: i64) -> R<PresetDto> {
+    use fretwire_core::editor::INPUT_SETTINGS;
+    let Some(&(_, _, label)) = INPUT_SETTINGS.iter().find(|(i, _, _)| *i == id) else {
+        return Err(format!(
+            "setting {id} is not a preset setting fretwire edits"
+        ));
+    };
+    mutate_edit(
+        state,
+        move |_| format!("Set {label}"),
+        move |s| s.set_setting(id, value),
+    )
+    .await
+}
+
 /// Swap the model at `slot` to `model_index` (a `Helix.sym` index). `paired_index` preserves an
 /// amp's cab/IR pairing across the swap; pass `-1` for no pairing.
 pub async fn swap_model(

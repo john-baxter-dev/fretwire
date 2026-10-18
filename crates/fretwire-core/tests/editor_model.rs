@@ -373,8 +373,8 @@ fn io_nodes_resolve_named_params() {
     let input = p.input_node().expect("input node");
     assert_eq!(input.slot, 0);
     assert_eq!(input.model_name, "Input");
-    let names: Vec<&str> = input.params.iter().map(|q| q.name.as_str()).collect();
-    assert_eq!(names, ["Input Gate", "Threshold", "Decay"]);
+    let names: Vec<&str> = input.params.iter().map(|q| q.display_name()).collect();
+    assert_eq!(names, ["Input Gate", "Threshold", "Decay", "Gtr Pad"]);
     assert_eq!(
         input.params[0].meta.value_type,
         Some(2),
@@ -402,6 +402,33 @@ fn io_nodes_resolve_named_params() {
     // Wire addressing: block() finds them by slot (history labels, param edits).
     assert_eq!(p.block(0).map(|b| b.model_name.as_str()), Some("Input"));
     assert_eq!(p.block(9).map(|b| b.model_name.as_str()), Some("Output"));
+}
+
+// Gtr Pad sits on the input block, as on the pedal's second page, but is a preset global (`5 → 134`)
+// written by op 25 under its id — never op 30 on slot 0, whose param 3 is `select` (issue #28).
+#[test]
+fn input_node_carries_the_pad_as_a_preset_setting() {
+    for fixture in [
+        "preset1_stream.msgpack.bin",
+        "xl_no_assignments.msgpack.bin",
+    ] {
+        let p = catalog().load_preset(&data(fixture)).unwrap();
+        let input = p.input_node().expect("input node");
+        let settings: Vec<_> = input
+            .params
+            .iter()
+            .filter(|q| q.setting_id.is_some())
+            .collect();
+        assert_eq!(settings.len(), 1, "{fixture}: Gtr Pad only");
+        let pad = settings[0];
+        assert_eq!((pad.setting_id, pad.display_name()), (Some(134), "Gtr Pad"));
+        assert_eq!(pad.value, ParamValue::Int(0), "{fixture}: Global");
+        assert_eq!(pad.meta.enum_labels, ["Global", "Off", "On"]);
+
+        // Only on the guitar input: the output node never carries it.
+        let output = p.output_node().expect("output node");
+        assert!(output.params.iter().all(|q| q.setting_id.is_none()));
+    }
 }
 
 /// Every model the picker offers must be one the pedal will actually accept, and no two rows may

@@ -149,6 +149,10 @@ pub struct ParamDto {
     /// number; one carrying `extra: false` matches on `index`. Both spaces start at 0, so matching
     /// on the wrong one silently drives a different control.
     pub extra_index: Option<i64>,
+    /// Set for a value shown on the block but stored as a preset global (the input's Gtr Pad):
+    /// write it with `set_preset_setting` under this id, not with the param commands. See
+    /// [`EditorParam::setting_id`].
+    pub setting_id: Option<i64>,
     /// How to render this value with its unit. Sent as rules rather than a finished string because
     /// the panel re-formats continuously while a slider is dragged, before any value reaches Rust.
     pub format: Option<NumFormatDto>,
@@ -227,6 +231,7 @@ impl From<&EditorParam> for ParamDto {
                 .collect(),
             settable: p.settable,
             extra_index: p.extra_index,
+            setting_id: p.setting_id,
             step: fin_opt(p.meta.step),
             default: fin_opt(p.meta.default),
             sync: p.meta.sync.map(|s| SyncDto {

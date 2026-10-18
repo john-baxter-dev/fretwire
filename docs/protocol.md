@@ -262,6 +262,27 @@ positions: `1` leaves the main outputs alone.)
 on the fixed input node at slot 0 of each DSP, set with the ordinary set-value op. See
 `PresetStream::io_node`.
 
+**Some of this namespace is per preset: the preset's key `5` uses the same ids** [issue #28,
+2026-10-17]. Tempo is setting `16` and the preset's `5 → 16`. `fixed.models` lists the preset's
+`@global_params`, among them `@guitarinputZ` (0..=8, `guitar_input_z`: Auto, 10k … 1M Ohm) and
+`@guitarpad` (0..=2, `guitar_pad`: Global/Off/On), which the pedal shows as **In-Z** and **Gtr Pad**
+on the input block's second page while the input is Main.
+- **`134` is Gtr Pad** [near-solid]: the 3-state write in `switch_input_gate_and_guitar_pad.pcapng`,
+  and the one key-`5` id every Stomp and XL preset has and no Floor, Rack or POD Go preset does. The
+  editor shows it on DSP 0's input node (`editor::INPUT_SETTINGS`) and writes it as an op-25 integer.
+- **In-Z's id is unknown.** The keys are otherwise the same on all six devices, and the only
+  unexplained one, `30`, is also in POD Go presets, while POD Go Edit's `@global_params` has no
+  In-Z, so `30` is not assumed.
+
+**To pin:** change In-Z and Gtr Pad on the pedal, one per cycle, and diff the settings dump; check
+too that an op-25 write reaches the edit buffer (`5 → id` reads back changed, the preset turns
+dirty).
+
+**Not settable yet: the input's source.** `@input` is the input node's key `5` (`1` = Main L/R on
+every Stomp/XL preset we hold; the Floor's `input_type` list calls it Multi). It is not in the node's
+`Helix.sym` order (`noiseGate, threshold, decay, select, gain, guitarSenseL, guitarSenseR`), so op 30
+can't address it, and no capture shows what HX Edit sends. `PresetStream::dsp_input_source` reads it.
+
 **Op 24 was already in this codebase under the wrong name.** The connect capture sends `{118: 128}`
 and we had it written up as `OP_READ_PREP`, a "read-sequence prepare step", because we only ever
 replayed it. It is not a prepare step — the handshake is fetching setting 128 along the way. The

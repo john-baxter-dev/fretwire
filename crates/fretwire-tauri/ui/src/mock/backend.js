@@ -238,7 +238,14 @@ function makeBlock(sym, opts = {}) {
 const inputNode = () => ({
   kind: "input", modelIndex: null, symbolic_id: "HelixStomp_AppDSPFlowInput", model_name: "Input",
   dsp_load: 0,
-  params: [P.bool(0, "Input Gate", false), P.float(1, "Threshold", -48, -96, 0), P.float(2, "Decay", 0.5, 0.01, 1)],
+  params: [
+    P.bool(0, "Input Gate", false),
+    P.float(1, "Threshold", -48, -96, 0),
+    P.float(2, "Decay", 0.5, 0.01, 1),
+    // A preset global the pedal shows on the input's second page, written by op 25 under
+    // `setting_id` rather than as a param (issue #28). See editor::INPUT_SETTINGS.
+    { ...P.enum(3, "Gtr Pad", 0, ["Global", "Off", "On"]), setting_id: 134 },
+  ],
 });
 const outputNode = () => ({
   kind: "output", modelIndex: null, symbolic_id: "HelixStomp_AppDSPFlowOutputMain", model_name: "Output",
@@ -848,6 +855,7 @@ const EDIT_LABELS = {
   set_param: (a) => `Set ${paramName(a.slot, false, a.paramIndex)}`,
   set_paired_param: (a) => `Set ${paramName(a.slot, true, a.paramIndex)}`,
   set_param_enum: (a) => `Set ${paramName(a.slot, a.paired, a.paramIndex)}`,
+  set_preset_setting: () => "Set Gtr Pad",
   swap_model: (a) =>
     `${slotName(a.slot)} → ${modelName(a.modelIndex)}` +
     (a.pairedIndex >= 0 ? ` + ${modelName(a.pairedIndex)}` : ""),
@@ -1523,6 +1531,13 @@ const HANDLERS = {
   },
   set_param_enum: ({ slot, paired, paramIndex, value }) => {
     const p = findParam(slot, paired, paramIndex);
+    if (p) p.value = value;
+    return toDto(current);
+  },
+  set_preset_setting: ({ id, value }) => {
+    if (id !== 134) throw new Error(`setting ${id} is not a preset setting fretwire edits`);
+    const input = current.slots[inputSlot(0)];
+    const p = input?.params.find((q) => q.setting_id === id);
     if (p) p.value = value;
     return toDto(current);
   },

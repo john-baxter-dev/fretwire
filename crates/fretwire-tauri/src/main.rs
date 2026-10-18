@@ -170,6 +170,7 @@ fn main() {
             commands::set_param,
             commands::set_paired_param,
             commands::set_param_enum,
+            commands::set_preset_setting,
             commands::swap_model,
             commands::add_block,
             commands::favorites,

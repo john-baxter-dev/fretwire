@@ -239,7 +239,20 @@ pub struct EditorParam {
     /// [solid — `captures/dynamic_ambience_trails_on_off.pcapng`, confirmed live on an HX Stomp
     /// 2026-08-02: `{98:2, 29:false, 26:0, 28:0, 119:true}` turns a Bucket Brigade's trails on]
     pub extra_index: Option<i64>,
+    /// Set for a value that is shown on a block but stored as one of the **preset's globals**
+    /// (preset key `5`) and written with op 25 under this id, not with op 30 on the block: the
+    /// input's Gtr Pad ([`INPUT_SETTINGS`]). `index` is then only a position in the list.
+    pub setting_id: Option<i64>,
 }
+
+/// The input block's second page on the pedal — **In-Z** and **Gtr Pad** — which are preset
+/// globals rather than params of the input node: `(setting id, fixed.models symbol, label)`. The
+/// pedal shows them only while the input is Main (issue #28). The ids are the preset's own `5 → id`
+/// keys; see [`fretwire_data::stream::PresetStream::preset_global`] for how firm each one is.
+///
+/// In-Z (`@guitarinputZ`) is not here yet: its id is unknown. The one candidate, `5 → 30`, is also
+/// in every POD Go preset, whose editor data has no In-Z at all, so naming it would be a guess.
+pub const INPUT_SETTINGS: &[(i64, &str, &str)] = &[(134, "@guitarpad", "Gtr Pad")];
 
 impl EditorParam {
     /// What to show the user. [`Self::name`] is the `symbolicID` — the key everything addresses this
@@ -1394,6 +1407,32 @@ impl Catalog {
                 p.name = d.to_string();
             }
         }
+        // The guitar input's pad (and In-Z, once its id is known), on the one input they belong
+        // to: DSP 0's path A, while it is fed from Main (`1`). Only where the preset carries them —
+        // `5 → 134` is in every Stomp and XL preset we hold, and in no Floor, Rack or POD Go one.
+        if kind == 0 && dsp == 0 && ps.dsp_input_source(dsp) == Some(1) {
+            let globals = self.param_meta.get("@global_params");
+            for &(id, symbol, label) in INPUT_SETTINGS {
+                let Some(value) = ps.preset_global(id) else {
+                    continue;
+                };
+                let mut meta = globals
+                    .and_then(|m| m.get(symbol))
+                    .cloned()
+                    .unwrap_or_default();
+                // The pedal's own short label, not `fixed.models`' "Guitar Pad".
+                meta.label = Some(label.to_string());
+                params.push(EditorParam {
+                    index: params.len(),
+                    name: symbol.to_string(),
+                    value,
+                    meta,
+                    settable: true,
+                    extra_index: None,
+                    setting_id: Some(id),
+                });
+            }
+        }
         Some(EditorBlock {
             dsp: b.dsp,
             slot: b.slot,
@@ -2177,6 +2216,7 @@ fn name_params(
                 meta,
                 settable,
                 extra_index,
+                setting_id: None,
             }
         })
         .collect()

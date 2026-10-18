@@ -60,6 +60,9 @@ pub enum Error {
     Frame(#[from] fretwire_protocol::Error),
     #[error("no reply matching channel {dst:#06x}/seq {seq} within {MAX_SKIP} frames")]
     Unmatched { dst: u16, seq: u8 },
+    /// The device is mid-firmware-update (see [`updating`]). Never opened: see `docs/safety.md`.
+    #[error("{0} is in the middle of a firmware update — leave it alone until it finishes")]
+    Updating(&'static str),
     #[error("timed out waiting for a bulk IN")]
     Timeout,
     /// A bulk **OUT** timed out — the device has stopped draining its endpoint. Distinct from
@@ -71,11 +74,34 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Whether a device announcing `product` is mid-firmware-update rather than running.
+///
+/// While POD Go Edit flashes a POD Go Wireless, the unit sits under its ordinary `0e41:424b` for
+/// about six minutes with the product string `"P34"` — its bare model code — instead of
+/// `"POD Go"` (issue #29, observed, never sent). Its PID alone would match, so this is what keeps
+/// fretwire off a flashing unit. Keyed on the model code rather than one PID, since an update is
+/// the same path across the family. [solid for the Wireless; hypothesis for the rest]
+fn updating(device: &Device, product: Option<&str>) -> bool {
+    matches!((device.model_code, product), (Some(code), Some(p)) if p.trim() == code)
+}
+
 /// Every known HX device currently enumerated on the bus, in [`fretwire_protocol::DEVICES`] order.
 /// A dependency-free smoke test that `nusb` can see a device before we attempt to claim it.
+///
+/// A device mid-firmware-update is left out (see [`updating`]).
 pub fn present_devices() -> Result<Vec<&'static Device>> {
     let pids: Vec<u16> = nusb::list_devices()?
         .filter(|d| d.vendor_id() == VID_LINE6)
+        .filter(|d| {
+            let Some(device) = Device::by_pid(d.product_id()) else {
+                return true;
+            };
+            let busy = updating(device, d.product_string());
+            if busy {
+                tracing::warn!("{} is mid-firmware-update; skipping it", device.name);
+            }
+            !busy
+        })
         .map(|d| d.product_id())
         .collect();
     Ok(fretwire_protocol::DEVICES
@@ -117,6 +143,9 @@ impl Transport {
         let info = nusb::list_devices()?
             .find(|d| d.vendor_id() == VID_LINE6 && d.product_id() == device.pid)
             .ok_or(Error::NotFound)?;
+        if updating(device, info.product_string()) {
+            return Err(Error::Updating(device.name));
+        }
         if let Some(caveat) = device.support.caveat() {
             // Reading and the handshake are low-risk (worst case a power cycle — see docs/safety.md),
             // but say so rather than pretending this device is known-good.
@@ -371,5 +400,30 @@ impl Transport {
             );
             self.pending.drain(..over);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fretwire_protocol::{PID_HX_STOMP, PID_POD_GO_WIRELESS};
+
+    /// The four enumerations the issue #29 owner saw across a POD Go Wireless update: only the
+    /// flashing one, `"P34"` under the ordinary PID, is the update.
+    #[test]
+    fn a_flashing_unit_is_recognised_by_its_bare_model_code() {
+        let wireless = Device::by_pid(PID_POD_GO_WIRELESS).unwrap();
+        assert!(updating(wireless, Some("P34")));
+        assert!(!updating(wireless, Some("POD Go")));
+        assert!(!updating(wireless, None));
+    }
+
+    #[test]
+    fn a_running_device_is_not_updating() {
+        for d in DEVICES {
+            assert!(!updating(d, Some(d.name)), "{}", d.name);
+        }
+        let stomp = Device::by_pid(PID_HX_STOMP).unwrap();
+        assert!(!updating(stomp, Some("P34")));
     }
 }

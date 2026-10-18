@@ -5,7 +5,7 @@
 
 use fretwire_protocol::{
     DEVICES, Device, PID_HELIX_FLOOR, PID_HELIX_LT, PID_HELIX_RACK, PID_HX_EFFECTS, PID_HX_STOMP,
-    PID_HX_STOMP_XL, PID_POD_GO, Support,
+    PID_HX_STOMP_XL, PID_POD_GO, PID_POD_GO_WIRELESS, Support,
 };
 
 #[test]
@@ -405,4 +405,29 @@ fn a_device_with_no_measured_bank_size_offers_no_labels() {
         let d = Device::by_pid(pid).unwrap();
         assert_eq!(d.preset_numbering_labels(), None, "{}", d.name);
     }
+}
+
+/// The POD Go Wireless enumerates under its own id but is a POD Go on the wire: it must take the
+/// POD Go paths, must not take over `P34` lookups from the plain POD Go, and carries its own
+/// measured facts rather than the POD Go's (2026-10-18 owner survey).
+#[test]
+fn the_pod_go_wireless_is_a_pod_go() {
+    let wireless = Device::by_pid(PID_POD_GO_WIRELESS).unwrap();
+    let pod = Device::by_pid(PID_POD_GO).unwrap();
+    assert_eq!(wireless.name, "POD Go Wireless");
+    assert_eq!(wireless.model_code, Some("P34"));
+    assert!(wireless.is_pod_go() && pod.is_pod_go());
+    assert_eq!(
+        Device::by_model_code("P34").map(|d| d.pid),
+        Some(PID_POD_GO)
+    );
+    assert_eq!(wireless.support, Support::Verified);
+    // Its own device id from its own `.pgb`, one past the POD Go's — not inherited.
+    assert_eq!(wireless.preset_device_id, Some(0x0021_0008));
+    assert_ne!(wireless.preset_device_id, pod.preset_device_id);
+    assert_eq!((wireless.dsps, wireless.snapshots), (Some(1), Some(4)));
+    assert_eq!(wireless.setlist_names(), &["Factory", "User"]);
+    assert_eq!(wireless.setlist_size, Some(128));
+    let (flat, banked) = wireless.preset_numbering_labels().unwrap();
+    assert_eq!((flat.as_str(), banked.as_str()), ("000-127", "01A-32D"));
 }

@@ -942,7 +942,7 @@ impl Session {
         model_index: i64,
         paired_index: i64,
     ) -> crate::Result<()> {
-        if self.device().pid != fretwire_protocol::PID_POD_GO {
+        if !self.device().is_pod_go() {
             return Ok(());
         }
         // No amp+cab block on a POD Go: the amp and the cab/IR are two slots of the fixed chain,
@@ -1007,7 +1007,7 @@ impl Session {
     /// [`PresetStream::move_block_single_row`] for the document rewrite itself. Edit buffer only;
     /// flash is untouched until a `save_preset`.
     pub fn move_block(&mut self, src: i64, dst: i64) -> crate::Result<()> {
-        if self.device().pid == fretwire_protocol::PID_POD_GO {
+        if self.device().is_pod_go() {
             let raw = self.read_preset_raw()?;
             let mut ps = fretwire_data::stream::PresetStream::parse(&raw)?;
             if !ps.move_block_single_row(src as usize, dst as usize) {
@@ -1044,7 +1044,7 @@ impl Session {
         model_index: i64,
         paired_index: i64,
     ) -> crate::Result<()> {
-        if self.device().pid == fretwire_protocol::PID_POD_GO {
+        if self.device().is_pod_go() {
             // POD Go Edit has no add of its own — its chain is ten fixed slots, and an emptied one
             // is re-filled by picking a model — but op 39 is how the owner fills empty slots from
             // fretwire, and any of the ten takes it (issue #15, 2026-09-03: "9 and 10 are valid
@@ -1104,7 +1104,7 @@ impl Session {
     /// the POD Go, whose ordinary credits are slower than that threshold. See `SLOW_CREDIT` in
     /// [`Self::send_chunked_tlv`] for the measurements. [solid — 2026-09-02, issue #15]
     fn slow_credit(&self) -> Option<()> {
-        (self.device().pid != fretwire_protocol::PID_POD_GO).then_some(())
+        (!self.device().is_pod_go()).then_some(())
     }
 
     /// Write a whole preset blob to the device's **edit buffer** (op 21) — the general structural
@@ -2730,7 +2730,7 @@ impl Session {
         }
         let txn = self.bump_txn();
         // The POD Go refuses the HX body with `-3`; it takes POD Go Edit's (see the builder).
-        let body = if self.device().pid == fretwire_protocol::PID_POD_GO {
+        let body = if self.device().is_pod_go() {
             edit::assign_param_pod_go(slot, paired, param_index, source, txn)
         } else {
             edit::assign_param(slot, paired, param_index, source, txn)
@@ -5082,7 +5082,7 @@ impl Session {
     /// an empty directory on a POD Go still falls back to the scan.
     pub fn ir_directory(&mut self) -> crate::Result<Vec<fretwire_data::ir::IrSlot>> {
         let dir = self.in_ir_session(Self::ir_commit)?;
-        if dir.is_empty() && self.device().pid == fretwire_protocol::PID_POD_GO {
+        if dir.is_empty() && self.device().is_pod_go() {
             tracing::info!(
                 "the IR directory (op 13) listed nothing on a POD Go — scanning the slots instead"
             );

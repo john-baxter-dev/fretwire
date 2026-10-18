@@ -35,6 +35,9 @@ SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="4245", MODE="0660", 
 # POD Go — the protocol is reconciled against a capture (issue #15), but nothing has been sent to
 # one and it needs its own reference data. Same family, so the rule is here; fretwire will warn.
 SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="4247", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+# POD Go Wireless — the POD Go with the receiver built in; its own USB id, the POD Go's P34 on the
+# wire. Verified on an owner's unit: reads, backups and live edits (2026-10-18).
+SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="424b", MODE="0660", GROUP="plugdev", TAG+="uaccess"
 # Helix Rack — verified on an owner's unit, fw 3.80.0: reads and live edits (issue #24). A Rack
 # older than fw 2.82 enumerates as 4242 and is not covered,
 # for the same reason no pre-2.82 Helix is.

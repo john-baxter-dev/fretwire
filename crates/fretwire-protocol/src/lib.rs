@@ -71,6 +71,15 @@ pub const PID_HX_EFFECTS: u16 = 0x4245;
 /// 833), so a block's model reference (`24 -> 25`) means something else on this device.
 /// See `docs/pod-go.md`.
 pub const PID_POD_GO: u16 = 0x4247;
+/// USB Product ID for the POD Go Wireless — the POD Go with the Relay G10 receiver built in —
+/// read off a unit on Linux (2026-10-18): `ID 0e41:424b Line6, Inc. POD Go`. The product string
+/// is the plain POD Go's, `bcdDevice` is `0x0200`, and interface 0 is the same vendor control
+/// channel (bulk `0x01`/`0x81`, 512 bytes) ahead of the UAC2 audio and MIDI interfaces.
+///
+/// It is a POD Go on the wire: the pulled active preset carries `7 → 36` = `"P34\0"`, so it takes
+/// the POD Go's data family and its device-specific paths through [`Device::is_pod_go`], not
+/// through this id.
+pub const PID_POD_GO_WIRELESS: u16 = 0x424B;
 /// Interface number of the vendor-specific control channel.
 pub const CONTROL_INTERFACE: u8 = 0x00;
 /// Bulk OUT endpoint (host → device).
@@ -199,6 +208,9 @@ pub struct Device {
 /// surveyed one (issue #24): it reports the Floor's `P21`, every field was read off the unit or its
 /// backup, and the Floor's verified edit builders worked on it live, which made it
 /// [`Support::Verified`] without a capture of its own. The `Untested` tier is empty again.
+///
+/// The **POD Go Wireless** is [`Support::Verified`] by the same second route: its own USB id, but
+/// the POD Go's `P34`, and the POD Go's builders confirmed live on an owner's unit.
 pub const DEVICES: &[Device] = &[
     Device {
         pid: PID_HX_STOMP,
@@ -286,6 +298,38 @@ pub const DEVICES: &[Device] = &[
         // from the Stomp's captured one in exactly one byte, the slot number. The last unknown
         // field, `preset_device_id`, arrived with their backup. What remains open is geometry, not
         // protocol: the fixed chain's add/move/delete semantics. [solid — 2026-08-28, issue #15]
+        support: Support::Verified,
+    },
+    Device {
+        pid: PID_POD_GO_WIRELESS,
+        name: "POD Go Wireless",
+        // `P34`, the plain POD Go's code, from two independent paths on one unit — the handshake
+        // identity reply returns "P34Main", and a pulled preset carries `7 -> 36` = "P34\0". It is
+        // what routes this device to POD Go Edit's data and the POD Go paths. Listed after the
+        // POD Go, so `by_model_code("P34")` keeps resolving to that one. [solid — 2026-10-18]
+        model_code: Some("P34"),
+        // From POD Go Edit's own `.pgb` backup of the unit, twice over, the same evidence as the
+        // POD Go's: the container header's device-id field reads 0x210008, and the archive JSON
+        // says `"device": 2162696` — the same number, one past the POD Go's 0x210007.
+        // [solid — 2026-10-18 backup]
+        preset_device_id: Some(0x0021_0008),
+        // One: a pulled preset populates group key `0` (the ten-slot chain) and key `1` is nil —
+        // the POD Go's reasoning, measured on this unit rather than copied. [solid — 2026-10-18]
+        dsps: Some(1),
+        // Four: the pulled preset's snapshot table holds SNAPSHOT 1..4. [solid — 2026-10-18]
+        snapshots: Some(4),
+        // A live read: the setlist listing returned exactly these two names, and each setlist's
+        // preset stream held 128 entries; the `.pgb` agrees (Factory 120/128, User 0/128 used).
+        // [solid — 2026-10-18]
+        setlists: Some(&["Factory", "User"]),
+        setlist_size: Some(128),
+        // Read off the pedal's screen by its owner: 01A..01D, four to a bank. [2026-10-18 owner]
+        presets_per_bank: Some(4),
+        // Verified by the second route (see [`Support::Verified`]): it shares the POD Go's `P34`, so
+        // it takes the POD Go's builders, and edits from them were confirmed on the unit itself —
+        // a parameter set, a bypass and a model swap each read back exactly, and a revert restored
+        // the preset byte-for-byte (fw 2.50). Reads, the IR slot scan and a full device backup
+        // also ran on fw 1.21 before the update. [solid — 2026-10-18]
         support: Support::Verified,
     },
     Device {
@@ -445,6 +489,13 @@ impl Device {
     /// matches devices whose code we actually know.
     pub fn by_model_code(code: &str) -> Option<&'static Device> {
         DEVICES.iter().find(|d| d.model_code == Some(code))
+    }
+
+    /// Whether this is a POD Go of either kind — the plain one or the Wireless, which differ in
+    /// USB id but both stamp `P34`. Device-specific POD Go behaviour (its fixed chain, its
+    /// assignment body, its write credits) keys on this, not on a PID.
+    pub fn is_pod_go(&self) -> bool {
+        self.model_code == Some("P34")
     }
 
     /// Slot groups to walk when enumerating this device's preset blocks. Falls back to `1` when

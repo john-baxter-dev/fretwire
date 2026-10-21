@@ -1447,6 +1447,17 @@ is the block (`@model`, `@type`, `@enabled`, then params by name — the same va
 `slot1` the paired cab for an amp, `data.meta.name` the name. `fretwire_data::hxb::Hxb::favorites`
 reads them; `show-backup` lists them.
 
+## A backup is one transfer session [solid — `favorite_add_delete_backup.pcapng`, 2026-09-04]
+HX Edit's backup opens op 255 once and closes it with op 254 after the last preset. Everything in
+between runs inside it: the IR pass (12/11), the favorite records (113), the user-default sweep
+(109 ×1160) and every preset (op 4 ×126). Op 4 goes out bare inside it, with no browse-open and no
+op 0 before each slot. The browse-open *is* op 254, so sending it per slot would end the session.
+The settings read (op 85) comes before the 255. The session is what puts "Transferring data…" on
+the pedal, so HX Edit's banner covers the whole backup. `Session::backup_device` does the same
+since issue #30. Bare op 4 inside the session works from fretwire too: the documents match the
+prologue-per-slot read byte for byte, apart from the txn [solid — live on the owner's Stomp,
+2026-10-20].
+
 ## User Defaults — op 109, one ask per (model, composite, cab kind) [solid — capture + live, 2026-09-04]
 `op 109 {64: model, 106: composite, 105: cab kind}` on the browse side, reply `104: nil`. HX Edit
 sends it **1162 times during a backup** — exactly the row count of the `.hxb`'s `UMDS`

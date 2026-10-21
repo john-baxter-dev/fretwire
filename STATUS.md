@@ -2,6 +2,22 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Backup keeps "Transferring data…" up until it is done (2026-10-20, issue #30).** The XL's owner
+saw the pedal's banner clear about ten seconds before `backup-device` finished, where HX Edit's stays
+up to the end, and pointed out that someone might unplug the pedal on seeing it go. They were right,
+and the reply on issue #5 ("HX Edit's own backup does the same") was wrong. The Sep 4 capture shows
+HX Edit opening **one** op-255 session and reading the IRs (12/11), the favorite records (113 ×2),
+the user defaults (109 ×1160) and every preset (op 4 ×126, sent bare) inside it, then one 254. We
+opened a session per section and swept the presets outside all of them. Our op-4 read also sent a
+browse-open per slot, and that is op 254, the session's close. `backup_device` now runs everything
+after the settings inside `in_transfer_session`. `in_ir_session` and `in_browse_prologue` defer to
+it, and op 4 goes out bare while it is open. If the first bare op 4 fails, the sweep leaves the
+session and retries the old way before falling back to the walk. **[solid]** on the owner's Stomp, same
+night: the banner held for the whole ~10 s run (the old code's dropped out about 7 s before the
+end), the fallback never fired, and the 126 preset documents matched an old-code run made minutes
+earlier. They differ only in the echoed txn and byte 3 of the 8-byte prefix, which reads `0x28`
+or, now and then, `0x44` under either code.
+
 **Helix LT owner captures: op 42 routes I/O nodes, op 46 removes a split (2026-10-18).** A
 second LT owner (fw 3.80) sent a backup and part of the capture round (A1, A2, B1, B2;
 `docs/helix-lt.md`). **op 42** sets an I/O node: `{98: slot, 51: input_type}` on an input and

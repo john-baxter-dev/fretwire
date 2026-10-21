@@ -69,6 +69,10 @@ pub struct Session {
     /// connect by the command layer, so the chain's star and the picker's Favorites category
     /// have them without a round trip per preset.
     favorites: Option<Vec<Favorite>>,
+    /// Set while a device backup holds one op-255 transfer session open around everything it
+    /// reads, as HX Edit's does — see [`Self::in_transfer_session`]. The readers that open their
+    /// own session or browse prologue run inside it instead, since their op 254 would close it.
+    in_transfer: bool,
 }
 
 /// One state on the edit-history timeline: the op-21-writable preset blob plus the label of the
@@ -348,6 +352,7 @@ impl Session {
                 closed: false,
                 probing: false,
                 favorites: None,
+                in_transfer: false,
                 device_lost: false,
                 last_raw: None,
                 history: Vec::new(),
@@ -3453,17 +3458,32 @@ impl Session {
     fn export_listed(
         &mut self,
         listings: &[SetlistListing],
+        progress: impl FnMut(ExportProgress) -> bool,
+    ) -> crate::Result<crate::backup::Backup> {
+        let start = self.sweep_start()?;
+        self.sweep_listed(start, listings, progress)
+    }
+
+    /// Where the user is, so a sweep can put them back afterwards. Confirmed, because the GUI's
+    /// export button is usually pressed right after clicking a preset, and the identity the device
+    /// reports in that window can still be the previous one — which would send the user somewhere
+    /// else entirely once the sweep finished.
+    ///
+    /// Still read on the op-4 path, cheaply and once: it costs one read, and it is what restores
+    /// the user's position if the sweep falls back to walking the pedal partway through. A device
+    /// backup reads it before opening its transfer session, where op 23 has never been tried.
+    fn sweep_start(&mut self) -> crate::Result<Option<fretwire_data::stream::PresetInfo>> {
+        Ok(self.read_preset_confirmed()?.1)
+    }
+
+    /// The sweep of [`Self::export_listed`], from a position [`Self::sweep_start`] read.
+    fn sweep_listed(
+        &mut self,
+        start: Option<fretwire_data::stream::PresetInfo>,
+        listings: &[SetlistListing],
         mut progress: impl FnMut(ExportProgress) -> bool,
     ) -> crate::Result<crate::backup::Backup> {
         let names = self.device().setlist_names();
-        // Note where we are so the sweep can put the user back afterwards. Confirmed, because the
-        // GUI's export button is usually pressed right after clicking a preset, and the identity
-        // the device reports in that window can still be the previous one — which would send the
-        // user somewhere else entirely once the sweep finished.
-        //
-        // Still read on the op-4 path, cheaply and once: it costs one read, and it is what restores
-        // the user's position if the sweep falls back to walking the pedal partway through.
-        let (_, start) = self.read_preset_confirmed()?;
         // Whether the device answers op 4. Assumed yes and cleared on the first refusal — see the
         // read below.
         let mut slot_read_works = true;
@@ -3489,7 +3509,20 @@ impl Session {
                 // back byte-identical to the loaded read, and the panel does not move. Never tried
                 // on a Floor, which is what `slot_read_works` is for.]
                 let (raw, info) = if slot_read_works {
-                    match self.read_preset_at(bank, index) {
+                    let mut read = self.read_preset_at(bank, index);
+                    if let Err(e) = &read
+                        && done == 0
+                        && self.in_transfer
+                    {
+                        // Bare op 4 inside the transfer session is HX Edit's shape but newer here
+                        // than op 4 behind its own prologue. Before calling op 4 missing and walking
+                        // the pedal, leave the session and ask again the way that has always worked;
+                        // the backup then finishes without the banner, as it used to.
+                        tracing::warn!(error = %e, "op 4 failed inside the transfer session; retrying outside it");
+                        self.end_transfer_session();
+                        read = self.read_preset_at(bank, index);
+                    }
+                    match read {
                         Ok(Some(raw)) => (raw, None),
                         // Nil means the slot is **unpopulated** — flash holds no document for it —
                         // and that is a slot HX Edit's own backup leaves out too. This used to
@@ -3621,7 +3654,8 @@ impl Session {
     /// [`Self::export_setlists`]). Presets last on purpose — the sweep is the long part and the
     /// only one that can walk the pedal, so a backup called off or lost partway through already
     /// holds everything else (issue #18). The parts are what HX Edit's backup carries, and what a
-    /// wiped pedal needs back — see [`Self::restore_device`].
+    /// wiped pedal needs back — see [`Self::restore_device`]. Everything after the settings runs in
+    /// one transfer session, so the pedal says "Transferring data…" until the last preset is read.
     ///
     /// `progress` is called once per item, with `total` covering the whole job from the first
     /// tick; returning `false` stops after the current item, and the file keeps what was read.
@@ -3694,99 +3728,111 @@ impl Session {
             }
         }
 
-        for info in &ir_slots {
-            let Some((info, blob)) = self.ir_export(info.index)? else {
-                // The directory said it was used; a slot emptied between the two reads is not
-                // worth failing the backup over.
-                tracing::warn!(
-                    slot = info.index,
-                    "IR slot emptied between the listing and the read"
-                );
-                continue;
-            };
-            backup.irs.push(crate::backup::BackupIr {
-                slot: info.index,
-                name: info.name.clone(),
-                blob,
-            });
-            done += 1;
-            if !progress(ExportProgress {
-                done,
-                total,
-                stage: "irs",
-                bank: 0,
-                setlist: "IRs",
-                name: &info.name,
-            }) {
-                return Ok(backup);
-            }
-        }
-
-        if favorites {
-            backup.favorites = self.read_favorites()?;
-            done += 1;
-            if !progress(ExportProgress {
-                done,
-                total,
-                stage: "favorites",
-                bank: 0,
-                setlist: "Favorites",
-                name: "favorites",
-            }) {
-                return Ok(backup);
-            }
-        }
-
-        if !ud_asks.is_empty() {
-            let symbols = &self.catalog.symbols;
-            let names: Vec<String> = ud_asks
-                .iter()
-                .map(|(model, kind)| {
-                    let sym = symbols
-                        .by_index(*model as usize)
-                        .map(|(s, _)| s)
-                        .unwrap_or("?");
-                    match kind {
-                        None => sym.to_string(),
-                        Some(k) if Some(*k) == self.cab_kind_micd() => format!("{sym} + mic'd cab"),
-                        Some(_) => format!("{sym} + cab"),
-                    }
-                })
-                .collect();
-            let mut i = 0;
-            let mut cancelled = false;
-            backup.user_defaults = self.read_user_defaults(&ud_asks, |_| {
+        // The sweep's start position is read before the session opens — see `sweep_start`.
+        let start = if listings.is_empty() {
+            None
+        } else {
+            self.sweep_start()?
+        };
+        // Everything from here to the last preset shares one transfer session, as HX Edit's backup
+        // does, so the pedal shows "Transferring data…" until the backup is done (issue #30).
+        self.in_transfer_session(|s| {
+            for info in &ir_slots {
+                let Some((info, blob)) = s.ir_export(info.index)? else {
+                    // The directory said it was used; a slot emptied between the two reads is not
+                    // worth failing the backup over.
+                    tracing::warn!(
+                        slot = info.index,
+                        "IR slot emptied between the listing and the read"
+                    );
+                    continue;
+                };
+                backup.irs.push(crate::backup::BackupIr {
+                    slot: info.index,
+                    name: info.name.clone(),
+                    blob,
+                });
                 done += 1;
-                let go = progress(ExportProgress {
+                if !progress(ExportProgress {
                     done,
                     total,
-                    stage: "user_defaults",
+                    stage: "irs",
                     bank: 0,
-                    setlist: "User defaults",
-                    name: &names[i],
-                });
-                i += 1;
-                cancelled |= !go;
-                go
-            })?;
-            if cancelled {
-                return Ok(backup);
+                    setlist: "IRs",
+                    name: &info.name,
+                }) {
+                    return Ok(backup);
+                }
             }
-        }
 
-        if !listings.is_empty() {
-            let before = done;
-            let sweep = self.export_listed(&listings, |p| {
-                progress(ExportProgress {
-                    done: before + p.done,
+            if favorites {
+                backup.favorites = s.read_favorites()?;
+                done += 1;
+                if !progress(ExportProgress {
+                    done,
                     total,
-                    ..p
-                })
-            })?;
-            backup.setlists = sweep.setlists;
-            backup.presets = sweep.presets;
-        }
-        Ok(backup)
+                    stage: "favorites",
+                    bank: 0,
+                    setlist: "Favorites",
+                    name: "favorites",
+                }) {
+                    return Ok(backup);
+                }
+            }
+
+            if !ud_asks.is_empty() {
+                let symbols = &s.catalog.symbols;
+                let names: Vec<String> = ud_asks
+                    .iter()
+                    .map(|(model, kind)| {
+                        let sym = symbols
+                            .by_index(*model as usize)
+                            .map(|(s, _)| s)
+                            .unwrap_or("?");
+                        match kind {
+                            None => sym.to_string(),
+                            Some(k) if Some(*k) == s.cab_kind_micd() => {
+                                format!("{sym} + mic'd cab")
+                            }
+                            Some(_) => format!("{sym} + cab"),
+                        }
+                    })
+                    .collect();
+                let mut i = 0;
+                let mut cancelled = false;
+                backup.user_defaults = s.read_user_defaults(&ud_asks, |_| {
+                    done += 1;
+                    let go = progress(ExportProgress {
+                        done,
+                        total,
+                        stage: "user_defaults",
+                        bank: 0,
+                        setlist: "User defaults",
+                        name: &names[i],
+                    });
+                    i += 1;
+                    cancelled |= !go;
+                    go
+                })?;
+                if cancelled {
+                    return Ok(backup);
+                }
+            }
+
+            if !listings.is_empty() {
+                let before = done;
+                let sweep = s.sweep_listed(start, &listings, |p| {
+                    progress(ExportProgress {
+                        done: before + p.done,
+                        total,
+                        ..p
+                    })
+                })?;
+                backup.setlists = sweep.setlists;
+                backup.presets = sweep.presets;
+            }
+            Ok(backup)
+        })
     }
 
     /// The favorites as last read, or nothing if they have not been (`refresh_favorites`).
@@ -3886,7 +3932,8 @@ impl Session {
     }
 
     /// The favorites the device holds, each with its record: op 112 for the list, op 113 per entry,
-    /// after one browse prologue and **not** inside a 255 transfer session. **Reads only.** A device
+    /// after one browse prologue and **not** inside a 255 transfer session — except in a device
+    /// backup, which holds one open on purpose (`in_transfer_session`). **Reads only.** A device
     /// that refuses op 112 has no favorites store and answers an empty list here, with a warning.
     pub fn read_favorites(&mut self) -> crate::Result<Vec<crate::backup::BackupFavorite>> {
         use fretwire_data::rmpv::Value;
@@ -4859,11 +4906,15 @@ impl Session {
         self.transport
             .drain_wire(std::time::Duration::from_millis(30), 128);
 
-        let txn = self.bump_txn();
-        self.edit_request_txn(cmd::OPEN, tlv(edit::browse_open(txn)), txn)?;
+        // Inside a backup's transfer session op 4 goes out bare, as HX Edit sends it there: the
+        // browse-open is op 254, which is also the session's close.
+        if !self.in_transfer {
+            let txn = self.bump_txn();
+            self.edit_request_txn(cmd::OPEN, tlv(edit::browse_open(txn)), txn)?;
 
-        let txn = self.bump_txn();
-        self.edit_request_txn(cmd::OPEN, tlv(edit::presets_open(txn)), txn)?;
+            let txn = self.bump_txn();
+            self.edit_request_txn(cmd::OPEN, tlv(edit::presets_open(txn)), txn)?;
+        }
 
         let txn = self.bump_txn();
         let first =
@@ -4913,17 +4964,63 @@ impl Session {
         self.transport
             .drain_wire(std::time::Duration::from_millis(30), 128);
 
+        // A backup's transfer session is already open, and this one's close would end it.
+        if self.in_transfer {
+            let out = f(self);
+            self.transport.drain();
+            return out;
+        }
+
         let txn = self.bump_txn();
         self.ir_request(cmd::OPEN, edit::ir_session_begin(txn), txn)?;
         let out = f(self);
+        self.send_session_end();
+        self.transport.drain();
+        out
+    }
+
+    /// Run `f` inside **one** op-255 transfer session that the readers it calls share — the shape
+    /// of HX Edit's backup, which opens 255 once, reads the IRs, favorite records, user defaults
+    /// and every preset (op 4) inside it, and sends 254 only after the last one.
+    ///
+    /// That session is what keeps "Transferring data…" on the pedal's screen, and it should stay
+    /// there until the backup is done: a backup that opened a session per section and swept the
+    /// presets outside any of them cleared the banner ten-odd seconds before it finished, which
+    /// invites someone to unplug a pedal mid-read (issue #30). [solid — from
+    /// `favorite_add_delete_backup.pcapng`: one 255, then 12/11, 113 ×2, 109 ×1160, 4 ×126, one 254]
+    fn in_transfer_session<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> crate::Result<T>,
+    ) -> crate::Result<T> {
+        self.transport.drain();
+        self.transport
+            .drain_wire(std::time::Duration::from_millis(30), 128);
+
+        let txn = self.bump_txn();
+        self.ir_request(cmd::OPEN, edit::ir_session_begin(txn), txn)?;
+        self.in_transfer = true;
+        let out = f(self);
+        self.end_transfer_session();
+        self.transport.drain();
+        out
+    }
+
+    /// Close the transfer session [`Self::in_transfer_session`] opened, early — before anything
+    /// that has only ever been run outside one. A no-op once it is closed.
+    fn end_transfer_session(&mut self) {
+        if std::mem::take(&mut self.in_transfer) {
+            self.send_session_end();
+        }
+    }
+
+    /// Send op 254. The close is sent whether or not the session's work succeeded.
+    fn send_session_end(&mut self) {
         let txn = self.bump_txn();
         let closed = self.ir_request(cmd::STREAM, edit::ir_session_end(txn), txn);
         if let Err(e) = closed {
             // Worth a line but not worth losing the result over: the session times out on its own.
             tracing::warn!(error = %e, "IR session did not close cleanly");
         }
-        self.transport.drain();
-        out
     }
 
     /// Run `f` after the plain **browse prologue** — a drain and one op-254 browse-open — with no
@@ -4956,8 +5053,11 @@ impl Session {
         self.transport
             .drain_wire(std::time::Duration::from_millis(30), 128);
 
-        let txn = self.bump_txn();
-        self.ir_request(cmd::OPEN, edit::browse_open(txn), txn)?;
+        // Inside a backup's transfer session the banner is wanted, and this op 254 would close it.
+        if !self.in_transfer {
+            let txn = self.bump_txn();
+            self.ir_request(cmd::OPEN, edit::browse_open(txn), txn)?;
+        }
         let out = f(self);
         self.transport.drain();
         out

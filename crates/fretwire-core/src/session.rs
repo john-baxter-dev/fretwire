@@ -5181,7 +5181,9 @@ impl Session {
     /// likely the chunked-reply bug [`Self::browse_reply_bytes`] fixed on 09-05. Unconfirmed, so
     /// an empty directory on a POD Go still falls back to the scan.
     pub fn ir_directory(&mut self) -> crate::Result<Vec<fretwire_data::ir::IrSlot>> {
-        let dir = self.in_ir_session(Self::ir_commit)?;
+        // Behind the browse prologue, as HX Edit reads it at connect: inside a 255 session the
+        // read flashes "Transferring data…", once at the start of every backup (issue #30).
+        let dir = self.in_browse_prologue(Self::ir_commit)?;
         if dir.is_empty() && self.device().is_pod_go() {
             tracing::info!(
                 "the IR directory (op 13) listed nothing on a POD Go — scanning the slots instead"
@@ -5659,6 +5661,8 @@ impl Session {
             tracing::info!("skipping session close — the device stopped responding");
             return Ok(());
         }
+        // A transfer session left open keeps "Transferring data…" on the pedal after we are gone.
+        self.end_transfer_session();
         for (src, dst) in [channel::STATUS, channel::EDIT, channel::PRIMARY] {
             let seq = self.next_seq(src);
             let arg = self.cur_arg(src);

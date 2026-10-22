@@ -1432,6 +1432,23 @@ fn main() -> Result<()> {
                     ", the user defaults"
                 }
             );
+            // The backup holds a transfer session open from the IRs to the last preset, and a
+            // process killed inside it leaves the pedal on "Transferring data…" until it is
+            // power-cycled (issue #30). So the first Ctrl-C asks the backup to stop after the
+            // current read, which closes the session; a second one exits regardless.
+            let interrupted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            {
+                let interrupted = interrupted.clone();
+                ctrlc::set_handler(move || {
+                    if interrupted.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                        std::process::exit(130);
+                    }
+                    eprintln!(
+                        "stopping after the current read so the pedal is released — \
+                         Ctrl-C again to quit now (the pedal then needs a power cycle)"
+                    );
+                })?;
+            }
             let mut unpopulated = 0usize;
             let backup = s.backup_device(
                 &banks,
@@ -1441,9 +1458,15 @@ fn main() -> Result<()> {
                 !no_user_defaults,
                 |p| {
                     print_sweep_line(&p, &mut unpopulated);
-                    true
+                    !interrupted.load(std::sync::atomic::Ordering::SeqCst)
                 },
             )?;
+            if interrupted.load(std::sync::atomic::Ordering::SeqCst) {
+                drop(s);
+                anyhow::bail!(
+                    "backup interrupted — the pedal is released, and {out} was not written"
+                );
+            }
             std::fs::write(&out, backup.to_json())?;
             println!(
                 "wrote {out}: {} presets{}, {} IRs, {} settings, {} favorites, {} user defaults (format v{})",

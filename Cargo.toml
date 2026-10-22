@@ -58,3 +58,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # rather than hand-maintained (it had already drifted), and makes a bad numeric argument an error
 # instead of a silent default — which on `save`/`rename` meant writing to the wrong setlist.
 clap = { version = "4", features = ["derive"] }
+# Ctrl-C during a backup stops it between reads, so the transfer session still closes — killed
+# outright, the pedal stays on "Transferring data…" until it is power-cycled (issue #30).
+ctrlc = "3.4"

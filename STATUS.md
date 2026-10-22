@@ -18,6 +18,18 @@ end), the fallback never fired, and the 126 preset documents matched an old-code
 earlier. They differ only in the echoed txn and byte 3 of the 8-byte prefix, which reads `0x28`
 or, now and then, `0x44` under either code.
 
+**Backup follow-up: Ctrl-C releases the pedal, and no flash at the start (2026-10-21, issue #30).**
+The XL's owner confirmed the banner fix, then found two things. First, Ctrl-C mid-backup left the
+pedal on "Transferring data…" until a power cycle. The process died inside the transfer session
+without sending its 254, and with the session now ~10 s long it was easy to hit. The CLI's
+`backup-device` now catches the first Ctrl-C and stops after the current read, so the session
+closes; it writes no file. A second Ctrl-C quits at once and says the pedal will need a power
+cycle. `Session::close` also ends a transfer session left open. Second, the banner flashed once
+before the backup's session: `ir_directory` opened its own short 255. It now reads op 13 behind the
+browse prologue, as HX Edit does at connect. **[solid]** on the owner's Stomp: a SIGINT during the
+preset sweep left the pedal back to normal with no power cycle, and a full run showed no flash
+before the banner and still read the IR.
+
 **Helix LT owner captures: op 42 routes I/O nodes, op 46 removes a split (2026-10-18).** A
 second LT owner (fw 3.80) sent a backup and part of the capture round (A1, A2, B1, B2;
 `docs/helix-lt.md`). **op 42** sets an I/O node: `{98: slot, 51: input_type}` on an input and

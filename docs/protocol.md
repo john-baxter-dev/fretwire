@@ -1390,9 +1390,10 @@ The banner therefore scales with the favorite count: the reporter's 28-favorite 
 single connect, where the owner's two-favorite Stomp needed ten connects in a row to be sure of it.
 This is also why HX Edit's connect prologue sends op 112 straight after the 254/0 browse-open and
 saves the 255 session for the backup sweep. `Session::read_favorites` runs through
-`in_browse_prologue` for exactly this reason. Op 13's IR directory is read the same way by HX Edit
-and is still wrapped in a session here — the same banner, on an explicit `ir-list` where it is less
-surprising, and untested.
+`in_browse_prologue` for exactly this reason. Op 13's IR directory is read the same way by HX Edit,
+and `Session::ir_directory` now does too. In a session it flashed the banner once at the start of
+every backup, ahead of the backup's own session [solid — issue #30; the flash is gone and the
+directory reads the same, live on the owner's Stomp, 2026-10-21].
 
 **Both replies can span frames, and must be reassembled** [solid — issue #5, 2026-09-05]. They are
 ordinary chunked streams: the first 8 bytes declare the length, and a reader that takes the frame

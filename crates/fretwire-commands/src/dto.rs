@@ -292,6 +292,8 @@ pub struct BlockDto {
     pub paired_symbolic_id: Option<String>,
     pub paired_category: Option<i64>,
     pub paired_params: Vec<ParamDto>,
+    /// A dual cab (`Cab › Dual`): both of its cabs are changed from the Cab (Dual) list.
+    pub dual_cab: bool,
     /// The favorite this block is — same model, cab and values — by name, or `null`. The chain
     /// draws the star for it, as the pedal does. Stamped by the command layer from the favorites
     /// read at connect.
@@ -322,6 +324,7 @@ impl From<&EditorBlock> for BlockDto {
             paired_symbolic_id: b.paired_symbolic_id.clone(),
             paired_category: b.paired_category,
             paired_params: b.paired_params.iter().map(ParamDto::from).collect(),
+            dual_cab: b.dual_cab,
             favorite: None,
         }
     }

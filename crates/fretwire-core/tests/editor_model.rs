@@ -5,7 +5,7 @@
 //! is present (`have_bundled_data`, set by build.rs).
 #![cfg(have_bundled_data)]
 
-use fretwire_core::editor::Catalog;
+use fretwire_core::editor::{CATEGORY_DUAL_CAB, Catalog};
 use fretwire_data::stream::ParamValue;
 use std::path::PathBuf;
 
@@ -435,7 +435,8 @@ fn input_node_carries_the_pad_as_a_preset_setting() {
 /// look alike — a duplicate row is unusable by definition, since the user cannot tell which is
 /// which. Both failed in the field on 2026-08-01: the Cab (Mic+IR) list carried all 46 cabs twice
 /// (the second copy being HX Edit's `Cab › Dual` twin, `*WithPan`), and picking a duplicate was
-/// refused by the device — codes `-306` and `-21` both seen — so the block snapped back.
+/// refused by the device — codes `-306` and `-21` both seen — so the block snapped back. The twins
+/// now have a list of their own, Cab (Dual), and are only ever offered as a pair.
 #[test]
 fn the_picker_never_offers_a_model_the_device_refuses() {
     let cat = catalog();
@@ -445,13 +446,18 @@ fn the_picker_never_offers_a_model_the_device_refuses() {
             !choices.is_empty(),
             "category {name:?} ({id}) is listed but offers nothing"
         );
-        assert!(
-            !choices
-                .iter()
-                .any(|c| c.symbolic_id.starts_with("HD2_CabMicIr_")
-                    && c.symbolic_id.ends_with("WithPan")),
-            "category {name:?} offers a dual-cab twin the device refuses to swap to"
-        );
+        let is_twin = |c: &&fretwire_core::editor::ModelChoice| c.symbolic_id.ends_with("WithPan");
+        if id == CATEGORY_DUAL_CAB {
+            assert!(
+                choices.iter().all(|c| is_twin(&c)),
+                "Cab (Dual) lists a single cab"
+            );
+        } else {
+            assert!(
+                !choices.iter().any(|c| is_twin(&c)),
+                "category {name:?} offers a dual-cab twin outside Cab (Dual)"
+            );
+        }
         // One row per model, and (Match G25/H30 aside — Line 6's own `HelixModelDefs.bin` gives
         // both the same `name`) one model per visible label.
         let mut ids: Vec<&str> = choices.iter().map(|c| c.symbolic_id.as_str()).collect();
@@ -559,4 +565,70 @@ fn category_colours_join_by_name_not_by_id() {
 
     // An id that is not a category has no colour rather than a default one.
     assert_eq!(cat.category_color(999), None);
+}
+
+/// Cab (Dual) — HX Edit's `Cab › Dual`. Every one of the 46 `*WithPan` cabs, each arriving paired
+/// with itself (the pedal refuses a dual with only one cab named), costed as two cabs, and each
+/// with a plain single-cab twin to add first, since op 39 refuses a `*WithPan` model. [issue #31]
+#[test]
+fn the_dual_cab_list_offers_every_twin_as_a_pair() {
+    let cat = catalog();
+    assert!(
+        cat.categories()
+            .iter()
+            .any(|&(id, name)| id == CATEGORY_DUAL_CAB && name == "Cab (Dual)")
+    );
+    let duals = cat.models_in_category(CATEGORY_DUAL_CAB, None);
+    assert_eq!(duals.len(), 46);
+    let singles = cat.models_in_category(19, None);
+    for d in &duals {
+        assert_eq!(d.default_paired_index, Some(d.index), "{}", d.name);
+        let single = cat.dual_cab_single(d.index).expect("a single-cab twin");
+        let twin = singles
+            .iter()
+            .find(|c| c.index == single)
+            .unwrap_or_else(|| panic!("{}: twin {single} is not in the single-cab list", d.name));
+        assert_eq!(format!("{}WithPan", twin.symbolic_id), d.symbolic_id);
+        assert_eq!(
+            d.dsp_load,
+            cat.model_load_by_index(d.index).map(|l| 2.0 * l)
+        );
+    }
+    // Only a dual has a single twin.
+    assert!(
+        singles
+            .iter()
+            .all(|c| cat.dual_cab_single(c.index).is_none())
+    );
+}
+
+/// A device-written dual cab reads back as one: both halves named, and flagged so the GUI changes
+/// either cab from Cab (Dual). An amp+cab block is not a dual.
+#[test]
+fn a_dual_cab_block_is_flagged_as_one() {
+    let cat = catalog();
+    let dual = cat
+        .load_preset(&data("pairing_dual_micir_cab.msgpack.bin"))
+        .unwrap();
+    let b = dual.block(1).expect("slot 1");
+    assert!(b.dual_cab);
+    assert_eq!(b.model_name, "4x12 Cali V30");
+    assert_eq!(b.paired_model_name.as_deref(), Some("2x12 Jazz Rivet"));
+    let amp = cat
+        .load_preset(&data("pairing_amp_micir_cab.msgpack.bin"))
+        .unwrap();
+    assert!(!amp.block(1).expect("slot 1").dual_cab);
+}
+
+/// The HX Stomp's two-Mic+IR-cab limit, counted the way a refusal is explained: the slot being
+/// edited drops out, the incoming refs come in. In the amp+cab fixture the amp's cab is one, so a
+/// dual anywhere else makes three — and the same dual replacing the amp+cab block makes two.
+#[test]
+fn mic_ir_cabs_are_counted_across_the_preset() {
+    let cat = catalog();
+    let stream = data("pairing_amp_micir_cab.msgpack.bin");
+    let dual = cat.models_in_category(CATEGORY_DUAL_CAB, None)[0].index;
+    assert_eq!(cat.mic_ir_cabs_after(&stream, 5, &[-1, -1]), Some(1));
+    assert_eq!(cat.mic_ir_cabs_after(&stream, 5, &[dual, dual]), Some(3));
+    assert_eq!(cat.mic_ir_cabs_after(&stream, 1, &[dual, dual]), Some(2));
 }

@@ -2,6 +2,20 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**Dual cabs can be added and changed, and the Stomp's two-cab limit is named (2026-10-22, issue
+#31).** A user could edit a dual cab's mics but not add one or change either cab. Both are now
+done through the op-40 swap we already send, naming both `*WithPan` cabs. They have a picker list
+of their own, Cab (Dual), and on a dual block both "Change model" and "Change cab" open it. A dual
+is added as its single-cab twin and then swapped to the pair, because op 39 refuses a `*WithPan`
+model; if the swap is refused the half-made block is deleted. What made dual cabs look unsupported
+since 2026-08-01 was mostly a limit: the **HX Stomp runs at most two Mic+IR cabs per preset**, a
+dual is two, and the third is refused with `-306`, the "out of DSP" code, whatever the meter says.
+`Device::mic_ir_cabs` records it (`Some(2)` on the Stomp, unmeasured elsewhere), and a `-306` that
+it explains now says so. **[solid]** on the owner's Stomp (fw 3.71), edit buffer only: single → dual,
+both cabs changed on a dual, the limit hit as a dual's second cab, as an amp's pair and as a
+standalone cab, and the new add and refusal paths run from the CLI. Table in `docs/protocol.md`.
+431 tests, clippy clean.
+
 **Backup keeps "Transferring data…" up until it is done (2026-10-20, issue #30).** The XL's owner
 saw the pedal's banner clear about ten seconds before `backup-device` finished, where HX Edit's stays
 up to the end, and pointed out that someone might unplug the pedal on seeing it go. They were right,

@@ -175,6 +175,14 @@ pub struct Device {
     /// override (`ui/src/lib/numbering.svelte.js`) only overrules it once the user sets one; this
     /// still renders the banked form where no device has been read, that being how the pedal ships.
     pub presets_per_bank: Option<usize>,
+    /// The most **Mic+IR cabs** (`HD2_CabMicIr_…`) one preset may hold, counting each half of a
+    /// dual cab and an amp's paired cab. Past it the pedal refuses the add or swap with `-306` —
+    /// the code it also uses for "out of DSP", whatever the DSP meter says. Legacy `HD2_Cab…` cabs
+    /// do not count. `None` where nobody has measured it; nothing is enforced from this, it only
+    /// lets a refusal be explained.
+    /// [solid for the Stomp — 2026-10-22, fw 3.71: a third cab refused as a dual's second half,
+    /// as an amp's pair and as a standalone block, with a quarter of the DSP free; issue #31]
+    pub mic_ir_cabs: Option<usize>,
     /// How much of the above is confirmed from real traffic.
     pub support: Support,
 }
@@ -228,6 +236,7 @@ pub const DEVICES: &[Device] = &[
         // 126 = 42 banks of three, which is what the three footswitches select.
         // [solid — read off the pedal's screen, 2026-08-20]
         presets_per_bank: Some(3),
+        mic_ir_cabs: Some(2),
         support: Support::Verified,
     },
     Device {
@@ -257,6 +266,7 @@ pub const DEVICES: &[Device] = &[
         // guess here has two plausible answers and no evidence — and the wrong one mislabels every
         // preset on the unit. Needs one look at a Floor's screen.
         presets_per_bank: None,
+        mic_ir_cabs: None,
         support: Support::Verified,
     },
     Device {
@@ -298,6 +308,7 @@ pub const DEVICES: &[Device] = &[
         // from the Stomp's captured one in exactly one byte, the slot number. The last unknown
         // field, `preset_device_id`, arrived with their backup. What remains open is geometry, not
         // protocol: the fixed chain's add/move/delete semantics. [solid — 2026-08-28, issue #15]
+        mic_ir_cabs: None,
         support: Support::Verified,
     },
     Device {
@@ -330,6 +341,7 @@ pub const DEVICES: &[Device] = &[
         // a parameter set, a bypass and a model swap each read back exactly, and a revert restored
         // the preset byte-for-byte (fw 2.50). Reads, the IR slot scan and a full device backup
         // also ran on fw 1.21 before the update. [solid — 2026-10-18]
+        mic_ir_cabs: None,
         support: Support::Verified,
     },
     Device {
@@ -373,6 +385,7 @@ pub const DEVICES: &[Device] = &[
         // re-read. No HX Edit capture from a Rack exists, and none is needed: it is `P21`, so it
         // takes the Floor's builders, which were checked byte-for-byte against a Floor's own
         // traffic, and the Rack accepted them. [2026-10-14, issue #24]
+        mic_ir_cabs: None,
         support: Support::Verified,
     },
     Device {
@@ -415,6 +428,7 @@ pub const DEVICES: &[Device] = &[
         // physical LT, but no edit has ever been sent to one. That is more than `Untested` ("only
         // the USB IDs are known") describes — the reads are real traffic, checked against real
         // parsers — and less than `Verified`, which means the *builders* have been reconciled too.
+        mic_ir_cabs: None,
         support: Support::Reported,
     },
     Device {
@@ -456,6 +470,7 @@ pub const DEVICES: &[Device] = &[
         // captures are reads, decoded and reconciled, but no *builder* has been checked against an
         // XL byte-for-byte, which is what `Verified` means here. What they did settle is the
         // geometry above and the controller table's size — see `docs/preset-format.md`.
+        mic_ir_cabs: None,
         support: Support::Reported,
     },
     Device {
@@ -475,6 +490,7 @@ pub const DEVICES: &[Device] = &[
         // was read off a screen, nothing was pasted back — so it fills in none of the fields above.
         // It is still `Reported` rather than `Untested`: "a user has this working" is real
         // information about the protocol, confirmed by outcome. [2026-08-24 owner report]
+        mic_ir_cabs: None,
         support: Support::Reported,
     },
 ];

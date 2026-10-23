@@ -931,10 +931,62 @@ impl Session {
         paired_index: i64,
     ) -> crate::Result<()> {
         self.guard_pod_go_swap(slot, model_index, paired_index)?;
+        // A dual cab is never half a pair — the pedal refuses one with `26: -1` — so a dual model
+        // named alone gets itself as the second cab, as the picker's Cab (Dual) list does.
+        let paired_index =
+            if paired_index < 0 && self.catalog.dual_cab_single(model_index).is_some() {
+                model_index
+            } else {
+                paired_index
+            };
         let txn = self.bump_txn();
         let body = edit::swap_model(slot, model_index, paired_index, txn);
-        self.send_edit(body)?;
+        self.send_edit(body)
+            .map_err(|e| self.explain_cab_limit(e, slot, &[model_index, paired_index]))?;
         Ok(())
+    }
+
+    /// Re-word a `-306` refusal that the device's Mic+IR cab limit explains
+    /// ([`fretwire_protocol::Device::mic_ir_cabs`]): the pedal answers with the same code it uses for
+    /// "out of DSP", so the default gloss sends the user hunting for DSP they already have. The
+    /// count is [`Catalog::mic_ir_cabs_after`] on the last-read preset, read now if there is none
+    /// (the CLI's add and swap go straight to the edit). Anything else passes through untouched —
+    /// so does every refusal on a device whose limit we have not measured.
+    fn explain_cab_limit(
+        &mut self,
+        err: crate::Error,
+        slot: i64,
+        incoming: &[i64],
+    ) -> crate::Error {
+        let crate::Error::Rejected(msg) = &err else {
+            return err;
+        };
+        let (Some(limit), Some((head, _))) = (
+            self.device().mic_ir_cabs,
+            msg.split_once(" — device code -306"),
+        ) else {
+            return err;
+        };
+        let head = head.to_string();
+        if self.last_raw.is_none() {
+            let _ = self.read_preset_raw();
+        }
+        let Some(count) = self
+            .last_raw
+            .as_deref()
+            .and_then(|raw| self.catalog.mic_ir_cabs_after(raw, slot, incoming))
+        else {
+            return err;
+        };
+        if count <= limit {
+            return err;
+        }
+        crate::Error::Rejected(format!(
+            "{head} — device code -306 (the {} holds at most {limit} Mic+IR cabs in a preset, \
+             counting both halves of a dual cab and an amp's paired cab, and this would make \
+             {count} — remove one, or use a legacy cab, which does not count)",
+            self.device().name
+        ))
     }
 
     /// The [`Self::swap_model`] guard for the POD Go's mandated wah/volume blocks (see there).
@@ -1069,11 +1121,25 @@ impl Session {
                 .into());
             }
         }
+        // A dual cab is added the same two-step way, but even its bare first step cannot name the
+        // dual model — op 39 refuses a `*WithPan` cab on its own — so the block starts as the
+        // plain single cab and the swap turns it into the pair. [solid — 2026-10-22, HX Stomp]
+        let dual_single = self.catalog.dual_cab_single(model_index);
         let txn = self.bump_txn();
-        let body = edit::add_block(slot, model_index, -1, txn);
-        self.send_edit(body)?;
-        if paired_index >= 0 {
-            self.swap_model(slot, model_index, paired_index)?;
+        let body = edit::add_block(slot, dual_single.unwrap_or(model_index), -1, txn);
+        self.send_edit(body)
+            .map_err(|e| self.explain_cab_limit(e, slot, &[model_index, paired_index]))?;
+        if paired_index >= 0 || dual_single.is_some() {
+            let paired = self.swap_model(slot, model_index, paired_index);
+            // A refused amp+cab still leaves a usable amp, but a refused dual would leave a single
+            // cab nobody asked for — and that cab counts against the Mic+IR limit that most likely
+            // refused the pair, so the next try would fail too. Take it back out — but only on a
+            // refusal: after a timeout the pedal may well have made the dual, and deleting it then
+            // would throw away exactly what was asked for.
+            if matches!(paired, Err(crate::Error::Rejected(_))) && dual_single.is_some() {
+                let _ = self.delete_block(slot);
+            }
+            paired?;
         }
         Ok(())
     }

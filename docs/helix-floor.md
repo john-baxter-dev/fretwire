@@ -1452,7 +1452,10 @@ in some states (both seen on the Stomp; the Floor log `fretwire18.log` has six o
 refusals from the tester working through the cab list). The refusal is the invariant, not the code.
 
 They are now excluded from the swap list — editing a dual cab needs two model refs and the pan
-params, which is a feature, not this fix. Name resolution is deliberately untouched so a preset that
+params, which is a feature, not this fix. *(Since done, issue #31: they have a Cab (Dual) list of
+their own. The pedal takes a dual through an ordinary op-40 swap naming both cabs; what refused the
+singles-made-dual here was a swap naming one cab, and, on the Stomp, its two-Mic+IR-cab limit —
+see `docs/protocol.md`.)* Name resolution is deliberately untouched so a preset that
 already contains one still reads back with its own name and params. All 46 remaining entries were
 swapped onto a real block on hardware: **0 refused**.
 

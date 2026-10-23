@@ -164,15 +164,14 @@ know what HX Edit actually sends — plain op 40 to the other symbol index, or s
 Dump before and after the first one (`variant_before.bin` / `variant_after.bin`) so we can diff what
 changed in the block record besides the model ref.
 
-## E. A two-cab (`Cab › Dual`) block
+## E. A two-cab (`Cab › Dual`) block — *done without HX Edit, skip unless curious*
 
-**Unblocks:** dual-cab support, which is currently absent and probably reads back as half of itself.
-Step 1 below is now part of section A — if you did that, the dump exists and only the captures here
-are still open.
-
-There are 46 `HD2_CabMicIr_*WithPan` symbols and the pedal refuses an in-place swap to any of them
-(`-306`, sometimes `-21`), so HX Edit must create them some other way. We have never decoded a real
-one — our only "dual" fixture is a dual *amp*.
+**Resolved 2026-10-22 (issue #31).** A dual reads back whole (`pairing_dual_micir_cab`), and the
+pedal builds and edits one through the op-40 swap we already send, naming both `*WithPan` cabs. The
+refusals that made it look impossible were swaps naming only one cab and the HX Stomp's
+two-Mic+IR-cab limit (see `docs/protocol.md`). The captures below would only confirm HX Edit does
+the same; `dualcab_pan_left` would still show which half a Pan edit addresses, which our builder
+already gets right (`26` = 0 for cab A, 1 for cab B).
 
 1. **`dualcab.bin` — the dump matters most.** Build a preset with a `Cab › Dual` block in HX Edit,
    save it, then dump it from Linux. Even with no capture at all this tells us where the second

@@ -52,6 +52,9 @@
     onAssignTravel,
   } = $props();
 
+  // The synthetic Cab (Dual) picker category (`editor::CATEGORY_DUAL_CAB`).
+  const DUAL_CAB = 101;
+
   // The device's footswitch colour palette, by wire index (layout key `16` / `@fs_customcolor`).
   // The names are Line 6's own — the `footswitchLED` control in HelixControls.json, whose enum
   // ordinals match the wire values (0 = Auto Color, the virgin default; 11 = Off). Confirmed by
@@ -564,13 +567,18 @@
         title="Change model"
         variant={block.variant}
         currentSymbolicId={block.symbolic_id}
-        initialCategory={block.category}
+        initialCategory={block.dual_cab ? DUAL_CAB : block.category}
         remaining={swapRemaining}
         {budget}
-        onpick={(idx, defaultPaired) => {
+        onpick={(idx, defaultPaired, category) => {
           swapping = false;
-          // An Amp+Cab pick brings its own matched cab; otherwise keep the current pairing.
-          onSwap(block.slot, idx, defaultPaired ?? block.paired_index ?? -1);
+          // An Amp+Cab pick brings its own matched cab; otherwise keep the current pairing. A dual
+          // cab keeps its second cab only for another dual — the pedal refuses a dual paired with
+          // anything else, so any other pick leaves the pair behind.
+          const paired = block.dual_cab
+            ? category === DUAL_CAB ? block.paired_index : (defaultPaired ?? -1)
+            : (defaultPaired ?? block.paired_index ?? -1);
+          onSwap(block.slot, idx, paired);
         }}
         oncancel={() => (swapping = false)}
       />
@@ -582,7 +590,7 @@
       <ModelPicker
         title="Change cab"
         currentSymbolicId={block.paired_symbolic_id}
-        initialCategory={block.paired_category ?? 19}
+        initialCategory={block.dual_cab ? DUAL_CAB : (block.paired_category ?? 19)}
         lockCategory
         remaining={swapRemaining}
         {budget}

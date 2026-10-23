@@ -112,6 +112,7 @@ const CATEGORY_NAMES = {
   1: "Amp", 2: "Cab", 3: "Distortion", 4: "Dynamics", 7: "Pitch/Synth",
   8: "Modulation", 9: "Delay", 10: "Reverb", 11: "Wah", 14: "EQ", 17: "Volume/Pan",
   100: "Amp+Cab", // synthetic: amps pre-paired with their suggested cab (editor::CATEGORY_AMP_CAB)
+  101: "Cab (Dual)", // synthetic: the dual-cab twins, each paired with itself (editor::CATEGORY_DUAL_CAB)
 };
 
 let _mi = 1000;
@@ -139,6 +140,11 @@ const CATALOG = [
   model("cab_112", "1x12 Field Coil", 2, PARAMS.cab, 4.0),
   model("cab_212", "2x12 Double C12N", 2, PARAMS.cab, 4.5),
   model("cab_412", "4x12 Greenback 25", 2, PARAMS.cab, 5.0),
+  // Dual-cab twins (the real `HD2_CabMicIr_*WithPan`): same names as the singles, listed only under
+  // the synthetic Cab (Dual) category, and a dual block is two of them.
+  { ...model("cab_112_dual", "1x12 Field Coil", 2, PARAMS.cab, 4.0), dual: true },
+  { ...model("cab_212_dual", "2x12 Double C12N", 2, PARAMS.cab, 4.5), dual: true },
+  { ...model("cab_412_dual", "4x12 Greenback 25", 2, PARAMS.cab, 5.0), dual: true },
   // Reverb
   model("reverb_glitz", "Glitz", 10, PARAMS.reverb, 18.0),
   model("reverb_ganymede", "Ganymede", 10, PARAMS.reverb, 22.0),
@@ -901,6 +907,7 @@ function blockDto(p, slot, e) {
     paired_model_name: e.paired_model_name, paired_index: e.paired_index,
     paired_symbolic_id: cab?.symbolic_id ?? null, paired_category: cab?.category ?? null,
     paired_params: clone(e.paired_params),
+    dual_cab: !!findModel(e.modelIndex)?.dual,
     favorite: e.favorite ?? null,
   };
 }
@@ -1543,6 +1550,8 @@ const HANDLERS = {
   },
   swap_model: ({ slot, modelIndex, pairedIndex }) => {
     const md = findModel(modelIndex);
+    // Like Session::swap_model: a dual cab named alone is paired with itself.
+    if (md?.dual && pairedIndex < 0) pairedIndex = md.index;
     const e = current.slots[slot];
     if (md && e && e.kind === "effect") {
       // Re-sending the same model (the change-cab flow) keeps the block's knob values; a real swap
@@ -1596,6 +1605,7 @@ const HANDLERS = {
   add_block: ({ modelIndex, pairedIndex }) => {
     // Like Session::add_block_append: end of row A first, then any free A slot, then row B.
     const md = findModel(modelIndex);
+    if (md?.dual && pairedIndex < 0) pairedIndex = md.index;
     const cab = pairedIndex >= 0 ? findModel(pairedIndex) : null;
     // Append into the first DSP with room (row A first, then row B) — DSP 0 preferred.
     let free = null;
@@ -1613,6 +1623,7 @@ const HANDLERS = {
   },
   add_block_at: ({ slot, modelIndex, pairedIndex }) => {
     const md = findModel(modelIndex);
+    if (md?.dual && pairedIndex < 0) pairedIndex = md.index;
     const cab = pairedIndex >= 0 ? findModel(pairedIndex) : null;
     if (current.slots[slot]) throw new Error(`slot ${slot} is not an empty grid slot (refusing add — it would overwrite)`);
     if (md && editSlots(baseOf(slot)).includes(slot)) current.slots[slot] = makeBlock(md.symbolic_id, { cab: cab?.symbolic_id });
@@ -1853,7 +1864,7 @@ const HANDLERS = {
   split_types: () => clone(SPLIT_TYPES),
   categories: () => {
     const ids = [...new Set(CATALOG.map((m) => m.category))].sort((a, b) => a - b);
-    ids.push(100); // synthetic Amp+Cab
+    ids.push(100, 101); // synthetic Amp+Cab and Cab (Dual)
     return ids
       .map((id) => ({
         id,
@@ -1876,7 +1887,13 @@ const HANDLERS = {
         };
       });
     }
-    return CATALOG.filter((m) => m.category === category).map((m) => ({
+    if (category === 101) {
+      return CATALOG.filter((m) => m.dual).map((m) => ({
+        index: m.index, symbolic_id: m.symbolic_id, name: m.name, category: 101,
+        variant: m.variant, dsp_load: 2 * m.dsp_load, default_paired_index: m.index,
+      }));
+    }
+    return CATALOG.filter((m) => m.category === category && !m.dual).map((m) => ({
       index: m.index, symbolic_id: m.symbolic_id, name: m.name,
       category: m.category, variant: m.variant, dsp_load: m.dsp_load, default_paired_index: null,
     }));

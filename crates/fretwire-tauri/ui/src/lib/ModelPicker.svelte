@@ -112,7 +112,7 @@
         title={tooBig
           ? `Needs ${pct(m.dsp_load ?? 0).toFixed(1)}% DSP; only ${pct(remaining).toFixed(1)}% is free. Remove or simplify a block to make room.`
           : m.name}
-        onclick={() => (m.favorite != null ? onpickfavorite(m.favorite) : onpick(m.index, m.default_paired_index ?? null))}
+        onclick={() => (m.favorite != null ? onpickfavorite(m.favorite) : onpick(m.index, m.default_paired_index ?? null, m.category ?? categoryId))}
       >
         <ModelIcon
           symbolicId={m.symbolic_id}

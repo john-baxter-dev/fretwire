@@ -436,14 +436,37 @@ for that target, so the code looks like "wrong shape for this thing" rather than
 
 | code | seen on | meaning [hypothesis] |
 |---:|---|---|
-| `-21` | op 39 `add_block` carrying a `paired_index`; op 40 swapping to a `*WithPan` twin | a model-ref the op will not take for that target |
+| `-21` | op 39 `add_block` carrying a `paired_index`; op 40 naming a `*WithPan` dual-cab model with no second cab (`26: -1`), in some device states | a model-ref the op will not take for that target |
 | `-3` | op 30 `set_value` writing a split node's `bypass` param; op 30 sending the **wrong wire type** for the param; op 30 addressing a param **past the model's symbol list** | that parameter is not writable *as asked* — wrong op, wrong type, or no such index |
-| `-306` | op 40 swapping to a model the DSP has no room for; op 40 swapping any block to a `*WithPan` dual-cab twin | **out of DSP** — see below. The dual-cab twins are a separate case (a different block type, not an in-place swap target) that answers `-21` in some device states, so there treat the refusal, not the code, as the signal |
+| `-306` | op 40 / op 39 to a model the DSP has no room for; either one taking the preset past the **Mic+IR cab limit** (two on the HX Stomp); op 39 adding a `*WithPan` model; op 40 naming one with `26: -1` | **out of DSP**, or **out of Mic+IR cabs** — both below. The code does not say which; the preset does |
 
 The `-3` case is worth knowing about because `bypass` **is** a real entry in the split's stored param
 array, and the four split models are the only ones in the whole catalog (4 of 681) that carry it. So
 the editor will happily offer it as a knob; `Session::set_param` now recognises it and sends op 41
 instead. [solid — 2026-07-31, two op-30 writes to a Split Y's bypass, both refused with `-3`]
+
+### `-306` is also the Mic+IR cab limit [solid]
+The HX Stomp runs at most **two Mic+IR cabs** (`HD2_CabMicIr_…`) in one preset, and refuses a third
+with the same `-306` it uses for DSP, however much DSP is free. Every cab counts: a standalone cab
+block, an amp's paired cab, and each half of a dual cab (`Cab › Dual`, two `*WithPan` models in one
+block). Legacy `HD2_Cab…` cabs do not. Measured 2026-10-22 on fw 3.71, with 15–25% of the DSP free
+throughout — the most any refused edit needed was 3.3%:
+
+| preset already holds | edit | result |
+|---|---|---|
+| amp + Mic+IR cab, a single Mic+IR cab | single → dual | refused, `-306` |
+| amp alone, a single Mic+IR cab | single → dual | **accepted** |
+| amp alone, a dual | amp → amp + Mic+IR cab | refused, `-306` |
+| amp alone, a dual | amp → amp + legacy cab | **accepted** |
+| amp + legacy cab, a dual | add a single Mic+IR cab | refused, `-306` |
+| amp + legacy cab, one single Mic+IR cab | add a second | **accepted** |
+
+That is what was mistaken, on 2026-08-01, for the pedal refusing dual cabs as such. They take an
+ordinary op-40 swap naming both `*WithPan` refs, from any block, and the same op changes either cab
+of an existing dual. The two things a dual will not take are being named alone (`26: -1`) and an
+op-39 add; `Session::add_block` adds the single-cab twin and swaps it to the pair. When a `-306`
+comes back and the preset would be over `Device::mic_ir_cabs`, the error says so instead of
+pointing at the DSP meter. Other devices' limits are unmeasured. [issue #31]
 
 ### `-306` on op 40 means the model does not fit in the DSP budget [solid]
 The field logs made this look like a property of the *model* — a Room reverb refusing to become a

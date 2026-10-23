@@ -104,6 +104,11 @@ pub struct Catalog {
 /// Not a real model-table category id — [`Catalog::models_in_category`] special-cases it.
 pub const CATEGORY_AMP_CAB: i64 = 100;
 
+/// Synthetic picker category: HX Edit's `Cab › Dual` — one block holding two Mic+IR cabs, each with
+/// its own pan and delay. Each entry is a `*WithPan` cab paired with itself as the default second
+/// cab; on a dual block the same list changes either cab. See [`is_dual_cab`].
+pub const CATEGORY_DUAL_CAB: i64 = 101;
+
 /// Which member of a tempo-sync group a parameter is. See [`SyncLink`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncRole {
@@ -312,6 +317,9 @@ pub struct EditorBlock {
     pub paired_category: Option<i64>,
     /// The paired cab/IR's named parameters, if any.
     pub paired_params: Vec<EditorParam>,
+    /// Whether this is a dual cab (`Cab › Dual`): both cabs are `*WithPan` models, so changing
+    /// either one picks from [`CATEGORY_DUAL_CAB`], not the single-cab list.
+    pub dual_cab: bool,
     /// DSP load this block draws (% of the device budget), including its paired cab/IR. `None` for
     /// controller nodes and models with no load data.
     pub dsp_load: Option<f64>,
@@ -657,6 +665,7 @@ pub fn category_name(id: i64) -> Option<&'static str> {
         17 => "Volume/Pan",
         19 => "Cab (Mic+IR)",
         CATEGORY_AMP_CAB => "Amp+Cab",
+        CATEGORY_DUAL_CAB => "Cab (Dual)",
         _ => return None,
     })
 }
@@ -1036,7 +1045,7 @@ impl Catalog {
         let name = category_name(id)?;
         let name = match name {
             "Amp+Cab" => "Amp",
-            "Cab (Mic+IR)" => "Cab",
+            "Cab (Mic+IR)" | "Cab (Dual)" => "Cab",
             other => other,
         };
         self.category_colors.get(name).copied()
@@ -1084,6 +1093,46 @@ impl Catalog {
         let (sym, _) = self.symbols.by_index(index as usize)?;
         let (base, variant) = split_variant(sym);
         self.model_load(base, variant)
+    }
+
+    /// For a dual-cab model (`*WithPan`), the `Helix.sym` index of its plain single-cab twin. A dual
+    /// cab cannot be added directly — op 39 refuses a `*WithPan` model — so it is created the way
+    /// it is on the pedal: add the single cab, then swap it to the pair (see `Session::add_block`).
+    /// `None` for anything that is not a dual cab.
+    pub fn dual_cab_single(&self, index: i64) -> Option<i64> {
+        let (sym, _) = self.symbols.by_index(usize::try_from(index).ok()?)?;
+        if !is_dual_cab(sym) {
+            return None;
+        }
+        self.symbol_index(sym.strip_suffix("WithPan")?)
+    }
+
+    /// Whether the model at this `Helix.sym` index is a Mic+IR cab (`HD2_CabMicIr_…`, single or a
+    /// dual's half) — the kind the HX Stomp runs at most two of per preset
+    /// (`fretwire_protocol::Device::mic_ir_cabs`).
+    pub fn is_mic_ir_cab(&self, index: i64) -> bool {
+        usize::try_from(index)
+            .ok()
+            .and_then(|i| self.symbols.by_index(i))
+            .is_some_and(|(s, _)| s.starts_with("HD2_CabMicIr_"))
+    }
+
+    /// How many Mic+IR cabs the preset `stream` would hold once `slot` holds the `incoming` model
+    /// refs (its block and paired cab, `-1` for none) instead of what it holds now — the number the
+    /// HX Stomp caps at two. `None` if the stream does not parse.
+    pub fn mic_ir_cabs_after(&self, stream: &[u8], slot: i64, incoming: &[i64]) -> Option<usize> {
+        let ps = PresetStream::parse(stream).ok()?;
+        let kept = ps
+            .loaded_blocks()
+            .into_iter()
+            .filter(|b| b.slot != slot)
+            .flat_map(|b| [b.model_index, b.paired_index])
+            .flatten();
+        Some(
+            kept.chain(incoming.iter().copied())
+                .filter(|&i| self.is_mic_ir_cab(i))
+                .count(),
+        )
     }
 
     /// A model's display name by its `Helix.sym` index (e.g. for labeling an add/swap in the edit
@@ -1144,6 +1193,9 @@ impl Catalog {
         if seen.contains(&1) && !self.pod_go {
             seen.insert(CATEGORY_AMP_CAB);
         }
+        if !self.models_in_category(CATEGORY_DUAL_CAB, None).is_empty() {
+            seen.insert(CATEGORY_DUAL_CAB);
+        }
         let mut out: Vec<(i64, &'static str)> = seen
             .into_iter()
             .filter_map(|id| category_name(id).map(|n| (id, n)))
@@ -1163,11 +1215,15 @@ impl Catalog {
                 let (base, var) = split_variant(sym);
                 let id = self.models.id_by_symbolic_id(sym)?;
                 let name = self.models.name(id).filter(|n| !n.is_empty())?;
-                (!is_dual_cab(base)).then(|| ModelChoice {
+                Some(ModelChoice {
                     index: idx as i64,
                     symbolic_id: base.to_string(),
                     name: name.to_string(),
-                    category: self.models.category(id).map(canonical_category),
+                    category: if is_dual_cab(base) {
+                        Some(CATEGORY_DUAL_CAB)
+                    } else {
+                        self.models.category(id).map(canonical_category)
+                    },
                     variant: var,
                     dsp_load: self.model_load(base, var),
                     default_paired_index: None,
@@ -1210,6 +1266,35 @@ impl Catalog {
                     Some(c)
                 })
                 .collect();
+        }
+        // Synthetic Cab (Dual): every `*WithPan` cab, paired with itself until the user changes
+        // the second one. The cost is both cabs'.
+        if category == CATEGORY_DUAL_CAB {
+            let mut out: Vec<ModelChoice> = (0..self.symbols.len())
+                .filter_map(|idx| {
+                    let (sym, _) = self.symbols.by_index(idx)?;
+                    if !is_dual_cab(sym) {
+                        return None;
+                    }
+                    let id = self.models.id_by_symbolic_id(sym)?;
+                    let name = self.models.name(id).filter(|n| !n.is_empty())?;
+                    Some(ModelChoice {
+                        index: idx as i64,
+                        symbolic_id: sym.to_string(),
+                        name: name.to_string(),
+                        category: Some(CATEGORY_DUAL_CAB),
+                        variant: None,
+                        dsp_load: self.model_load(sym, None).map(|l| 2.0 * l),
+                        default_paired_index: Some(idx as i64),
+                    })
+                })
+                .collect();
+            out.sort_by(|a, b| {
+                a.name
+                    .cmp(&b.name)
+                    .then_with(|| a.symbolic_id.cmp(&b.symbolic_id))
+            });
+            return out;
         }
         let mut chosen: std::collections::HashMap<String, ModelChoice> =
             std::collections::HashMap::new();
@@ -1454,6 +1539,7 @@ impl Catalog {
             paired_symbolic_id: None,
             paired_category: None,
             paired_params: Vec::new(),
+            dual_cab: false,
             dsp_load: None,
         })
     }
@@ -1537,6 +1623,7 @@ impl Catalog {
             } else {
                 None
             },
+            dual_cab: sym.is_some_and(|(s, _)| is_dual_cab(s)),
             dsp_load,
         }
     }
@@ -2135,19 +2222,22 @@ fn type_token(symbolic_id: &str) -> &str {
 /// Split a device symbol into its `symbolicID` base and `Mono`/`Stereo` variant (some models —
 /// e.g. amps — carry no suffix, giving `None`).
 /// Whether `symbol` is the **dual** twin of a Cab (Mic+IR) model — HX Edit's `Cab › Dual`
-/// subcategory, a two-cab block with per-cab pan.
+/// subcategory, a two-cab block with per-cab pan and delay.
 ///
 /// The 46 `HD2_CabMicIr_*WithPan` symbols each shadow a plain `HD2_CabMicIr_*` single cab of the
-/// same display name, so a flat category listing shows every cab twice. The twins are not
-/// interchangeable: they are a different block type, and the pedal **refuses an in-place swap** to
-/// one — device code `-306`, and `-21` in some states. Selecting a duplicate therefore did
-/// nothing and the block snapped back to what it was. Editing a dual cab is not supported yet
-/// (it needs two model refs and the pan params), so keep them out of the swap list rather than
-/// offering a choice that cannot be taken. Name resolution is deliberately left alone — a preset
-/// that already contains one must still read back with its own name and params.
+/// same display name, which is why they are listed under [`CATEGORY_DUAL_CAB`] and kept out of the
+/// single-cab list: there, every cab showed up twice (the 2026-08-01 field report). They are not
+/// interchangeable with the singles. A dual block stores **both** cabs as `*WithPan` models (main
+/// at `24 → 25`, the second at `24 → 26`), and the pedal takes one through an ordinary op-40 swap
+/// carrying both — from a single cab, from another dual, or from any other block. A swap naming
+/// only one (`26: -1`) is refused, and so is an op-39 add of one.
 ///
-/// [solid — 2026-08-01: reproduced on the HX Stomp, every dual twin refused; matches the
-/// field report and the shipped `HX_ModelCatalog.json` `Cab › Dual` grouping.]
+/// Most of the refusals we first put down to the dual cabs themselves were the **Mic+IR cab
+/// limit** instead: the HX Stomp runs at most two per preset and a dual is two of them, so in a
+/// preset whose amp already has a Mic+IR cab paired, every dual swap answers `-306`.
+///
+/// [solid — 2026-10-22, HX Stomp fw 3.71: single→dual, dual→dual changing either cab, and the
+/// limit, each run on the device; issue #31.]
 fn is_dual_cab(symbol: &str) -> bool {
     symbol.starts_with("HD2_CabMicIr_") && symbol.ends_with("WithPan")
 }

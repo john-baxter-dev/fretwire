@@ -34,6 +34,7 @@ export const CAT = {
   // Favorites list and a block that *is* a favorite draw the star, as the pedal's screen does.
   FAVORITES: 23,
   AMP_CAB: 100,
+  DUAL_CAB: 101,
 };
 
 /** One icon per category — the picker's category list, and the fallback for anything unmatched. */
@@ -43,6 +44,7 @@ export const CATEGORY_SPECS = {
   [CAT.CAB]: { shape: "cab", body: C.espresso, speakers: [2, 2], cloth: CLOTH.basketweave },
   [CAT.CAB_MIC_IR]: { shape: "cab", body: C.espresso, speakers: [2, 2], cloth: CLOTH.basketweave, mic: true },
   [CAT.IR]: { shape: "rack", body: C.graphite, knobs: 3, glyph: "wave" },
+  [CAT.DUAL_CAB]: { shape: "cab", body: C.espresso, speakers: [2, 2], cloth: CLOTH.basketweave, mic: true },
   [CAT.AMP_CAB]: { shape: "head", body: C.black, panel: PANEL.plexi, knobs: 6, cloth: CLOTH.basketweave, stack: true },
   [CAT.DISTORTION]: { shape: "stomp", body: C.orange, knobs: 3 },
   [CAT.DYNAMICS]: { shape: "stomp", body: C.red, knobs: 2 },

@@ -735,14 +735,14 @@ real session.
       `14: <name>` itself; op 56 writes the virgin pair. So op 56 is not missing a follow-up op —
       the difference is two document keys, writable on purpose. See `docs/protocol.md`.
 
-- [ ] **Session grid/routing planning is still DSP-0 only.** `add_block_at`, `place_block`,
-      `insert_block`, `reorder_block` and `set_node_pos` plan slot moves inside one 20-slot array
-      and read it via `dsp_blocks(0)`/`dsp_grid(0)` — complete for the Stomp, needs a `dsp` argument
-      for the Floor. Reading and per-block edits are already DSP-agnostic; only this layer is not.
-- [ ] Grid/UI: the routing view assumes one DSP × 2 rows. The Floor needs 2 DSPs × 2 paths. The
-      backend is ready — `PresetDto.dsps[]` carries each DSP's grid/nodes/load, and every cell and
-      block is tagged with its `dsp`; the flat fields mirror `dsps[0]` so the current UI is
-      unaffected until it's rewritten.
+- [x] **Session grid/routing planning per DSP** — done by 0.2.0 (this line went stale; noticed
+      2026-10-31). `add_block_at`, `place_block`, `insert_block` and `reorder_block` take absolute
+      wire slots and read the slot's own DSP (`split_wire_slot`), `set_node_pos` takes a `dsp`, and
+      tests pin the DSP-2 cases as the DSP-0 ones shifted by 20. One leftover: the toolbar's
+      **+ Add block** (`add_block_append`) still appends to DSP 1 only; clicking an empty cell adds
+      on either DSP.
+- [x] Grid/UI: 2 DSPs × 2 paths — done by 0.2.0. `App.svelte` renders one `Chain` per
+      `PresetDto.dsps[]` entry, with a DSP meter each.
 - [~] `.hxb` import/restore. **The conversion is built and measured** (2026-08-25):
       `fretwire_data::tone` turns a `tone` object — what an `.hxb` slot and an `.hlx` file both
       carry — into the wire preset, and `fretwire hxb-convert` writes an export file the existing

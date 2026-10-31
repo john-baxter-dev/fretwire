@@ -245,7 +245,7 @@
     position: absolute;
     right: 0;
     top: calc(100% + 4px);
-    z-index: 20;
+    z-index: var(--z-menu);
     min-width: 210px;
     display: flex;
     flex-direction: column;

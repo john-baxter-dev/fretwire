@@ -271,7 +271,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 105;
+    z-index: var(--z-panel);
   }
   .ir-card {
     display: flex;

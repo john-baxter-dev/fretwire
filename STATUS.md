@@ -2,6 +2,13 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**IR dialogs open in front of the IR panel (2026-10-31, issue #32).** Upload, Rename and Delete
+in the IR manager opened their dialog *behind* the panel (Dialog at z-index 100, the panel's
+overlay at 105), and the first click hit the panel's backdrop and closed everything, so none of
+the three could be used from the GUI since the IR manager went in. The stacking order is now a
+set of `--z-*` tokens in `app.css` with dialogs above panels, and `tests/stacking.mjs` fails on
+any bare z-index or on dialogs falling below panels again.
+
 **Dual cabs can be added and changed, and the Stomp's two-cab limit is named (2026-10-22, issue
 #31).** A user could edit a dual cab's mics but not add one or change either cab. Both are now
 done through the op-40 swap we already send, naming both `*WithPan` cabs. They have a picker list

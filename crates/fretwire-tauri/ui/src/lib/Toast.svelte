@@ -22,7 +22,7 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    z-index: 200;
+    z-index: var(--z-toast);
     max-width: 380px;
   }
   .toast {

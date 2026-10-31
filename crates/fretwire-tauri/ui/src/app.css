@@ -1,4 +1,14 @@
-:root { color-scheme: dark; }
+:root {
+  color-scheme: dark;
+  /* The stacking order, in one place. A Dialog is opened *from* a panel (IrPanel's rename, delete
+     and upload), so it has to sit above every panel and overlay or it renders underneath one and
+     the panel's click-outside handler eats the first click (issue #32). Toasts stay on top. */
+  --z-menu: 20;
+  --z-panel: 105;
+  --z-progress: 110;
+  --z-dialog: 120;
+  --z-toast: 200;
+}
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body {

@@ -1087,11 +1087,11 @@ dependencies = [
 
 [[package]]
 name = "fretwire"
-version = "0.6.1"
+version = "0.6.2"
 
 [[package]]
 name = "fretwire-cli"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1106,7 +1106,7 @@ dependencies = [
 
 [[package]]
 name = "fretwire-commands"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "base64 0.22.1",
  "fretwire-core",
@@ -1118,7 +1118,7 @@ dependencies = [
 
 [[package]]
 name = "fretwire-core"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "fretwire-data",
  "fretwire-protocol",
@@ -1132,7 +1132,7 @@ dependencies = [
 
 [[package]]
 name = "fretwire-data"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "flate2",
  "rmpv",
@@ -1143,7 +1143,7 @@ dependencies = [
 
 [[package]]
 name = "fretwire-mcp"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "clap",
  "fretwire-commands",
@@ -1159,7 +1159,7 @@ dependencies = [
 
 [[package]]
 name = "fretwire-protocol"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "rmpv",
  "thiserror 2.0.18",
@@ -1167,7 +1167,7 @@ dependencies = [
 
 [[package]]
 name = "fretwire-serve"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "axum",
  "clap",
@@ -1183,7 +1183,7 @@ dependencies = [
 
 [[package]]
 name = "fretwire-tauri"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "fretwire-commands",
  "fretwire-core",
@@ -1196,7 +1196,7 @@ dependencies = [
 
 [[package]]
 name = "fretwire-usb"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "fretwire-protocol",
  "futures-lite",

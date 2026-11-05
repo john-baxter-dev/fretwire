@@ -16,8 +16,10 @@
     splitTypes = [],
     onFloat,
     onEnum,
-    // Writes a value that carries a `setting_id` (Gtr Pad): a preset global, not a param.
+    // Writes a value that carries a `setting_id` (In-Z, Gtr Pad): a preset global, not a param.
     onSetting,
+    // Writes the input node's Source (`input_source`): op 42 by list position, not a param.
+    onInputSource,
     onPreview,
     onBypass,
     onSwap,
@@ -641,7 +643,7 @@
                 title={sync.on ? "Synced to tempo — click for a free value" : "Sync to the tempo (note values)"}
                 onclick={() => onEnum(block.slot, paired, sync.tempoIndex, sync.on ? 0 : 1)}>♩</button>
             {/if}
-            {#if p.setting_id == null}
+            {#if p.setting_id == null && !p.input_source}
             <button
               class="asgbtn"
               class:on={!!asg}
@@ -681,6 +683,7 @@
               onchange={(e) => {
                 const v = Number(e.currentTarget.value);
                 if (p.setting_id != null) onSetting(p.setting_id, v);
+                else if (p.input_source) onInputSource(Math.floor(block.slot / 20), v);
                 else onEnum(block.slot, paired, p.index, v);
               }}
             >

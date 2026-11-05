@@ -241,6 +241,14 @@ function makeBlock(sym, opts = {}) {
 
 // Fixed input/output nodes (slots 0 and 9) — same param shapes as the real backend resolves from
 // io.models (`HelixStomp_AppDSPFlowInput` / `…OutputMain`).
+const INPUT_SOURCES = ["Main L/R", "Return L/R", "USB 5/6"];
+const mainInputSettings = () => [
+  {
+    ...P.enum(4, "In-Z", 0, ["Auto", "10k Ohm", "22k Ohm", "32k Ohm", "70k Ohm", "90k Ohm", "136k Ohm", "230k Ohm", "1M Ohm"]),
+    setting_id: 30,
+  },
+  { ...P.enum(5, "Gtr Pad", 0, ["Global", "Off", "On"]), setting_id: 134 },
+];
 const inputNode = () => ({
   kind: "input", modelIndex: null, symbolic_id: "HelixStomp_AppDSPFlowInput", model_name: "Input",
   dsp_load: 0,
@@ -248,9 +256,11 @@ const inputNode = () => ({
     P.bool(0, "Input Gate", false),
     P.float(1, "Threshold", -48, -96, 0),
     P.float(2, "Decay", 0.5, 0.01, 1),
-    // A preset global the pedal shows on the input's second page, written by op 25 under
-    // `setting_id` rather than as a param (issue #28). See editor::INPUT_SETTINGS.
-    { ...P.enum(3, "Gtr Pad", 0, ["Global", "Off", "On"]), setting_id: 134 },
+    // The source, written by op 42 by list position (editor::STOMP_INPUT_SOURCES), then the
+    // preset globals the pedal shows on the input's second page while it is Main, written by
+    // op 25 under `setting_id` rather than as params (issue #28). See editor::INPUT_SETTINGS.
+    { ...P.enum(3, "Source", 0, INPUT_SOURCES), input_source: true },
+    ...mainInputSettings(),
   ],
 });
 const outputNode = () => ({
@@ -861,7 +871,8 @@ const EDIT_LABELS = {
   set_param: (a) => `Set ${paramName(a.slot, false, a.paramIndex)}`,
   set_paired_param: (a) => `Set ${paramName(a.slot, true, a.paramIndex)}`,
   set_param_enum: (a) => `Set ${paramName(a.slot, a.paired, a.paramIndex)}`,
-  set_preset_setting: () => "Set Gtr Pad",
+  set_preset_setting: (a) => `Set ${a.id === 30 ? "In-Z" : "Gtr Pad"}`,
+  set_input_source: (a) => `Input → ${INPUT_SOURCES[a.index]}`,
   swap_model: (a) =>
     `${slotName(a.slot)} → ${modelName(a.modelIndex)}` +
     (a.pairedIndex >= 0 ? ` + ${modelName(a.pairedIndex)}` : ""),
@@ -1541,8 +1552,20 @@ const HANDLERS = {
     if (p) p.value = value;
     return toDto(current);
   },
+  set_input_source: ({ dsp, index }) => {
+    if (!INPUT_SOURCES[index]) throw new Error(`input source ${index} is not one fretwire knows`);
+    const input = current.slots[inputSlot(dsp * 20)];
+    const src = input?.params.find((q) => q.input_source);
+    if (src) {
+      src.value = index;
+      // Like the pedal: In-Z and Gtr Pad show only on Main, and leaving Main resets In-Z.
+      input.params = input.params.filter((q) => q.setting_id == null);
+      if (index === 0) input.params.push(...mainInputSettings());
+    }
+    return toDto(current);
+  },
   set_preset_setting: ({ id, value }) => {
-    if (id !== 134) throw new Error(`setting ${id} is not a preset setting fretwire edits`);
+    if (id !== 134 && id !== 30) throw new Error(`setting ${id} is not a preset setting fretwire edits`);
     const input = current.slots[inputSlot(0)];
     const p = input?.params.find((q) => q.setting_id === id);
     if (p) p.value = value;

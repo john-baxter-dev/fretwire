@@ -573,6 +573,22 @@ pub async fn set_preset_setting(state: &AppState, id: i64, value: i64) -> R<Pres
     .await
 }
 
+/// Route DSP `dsp`'s input to `index`, a position in
+/// [`fretwire_core::editor::STOMP_INPUT_SOURCES`] — the input node's Source dropdown, written with
+/// op 42. An edit like any other: on the timeline, and the preset is re-read.
+pub async fn set_input_source(state: &AppState, dsp: usize, index: usize) -> R<PresetDto> {
+    use fretwire_core::editor::STOMP_INPUT_SOURCES;
+    let Some(&(source, label)) = STOMP_INPUT_SOURCES.get(index) else {
+        return Err(format!("input source {index} is not one fretwire knows"));
+    };
+    mutate_edit(
+        state,
+        move |_| format!("Input → {label}"),
+        move |s| s.set_input_source(dsp, source).map(|_| ()),
+    )
+    .await
+}
+
 /// Swap the model at `slot` to `model_index` (a `Helix.sym` index). `paired_index` preserves an
 /// amp's cab/IR pairing across the swap; pass `-1` for no pairing.
 pub async fn swap_model(

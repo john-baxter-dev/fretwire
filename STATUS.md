@@ -2,6 +2,21 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**In-Z and the input source, on the input block (2026-10-31, issue #28).** The two items left on
+#28, both settled on the owner's Stomp (fw 3.71) with no HX Edit capture. **In-Z is preset setting
+`30`**: Auto → 1M Ohm on the pedal changed only `5 → 30`, 0 → 8, and an op-25 write of the same
+value gave an identical preset. **The input source is op 42**, the op the Helix LT captures
+showed, with the Stomp's own values: Main L/R `1`, Return L/R `4`, USB 5/6 `6`, read by turning
+the pedal's knob. Op 42 writes of `1` and `4` read back, the screen followed, and the Return
+preset matched the pedal's own. Leaving Main resets In-Z to Auto on the pedal. The input block
+now has a **Source** dropdown (`set_input_source`, by list position in
+`editor::STOMP_INPUT_SOURCES`) and **In-Z** beside Gtr Pad, both shown only on a Stomp or XL
+(`HAS_INPUT_PAGE`, since POD Go presets also store a `30`), and In-Z and Gtr Pad only while the
+source is Main. MCP's `param_set` reaches all three, and the CLI has `input-source [value]`.
+Three Stomp dumps from the session are fixtures (`captures/stomp_input_*.msgpack.bin`).
+**[hypothesis]** the XL shares the source values; its owner reports the same three entries.
+439 tests; no new clippy warnings.
+
 **IR dialogs open in front of the IR panel (2026-10-31, issue #32).** Upload, Rename and Delete
 in the IR manager opened their dialog *behind* the panel (Dialog at z-index 100, the panel's
 overlay at 105), and the first click hit the panel's backdrop and closed everything, so none of

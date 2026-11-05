@@ -153,6 +153,9 @@ pub struct ParamDto {
     /// write it with `set_preset_setting` under this id, not with the param commands. See
     /// [`EditorParam::setting_id`].
     pub setting_id: Option<i64>,
+    /// Set on the input node's Source dropdown: write it with `set_input_source` (the value is
+    /// the list position), not with the param commands. See [`EditorParam::input_source`].
+    pub input_source: bool,
     /// How to render this value with its unit. Sent as rules rather than a finished string because
     /// the panel re-formats continuously while a slider is dragged, before any value reaches Rust.
     pub format: Option<NumFormatDto>,
@@ -232,6 +235,7 @@ impl From<&EditorParam> for ParamDto {
             settable: p.settable,
             extra_index: p.extra_index,
             setting_id: p.setting_id,
+            input_source: p.input_source,
             step: fin_opt(p.meta.step),
             default: fin_opt(p.meta.default),
             sync: p.meta.sync.map(|s| SyncDto {

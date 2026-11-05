@@ -434,7 +434,7 @@ enum Command {
     WriteRoundtrip,
     /// Set a global/input setting (op 25). The id space is only partly mapped — a live RE probe.
     ///
-    /// Known: id 134 = 3-state input setting (0/1/2).
+    /// Known: id 30 = In-Z (0 Auto … 8 1M Ohm), id 134 = Gtr Pad (0 Global, 1 Off, 2 On).
     Setting { id: i64, value: i64 },
     /// List the device's user IR slots — index, name and blob checksum. **Reads only.**
     IrList {
@@ -496,6 +496,15 @@ enum Command {
     },
     /// Read one device setting by id (op 24). **Reads only.**
     SettingGet { id: i64 },
+    /// Read, or with a value set, the input node's source (`@input`). The write is op 42, the
+    /// op HX Edit sends on a Helix LT; edit buffer only, and reports what reads back.
+    InputSource {
+        /// The source to route to. Omit to read the current one.
+        value: Option<i64>,
+        /// Which DSP's input (0-based).
+        #[arg(long, default_value_t = 0)]
+        dsp: usize,
+    },
     /// Set a device setting, matching the type the device already holds (op 24 then 25).
     ///
     /// Unlike `setting`, which always writes an integer, this reads the current value first — so it
@@ -1774,6 +1783,17 @@ fn main() -> Result<()> {
                 // already holds is refused with -3, so the probe has to show it.
                 Some(v) => println!("{id} = {v}  [{}]{}", value_type(&v), setting_gloss(id)),
                 None => println!("{id}: no value (the device does not implement it)"),
+            }
+        }
+        Command::InputSource { value, dsp } => {
+            let mut s = fretwire_core::Session::connect()?;
+            let before = s.input_source(dsp)?;
+            match value {
+                None => println!("DSP {dsp} input source = {before:?}"),
+                Some(v) => {
+                    let after = s.set_input_source(dsp, v)?;
+                    println!("DSP {dsp} input source: {before:?} -> sent {v} -> reads {after:?}");
+                }
             }
         }
         Command::SettingSet { id, value } => {

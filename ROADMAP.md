@@ -456,6 +456,10 @@ guessing has already cost a power cycle): see section B of `captures/_RUNBOOK-hx
       **Mapping the rest needs no capture:** `settings-dump`, change one thing on the pedal,
       `settings-dump` again, `settings-diff`. Verified — a tempo move showed up as exactly one id
       out of 166. Priorities: Input Z, guitar pad, main out level, and the preset-numbering flag.
+      **Input page done (issue #28, 2026-10-31, live on a Stomp):** In-Z (`5 → 30`) and Gtr Pad
+      (`5 → 134`) are per-preset and written with op 25; the input source is op 42 (Main/Return/
+      USB 5/6 = 1/4/6). All three are on the input block in the GUI and MCP. Left: main out level
+      and the preset-numbering flag.
 - [x] **Save As** (GUI, 2026-06-29) — write the edit buffer to a chosen slot under a new name (op 71);
       sidebar slot-pick + overwrite confirm. Verified live.
 - [x] **Preset rename (name-only)** — DECODED (2026-06-30): op 6 `{107:bank,108:slot,109:name\0}` on

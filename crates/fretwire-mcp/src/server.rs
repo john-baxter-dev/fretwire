@@ -627,9 +627,15 @@ impl Fretwire {
                     p.enum_labels.join(" | ")
                 ));
             };
-            // Gtr Pad: shown on the input block, but a preset global written by id.
+            // In-Z / Gtr Pad: shown on the input block, but preset globals written by id; the
+            // input's Source is op 42, by its list position.
             let after = match p.setting_id {
                 Some(id) => c::set_preset_setting(&self.state, id, v).await?,
+                None if p.input_source => {
+                    let dsp = usize::try_from(a.slot / 20).unwrap_or(0);
+                    let index = usize::try_from(v).map_err(|_| format!("no source {v}"))?;
+                    c::set_input_source(&self.state, dsp, index).await?
+                }
                 None => c::set_param_enum(&self.state, a.slot, paired, idx, v).await?,
             };
             return Ok(report(&after, a.slot, paired, idx));

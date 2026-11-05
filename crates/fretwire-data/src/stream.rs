@@ -704,7 +704,9 @@ impl PresetStream {
     /// setting `16` there. `134` is `@guitarpad` (Gtr Pad, Global/Off/On), which the pedal shows on
     /// the input block's second page: it is the 3-state write in
     /// `switch_input_gate_and_guitar_pad.pcapng`, and the only key here that every Stomp and XL
-    /// preset has and no Floor, Rack or POD Go one does. [near-solid, issue #28]
+    /// preset has and no Floor, Rack or POD Go one does. [near-solid, issue #28] `30` is
+    /// `@guitarinputZ` (In-Z, the `guitar_input_z` index): Auto → 1M Ohm on a Stomp changed only
+    /// `5 → 30`, 0 → 8. [solid, 2026-10-31]
     pub fn preset_global(&self, id: i64) -> Option<ParamValue> {
         self.field(5)
             .and_then(|m| map_get(m, id))

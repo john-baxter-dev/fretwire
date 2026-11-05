@@ -2594,6 +2594,22 @@ impl Session {
         Ok(())
     }
 
+    /// The input node's source on `dsp` (`@input`, node key `5`), as the preset stores it.
+    pub fn input_source(&mut self, dsp: usize) -> crate::Result<Option<i64>> {
+        let raw = self.read_preset_raw()?;
+        Ok(fretwire_data::stream::PresetStream::parse(&raw)?.dsp_input_source(dsp))
+    }
+
+    /// Route `dsp`'s input node to `source` with op 42 (`{98: slot, 51: source}`), the write HX
+    /// Edit sends on a Helix LT. Edit buffer only. Returns the source read back afterwards, which
+    /// is the only confirmation: on a Stomp this op is a [hypothesis] until it reads back.
+    pub fn set_input_source(&mut self, dsp: usize, source: i64) -> crate::Result<Option<i64>> {
+        let slot = (dsp * 20) as i64;
+        let txn = self.bump_txn();
+        self.send_edit(edit::set_input(slot, source, txn))?;
+        self.input_source(dsp)
+    }
+
     /// Set a global/input setting (op 25, `{118: id, 119: value}`) — not block-addressed. The id
     /// space is only partly mapped, so this is mainly a live-probe primitive for now (id 134 is a
     /// 3-state input setting). Not a flash write; recoverable.

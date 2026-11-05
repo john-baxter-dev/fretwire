@@ -552,6 +552,8 @@
     apply(invoke("set_param_enum", { slot, paired, paramIndex: index, value }));
   // Gtr Pad sits on the input block but is a preset global, written by id (issue #28).
   const onSetting = (id, value) => apply(invoke("set_preset_setting", { id, value }));
+  // The input's Source (Main / Return / USB 5/6) is op 42, by its position in the list.
+  const onInputSource = (dsp, index) => apply(invoke("set_input_source", { dsp, index }));
   const onBypass = (slot, bypassed) => apply(invoke("set_bypass", { slot, bypassed }));
   const onSwap = (slot, modelIndex, pairedIndex) =>
     apply(invoke("swap_model", { slot, modelIndex, pairedIndex }));
@@ -1533,6 +1535,7 @@
             {onFloat}
             {onEnum}
             {onSetting}
+            {onInputSource}
             {onPreview}
             {onBypass}
             {onSwap}

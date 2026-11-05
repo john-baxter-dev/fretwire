@@ -374,7 +374,17 @@ fn io_nodes_resolve_named_params() {
     assert_eq!(input.slot, 0);
     assert_eq!(input.model_name, "Input");
     let names: Vec<&str> = input.params.iter().map(|q| q.display_name()).collect();
-    assert_eq!(names, ["Input Gate", "Threshold", "Decay", "Gtr Pad"]);
+    assert_eq!(
+        names,
+        [
+            "Input Gate",
+            "Threshold",
+            "Decay",
+            "Source",
+            "In-Z",
+            "Gtr Pad"
+        ]
+    );
     assert_eq!(
         input.params[0].meta.value_type,
         Some(2),
@@ -404,10 +414,12 @@ fn io_nodes_resolve_named_params() {
     assert_eq!(p.block(9).map(|b| b.model_name.as_str()), Some("Output"));
 }
 
-// Gtr Pad sits on the input block, as on the pedal's second page, but is a preset global (`5 → 134`)
-// written by op 25 under its id — never op 30 on slot 0, whose param 3 is `select` (issue #28).
+// In-Z and Gtr Pad sit on the input block, as on the pedal's second page, but are preset globals
+// (`5 → 30`, `5 → 134`) written by op 25 under their ids — never op 30 on slot 0, whose param 3 is
+// `select` (issue #28). The Source is op 42, by its position in `STOMP_INPUT_SOURCES`.
 #[test]
-fn input_node_carries_the_pad_as_a_preset_setting() {
+fn input_node_carries_the_source_and_the_preset_settings() {
+    use fretwire_core::editor::STOMP_INPUT_SOURCES;
     for fixture in [
         "preset1_stream.msgpack.bin",
         "xl_no_assignments.msgpack.bin",
@@ -419,16 +431,77 @@ fn input_node_carries_the_pad_as_a_preset_setting() {
             .iter()
             .filter(|q| q.setting_id.is_some())
             .collect();
-        assert_eq!(settings.len(), 1, "{fixture}: Gtr Pad only");
-        let pad = settings[0];
-        assert_eq!((pad.setting_id, pad.display_name()), (Some(134), "Gtr Pad"));
-        assert_eq!(pad.value, ParamValue::Int(0), "{fixture}: Global");
-        assert_eq!(pad.meta.enum_labels, ["Global", "Off", "On"]);
+        let named: Vec<_> = settings
+            .iter()
+            .map(|q| (q.setting_id, q.display_name()))
+            .collect();
+        assert_eq!(
+            named,
+            [(Some(30), "In-Z"), (Some(134), "Gtr Pad")],
+            "{fixture}"
+        );
+        assert_eq!(
+            settings[0].meta.enum_labels.first().map(String::as_str),
+            Some("Auto")
+        );
+        assert_eq!(settings[1].value, ParamValue::Int(0), "{fixture}: Global");
+        assert_eq!(settings[1].meta.enum_labels, ["Global", "Off", "On"]);
 
-        // Only on the guitar input: the output node never carries it.
+        let source = input
+            .params
+            .iter()
+            .find(|q| q.input_source)
+            .expect("source");
+        assert_eq!(source.value, ParamValue::Int(0), "{fixture}: Main");
+        assert_eq!(source.meta.enum_labels.len(), STOMP_INPUT_SOURCES.len());
+        assert!(source.setting_id.is_none());
+
+        // Only on the guitar input: the output node never carries them.
         let output = p.output_node().expect("output node");
-        assert!(output.params.iter().all(|q| q.setting_id.is_none()));
+        assert!(
+            output
+                .params
+                .iter()
+                .all(|q| q.setting_id.is_none() && !q.input_source)
+        );
     }
+}
+
+// Read off an HX Stomp (fw 3.71, 2026-10-31) after turning the input's knob on the pedal: In-Z at
+// 1M Ohm on Main, then Return L/R, then USB 5/6. Off Main the pedal hides In-Z and Gtr Pad (and
+// resets In-Z), and so does the editor.
+#[test]
+fn input_source_follows_the_pedal() {
+    let source_and_settings = |fixture: &str| {
+        let p = catalog().load_preset(&data(fixture)).unwrap();
+        let input = p.input_node().expect("input node");
+        let source = input
+            .params
+            .iter()
+            .find(|q| q.input_source)
+            .map(|q| q.value);
+        let settings: Vec<_> = input
+            .params
+            .iter()
+            .filter_map(|q| q.setting_id.map(|id| (id, q.value)))
+            .collect();
+        (source, settings)
+    };
+    assert_eq!(
+        source_and_settings("stomp_input_main_inz_1m.msgpack.bin"),
+        (
+            Some(ParamValue::Int(0)),
+            vec![(30, ParamValue::Int(8)), (134, ParamValue::Int(0))]
+        )
+    );
+    assert_eq!(
+        source_and_settings("stomp_input_return.msgpack.bin"),
+        (Some(ParamValue::Int(1)), vec![])
+    );
+    assert_eq!(
+        source_and_settings("stomp_input_usb56.msgpack.bin"),
+        (Some(ParamValue::Int(2)), vec![])
+    );
 }
 
 /// Every model the picker offers must be one the pedal will actually accept, and no two rows may

@@ -248,6 +248,10 @@ pub struct EditorParam {
     /// (preset key `5`) and written with op 25 under this id, not with op 30 on the block: the
     /// input's Gtr Pad ([`INPUT_SETTINGS`]). `index` is then only a position in the list.
     pub setting_id: Option<i64>,
+    /// Set on the input node's **source** (Main / Return / USB): its value is an index into
+    /// [`STOMP_INPUT_SOURCES`], written with op 42 (`Session::set_input_source`), never op 30 —
+    /// the node's `@input` is not in its `Helix.sym` order. `index` is only a position in the list.
+    pub input_source: bool,
 }
 
 /// The input block's second page on the pedal — **In-Z** and **Gtr Pad** — which are preset
@@ -255,9 +259,26 @@ pub struct EditorParam {
 /// pedal shows them only while the input is Main (issue #28). The ids are the preset's own `5 → id`
 /// keys; see [`fretwire_data::stream::PresetStream::preset_global`] for how firm each one is.
 ///
-/// In-Z (`@guitarinputZ`) is not here yet: its id is unknown. The one candidate, `5 → 30`, is also
-/// in every POD Go preset, whose editor data has no In-Z at all, so naming it would be a guess.
-pub const INPUT_SETTINGS: &[(i64, &str, &str)] = &[(134, "@guitarpad", "Gtr Pad")];
+/// In-Z is `30` [solid, HX Stomp fw 3.71, 2026-10-31]: Auto → 1M Ohm on the pedal changed only
+/// `5 → 30`, 0 → 8 (the `guitar_input_z` index), and an op-25 write of `30 = 8` produced the same
+/// preset. The POD Go stores a `30` too but has no In-Z, so these are offered on the HX Stomp and
+/// Stomp XL only ([`HAS_INPUT_PAGE`]).
+pub const INPUT_SETTINGS: &[(i64, &str, &str)] = &[
+    (30, "@guitarinputZ", "In-Z"),
+    (134, "@guitarpad", "Gtr Pad"),
+];
+
+/// The model codes whose input block has the source choice and the In-Z / Gtr Pad page: the HX
+/// Stomp (`P33`) and Stomp XL (`P36`).
+pub const HAS_INPUT_PAGE: &[&str] = &["P33", "P36"];
+
+/// The HX Stomp's input sources, `(wire value of @input, label)` — the input node's key `5`, set
+/// with op 42 [solid, HX Stomp fw 3.71, 2026-10-31: turning the pedal's knob read 1 → 4 → 6, and
+/// op 42 writes of each read back and matched the pedal's own preset]. Not the Helix's
+/// `input_type` list, where 4 is Variax. The XL shares the list by the owner's report of the same
+/// three entries (issue #28); its values are not yet read off one.
+pub const STOMP_INPUT_SOURCES: &[(i64, &str)] =
+    &[(1, "Main L/R"), (4, "Return L/R"), (6, "USB 5/6")];
 
 impl EditorParam {
     /// What to show the user. [`Self::name`] is the `symbolicID` — the key everything addresses this
@@ -1492,10 +1513,44 @@ impl Catalog {
                 p.name = d.to_string();
             }
         }
-        // The guitar input's pad (and In-Z, once its id is known), on the one input they belong
-        // to: DSP 0's path A, while it is fed from Main (`1`). Only where the preset carries them —
-        // `5 → 134` is in every Stomp and XL preset we hold, and in no Floor, Rack or POD Go one.
-        if kind == 0 && dsp == 0 && ps.dsp_input_source(dsp) == Some(1) {
+        let stomp_input = kind == 0
+            && dsp == 0
+            && ps
+                .device_model()
+                .is_some_and(|m| HAS_INPUT_PAGE.contains(&m.as_str()));
+        // The source, as the pedal's lower knob picks it. A value outside the list (none seen) is
+        // left off rather than shown as something it isn't.
+        let source = ps.dsp_input_source(dsp);
+        if stomp_input
+            && let Some(pos) = STOMP_INPUT_SOURCES
+                .iter()
+                .position(|&(v, _)| Some(v) == source)
+        {
+            let labels: Vec<String> = STOMP_INPUT_SOURCES
+                .iter()
+                .map(|&(_, l)| l.to_string())
+                .collect();
+            params.push(EditorParam {
+                index: params.len(),
+                name: "@input".to_string(),
+                value: ParamValue::Int(pos as i64),
+                meta: ParamMeta {
+                    label: Some("Source".to_string()),
+                    min: Some(0.0),
+                    max: Some((labels.len() - 1) as f64),
+                    value_type: Some(0),
+                    enum_labels: labels,
+                    ..Default::default()
+                },
+                settable: true,
+                extra_index: None,
+                setting_id: None,
+                input_source: true,
+            });
+        }
+        // In-Z and the pad, on the one input they belong to: DSP 0's path A, while it is fed from
+        // Main (`1`) — leaving Main resets In-Z to Auto on the pedal.
+        if stomp_input && source == Some(1) {
             let globals = self.param_meta.get("@global_params");
             for &(id, symbol, label) in INPUT_SETTINGS {
                 let Some(value) = ps.preset_global(id) else {
@@ -1515,6 +1570,7 @@ impl Catalog {
                     settable: true,
                     extra_index: None,
                     setting_id: Some(id),
+                    input_source: false,
                 });
             }
         }
@@ -2307,6 +2363,7 @@ fn name_params(
                 settable,
                 extra_index,
                 setting_id: None,
+                input_source: false,
             }
         })
         .collect()

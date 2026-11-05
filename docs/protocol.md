@@ -270,13 +270,15 @@ on the input block's second page while the input is Main.
 - **`134` is Gtr Pad** [near-solid]: the 3-state write in `switch_input_gate_and_guitar_pad.pcapng`,
   and the one key-`5` id every Stomp and XL preset has and no Floor, Rack or POD Go preset does. The
   editor shows it on DSP 0's input node (`editor::INPUT_SETTINGS`) and writes it as an op-25 integer.
-- **In-Z's id is unknown.** The keys are otherwise the same on all six devices, and the only
-  unexplained one, `30`, is also in POD Go presets, while POD Go Edit's `@global_params` has no
-  In-Z, so `30` is not assumed.
-
-**To pin:** change In-Z and Gtr Pad on the pedal, one per cycle, and diff the settings dump; check
-too that an op-25 write reaches the edit buffer (`5 → id` reads back changed, the preset turns
-dirty).
+- **`30` is In-Z** [solid — HX Stomp fw 3.71, 2026-10-31]. Auto → 1M Ohm on the pedal changed
+  exactly one path, `5 → 30`, 0 → 8: the index into `guitar_input_z` (Auto, 10k … 230k, 1M Ohm).
+  An op-25 write of `30 = 8` then produced a preset identical to the pedal's own (`diff-stream`
+  empty), so the op-25 write does reach the edit buffer. The POD Go stores a `30` as well but
+  shows no In-Z, so the editor offers In-Z and Gtr Pad on the Stomp and XL only
+  (`editor::HAS_INPUT_PAGE`).
+- **Leaving Main resets In-Z.** Switching the source Main → Return on the pedal took `5 → 30`
+  from 8 back to 0 in the same change. The pedal shows In-Z and Gtr Pad only while the source is
+  Main, and so does the editor.
 
 **The input's source is op 42, on a Helix** [solid on an LT, 2026-10-18; Stomp untested].
 `@input` is the input node's key `5` (`1` = Main L/R on every Stomp/XL preset we hold; the Floor's
@@ -284,8 +286,23 @@ dirty).
 decay, select, gain, guitarSenseL, guitarSenseR`), so op 30 can't address it. HX Edit on a Helix LT
 sends `{98: slot, 51: source}` as op 42 instead, and the output node's destination the same way with
 key `52` — see [Structural edits](#structural-edits-move--add--split-type-solid--from-the-2026-06-26-windows-captures).
-`PresetStream::dsp_input_source` reads it. That the Stomp takes the same op, with its own
-`input_type` list, is a [hypothesis] until one write of it reads back.
+`PresetStream::dsp_input_source` reads it.
+
+**The Stomp takes the same op, with its own values** [solid — HX Stomp fw 3.71, 2026-10-31].
+Turning the pedal's lower knob on the input block read `@input` as:
+
+| source | `@input` |
+|---|---|
+| Main L/R | `1` |
+| Return L/R | `4` |
+| USB 5/6 | `6` |
+
+Not the Helix's `input_type` list, where `4` is Variax. Op 42 `{98: 0, 51: v}` then wrote `1`
+and `4`; each read back, the pedal's screen followed, and the preset written to Return was
+identical to the one the pedal made itself. `editor::STOMP_INPUT_SOURCES` holds the list;
+`Session::set_input_source`, CLI `input-source`, and the input block's Source dropdown send it.
+The XL is assumed to share the list (its owner reports the same three entries, issue #28); its
+values have not been read off one.
 
 **Op 24 was already in this codebase under the wrong name.** The connect capture sends `{118: 128}`
 and we had it written up as `OP_READ_PREP`, a "read-sequence prepare step", because we only ever

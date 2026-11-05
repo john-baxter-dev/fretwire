@@ -222,6 +222,15 @@ pub async fn set_preset_setting(state: State<'_, AppState>, id: i64, value: i64)
 }
 
 #[tauri::command]
+pub async fn set_input_source(
+    state: State<'_, AppState>,
+    dsp: usize,
+    index: usize,
+) -> R<PresetDto> {
+    fretwire_commands::set_input_source(&state, dsp, index).await
+}
+
+#[tauri::command]
 pub async fn swap_model(
     state: State<'_, AppState>,
     slot: i64,

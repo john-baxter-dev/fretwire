@@ -424,9 +424,12 @@ enum Command {
         index: i64,
         /// Target slot; defaults to the backup index.
         slot: Option<i64>,
-        /// Which setlist the preset was exported from, and the one it goes back to.
+        /// Which setlist the preset was exported from.
         #[arg(long, default_value_t = 0)]
         bank: i64,
+        /// The setlist to write it into; defaults to `--bank`.
+        #[arg(long)]
+        to_bank: Option<i64>,
     },
     /// PROBE: read the preset and write it back unchanged via op 21, then re-read.
     ///
@@ -1598,8 +1601,10 @@ fn main() -> Result<()> {
             index,
             slot,
             bank,
+            to_bank,
         } => {
             let slot = slot.unwrap_or(index);
+            let to_bank = to_bank.unwrap_or(bank);
             let backup =
                 fretwire_core::backup::Backup::from_json(&std::fs::read_to_string(&path)?)?;
             let entry = backup.preset(bank, index).ok_or_else(|| {
@@ -1609,8 +1614,10 @@ fn main() -> Result<()> {
                 )
             })?;
             let mut s = fretwire_core::Session::connect()?;
+            let here = s.read_identity()?.map(|i| i.bank);
+            s.check_cross_setlist_write(here, to_bank, "restore")?;
             let current = s
-                .list_presets_in(bank)?
+                .list_presets_in(to_bank)?
                 .into_iter()
                 .find(|(i, _)| *i as i64 == slot)
                 .map(|(_, n)| n)
@@ -1619,7 +1626,7 @@ fn main() -> Result<()> {
                 "⚠  PERSISTENT WRITE: restoring {:?} into slot {slot}, overwriting {current:?}.",
                 entry.name
             );
-            let preset = s.restore_preset(&entry.raw, bank, slot, &entry.name)?;
+            let preset = s.restore_preset(&entry.raw, to_bank, slot, &entry.name)?;
             println!(
                 "restored {:?} to slot {slot}; device now shows:",
                 entry.name

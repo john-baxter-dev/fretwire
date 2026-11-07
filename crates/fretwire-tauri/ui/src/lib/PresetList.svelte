@@ -110,7 +110,11 @@
         <div class="menu" role="menu">
           <button role="menuitem" onclick={() => run(onRename)}>Rename preset…</button>
           <button role="menuitem" onclick={() => run(onExport)}>Export presets to file…</button>
-          <button role="menuitem" onclick={() => run(onRestore)}>Restore preset from file…</button>
+          <button
+            role="menuitem"
+            disabled={writeBlocked}
+            title={writeBlocked ? `Restoring into ${setlists[viewBank] ?? "another setlist"} is untested on this hardware` : undefined}
+            onclick={() => run(onRestore)}>Restore preset from file…</button>
           <div class="sep" role="separator"></div>
           <button role="menuitem" onclick={() => run(onBackupDevice)}>Back up device to file…</button>
           <button role="menuitem" onclick={() => run(onRestoreDevice)}>Restore device from file…</button>
@@ -272,6 +276,11 @@
   }
   .menu button:hover {
     background: #2a2f3a;
+  }
+  .menu button:disabled {
+    color: #6b7180;
+    cursor: default;
+    background: none;
   }
   .menu .sep {
     height: 1px;

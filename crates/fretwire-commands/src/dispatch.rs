@@ -322,6 +322,7 @@ pub async fn dispatch(
             a.req("index")?,
             a.req("slot")?,
             a.req("bank")?,
+            a.opt("toBank")?,
         )
         .await?),
         // The same three with the file inline — for a frontend whose disk the daemon can't see.
@@ -378,6 +379,7 @@ pub async fn dispatch(
             a.req("index")?,
             a.req("slot")?,
             a.req("bank")?,
+            a.opt("toBank")?,
         )
         .await?),
         // ---- clipboards ----

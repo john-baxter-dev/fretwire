@@ -1399,19 +1399,25 @@ fn backup_entries(backup: Backup) -> Vec<PresetListItem> {
 /// Restore one preset from a backup file into setlist `slot` — **overwrites the slot in flash**
 /// (op-21 edit-buffer write + op-71 save). Clears the edit history (new editing context) and
 /// returns the re-read preset.
+///
+/// `bank` and `index` pick the entry *in the file*; `to_bank` is the setlist it is written into,
+/// and defaults to `bank`. They are separate because a single-setlist export restored while
+/// browsing another setlist would otherwise land in the file's setlist, not the one picked
+/// (issue #33).
 pub async fn restore_preset(
     state: &AppState,
     path: String,
     index: i64,
     slot: i64,
     bank: i64,
+    to_bank: Option<i64>,
 ) -> R<PresetDto> {
     let target = backup_path(&path);
     run(state, move |s| {
         let text = std::fs::read_to_string(&target).map_err(|e| {
             fretwire_core::Error::Backup(format!("reading {}: {e}", target.display()))
         })?;
-        restore_from(s, &Backup::from_json(&text)?, index, slot, bank)
+        restore_from(s, &Backup::from_json(&text)?, index, slot, bank, to_bank)
     })
     .await
 }
@@ -1424,9 +1430,10 @@ pub async fn restore_preset_inline(
     index: i64,
     slot: i64,
     bank: i64,
+    to_bank: Option<i64>,
 ) -> R<PresetDto> {
     run(state, move |s| {
-        restore_from(s, &Backup::from_json(&json)?, index, slot, bank)
+        restore_from(s, &Backup::from_json(&json)?, index, slot, bank, to_bank)
     })
     .await
 }
@@ -1437,13 +1444,16 @@ fn restore_from(
     index: i64,
     slot: i64,
     bank: i64,
+    to_bank: Option<i64>,
 ) -> fretwire_core::Result<PresetDto> {
     let entry = backup.preset(bank, index).ok_or_else(|| {
         fretwire_core::Error::Backup(format!(
             "export file has no preset at bank {bank} slot {index}"
         ))
     })?;
-    let p = s.restore_preset(&entry.raw, bank, slot, &entry.name)?;
+    let to_bank = to_bank.unwrap_or(bank);
+    check_cross_setlist_write(s, to_bank, "restore_preset")?;
+    let p = s.restore_preset(&entry.raw, to_bank, slot, &entry.name)?;
     Ok(dto(s, &p))
 }
 

@@ -38,6 +38,15 @@ const restored = await mock.invoke("restore_preset_inline", { json: file.json, i
 ok(restored.name === from.name && restored.index === target, `inline restore lands "${from.name}" in slot ${target}`);
 await throws(() => mock.invoke("restore_preset_inline", { json: file.json, index: 999, slot: target, bank: 0 }), "no preset at", "a missing entry is named");
 
+// Issue #33: a single-setlist export (bank 0) restored while browsing another setlist goes where
+// the dialog pointed — `toBank` — not back into the file's setlist.
+const pick = entries.find((e) => e.bank === 0 && e.index === 2);
+const bystander = list.find((p) => p.index === 1).name; // bank 0 slot 1, untouched so far
+const into = await mock.invoke("restore_preset_inline", { json: file.json, index: pick.index, slot: 1, bank: 0, toBank: 2 });
+ok(into.index === 1 && into.name === pick.name, `restore lands "${pick.name}" in slot 1`);
+ok((await mock.invoke("list_presets", { bank: 2 })).find((p) => p.index === 1)?.name === pick.name, "…of the setlist asked for");
+ok((await mock.invoke("list_presets", { bank: 0 })).find((p) => p.index === 1)?.name === bystander, "…and not the file's setlist");
+
 // ---- whole-device backup and restore (format v3) ----
 // The same sweep with the IR store and the global settings behind it, and a restore that writes
 // only what the pedal does not already hold.

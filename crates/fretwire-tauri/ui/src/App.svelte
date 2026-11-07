@@ -819,8 +819,17 @@
     }
   }
 
-  const onRestore = () =>
-    (restoreDlg = { path: "~/", json: null, fileName: null, entries: null, index: null, slot: null });
+  const onRestore = () => {
+    // The destination is a slot in the browsed setlist, so the same limit as Save As applies.
+    if (foreignSetlist) {
+      toast(
+        `Restore is limited to ${setlists[presetBank] ?? "the device's setlist"} — writing into ` +
+          `another setlist is untested on this hardware. Set FRETWIRE_SETLISTS=1 to allow it.`,
+      );
+      return;
+    }
+    restoreDlg = { path: "~/", json: null, fileName: null, entries: null, index: null, slot: null };
+  };
   // What the chosen restore target currently holds — overwriting must be a visible choice.
   const restoreTarget = $derived(
     restoreDlg?.slot != null ? presets.find((p) => p.index === restoreDlg.slot) : null,
@@ -848,10 +857,11 @@
     restoreDlg = null;
     if (index == null || slot == null) return;
     selectedSlot = null;
-    // The entry's own bank, so a preset exported from USER 1 goes back to USER 1 rather than
-    // whichever list bank 0 happens to be. The file goes back with the choice when it was the
-    // browser's: the backend keeps nothing between the listing and the restore.
-    const target = { index, slot, bank: bank ?? 0 };
+    // `bank` picks the entry out of the file (a multi-setlist export has one 000 per setlist);
+    // `toBank` is where it goes — the setlist whose slots the dialog listed, not the file's
+    // (issue #33). The file goes back with the choice when it was the browser's: the backend
+    // keeps nothing between the listing and the restore.
+    const target = { index, slot, bank: bank ?? 0, toBank: viewBank };
     await apply(
       json != null
         ? invoke("restore_preset_inline", { json, ...target })
@@ -859,7 +869,10 @@
     );
     await refreshPresets();
     activeSnapshot = preset?.active_snapshot ?? 0;
-    status = `Restored to slot ${slot}.`;
+    status =
+      setlists.length > 1
+        ? `Restored to slot ${slot} of ${setlists[viewBank] ?? `bank ${viewBank}`}.`
+        : `Restored to slot ${slot}.`;
   }
 
   // ---- whole-device backup / restore ----
@@ -1813,7 +1826,7 @@
       {#if restoreTarget && restoreDlg.index != null}
         <p class="dlg-warn">
           Overwrites <b>{restoreTarget.name}</b> in slot {restoreDlg.slot}
-          {#if setlists.length > 1}of <b>{setlists[restoreDlg.bank] ?? `bank ${restoreDlg.bank}`}</b>{/if}
+          {#if setlists.length > 1}of <b>{setlists[viewBank] ?? `bank ${viewBank}`}</b>{/if}
           on the device.
         </p>
       {/if}

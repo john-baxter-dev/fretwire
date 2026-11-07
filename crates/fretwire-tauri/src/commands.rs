@@ -486,8 +486,9 @@ pub async fn restore_preset(
     index: i64,
     slot: i64,
     bank: i64,
+    to_bank: Option<i64>,
 ) -> R<PresetDto> {
-    fretwire_commands::restore_preset(&state, path, index, slot, bank).await
+    fretwire_commands::restore_preset(&state, path, index, slot, bank, to_bank).await
 }
 
 // The `_inline` variants exist for serve mode (the browser's files are not the daemon's); the
@@ -515,8 +516,9 @@ pub async fn restore_preset_inline(
     index: i64,
     slot: i64,
     bank: i64,
+    to_bank: Option<i64>,
 ) -> R<PresetDto> {
-    fretwire_commands::restore_preset_inline(&state, json, index, slot, bank).await
+    fretwire_commands::restore_preset_inline(&state, json, index, slot, bank, to_bank).await
 }
 
 #[tauri::command]

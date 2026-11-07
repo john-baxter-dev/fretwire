@@ -755,7 +755,8 @@ const backupEntries = (backup) =>
     setlist: backup.setlists?.find((s) => s.bank === (p.bank ?? 0))?.name ?? null,
   }));
 
-function restoreFrom(backup, index, slot, bank) {
+// `bank` picks the entry in the file; `toBank` is the setlist written into (issue #33).
+function restoreFrom(backup, index, slot, bank, toBank = bank) {
   const entry = backup.presets.find((p) => p.index === index && (p.bank ?? 0) === bank);
   if (!entry) throw new Error(`export file has no preset at bank ${bank} slot ${index}`);
   let state;
@@ -773,7 +774,7 @@ function restoreFrom(backup, index, slot, bank) {
     deviceModel: state.deviceModel ?? current.deviceModel,
     buildStamp: state.buildStamp ?? current.buildStamp,
   };
-  const list = bankOf(currentBank);
+  const list = bankOf(toBank);
   const at = list.findIndex((p) => p.index === slot);
   if (at >= 0) list[at] = restored;
   else {
@@ -781,6 +782,7 @@ function restoreFrom(backup, index, slot, bank) {
     list.sort((a, b) => a.index - b.index);
   }
   // Like Session::restore_preset: the device ends up on the restored slot, history reset.
+  currentBank = toBank;
   current = restored;
   clearHistory();
   seedHistory();
@@ -1852,12 +1854,12 @@ const HANDLERS = {
     return backupEntries(lastBackup);
   },
   backup_show_inline: ({ json }) => backupEntries(parseBackup(json)),
-  restore_preset: ({ index, slot, bank = 0 }) => {
+  restore_preset: ({ index, slot, bank = 0, toBank = bank }) => {
     if (!lastBackup) throw new Error("mock backend: nothing exported this session — run Export… first");
-    return restoreFrom(lastBackup, index, slot, bank);
+    return restoreFrom(lastBackup, index, slot, bank, toBank);
   },
-  restore_preset_inline: ({ json, index, slot, bank = 0 }) =>
-    restoreFrom(parseBackup(json), index, slot, bank),
+  restore_preset_inline: ({ json, index, slot, bank = 0, toBank = bank }) =>
+    restoreFrom(parseBackup(json), index, slot, bank, toBank),
   // ---- whole-device backup / restore ----
   // `favorites` / `userDefaults` default on, as the real dispatcher's do for an older client.
   backup_device: async ({ path, banks, irs, settings, favorites = true, userDefaults = true }) => {

@@ -2,6 +2,13 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**No more "outside path B" badge (2026-11-07, issue #34).** A Helix LT owner's factory preset
+GlitchVerb has its split and join one column apart, with B-row blocks to the left, between and to
+the right, and on the pedal all three are on path B. We marked the outer two "outside path B" on
+the theory that HX Edit can't draw that layout. A Line 6 factory preset laid out that way refutes
+it. The B row's columns are layout, not routing. The badge is gone, and the path B wire now spans
+the split→mixer bracket plus every occupied B column.
+
 **In-Z and the input source, on the input block (2026-10-31, issue #28).** The two items left on
 #28, both settled on the owner's Stomp (fw 3.71) with no HX Edit capture. **In-Z is preset setting
 `30`**: Auto → 1M Ohm on the pedal changed only `5 → 30`, 0 → 8, and an op-25 write of the same

@@ -84,30 +84,20 @@
       (c) => c.column <= maxCol && (showB || c.row === 0),
     );
 
-    // A block on the B row outside the split→mixer bracket. HX Edit cannot draw this layout at all —
-    // its path B always spans exactly the bracket — so it is worth marking. But the pedal stores it,
-    // saves it, and **plays it**: the tester put a reverb left of the split and heard it fine.
-    //
-    // It briefly said "no feed" here, on the theory that a cell left of the split has nothing
-    // branched into it yet. That was wrong, and the same evening's logs say why: every block he
-    // called dead was an envelope filter (Tron Up, Mystery Filter, Autofilter — all sweep on input
-    // level), and every block he called merely quiet was a delay or reverb. Split Y sits at Balance
-    // 0.5 per leg, so path B runs ~6 dB down and an envelope filter there may never open, wherever
-    // it sits. Position was a coincidence; level was the cause. Don't out-guard the pedal.
-    // [refuted — 2026-08-03, `fretwire49`/`50` + `Somehinged4_var2.png`.]
-    const strandedSide = (c) =>
-      !split || c.row !== 1 || !c.occupied
-        ? null
-        : c.column < d.split_pos
-          ? "before"
-          : c.column >= d.mixer_pos
-            ? "after"
-            : null;
+    // Every occupied B-row cell is on path B, wherever it sits relative to the split and mixer
+    // columns. The B row's columns are layout, not routing: the pedal plays blocks left of the
+    // split [2026-08-03, `fretwire49`/`50`], and Line 6 ships factory presets laid out that way
+    // (Helix LT "GlitchVerb": B blocks at the split's column, between, and at the join's — issue
+    // #34), with every one switched on in path B. We used to badge these "outside path B" on the
+    // theory that HX Edit can't draw that shape; a factory preset says otherwise. So the B wire
+    // spans the bracket *and* every occupied B column, and nothing is marked.
+    const bCols = split
+      ? allCells.filter((c) => c.row === 1 && c.occupied).map((c) => c.column)
+      : [];
 
     const items = cells.map((c) => {
       const b = bySlot.get(c.slot);
       const name = b ? b.user_label || b.model_name : "";
-      const side = strandedSide(c);
       return {
         slot: c.slot,
         occupied: c.occupied,
@@ -127,13 +117,6 @@
         // the editor simply never showed it. Read-only for now; see ROADMAP "Footswitch assign".
         footswitch: b?.footswitch ?? 0,
         color: catColor(b?.category),
-        stranded: side,
-        strandedWhy:
-          side === "before"
-            ? "Left of the split, so outside the parallel path. The pedal keeps it and it still plays — HX Edit just can't draw a path B this shape."
-            : side === "after"
-              ? "Right of the mixer, so outside the parallel path. The pedal keeps it and it still plays."
-              : null,
       };
     });
 
@@ -163,7 +146,11 @@
       const xSplit = gapX(d.split_pos);
       const xMixer = gapX(d.mixer_pos);
       const yT = midY(TOP_Y), yB = midY(BOT_Y);
-      wires.push(`M ${xSplit} ${yT} V ${yB} H ${xMixer} V ${yT}`);
+      // The B run reaches the outer gaps of any B block past either end of the bracket, so a
+      // block there sits on the wire instead of floating beside it.
+      const xLo = Math.min(xSplit, ...bCols.map((c) => gapX(c)));
+      const xHi = Math.max(xMixer, ...bCols.map((c) => gapX(c + 1)));
+      wires.push(`M ${xSplit} ${yT} V ${yB}`, `M ${xLo} ${yB} H ${xHi}`, `M ${xMixer} ${yB} V ${yT}`);
       // Seat the node glyphs in the vertical gap between the two rows (on the branch wire), where no
       // cell lives — so they never overlap blocks however tight the columns are.
       const yNode = (TOP_Y + CH + BOT_Y) / 2;
@@ -290,8 +277,7 @@
         class="cell"
         class:sel={c.slot === selectedSlot}
         class:bypassed={c.bypassed}
-        class:stranded={c.stranded != null}
-        title={c.strandedWhy ?? (c.favorite ? `${c.name} — favorite "${c.favorite}"` : c.name)}
+        title={c.favorite ? `${c.name} — favorite "${c.favorite}"` : c.name}
         class:insb={dragOver === c.slot && dragSide === "l" && dragSrc != null && dragSrc !== c.slot}
         class:insa={dragOver === c.slot && dragSide === "r" && dragSrc != null && dragSrc !== c.slot}
         draggable="true"
@@ -361,7 +347,6 @@
             >FS{c.footswitch}</span>
           {/if}
         {/if}
-        {#if c.stranded != null}<span class="unfed">outside path B</span>{/if}
       </button>
     {:else}
       <div
@@ -458,26 +443,8 @@
   .cell.bypassed .name {
     color: #626a77;
   }
-  /* A row-B block outside the split→mixer bracket — a layout HX Edit can't draw. Deliberately a
-     muted grey and not amber: the block plays, so this is a note about the drawing, not a fault. */
-  .cell.stranded {
-    border-style: dashed;
-  }
-  .cell .unfed {
-    position: absolute;
-    top: -8px;
-    right: -6px;
-    padding: 0 4px;
-    border-radius: 7px;
-    background: #3a4049;
-    color: #98a1ae;
-    font-size: 9px;
-    font-weight: 600;
-    white-space: nowrap;
-  }
-  /* The footswitch this block's bypass sits on. Top-*left*, so it never collides with the
-     stranded badge at top-right, and in the accent blue rather than the muted grey those use:
-     this is a live binding on the pedal, not a note about our drawing. */
+  /* The footswitch this block's bypass sits on: top-left, in the accent blue — a live binding
+     on the pedal. */
   .cell .fs {
     position: absolute;
     top: -8px;

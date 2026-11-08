@@ -2069,3 +2069,8 @@ amber warning claiming it is dead. **Third time the same lesson: do not out-guar
 To settle the audio question with no Windows and no capture: put an envelope filter in path B, play,
 then raise `Balance B` (or the filter's own Sensitivity) and play again. If it comes alive, level is
 the whole story.
+
+**Update (2026-11-07, issue #34) [solid]:** the remaining "outside path B" note is gone too. Its
+premise, that HX Edit's path B always spans exactly the split→mixer bracket, is refuted by Line 6's
+own factory preset GlitchVerb (Helix LT): split and join one column apart, B blocks on both sides,
+all playing in path B. The GUI now draws the B wire across every occupied B column.

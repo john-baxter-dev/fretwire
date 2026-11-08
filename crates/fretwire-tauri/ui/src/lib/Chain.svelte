@@ -146,14 +146,19 @@
       const xSplit = gapX(d.split_pos);
       const xMixer = gapX(d.mixer_pos);
       const yT = midY(TOP_Y), yB = midY(BOT_Y);
-      // The B run reaches the outer gaps of any B block past either end of the bracket, so a
-      // block there sits on the wire instead of floating beside it.
-      const xLo = Math.min(xSplit, ...bCols.map((c) => gapX(c)));
-      const xHi = Math.max(xMixer, ...bCols.map((c) => gapX(c + 1)));
-      wires.push(`M ${xSplit} ${yT} V ${yB}`, `M ${xLo} ${yB} H ${xHi}`, `M ${xMixer} ${yB} V ${yT}`);
       // Seat the node glyphs in the vertical gap between the two rows (on the branch wire), where no
       // cell lives — so they never overlap blocks however tight the columns are.
       const yNode = (TOP_Y + CH + BOT_Y) / 2;
+      // Path B is drawn the way the Helix's own screen draws it (GlitchVerb on an LT, issue #34):
+      // the split drops to a rail in the row gap, the rail runs out past the leftmost B block, down
+      // and along the B row through every block in column order, back up past the rightmost one,
+      // and along a second rail to the mixer. With every B block inside the bracket both rails are
+      // zero-length and this is the plain bracket.
+      const xLo = Math.min(xSplit, ...bCols.map((c) => gapX(c)));
+      const xHi = Math.max(xMixer, ...bCols.map((c) => gapX(c + 1)));
+      wires.push(
+        `M ${xSplit} ${yT} V ${yNode} H ${xLo} V ${yB} H ${xHi} V ${yNode} H ${xMixer} V ${yT}`,
+      );
       nodes = [
         { kind: "split", x: xSplit, y: yNode, text: "⋔", slot: d.split_node?.slot },
         { kind: "mixer", x: xMixer, y: yNode, text: "⋉", slot: d.mixer_node?.slot },

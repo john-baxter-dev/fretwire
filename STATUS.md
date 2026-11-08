@@ -6,8 +6,9 @@ _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in 
 GlitchVerb has its split and join one column apart, with B-row blocks to the left, between and to
 the right, and on the pedal all three are on path B. We marked the outer two "outside path B" on
 the theory that HX Edit can't draw that layout. A Line 6 factory preset laid out that way refutes
-it. The B row's columns are layout, not routing. The badge is gone, and the path B wire now spans
-the split→mixer bracket plus every occupied B column.
+it. The B row's columns are layout, not routing. The badge is gone, and path B is drawn the way the LT's own screen draws it
+(the owner's photo): the split drops to a rail that runs out past the outermost B blocks, through
+all of them in column order, and back along a second rail to the mixer.
 
 **In-Z and the input source, on the input block (2026-10-31, issue #28).** The two items left on
 #28, both settled on the owner's Stomp (fw 3.71) with no HX Edit capture. **In-Z is preset setting

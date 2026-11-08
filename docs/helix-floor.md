@@ -2073,4 +2073,8 @@ the whole story.
 **Update (2026-11-07, issue #34) [solid]:** the remaining "outside path B" note is gone too. Its
 premise, that HX Edit's path B always spans exactly the split→mixer bracket, is refuted by Line 6's
 own factory preset GlitchVerb (Helix LT): split and join one column apart, B blocks on both sides,
-all playing in path B. The GUI now draws the B wire across every occupied B column.
+all playing in path B. The owner's photo of the LT's screen shows how the pedal draws it: the split
+drops to a rail that runs to the left edge, down, right along the B row through every block in
+column order, up at the right edge, and back along a second rail to the join. Path B is the whole
+B row; the split/join columns only say where it leaves and rejoins the A row. The GUI now draws
+that loop, with the rails stopping just past the outermost B blocks instead of at the grid edges.

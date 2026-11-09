@@ -1005,12 +1005,17 @@
   }
   /* Two thirds of the routing panel above is as long as a slider needs to be — the rest was
      just dead drag distance. A one-group block gets that cap on its single column; paired
-     blocks already split the panel per group, so each fills its own share. */
+     blocks already split the panel per group, so each fills its own share. The cap only applies
+     above ~900px; below that, use the full width. */
   .grid {
     display: grid;
     grid-template-columns: 1fr;
     gap: 14px 0;
-    max-width: 66%;
+  }
+  @media (min-width: 900px) {
+    .grid {
+      max-width: 66%;
+    }
   }
   .groups.paired .grid {
     max-width: 100%;
@@ -1032,8 +1037,8 @@
   }
   .ctrl {
     display: grid;
-    /* The badge now reads "Snap" instead of "Snapshots", so the name cell can give a little
-       width back to the slider without crowding the longest labels. */
+    /* The badge now reads "Snap" instead of "Snapshots", allowing tighter spacing. The gap
+       changed from 10px to 2px to accommodate this. */
     grid-template-columns: 110px 1fr;
     align-items: center;
     gap: 2px;

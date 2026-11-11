@@ -22,8 +22,8 @@ pub mod events;
 
 use crate::dto::{
     BackupFileDto, BackupInfoDto, BackupSummaryDto, CategoryDto, DataStatusDto, DetectedDeviceDto,
-    FavoriteDto, ImportResultDto, IrFileDto, IrSlotDto, ModelChoiceDto, PresetDto, PresetListItem,
-    RestoreReportDto, SettingDto, SplitTypeDto, UpdateStatusDto,
+    FavoriteDto, HlxPreviewDto, ImportResultDto, IrFileDto, IrSlotDto, ModelChoiceDto, PresetDto,
+    PresetListItem, RestoreReportDto, SettingDto, SplitTypeDto, UpdateStatusDto,
 };
 use crate::events::{Event, EventSink};
 use base64::Engine as _;
@@ -1434,6 +1434,58 @@ pub async fn restore_preset_inline(
 ) -> R<PresetDto> {
     run(state, move |s| {
         restore_from(s, &Backup::from_json(&json)?, index, slot, bank, to_bank)
+    })
+    .await
+}
+
+/// Convert a Stomp .hlx using a fresh read from the connected device. No writes.
+fn prepare_hlx(
+    s: &mut Session,
+    source: &fretwire_core::hlx::HlxPreset,
+) -> fretwire_core::Result<fretwire_core::hlx::PreparedHlx> {
+    if s.device().model_code != Some("P33") {
+        return Err(fretwire_core::Error::Invalid(
+            "direct .hlx import currently supports the HX Stomp only".into(),
+        ));
+    }
+    let raw = s.read_preset_raw()?;
+    let donor = fretwire_core::fretwire_data::stream::PresetStream::parse(&raw)?;
+    source.prepare(&donor, &s.catalog().symbols, &s.catalog().value_types)
+}
+
+/// Inspect conversion before the destination is chosen. Envelope and placement errors fail
+/// before USB I/O; model and parameter validation happens before any device writes.
+pub async fn hlx_preview(state: &AppState, json: String) -> R<HlxPreviewDto> {
+    let source = fretwire_core::hlx::HlxPreset::parse(&json).map_err(|e| e.to_string())?;
+    run(state, move |s| {
+        let prepared = prepare_hlx(s, &source)?;
+        Ok(HlxPreviewDto {
+            name: prepared.name,
+            blocks: prepared.report.blocks,
+            snapshots: prepared.report.snapshots,
+            footswitches: prepared.report.footswitches,
+            controllers: prepared.report.controllers,
+            not_carried: prepared.report.not_carried,
+        })
+    })
+    .await
+}
+
+/// Restore an .hlx into an explicitly chosen slot. Revalidate and convert against the current
+/// device before the first write; the frontend sends the exact text that was previewed.
+pub async fn restore_hlx(
+    state: &AppState,
+    json: String,
+    bank: i64,
+    slot: i64,
+    allow_partial: bool,
+) -> R<PresetDto> {
+    let source = fretwire_core::hlx::HlxPreset::parse(&json).map_err(|e| e.to_string())?;
+    fretwire_core::hlx::validate_destination(bank, slot).map_err(|e| e.to_string())?;
+    run(state, move |s| {
+        let prepared = prepare_hlx(s, &source)?;
+        let p = prepared.restore(s, bank, slot, allow_partial)?;
+        Ok(dto(s, &p))
     })
     .await
 }

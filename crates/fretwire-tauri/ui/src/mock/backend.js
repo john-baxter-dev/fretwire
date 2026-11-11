@@ -344,7 +344,7 @@ function makePreset(name, index, slots, opts = {}) {
   return {
     name, index, active_snapshot: 0, snapshot_names: opts.snapshot_names ?? [], slots,
     nodePos: {}, dspCount,
-    deviceModel: opts.deviceModel ?? "HX Stomp", buildStamp: opts.buildStamp ?? "v3.71-32-g1039661",
+    deviceModel: opts.deviceModel ?? "P33", buildStamp: opts.buildStamp ?? "v3.71-32-g1039661",
   };
 }
 
@@ -787,6 +787,72 @@ function restoreFrom(backup, index, slot, bank, toBank = bank) {
   clearHistory();
   seedHistory();
   return toDto(current);
+}
+
+// UI exercise only. The mock catalog has synthetic symbols such as drive_minotaur;
+// conversion of real HX Edit symbols belongs to the Rust backend and its imported data.
+function prepareHlx(json) {
+  const file = JSON.parse(json);
+  if (file.schema !== "L6Preset") throw new Error("expected schema L6Preset");
+  if (file.data?.device !== 0x210006) throw new Error("HX Stomp presets only");
+  const name = file.data.meta?.name;
+  if (typeof name !== "string" || !name.trim() || name.includes("\0")) throw new Error("invalid preset name");
+  const tone = file.data.tone;
+  if (!tone?.dsp0 || typeof tone.dsp0 !== "object" || Array.isArray(tone.dsp0)) throw new Error("no dsp0 object");
+  const topology = tone.global?.["@topology0"];
+  if (!["A", "SABJ"].includes(topology)) throw new Error("HX Stomp topology A or SABJ required");
+  for (const key of ["split", "join"]) {
+    const node = tone.dsp0[key];
+    const prefix = key === "split" ? "HD2_AppDSPFlowSplit" : "HD2_AppDSPFlowJoin";
+    if (!node?.["@model"]?.startsWith(prefix) || !Number.isInteger(node["@position"]) ||
+        node["@position"] < 0 || node["@position"] > 7) throw new Error(`invalid or missing ${key} routing node`);
+  }
+  for (const [key, dsp] of Object.entries(tone)) {
+    if (key.startsWith("dsp") && key !== "dsp0" && Object.keys(dsp ?? {}).some((k) => k.startsWith("block"))) {
+      throw new Error("an HX Stomp has one DSP");
+    }
+  }
+  const blocks = Object.entries(tone.dsp0).filter(([k]) => k.startsWith("block"));
+  if (blocks.length > 8) throw new Error("an HX Stomp holds at most 8 blocks");
+  const occupied = new Set();
+  for (const [, b] of blocks) {
+    if (!Number.isInteger(b?.["@path"]) || b["@path"] < 0 || b["@path"] > 1 ||
+        !Number.isInteger(b["@position"]) || b["@position"] < 0 || b["@position"] > 7) {
+      throw new Error("invalid @path/@position");
+    }
+    const slot = b["@path"] * 10 + b["@position"] + 1;
+    if (b["@path"] === 1 && topology === "A") throw new Error("path B needs a parallel topology");
+    if (occupied.has(slot)) throw new Error("two blocks occupy the same path and position");
+    occupied.add(slot);
+  }
+  if (!connected) throw new Error("not connected");
+  if (deviceMode !== "stomp") throw new Error("direct .hlx import supports the HX Stomp only");
+  const prepared = structuredClone(current);
+  for (const slot of allEditSlots(prepared)) delete prepared.slots[slot];
+  prepared.name = name;
+  prepared.assignments = [];
+  let footswitches = 0;
+  for (const [key, b] of blocks) {
+    const model = findModel(b["@model"]);
+    if (!model) throw new Error("mock .hlx import uses synthetic model symbols; real files require the Rust backend");
+    const cab = b["@cab"] ? tone.dsp0[b["@cab"]]?.["@model"] : undefined;
+    if (cab && !findModel(cab)) throw new Error("unknown mock cab model");
+    const fs = tone.footswitch?.dsp0?.[key]?.["@fs_index"] ?? 0;
+    const block = makeBlock(model.symbolic_id, { cab, bypassed: b["@enabled"] === false, footswitch: fs });
+    for (const param of block.params) {
+      if (Object.hasOwn(b, param.name)) param.value = Number(b[param.name]);
+    }
+    prepared.slots[b["@path"] * 10 + b["@position"] + 1] = block;
+    if (fs > 0 && fs <= 5) footswitches++;
+  }
+  let snapshots = 0;
+  for (let i = 0; i < 3 && tone[`snapshot${i}`]; i++) {
+    prepared.snapshot_names[i] = tone[`snapshot${i}`]["@name"] ?? prepared.snapshot_names[i];
+    snapshots++;
+  }
+  return { prepared, preview: { name, blocks: blocks.length, snapshots, footswitches, controllers: 0,
+    not_carried: ["Undecoded settings use the currently loaded preset as a donor, not the destination slot.",
+      "Browser mock: controller and snapshot conversion is simulated. Use the Rust backend for real presets."] } };
 }
 
 
@@ -1441,6 +1507,22 @@ const HANDLERS = {
     return null;
   },
   read_preset: () => {
+    seedHistory();
+    return toDto(current);
+  },
+  hlx_preview: ({ json }) => prepareHlx(json).preview,
+  restore_hlx: ({ json, bank, slot, allowPartial }) => {
+    if (bank !== 0 || !Number.isInteger(slot) || slot < 0 || slot >= 126) throw new Error("choose bank 0, slot 0 to 125");
+    const { prepared } = prepareHlx(json);
+    if (allowPartial !== true) throw new Error("acknowledge the .hlx conversion omissions");
+    prepared.index = slot;
+    const list = bankOf(bank);
+    const at = list.findIndex((p) => p.index === slot);
+    if (at >= 0) list[at] = prepared;
+    else list.push(prepared);
+    currentBank = bank;
+    current = prepared;
+    clearHistory();
     seedHistory();
     return toDto(current);
   },

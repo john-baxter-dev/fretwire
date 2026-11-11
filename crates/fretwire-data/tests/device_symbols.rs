@@ -426,7 +426,7 @@ fn snapshot_matrix_matches_the_live_block_state() {
     assert_eq!(snaps[0].name, "SNAPSHOT 1");
     assert_eq!(snaps[0].block_enabled.len(), 20, "one entry per slot");
 
-    // preset1's live blocks: 2/3/4/7 bypassed, 5/6 active. `key 10 → 8` says snapshot 0 is active,
+    // preset1's live blocks: 2/3/4/7 bypassed, 5/6 active. `key 10 → 6` says snapshot 0 is active,
     // and snapshot 0's matrix agrees exactly — which is what makes the decode [solid].
     assert_eq!(ps.snapshots().0, Some(0));
     for b in ps.blocks().iter().filter(|b| b.is_block()) {
@@ -439,15 +439,18 @@ fn snapshot_matrix_matches_the_live_block_state() {
     }
 }
 
-// ...and the fixture that shows the stored active index can't be trusted on its own: dual_amp
-// reports snapshot 1 active, but its live block state is snapshot 0's scene. Locked in as a
-// regression so the discrepancy can't be "tidied away" without noticing — it is the standing lead
-// on the GUI highlighting the wrong snapshot on hardware.
+// Dual Amp has one controller place (10/8), while selection (10/6) and its live scene are 0.
 #[test]
-fn dual_amp_stored_active_snapshot_disagrees_with_its_scene() {
+fn dual_amp_controller_count_is_not_its_snapshot_selection() {
+    use fretwire_data::stream::map_get;
+    use rmpv::Value;
     let ps = PresetStream::parse(&capture("dual_amp_stream.msgpack.bin")).unwrap();
     let snaps = ps.snapshot_details();
-    assert_eq!(ps.snapshots().0, Some(1), "stored active index is 1");
+    assert_eq!(ps.snapshots().0, Some(0), "selection comes from key 6");
+    assert_eq!(
+        map_get(ps.field(10).unwrap(), 8).and_then(Value::as_i64),
+        Some(1)
+    );
 
     let live: Vec<(usize, bool)> = ps
         .blocks()
@@ -459,10 +462,7 @@ fn dual_amp_stored_active_snapshot_disagrees_with_its_scene() {
         live.iter().all(|&(slot, on)| s.block_enabled[slot] == on)
     };
     assert!(matches(&snaps[0]), "the live scene is snapshot 0's");
-    assert!(
-        !matches(&snaps[1]),
-        "but the stored active index points at snapshot 1, whose scene differs"
-    );
+    assert!(!matches(&snaps[1]), "snapshot 1 has a different scene");
 }
 
 // The preset header is an **offset table**, not an opaque uuid, and `to_blob` has to rebuild it.

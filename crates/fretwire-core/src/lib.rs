@@ -29,6 +29,7 @@ pub const BUILD_BANNER: &str = concat!(
 
 pub mod backup;
 pub mod editor;
+pub mod hlx;
 pub mod import;
 pub mod session;
 pub mod update;

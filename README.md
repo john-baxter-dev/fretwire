@@ -149,6 +149,39 @@ some GPU/compositor combinations hit a fatal Wayland protocol error otherwise. S
 produces the `.deb`/`.rpm`/AppImage (the CLI build comes first because the packages bundle it). CI
 does exactly this on a tag — see `.github/workflows/release.yml`.
 
+### Import an HX Stomp `.hlx` preset
+
+With an HX Stomp connected, open the preset list menu and choose **Import .hlx preset…**.
+Choose a single HX Stomp preset exported by HX Edit, review the conversion report, acknowledge
+its limitations, and choose a destination slot. **Import to selected slot** overwrites and saves
+that slot on the pedal. Choosing a file and viewing the report makes no device writes; Cancel
+leaves the pedal unchanged. Import discards unsaved edits when it switches to the destination.
+
+This is a partial conversion through the existing backup tone converter. It carries supported
+blocks, parameters, topology, snapshots, bypass bindings and supported controller assignments.
+Undecoded fields, including Stomp input/output routing and some snapshot state, come from the
+**currently loaded preset at import time**, which serves as the donor; they do not come from the
+chosen destination. Review the report before saving. IR audio is not imported, and MIDI
+controller assignments and other unsupported sections are reported. Floor, LT, Rack, Stomp XL,
+HX Effects and POD Go files are refused rather than adapted to a Stomp. Unknown models and
+missing effect parameters are refused; use reference data matching the file's HX Edit version.
+The initial import supports serial `A` and parallel `SABJ` topology. Both split and join nodes
+must be present with complete parameters; incomplete routing is refused before writing.
+The editor reads the converted edit buffer back before saving and refuses a mismatched document.
+
+For an offline conversion, supply a raw preset stream previously read from your Stomp:
+
+```
+fretwire hlx-convert preset.hlx --donor stomp-donor.bin --out imported.json
+fretwire backup-show imported.json
+```
+
+The command writes a single-preset fretwire export and prints omissions to stderr. It performs
+no USB I/O. Restore the export through the existing restore workflow only after reviewing the
+report. Direct import was checked on an HX Stomp (owner-reported firmware 3.80): an amp,
+amp+cab, snapshot bypass and parameter recall, custom footswitch label/colour, and active
+snapshot selection survived save/reload. Audio equivalence and other hardware remain unverified.
+
 ### No hardware, no Rust
 
 The frontend runs standalone in a browser against an in-memory **mock device** — no pedal, no Rust

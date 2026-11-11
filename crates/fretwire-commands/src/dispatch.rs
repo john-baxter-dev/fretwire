@@ -20,6 +20,8 @@ use serde_json::Value;
 
 /// Every command the dispatcher answers — the serve-side registry, one name per match arm.
 pub const COMMAND_NAMES: &[&str] = &[
+    "hlx_preview",
+    "restore_hlx",
     "data_status",
     "update_status",
     "update_check",
@@ -316,6 +318,15 @@ pub async fn dispatch(
         }
         "cancel_export" => ok(c::cancel_export(state).await?),
         "backup_show" => ok(c::backup_show(a.req("path")?).await?),
+        "hlx_preview" => ok(c::hlx_preview(state, a.req("json")?).await?),
+        "restore_hlx" => ok(c::restore_hlx(
+            state,
+            a.req("json")?,
+            a.req("bank")?,
+            a.req("slot")?,
+            a.req("allowPartial")?,
+        )
+        .await?),
         "restore_preset" => ok(c::restore_preset(
             state,
             a.req("path")?,
@@ -452,7 +463,7 @@ mod tests {
     /// pinned by `connect_is_matched_without_running`.
     #[tokio::test]
     async fn every_name_dispatches() {
-        assert_eq!(COMMAND_NAMES.len(), 86, "the surface was 86 commands");
+        assert_eq!(COMMAND_NAMES.len(), 88, "the surface is 88 commands");
         for name in COMMAND_NAMES {
             if *name == "connect" {
                 continue;
@@ -579,6 +590,43 @@ mod tests {
         .await
         .unwrap_err();
         assert!(e.starts_with("wav_base64:"), "got: {e}");
+    }
+
+    #[tokio::test]
+    async fn hlx_rejects_foreign_files_and_bad_destinations_before_the_device() {
+        let file = |device| {
+            serde_json::json!({
+                "schema": "L6Preset", "version": 6,
+                "data": {"device": device, "meta": {"name": "Test"}, "tone": {
+                    "global":{"@topology0":"A"}, "dsp0": {
+                        "split":{"@model":"HD2_AppDSPFlowSplitY","@position":0},
+                        "join":{"@model":"HD2_AppDSPFlowJoin","@position":0}
+                    }
+                }}
+            })
+            .to_string()
+        };
+        for json in ["{".into(), file(0x210001), file(0x21000b)] {
+            let e = call("hlx_preview", serde_json::json!({"json": json}))
+                .await
+                .unwrap_err();
+            assert!(!e.contains("not connected"), "got: {e}");
+        }
+        let e = call(
+            "restore_hlx",
+            serde_json::json!({
+                "json": file(0x210006), "bank": 0, "slot": 126, "allowPartial": true
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(e.contains("from 0 to 125"), "got: {e}");
+        for spelling in ["allowPartial", "allow_partial"] {
+            let mut args = serde_json::json!({"json": file(0x210006), "bank": 0, "slot": 1});
+            args[spelling] = serde_json::json!(false);
+            let e = call("restore_hlx", args).await.unwrap_err();
+            assert!(e.contains("not connected"), "got: {e}");
+        }
     }
 
     /// Optional args accept absent and null alike.

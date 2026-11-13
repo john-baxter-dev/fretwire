@@ -7,9 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "//test": "Contract check for the mock backend. Plain node, no runner — see tests/.",
+    "//test": "Contract check for the mock backend. Plain node, no runner \u2014 see tests/.",
     "test": "node tests/ir-mock.mjs && node tests/globals-mock.mjs && node tests/sources-mock.mjs && node tests/eqcurve.mjs && node tests/files.mjs && node tests/backup-mock.mjs && node tests/update-mock.mjs && node tests/sync-mock.mjs && node tests/favorites-mock.mjs && node tests/panel-ssr.mjs && node tests/push-kinds.mjs && node tests/invoke-args.mjs && node tests/stacking.mjs",
-    "//tauri:dev": "Hot-reloading app against the real backend. Runs from the crate root (that is where tauri.conf.json lives). --no-default-features turns off `custom-protocol` — a default here so plain cargo builds work — which is what lets the webview use this dev server instead of the embedded dist/.",
+    "//tauri:dev": "Hot-reloading app against the real backend. Runs from the crate root (that is where tauri.conf.json lives). --no-default-features turns off `custom-protocol` \u2014 a default here so plain cargo builds work \u2014 which is what lets the webview use this dev server instead of the embedded dist/.",
     "tauri:dev": "cd .. && ./ui/node_modules/.bin/tauri dev -- --no-default-features"
   },
   "dependencies": {
@@ -21,8 +21,5 @@
     "@tauri-apps/cli": "^2.11.4",
     "svelte": "^5",
     "vite": "^6"
-  },
-  "allowScripts": {
-    "esbuild@0.25.12": true
   }
 }

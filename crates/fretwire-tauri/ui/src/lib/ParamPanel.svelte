@@ -129,6 +129,11 @@
     );
   }
 
+  // The assign badge shares the parameter-name cell, so its width comes out of slider travel.
+  // "Snapshots" is the one source long enough to matter; the wire name and the picker below keep
+  // the full word, only the badge abbreviates it.
+  const badgeSource = (name) => (name === "Snapshots" ? "Snap" : name);
+
   // Which parameter's assignment editor is open. Only one at a time — the travel controls are tall
   // enough that several open at once turns the grid into a wall.
   let openAssign = $state(null);
@@ -604,12 +609,20 @@
       />
     {/if}
 
-    {@render controls(block.params, false)}
-
-    {#if block.paired_params.length}
-      <div class="subhead">{block.paired_model_name ?? "Cab / IR"}</div>
-      {@render controls(block.paired_params, true)}
-    {/if}
+    <div class="groups" class:paired={block.paired_params.length}>
+      <section class="group">
+        {#if block.paired_params.length}
+          <div class="subhead">{block.model_name}</div>
+        {/if}
+        {@render controls(block.params, false)}
+      </section>
+      {#if block.paired_params.length}
+        <section class="group">
+          <div class="subhead">{block.paired_model_name ?? "Cab / IR"}</div>
+          {@render controls(block.paired_params, true)}
+        </section>
+      {/if}
+    </div>
   </div>
 {/if}
 
@@ -650,7 +663,7 @@
               title={asg
                 ? `Driven by ${asg.source_name} — click to change`
                 : "Put this parameter under a footswitch or expression pedal"}
-              onclick={() => (openAssign = openAssign === k ? null : k)}>{asg ? asg.source_name : "\u21e2"}</button
+              onclick={() => (openAssign = openAssign === k ? null : k)}>{asg ? badgeSource(asg.source_name) : "\u21e2"}</button
             >
             {/if}
           </span>
@@ -968,19 +981,47 @@
     font-size: 13px;
   }
   .subhead {
-    margin: 16px 0 8px;
+    margin: 0 0 8px;
     color: #9aa3b2;
     font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.4px;
   }
+  /* Parameter groups get a column each — an amp's controls beside its paired cab's, rather than
+     the cab's flowing into whatever space the amp's auto-fill grid left. A block with one group
+     gets one column, and below ~900px two readable columns no longer fit, so the groups stack
+     (each still a single column). */
+  .groups {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+    gap: 8px 32px;
+    align-items: start;
+    /* A line of breathing room under the block title — about one text line — so the name and the
+       first row of controls don't crowd each other. */
+    margin-top: 20px;
+  }
+  .group {
+    min-width: 0;
+  }
+  /* Two thirds of the routing panel above is as long as a slider needs to be — the rest was
+     just dead drag distance. A one-group block gets that cap on its single column; paired
+     blocks already split the panel per group, so each fills its own share. The cap only applies
+     above ~900px; below that, use the full width. */
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-    gap: 10px 32px;
+    grid-template-columns: 1fr;
+    gap: 14px 0;
+  }
+  @media (min-width: 900px) {
+    .grid {
+      max-width: 66%;
+    }
+  }
+  .groups.paired .grid {
+    max-width: 100%;
   }
   /* Cab blocks only: the drawing sits beside the params instead of banding across the top. The
-     grid keeps its own auto-fill columns in whatever width is left, and `min-width: 0` is what
+     grid keeps its single parameter column in whatever width is left, and `min-width: 0` is what
      lets it actually give width back — a grid item defaults to its content's min size and would
      otherwise shove the drawing off the panel. Below ~600px there is no room for both and the
      drawing wraps underneath. */
@@ -996,9 +1037,11 @@
   }
   .ctrl {
     display: grid;
+    /* The badge now reads "Snap" instead of "Snapshots", allowing tighter spacing. The gap
+       changed from 10px to 2px to accommodate this. */
     grid-template-columns: 110px 1fr;
     align-items: center;
-    gap: 10px;
+    gap: 2px;
     min-width: 0;
   }
   .ctrl .cap {
@@ -1101,7 +1144,7 @@
   .slider {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 2px;
     min-width: 0;
   }
   .slider input[type="range"] {

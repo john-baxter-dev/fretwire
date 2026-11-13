@@ -437,6 +437,40 @@ pub fn apply_tone(
     Ok(out)
 }
 
+/// Check that effect parameters can be converted without inventing missing values. Direct
+/// `.hlx` import uses this before applying an untrusted file to a device-authored donor.
+/// Loopers intentionally store only a subset of their symbol's live transport parameters.
+pub fn validate_tone_parameters(tone: &JsonMap<String, Json>, syms: &DeviceSymbols) -> Result<()> {
+    for (dsp_name, dsp) in tone.iter().filter(|(k, _)| k.starts_with("dsp")) {
+        let Some(dsp) = dsp.as_object() else { continue };
+        for (name, block) in dsp.iter().filter(|(k, _)| {
+            k.starts_with("block") || k.starts_with("cab") || matches!(k.as_str(), "split" | "join")
+        }) {
+            let model = block
+                .get("@model")
+                .and_then(Json::as_str)
+                .ok_or_else(|| Error::Stream(format!("{dsp_name}.{name}: no @model")))?;
+            let (_, _, params) = resolve_symbol(model, block, syms)?;
+            let looper = block.get("@type").and_then(Json::as_i64) == Some(6);
+            for param in params.iter().filter(|p| *p != "IrData") {
+                let value = get_param(block, param);
+                if looper && value.is_none() {
+                    continue;
+                }
+                if !matches!(
+                    value,
+                    Some(Json::Bool(_) | Json::String(_) | Json::Number(_))
+                ) {
+                    return Err(Error::Stream(format!(
+                        "{dsp_name}.{name}: missing or invalid parameter {param:?}; refusing to fill it with zero"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Preset key `3 → 8` — the **footswitch layout**, with its custom labels and LED colours.
 ///
 /// The array has one position per switch (FS*n* is position *n* − 1) and each position holds the
@@ -941,9 +975,10 @@ fn controller_row(
 /// `[false, len, nil]` sentinel the device uses for unused rows.
 ///
 /// Left as the donor's: `1`, controller state of a shape not yet decoded (`[24, false, [0…]]` per
-/// row in every fixture), and `10 → 8`, the stored active snapshot — the `tone` says 0 where the
-/// same unit's dump says 4, so the pairing is unconfirmed and the field is already known to be an
-/// unreliable reading of the live snapshot.
+/// row in every fixture). Key `8` is the number of assigned controller places, not the active
+/// snapshot: a live Stomp went 0 → 1 → 2 → 1 as assignments were added and removed without
+/// switching snapshots. Leaving it zero preserves the values in the document but prevents
+/// firmware from recalling them. [solid — live HX Stomp, 2026-11-11]
 fn apply_snapshots(
     donor: &mut PresetStream,
     tone: &JsonMap<String, Json>,
@@ -956,6 +991,7 @@ fn apply_snapshots(
     let Some(group) = map_get_mut(&mut donor.preset, 10) else {
         return;
     };
+    set_map_key(group, 8, Value::from(placed.len() as i64));
     let Some(Value::Array(list)) = map_get_mut(group, 10) else {
         return;
     };
@@ -1809,8 +1845,7 @@ fn apply_globals(donor: &mut PresetStream, tone: &JsonMap<String, Json>, chain: 
 fn note_omissions(tone: &JsonMap<String, Json>, out: &mut Conversion) {
     if out.snapshots > 0 {
         out.not_carried.push(
-            "snapshot key 1 (controller state of undecoded shape) and the stored active snapshot: \
-             left as the target preset's"
+            "snapshot key 1 (controller state of undecoded shape): left as the target preset's"
                 .into(),
         );
     }

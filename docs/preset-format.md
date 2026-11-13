@@ -445,6 +445,16 @@ several nodes" below:
   [solid — assigning a Simple Delay's bypass to FS1 leaves key `4` entirely `nil`;
   `captures/assign_bypass_on_fs1.msgpack.bin`.]
 
+  **`10 → 8` counts assigned controller places on HX Stomp; it is not a snapshot index.**
+  With the active snapshot held fixed, adding a Snapshots assignment, adding an EXP1 assignment,
+  and removing the first assignment changed it `0 → 1 → 2 → 1`. Converted snapshots with values
+  in key `2` but a count of zero switched bypass correctly while failing to recall the assigned
+  parameter. Rebuilding this count restored parameter recall. The live snapshot index comes from
+  read-info key `92`. [solid — live HX Stomp, 2026-11-11; firmware reported as 3.80 by the owner]
+  Selection is `10 → 6`: switching from snapshot 0 to 2 changes it to 2, and it survives
+  save/reload. The `.hlx` importer writes this selection and selects the same snapshot before
+  save, so the live controller values are committed to the intended scene.
+
   **A bypass on an *expression pedal* does reach key 4** — the "probably" above resolved on
   2026-08-25. An XL owner put one block's bypass on EXP1 and another's on EXP2, and both landed here
   as ordinary key-4 entries carrying a target slot (`5`) and **no parameter reference** (`6`), which

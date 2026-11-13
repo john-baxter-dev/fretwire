@@ -6,6 +6,17 @@ use fretwire_core::fretwire_data::stream::{ParamValue, StatusPush};
 use fretwire_core::{EditorBlock, EditorParam, EditorPreset, ModelChoice};
 use serde::Serialize;
 
+/// Read-only .hlx conversion preview. Every omission must be visible before restore.
+#[derive(Serialize, Clone, Debug)]
+pub struct HlxPreviewDto {
+    pub name: String,
+    pub blocks: usize,
+    pub snapshots: usize,
+    pub footswitches: usize,
+    pub controllers: usize,
+    pub not_carried: Vec<String>,
+}
+
 /// A device-originated state change (footswitch bypass, panel snapshot/preset switch, panel knob),
 /// forwarded to the frontend so the GUI follows the hardware live. `Other` pushes are dropped.
 #[derive(Serialize, Clone, Debug)]

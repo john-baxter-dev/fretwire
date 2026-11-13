@@ -174,6 +174,48 @@
   // { path | json+fileName, entries, index, slot } — entries load from the file, which is a path
   // for the backend to open or (INLINE_FILES) the file's text carried in the invoke.
   let restoreDlg = $state(null);
+  // A preview is read-only. Keep the exact file text for the confirmed restore, with no
+  // destination selected by default and an explicit acknowledgement of conversion omissions.
+  let hlxDlg = $state(null);
+  let hlxBusy = $state(false);
+  const hlxTarget = $derived(hlxDlg?.slot != null ? presets.find((p) => p.index === hlxDlg.slot) : null);
+  const canImportHlx = $derived(preset?.device_model === "P33" && preset?.device_name === "HX Stomp");
+
+  async function onImportHlx() {
+    if (hlxBusy || !canImportHlx) return;
+    const file = await pickFile({ accept: ".hlx,application/json" });
+    if (!file) return;
+    hlxBusy = true;
+    try {
+      const json = await file.text();
+      const preview = await invoke("hlx_preview", { json });
+      hlxDlg = { json, fileName: file.name, preview, slot: null, acknowledged: false, error: null };
+    } catch (e) {
+      toast("Import .hlx: " + e);
+    } finally {
+      hlxBusy = false;
+    }
+  }
+
+  async function confirmHlx() {
+    if (hlxBusy || !hlxDlg || hlxDlg.slot == null ||
+      (hlxDlg.preview.not_carried.length && !hlxDlg.acknowledged)) return;
+    hlxBusy = true;
+    try {
+      const { json, slot, acknowledged } = hlxDlg;
+      preset = await invoke("restore_hlx", { json, bank: 0, slot, allowPartial: acknowledged });
+      hlxDlg = null;
+      selectedSlot = null;
+      activeSnapshot = preset.active_snapshot ?? 0;
+      await refreshPresets();
+      status = `Imported ${preset.name} to slot ${slot}.`;
+    } catch (e) {
+      if (hlxDlg) hlxDlg = { ...hlxDlg, error: String(e) };
+      else toast(e);
+    } finally {
+      hlxBusy = false;
+    }
+  }
   // Whole-device backup: { path, irs, settings, favorites, userDefaults, onServer } — every setlist, plus the IR store and
   // the global settings unless unticked. The export dialog above is presets only.
   let backupDlg = $state(null);
@@ -1446,7 +1488,7 @@
 <main>
   {#if preset}
     <div class="workspace">
-      <PresetList {presets} currentIndex={preset.index} dirty={preset.dirty} {setlists} {viewBank} currentBank={presetBank} writeBlocked={foreignSetlist} {onPickSetlist} {onGoto} {onSave} {onSaveAs} {onRename} {onExport} {onRestore} {onBackupDevice} {onRestoreDevice} {onCopyPreset} {onPastePreset} {onClearPreset} {onRevertPreset} {presetClip} onNumbering={setNumberingMode} />
+      <PresetList {presets} currentIndex={preset.index} dirty={preset.dirty} {setlists} {viewBank} currentBank={presetBank} writeBlocked={foreignSetlist} {onPickSetlist} {onGoto} {onSave} {onSaveAs} {onRename} {onExport} {onRestore} {onImportHlx} canImportHlx={canImportHlx && !hlxBusy} {onBackupDevice} {onRestoreDevice} {onCopyPreset} {onPastePreset} {onClearPreset} {onRevertPreset} {presetClip} onNumbering={setNumberingMode} />
       <div class="content">
         <div class="meta">
           <span>
@@ -1750,6 +1792,37 @@
       <b>Presets only.</b> Global settings and IRs are not in the file — for those, use
       <b>Back up device to file…</b> in the same menu.
     </p>
+  </Dialog>
+{/if}
+
+{#if hlxDlg}
+  <Dialog
+    title="Import HX Stomp preset"
+    confirmLabel={hlxBusy ? "Importing…" : "Import to selected slot"}
+    confirmDisabled={hlxBusy || !canImportHlx || hlxDlg.slot == null || (hlxDlg.preview.not_carried.length > 0 && !hlxDlg.acknowledged)}
+    danger
+    width={560}
+    onconfirm={confirmHlx}
+    oncancel={() => { if (!hlxBusy) hlxDlg = null; }}
+  >
+    <p class="dlg-text"><b>{hlxDlg.preview.name}</b> — {hlxDlg.fileName}<br />
+      {hlxDlg.preview.blocks} blocks, {hlxDlg.preview.snapshots} snapshots,
+      {hlxDlg.preview.footswitches} footswitch bindings, {hlxDlg.preview.controllers} controller assignments.</p>
+    {#if hlxDlg.preview.not_carried.length}
+      <p class="dlg-text">These parts cannot be carried across completely. Settings left as the target's in this report come from the currently loaded preset:</p>
+      <ul class="dlg-text">{#each hlxDlg.preview.not_carried as warning}<li>{warning}</li>{/each}</ul>
+      <label class="dlg-text"><input type="checkbox" bind:checked={hlxDlg.acknowledged} disabled={hlxBusy} />
+        I have reviewed these limitations.</label>
+    {/if}
+    <label class="dlg-field">Destination slot
+      <select value={hlxDlg.slot ?? ""} disabled={hlxBusy} onchange={(e) => (hlxDlg = { ...hlxDlg, slot: e.currentTarget.value === "" ? null : Number(e.currentTarget.value) })}>
+        <option value="">Choose a slot…</option>
+        {#each presets as p (p.index)}<option value={p.index}>{slotLabel(p)} — {p.name}</option>{/each}
+      </select>
+    </label>
+    {#if hlxTarget}<p class="dlg-warn">Overwrites <b>{hlxTarget.name}</b> in slot {hlxDlg.slot} on the HX Stomp.
+      This saves to the pedal. Unsaved edits in the current preset will be discarded.</p>{/if}
+    {#if hlxDlg.error}<p class="dlg-warn" role="alert">{hlxDlg.error}</p>{/if}
   </Dialog>
 {/if}
 

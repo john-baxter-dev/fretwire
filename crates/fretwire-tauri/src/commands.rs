@@ -11,13 +11,29 @@
 use fretwire_commands::R;
 use fretwire_commands::dto::{
     BackupFileDto, BackupInfoDto, BackupSummaryDto, CategoryDto, DataStatusDto, DetectedDeviceDto,
-    ImportResultDto, IrFileDto, IrSlotDto, ModelChoiceDto, PresetDto, PresetListItem,
-    RestoreReportDto, SettingDto, SplitTypeDto, UpdateStatusDto,
+    HlxPreviewDto, ImportResultDto, IrFileDto, IrSlotDto, ModelChoiceDto, PresetDto,
+    PresetListItem, RestoreReportDto, SettingDto, SplitTypeDto, UpdateStatusDto,
 };
 use fretwire_commands::events::{Event, EventSink};
 use tauri::{Emitter, State};
 
 pub use fretwire_commands::AppState;
+
+#[tauri::command]
+pub async fn hlx_preview(state: State<'_, AppState>, json: String) -> R<HlxPreviewDto> {
+    fretwire_commands::hlx_preview(&state, json).await
+}
+
+#[tauri::command]
+pub async fn restore_hlx(
+    state: State<'_, AppState>,
+    json: String,
+    bank: i64,
+    slot: i64,
+    allow_partial: bool,
+) -> R<PresetDto> {
+    fretwire_commands::restore_hlx(&state, json, bank, slot, allow_partial).await
+}
 
 /// [`EventSink`] over the Tauri event system (a newtype — the orphan rule keeps the impl off
 /// `AppHandle` itself). Emit failures are logged, not surfaced: the producers have nowhere to

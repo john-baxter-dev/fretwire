@@ -137,6 +137,8 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::hlx_preview,
+            commands::restore_hlx,
             commands::data_status,
             commands::update_status,
             commands::update_check,

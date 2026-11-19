@@ -504,6 +504,8 @@ function floorSetlists() {
 // Session state
 // ---------------------------------------------------------------------------------------------
 let connected = false;
+let hlxPreview = null;
+let hlxPreviewId = 0;
 
 // Which unit the mock is pretending to be, and its setlists: banks[bank] is a list of presets.
 // The choice is remembered across reloads (`fretwireMock.device(…)` writes it), because switching
@@ -797,6 +799,7 @@ function prepareHlx(json) {
   if (file.data?.device !== 0x210006) throw new Error("HX Stomp presets only");
   const name = file.data.meta?.name;
   if (typeof name !== "string" || !name.trim() || name.includes("\0")) throw new Error("invalid preset name");
+  if (new TextEncoder().encode(name).length > 32) throw new Error("preset name exceeds 32 UTF-8 bytes");
   const tone = file.data.tone;
   if (!tone?.dsp0 || typeof tone.dsp0 !== "object" || Array.isArray(tone.dsp0)) throw new Error("no dsp0 object");
   const topology = tone.global?.["@topology0"];
@@ -851,7 +854,7 @@ function prepareHlx(json) {
     snapshots++;
   }
   return { prepared, preview: { name, blocks: blocks.length, snapshots, footswitches, controllers: 0,
-    not_carried: ["Undecoded settings use the currently loaded preset as a donor, not the destination slot.",
+    not_carried: ["Undecoded settings use the preset that was loaded during preview as a donor.",
       "Browser mock: controller and snapshot conversion is simulated. Use the Rust backend for real presets."] } };
 }
 
@@ -1504,17 +1507,26 @@ const HANDLERS = {
   },
   disconnect: () => {
     connected = false;
+    hlxPreview = null;
     return null;
   },
   read_preset: () => {
     seedHistory();
     return toDto(current);
   },
-  hlx_preview: ({ json }) => prepareHlx(json).preview,
-  restore_hlx: ({ json, bank, slot, allowPartial }) => {
+  hlx_preview: ({ json }) => {
+    const { prepared, preview } = prepareHlx(json);
+    const preview_id = ++hlxPreviewId;
+    hlxPreview = { id: preview_id, prepared };
+    return { ...preview, preview_id };
+  },
+  restore_hlx: ({ previewId, bank, slot, allowPartial }) => {
     if (bank !== 0 || !Number.isInteger(slot) || slot < 0 || slot >= 126) throw new Error("choose bank 0, slot 0 to 125");
-    const { prepared } = prepareHlx(json);
+    if (!connected) throw new Error("not connected");
+    if (!hlxPreview || hlxPreview.id !== previewId) throw new Error("preview expired; preview the .hlx file again");
     if (allowPartial !== true) throw new Error("acknowledge the .hlx conversion omissions");
+    const { prepared } = hlxPreview;
+    hlxPreview = null;
     prepared.index = slot;
     const list = bankOf(bank);
     const at = list.findIndex((p) => p.index === slot);
@@ -2094,6 +2106,7 @@ if (typeof window !== "undefined") {
       banks = buildBanks();
       currentBank = 0;
       current = bankOf(0)[0];
+      hlxPreview = null;
       clearHistory();
       console.info(
         `[fretwire] mock is now a ${DEVICES[mode].name} — reload the page (the setting sticks).`,

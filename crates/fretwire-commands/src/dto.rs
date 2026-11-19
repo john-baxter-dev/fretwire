@@ -9,6 +9,7 @@ use serde::Serialize;
 /// Read-only .hlx conversion preview. Every omission must be visible before restore.
 #[derive(Serialize, Clone, Debug)]
 pub struct HlxPreviewDto {
+    pub preview_id: u32,
     pub name: String,
     pub blocks: usize,
     pub snapshots: usize,

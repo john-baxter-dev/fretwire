@@ -160,14 +160,15 @@ leaves the pedal unchanged. Import discards unsaved edits when it switches to th
 This is a partial conversion through the existing backup tone converter. It carries supported
 blocks, parameters, topology, snapshots, bypass bindings and supported controller assignments.
 Undecoded fields, including Stomp input/output routing and some snapshot state, come from the
-**currently loaded preset at import time**, which serves as the donor; they do not come from the
-chosen destination. Review the report before saving. IR audio is not imported, and MIDI
+**preset loaded at preview time**, which serves as the donor through confirmation. Review the
+report before saving. IR audio is not imported, and MIDI
 controller assignments and other unsupported sections are reported. Floor, LT, Rack, Stomp XL,
 HX Effects and POD Go files are refused rather than adapted to a Stomp. Unknown models and
 missing effect parameters are refused; use reference data matching the file's HX Edit version.
 The initial import supports serial `A` and parallel `SABJ` topology. Both split and join nodes
 must be present with complete parameters; incomplete routing is refused before writing.
-The editor reads the converted edit buffer back before saving and refuses a mismatched document.
+The editor verifies the converted edit buffer before recalling the selected scene and saving.
+If the pedal needs to switch snapshots, the recalled scene can replace live values in the file.
 
 For an offline conversion, supply a raw preset stream previously read from your Stomp:
 

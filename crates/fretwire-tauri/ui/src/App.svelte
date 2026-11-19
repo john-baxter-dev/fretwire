@@ -51,6 +51,7 @@
   let status = $state("Ready — WebKitGTK webview is painting.");
   let statusErr = $state(false);
   let preset = $state(null);
+  let presetGeneration = 0;
 
   // The status line reports the last thing that happened, which makes it a liar the moment the
   // loaded preset changes out from under it. Both halves showed up in the tester's screenshots: a
@@ -174,8 +175,8 @@
   // { path | json+fileName, entries, index, slot } — entries load from the file, which is a path
   // for the backend to open or (INLINE_FILES) the file's text carried in the invoke.
   let restoreDlg = $state(null);
-  // A preview is read-only. Keep the exact file text for the confirmed restore, with no
-  // destination selected by default and an explicit acknowledgement of conversion omissions.
+  // The preview ID identifies the conversion the user reviewed, including its donor settings.
+  // The destination and acknowledgement are chosen separately.
   let hlxDlg = $state(null);
   let hlxBusy = $state(false);
   const hlxTarget = $derived(hlxDlg?.slot != null ? presets.find((p) => p.index === hlxDlg.slot) : null);
@@ -189,7 +190,7 @@
     try {
       const json = await file.text();
       const preview = await invoke("hlx_preview", { json });
-      hlxDlg = { json, fileName: file.name, preview, slot: null, acknowledged: false, error: null };
+      hlxDlg = { fileName: file.name, preview, slot: null, acknowledged: false, error: null };
     } catch (e) {
       toast("Import .hlx: " + e);
     } finally {
@@ -198,22 +199,50 @@
   }
 
   async function confirmHlx() {
-    if (hlxBusy || !hlxDlg || hlxDlg.slot == null ||
+    if (hlxBusy || !canImportHlx || !hlxDlg || hlxDlg.slot == null ||
       (hlxDlg.preview.not_carried.length && !hlxDlg.acknowledged)) return;
     hlxBusy = true;
+    // In-flight reads from before the import must not repaint the old edit buffer.
+    presetGeneration++;
     try {
-      const { json, slot, acknowledged } = hlxDlg;
-      preset = await invoke("restore_hlx", { json, bank: 0, slot, allowPartial: acknowledged });
+      const { preview, slot, acknowledged } = hlxDlg;
+      const restored = await invoke("restore_hlx", { previewId: preview.preview_id, bank: 0, slot, allowPartial: acknowledged });
+      if (!connected) return;
+      preset = restored;
       hlxDlg = null;
       selectedSlot = null;
+      addTarget = null;
       activeSnapshot = preset.active_snapshot ?? 0;
       await refreshPresets();
-      status = `Imported ${preset.name} to slot ${slot}.`;
+      if (connected) status = `Imported ${restored.name} to slot ${slot}.`;
     } catch (e) {
       if (hlxDlg) hlxDlg = { ...hlxDlg, error: String(e) };
-      else toast(e);
+      await recoverPreset();
     } finally {
       hlxBusy = false;
+    }
+  }
+
+  async function recoverPreset() {
+    if (!connected) return;
+    try {
+      const live = await invoke("read_preset", { confirmIdentity: true });
+      if (!connected) return;
+      if (!Number.isInteger(live?.bank) || live.bank < 0 || !Number.isInteger(live?.index) || live.index < 0) {
+        throw new Error("the device did not report the loaded slot");
+      }
+      selectedSlot = null;
+      addTarget = null;
+      activeSnapshot = live.active_snapshot ?? 0;
+      statusErr = false;
+      preset = live;
+      await refreshPresets();
+    } catch (e) {
+      if (!connected) return;
+      preset = null;
+      status = "Could not read the current preset. Refresh before editing.";
+      statusErr = true;
+      toast("Read current preset: " + e);
     }
   }
   // Whole-device backup: { path, irs, settings, favorites, userDefaults, onServer } — every setlist, plus the IR store and
@@ -344,7 +373,7 @@
   // bypass (like HX Edit) — except while typing in a field or with a dialog open.
   onMount(() => {
     const onKey = (e) => {
-      if (!connected) return;
+      if (!connected || !preset || hlxDlg || hlxBusy) return;
       const tag = e.target?.tagName;
       if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
       if ((e.key === "Delete" || e.key === "Backspace") && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -380,8 +409,11 @@
   });
 
   async function refreshPreset() {
+    if (!preset || (hlxBusy && hlxDlg)) return;
+    const generation = presetGeneration;
     try {
-      preset = await invoke("read_preset");
+      const live = await invoke("read_preset");
+      if (generation === presetGeneration && connected) preset = live;
     } catch (e) {
       /* transient; heartbeat will catch up */
     }
@@ -568,8 +600,10 @@
 
   // Run a command that returns the updated preset; keep the selection. Errors surface as toasts.
   async function apply(promise) {
+    const generation = presetGeneration;
     try {
-      preset = await promise;
+      const live = await promise;
+      if (generation === presetGeneration && connected) preset = live;
     } catch (e) {
       toast(e);
     }
@@ -1111,6 +1145,7 @@
     }
     connected = false;
     preset = null;
+    hlxDlg = null;
     presets = [];
     setlists = [];
     viewBank = 0;
@@ -1125,6 +1160,7 @@
   function onDeviceLost(message) {
     connected = false;
     preset = null;
+    hlxDlg = null;
     presets = [];
     setlists = [];
     viewBank = 0;
@@ -1407,7 +1443,7 @@
 {/if}
 
 {#if dataReady}
-<header>
+<header inert={hlxDlg != null}>
   <h1>fretwire</h1>
   <button class="ver" onclick={() => (updateDlg = true)} title="Version and the update check">
     v{update?.current ?? "…"}
@@ -1448,7 +1484,7 @@
       title="Redo (Ctrl+Shift+Z)"
       onclick={onRedo}
     >↷ Redo</button>
-    <button class="secondary" onclick={() => (addTarget = addTarget == null ? -1 : null)}>＋ Add block</button>
+    <button class="secondary" disabled={!preset} onclick={() => (addTarget = addTarget == null ? -1 : null)}>＋ Add block</button>
     <button class="secondary" onclick={openIrs} title="Manage the pedal's user impulse responses">IRs…</button>
     <button class="secondary" onclick={openGlobals} title="Read and change the pedal's global settings">Globals…</button>
     <span class="tempo" title={tempoTitle}>
@@ -1485,7 +1521,7 @@
 
 <div class="status" class:err={statusErr}>{status}</div>
 
-<main>
+<main inert={hlxDlg != null}>
   {#if preset}
     <div class="workspace">
       <PresetList {presets} currentIndex={preset.index} dirty={preset.dirty} {setlists} {viewBank} currentBank={presetBank} writeBlocked={foreignSetlist} {onPickSetlist} {onGoto} {onSave} {onSaveAs} {onRename} {onExport} {onRestore} {onImportHlx} canImportHlx={canImportHlx && !hlxBusy} {onBackupDevice} {onRestoreDevice} {onCopyPreset} {onPastePreset} {onClearPreset} {onRevertPreset} {presetClip} onNumbering={setNumberingMode} />
@@ -1617,6 +1653,8 @@
         {/if}
       </div>
     </div>
+  {:else if connected}
+    <p class="hint"><button class="secondary" onclick={recoverPreset}>Refresh current preset</button></p>
   {:else}
     <p class="hint">Click <b>Connect</b> to open a session and read the current preset from the HX Stomp.</p>
   {/if}
@@ -1809,7 +1847,7 @@
       {hlxDlg.preview.blocks} blocks, {hlxDlg.preview.snapshots} snapshots,
       {hlxDlg.preview.footswitches} footswitch bindings, {hlxDlg.preview.controllers} controller assignments.</p>
     {#if hlxDlg.preview.not_carried.length}
-      <p class="dlg-text">These parts cannot be carried across completely. Settings left as the target's in this report come from the currently loaded preset:</p>
+      <p class="dlg-text">These parts cannot be carried across completely:</p>
       <ul class="dlg-text">{#each hlxDlg.preview.not_carried as warning}<li>{warning}</li>{/each}</ul>
       <label class="dlg-text"><input type="checkbox" bind:checked={hlxDlg.acknowledged} disabled={hlxBusy} />
         I have reviewed these limitations.</label>

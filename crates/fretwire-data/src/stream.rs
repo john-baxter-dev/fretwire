@@ -1351,10 +1351,9 @@ impl PresetStream {
     /// The matrix is [solid]: in `preset1_stream`, the live blocks are bypassed at slots 2/3/4/7
     /// and active at 5/6, which is exactly snapshot 0's `key 3` — and selection `10 → 6` is 0.
     ///
-    /// `key 10 → 8` was formerly read as a snapshot index. It counts controller places on
-    /// HX Stomp: adding and removing assignments changes it without switching snapshots.
-    /// Selection is key `10 → 6`, observed changing 0 → 2 with a live snapshot switch.
-    /// Read-info key `92` remains the authority for the live session. [2026-11-11]
+    /// On HX Stomp (P33), `10 → 8` counts controller places and `10 → 6` carries the
+    /// selection. [solid — assignments added and removed with the snapshot held fixed,
+    /// then a switch from snapshot 0 to 2, 2026-11-11.] Use read-info key `92` for the live index.
     pub fn snapshot_details(&self) -> Vec<SnapshotInfo> {
         let Some(Value::Array(snaps)) = self.field(10).and_then(|m| map_get(m, 10)) else {
             return Vec::new();
@@ -1386,12 +1385,19 @@ impl PresetStream {
             .collect()
     }
 
-    /// Snapshot names and the stored selection (preset key `10`: `6` = selection,
-    /// `10` = `Array` of snapshot maps each with `4` = name). For a live session, use the
-    /// authoritative read-info [`PresetInfo::snapshot`]. Key `8` counts controller places.
+    /// Snapshot names (preset key `10 → 10`, each map's key `4`) and the offline selection.
+    /// On HX Stomp (P33), selection comes from `10 → 6`. Other models keep the existing
+    /// `10 → 8` lookup. For a live session, use the authoritative [`PresetInfo::snapshot`].
     pub fn snapshots(&self) -> (Option<i64>, Vec<String>) {
         let root = self.field(10);
-        let active = root.and_then(|m| map_get(m, 6)).and_then(Value::as_i64);
+        let selection_key = if self.device_model().as_deref() == Some("P33") {
+            6
+        } else {
+            8
+        };
+        let active = root
+            .and_then(|m| map_get(m, selection_key))
+            .and_then(Value::as_i64);
         let names = match root.and_then(|m| map_get(m, 10)) {
             Some(Value::Array(a)) => a
                 .iter()
@@ -1666,10 +1672,9 @@ pub struct PresetInfo {
     pub name: String,
     /// **The live active snapshot** (key 92), 0-based — what the pedal is showing *right now*.
     ///
-    /// This is the live session authority. The blob also carries a selection at `10 → 6`
-    /// ([`PresetStream::snapshots`]); key `10 → 8`, formerly mistaken for selection, counts
-    /// controller places. Key 92 is the snapshot index in status pushes too
-    /// (`{105:42, 106:{92:n}}`).
+    /// This is the live session authority. On HX Stomp (P33), the blob carries a selection at
+    /// `10 → 6` and a controller place count at `10 → 8`. See [`PresetStream::snapshots`] for
+    /// offline selection. Key 92 is the snapshot index in status pushes too (`{105:42, 106:{92:n}}`).
     pub snapshot: Option<i64>,
 }
 
@@ -2492,22 +2497,30 @@ mod list_tests {
             |name: &str| Value::Map(vec![(Value::from(4), Value::from(format!("{name}\0")))]);
         let key10 = Value::Map(vec![
             (Value::from(6), Value::from(1)),
-            (Value::from(8), Value::from(4)), // controller count, separate from selection
+            (Value::from(8), Value::from(2)),
             (
                 Value::from(10),
                 Value::Array(vec![snap("CLEAN"), snap("Just TS"), snap("LEAD")]),
             ),
         ]);
-        let preset = Value::Map(vec![(Value::from(10), key10)]);
-        let ps = PresetStream {
-            magic: "l6-helix".to_string(),
-            header: vec![],
-            preset,
-            header_slots: Vec::new(),
-        };
-        let (active, names) = ps.snapshots();
-        assert_eq!(active, Some(1));
-        assert_eq!(names, vec!["CLEAN", "Just TS", "LEAD"]);
+        for (device, selection) in [("P33\0", 1), ("P21\0", 2)] {
+            let preset = Value::Map(vec![
+                (
+                    Value::from(7),
+                    Value::Map(vec![(Value::from(36), Value::from(device))]),
+                ),
+                (Value::from(10), key10.clone()),
+            ]);
+            let ps = PresetStream {
+                magic: "l6-helix".to_string(),
+                header: vec![],
+                preset,
+                header_slots: Vec::new(),
+            };
+            let (active, names) = ps.snapshots();
+            assert_eq!(active, Some(selection), "device {device}");
+            assert_eq!(names, vec!["CLEAN", "Just TS", "LEAD"]);
+        }
     }
 
     #[test]

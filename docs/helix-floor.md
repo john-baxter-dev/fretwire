@@ -489,27 +489,20 @@ order is read off the unit's PRESETS menu [hypothesis].
 
 ### Active snapshot can be wrong — FIXED 2026-07-26
 
-The GUI highlighted snapshot 5 while the unit was on snapshot 1. The decoder is *not* at fault: the
-preset blob's key `10 → 8` is the snapshot that was **stored** with the preset (dual_amp's fixture
-reads 1, having been saved on SNAPSHOT 2), and the device has a global snapshot-recall preference,
-so the live selection can differ from the stored one. A panel-side change reaches us only as a
-status push (type 42/46), which we already apply. What's missing is a way to *query* the live
-snapshot on connect — that needs a capture of HX Edit connecting to a unit parked on a non-default
-snapshot. `read_preset` now logs the stored value at debug level to help correlate.
+The GUI highlighted snapshot 5 while the unit was on snapshot 1. The original lookup read `10 → 8`
+from the preset blob. On the Floor's `Pull Me Under` capture that field is 4, while the live block
+state matches snapshot 0. A panel-side change reaches the editor as a status push (type 42/46).
+On connect, the editor needs to query the live selection directly.
 
 **Decoding the snapshot bypass matrix (key `10 → 10 → [i] → 3`) turned this from a guess into a
 measurement.** Each snapshot stores one `[_, enabled]` pair per slot — the scene it recalls. In
-`preset1_stream` the live blocks match snapshot 0's row and key `8` says 0, so both agree. In
-`dual_amp_stream` key `8` says **1**, but the live block state is snapshot **0**'s scene. So the
-stored index and the stored scene genuinely disagree in a fixture we already had, offline, with no
-hardware involved — the same failure mode the tester saw. Both facts are pinned by tests
-(`snapshot_matrix_matches_the_live_block_state`, `dual_amp_stored_active_snapshot_disagrees_with_its_scene`).
+the Stomp's `preset1_stream` and `dual_amp_stream`, the live blocks match snapshot 0's row. In
+`dual_amp_stream`, `10 → 8` is 1 and `10 → 6` is 0. A later hardware check confirmed that the first
+field counts controller places and the second carries selection on the Stomp (P33).
 
 **Resolved: the device tells us, and we were discarding it.** An HX Stomp parked on SNAPSHOT 3
-reported a stored index of **0**, refuting "key `8` is the live snapshot" outright. Scene-matching
-was ambiguous on that preset (snapshots 2 and 3 held identical scenes), so it can't carry the fix
-either — but decoding the **op-23 read-info reply** in full showed the answer was already on the
-wire:
+reported `10 → 8` as **0**, and snapshots 2 and 3 held identical scenes. The **op-23 read-info
+reply** exposes the live selection directly:
 
 ```
 104: {107: 0, 108: 20, 109: "Dual Amp\0", 117: true, 83: [8850, 0], 92: 0}
@@ -517,12 +510,11 @@ wire:
 
 **Key `92` is the live active snapshot** — the same key a snapshot status-push carries
 (`{105:42, 106:{92:n}}`). We parsed only 107/108/109 and dropped the rest. In the `Dual Amp`
-capture key 92 reads 0, matching that preset's live block *scene*, while its blob stores 1 — three
-independent signals now agreeing.
+capture key 92 reads 0, matching that preset's live block scene and the selection at `10 → 6`.
 
-`PresetInfo::snapshot` carries it, and `Session::read_preset` overrides the blob's stored value with
-it (falling back to the blob for offline decodes, which have no device to ask). Keys `117` (bool)
-and `83` (`[u32, 0]`) in that reply are still unidentified.
+`PresetInfo::snapshot` carries it, and `Session::read_preset` prefers it over the blob. Offline
+decodes still read `10 → 8` on the Floor and use `10 → 6` on the Stomp. Keys `117` (bool) and
+`83` (`[u32, 0]`) in that reply are still unidentified.
 
 ## Second hardware round (2026-07-29): eight bank listings + a multi-row-B preset
 

@@ -5,25 +5,94 @@
 //! path accepts Stomp presets only; it does not adapt Floor/XL presets to a smaller device.
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use fretwire_data::Preset;
 use fretwire_data::rmpv::Value;
 use fretwire_data::stream::{PresetStream, map_get};
 use fretwire_data::symbols::DeviceSymbols;
 use fretwire_data::tone::{Conversion, ValueTypes};
+use fretwire_protocol::{Device, PID_HX_STOMP};
 
-use crate::{Error, Result};
+use crate::{EditorPreset, Error, Result, Session};
 
 pub const STOMP_DEVICE_ID: i64 = 0x0021_0006;
+const MAX_PRESET_NAME_BYTES: usize = 32;
 
 /// A parsed, validated Stomp preset, before a donor or the model catalog is needed.
 pub struct HlxPreset(Preset);
 
+#[derive(Clone)]
 pub struct PreparedHlx {
     pub name: String,
     pub raw: Vec<u8>,
     pub report: Conversion,
     pub active_snapshot: i64,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum Recovery {
+    Reload(i64, i64),
+    Confirm(i64, i64),
+}
+
+impl Session {
+    /// Cache the exact conversion shown in the preview, using the currently loaded preset as donor.
+    pub fn preview_hlx(&mut self, source: &HlxPreset) -> Result<(u32, &PreparedHlx)> {
+        static NEXT_ID: AtomicU32 = AtomicU32::new(1);
+
+        if self.device().pid != PID_HX_STOMP {
+            return Err(Error::Invalid(
+                "direct .hlx import currently supports the HX Stomp only".into(),
+            ));
+        }
+        let donor = PresetStream::parse(&self.read_preset_raw()?)?;
+        let prepared =
+            source.prepare(&donor, &self.catalog().symbols, &self.catalog().value_types)?;
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let (_, prepared) = self.hlx_preview.insert((id, prepared));
+        Ok((id, prepared))
+    }
+
+    pub fn restore_hlx_preview(
+        &mut self,
+        preview_id: u32,
+        bank: i64,
+        slot: i64,
+        allow_partial: bool,
+    ) -> Result<EditorPreset> {
+        let Some((_, prepared)) = self
+            .hlx_preview
+            .as_ref()
+            .filter(|(id, _)| *id == preview_id)
+        else {
+            return Err(Error::Invalid(
+                "this .hlx preview expired; preview the file again".into(),
+            ));
+        };
+        let prepared = prepared.clone();
+        prepared.write_verified(self, bank, slot, allow_partial)?;
+        self.hlx_preview = None;
+        read_saved_hlx(self, bank, slot)
+    }
+
+    pub(crate) fn reload_hlx_destination(&mut self) -> Result<()> {
+        if let Some(Recovery::Reload(bank, slot)) = self.hlx_recovery {
+            self.goto_preset(bank, slot)?;
+            self.read_preset_raw_with_identity()?;
+            self.hlx_recovery = Some(Recovery::Confirm(bank, slot));
+        }
+        Ok(())
+    }
+}
+
+fn read_saved_hlx(session: &mut Session, bank: i64, slot: i64) -> Result<EditorPreset> {
+    session.hlx_recovery = Some(Recovery::Confirm(bank, slot));
+    session.read_preset_with_identity().map_err(|error| {
+        Error::Invalid(format!(
+            "the preset was saved, but the editor could not read it: {error}"
+        ))
+    })
 }
 
 impl HlxPreset {
@@ -45,6 +114,11 @@ impl HlxPreset {
             return Err(Error::Invalid(
                 "the preset needs a nonempty name without NUL characters".into(),
             ));
+        }
+        if preset.name().len() > MAX_PRESET_NAME_BYTES {
+            return Err(Error::Invalid(format!(
+                "the preset name must be at most {MAX_PRESET_NAME_BYTES} UTF-8 bytes"
+            )));
         }
         let tone = &preset.data.tone;
         let dsp = tone
@@ -172,7 +246,7 @@ impl HlxPreset {
         {
             *selected = Value::from(active_snapshot);
         }
-        report.not_carried.insert(0, "Undecoded settings, including Stomp input/output routing, use the currently loaded preset as a donor. They do not come from the destination slot.".into());
+        report.not_carried.insert(0, "Undecoded settings, including Stomp input/output routing, come from the donor preset that was loaded when this preview was prepared.".into());
         for key in self.0.data.tone.keys() {
             if !matches!(
                 key.as_str(),
@@ -203,13 +277,19 @@ impl PreparedHlx {
         Ok(())
     }
 
-    /// A transport ACK alone is not proof that firmware accepted the DSP document.
-    /// Compare the decoded edit buffer before allowing a persistent save.
+    /// Compare the entire decoded document, including its snapshot selection.
     pub fn verify_readback(&self, actual: &PresetStream) -> Result<()> {
-        let expected = PresetStream::parse(&self.raw)?;
+        Self::verify_document(&PresetStream::parse(&self.raw)?, actual, true)
+    }
+
+    fn verify_document(
+        expected: &PresetStream,
+        actual: &PresetStream,
+        include_selection: bool,
+    ) -> Result<()> {
         if !same_document(
-            &verification_document(&expected),
-            &verification_document(actual),
+            &verification_document(expected, include_selection),
+            &verification_document(actual, include_selection),
         ) {
             return Err(Error::Invalid(
                 "the device changed or rejected part of the converted .hlx preset; it has not been saved".into(),
@@ -221,38 +301,87 @@ impl PreparedHlx {
     /// Import into an explicit slot, verifying the edit buffer before writing flash.
     pub fn restore(
         &self,
-        session: &mut crate::Session,
+        session: &mut Session,
         bank: i64,
         slot: i64,
         allow_partial: bool,
-    ) -> Result<crate::EditorPreset> {
+    ) -> Result<EditorPreset> {
+        self.write_verified(session, bank, slot, allow_partial)?;
+        read_saved_hlx(session, bank, slot)
+    }
+
+    fn write_verified(
+        &self,
+        session: &mut Session,
+        bank: i64,
+        slot: i64,
+        allow_partial: bool,
+    ) -> Result<()> {
         validate_destination(bank, slot)?;
         self.require_acknowledgement(allow_partial)?;
-        if session.device().model_code != Some("P33") {
+        if session.device().pid != PID_HX_STOMP {
             return Err(Error::Invalid(".hlx restore requires an HX Stomp".into()));
         }
-        session.goto_preset(bank, slot)?;
-        // Open the freshly selected edit buffer before the chunked write.
-        session.read_preset_raw()?;
         let expected = PresetStream::parse(&self.raw)?;
-        session.write_preset(expected.to_blob())?;
-        // A whole-document write resets the live selection. Restore the file's
-        // snapshot before saving, so save commits its live controller values
-        // into the matching scene.
-        session.set_snapshot(self.active_snapshot)?;
-        let actual = PresetStream::parse(&session.read_preset_raw()?)?;
-        if let Err(error) = self.verify_readback(&actual) {
-            // Discard a semantically rejected edit buffer; the stored slot is intact.
-            if let Err(revert_error) = session.revert_preset() {
+        if session.hlx_recovery.is_some() {
+            session.read_preset_with_identity()?;
+        }
+        // The selection may take effect even if the host misses the reply. Undo entries from the
+        // previous slot must never be available after this point.
+        session.clear_history();
+        let save = (|| {
+            session.goto_preset(bank, slot)?;
+            // Open the freshly selected edit buffer before the chunked write.
+            session.read_preset_raw_with_identity()?;
+            session.write_preset(expected.to_blob())?;
+            session.confirm_next_preset_address(bank, slot);
+            let actual = PresetStream::parse(&session.read_preset_raw_with_identity()?)?;
+            // A snapshot switch can recall stored parameters and bypass states over the live
+            // values. Verify those values before switching, then check the live selection via
+            // op 23, separately from the document's 10/6 field.
+            Self::verify_document(&expected, &actual, false)?;
+            let info = session
+                .last_identity()
+                .filter(|i| (i.bank, i.index) == (bank, slot))
+                .ok_or_else(|| {
+                    Error::Invalid("the .hlx destination changed during import".into())
+                })?;
+            let mut snapshot = info.snapshot;
+            if snapshot != Some(self.active_snapshot) {
+                session.set_snapshot(self.active_snapshot)?;
+                // The switch ACK can precede the identity update. Retry a confirmed read of
+                // this slot if the device still reports the previous snapshot.
+                for attempt in 0..3 {
+                    if attempt > 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(40));
+                    }
+                    session.confirm_next_preset_address(bank, slot);
+                    session.read_preset_raw_with_identity()?;
+                    snapshot = session.last_identity().and_then(|i| i.snapshot);
+                    if snapshot == Some(self.active_snapshot) {
+                        break;
+                    }
+                }
+            }
+            if snapshot != Some(self.active_snapshot) {
+                return Err(Error::Invalid(
+                    "the device did not confirm the imported preset's snapshot".into(),
+                ));
+            }
+            session.save_preset(bank, slot, &self.name)
+        })();
+        if let Err(error) = save {
+            // Reload the destination even if the op-21 write or flash save returned an error:
+            // the device may have applied a command whose reply never arrived.
+            session.hlx_recovery = Some(Recovery::Reload(bank, slot));
+            if let Err(revert_error) = session.reload_hlx_destination() {
                 return Err(Error::Invalid(format!(
                     "{error}; reloading the stored preset also failed: {revert_error}"
                 )));
             }
             return Err(error);
         }
-        session.save_preset(bank, slot, &self.name)?;
-        session.clear_history();
-        session.read_preset()
+        Ok(())
     }
 
     /// A single-preset export, readable by `backup-show` and the existing restore dialog.
@@ -273,7 +402,7 @@ impl PreparedHlx {
 /// Stomp regenerates a bypass binding's display name and model colour from its
 /// referenced block. Custom labels/colours live on the enclosing entry and are
 /// still compared, together with the binding target, type, enable and mode.
-fn verification_document(stream: &PresetStream) -> Value {
+fn verification_document(stream: &PresetStream, include_selection: bool) -> Value {
     fn field_mut(value: &mut Value, key: i64) -> Option<&mut Value> {
         let Value::Map(entries) = value else {
             return None;
@@ -284,6 +413,9 @@ fn verification_document(stream: &PresetStream) -> Value {
             .map(|(_, v)| v)
     }
     let mut document = stream.preset.clone();
+    if !include_selection && let Some(Value::Map(fields)) = field_mut(&mut document, 10) {
+        fields.retain(|(key, _)| key.as_i64() != Some(6));
+    }
     if let Some(Value::Array(switches)) = field_mut(&mut document, 3).and_then(|v| field_mut(v, 8))
     {
         for switch in switches {
@@ -326,9 +458,10 @@ fn same_document(a: &Value, b: &Value) -> bool {
 
 /// Stomp destination slots are zero-based, in its single setlist.
 pub fn validate_destination(bank: i64, slot: i64) -> Result<()> {
-    let size = fretwire_protocol::Device::by_pid(0x4246)
+    let size = Device::by_pid(PID_HX_STOMP)
         .and_then(|d| d.setlist_size)
-        .expect("known HX Stomp setlist size") as i64;
+        .ok_or_else(|| Error::Invalid("no setlist size is defined for the HX Stomp".into()))?
+        as i64;
     if bank != 0 || !(0..size).contains(&slot) {
         return Err(Error::Invalid(format!(
             "choose an HX Stomp slot in bank 0, from 0 to {}",

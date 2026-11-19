@@ -184,6 +184,33 @@ fn refuses_wrong_schema_device_name_and_dsp_before_conversion() {
 }
 
 #[test]
+fn validates_the_name_utf8_limit_before_conversion() {
+    let mut f = file();
+    f["data"]["meta"]["name"] = json!("é".repeat(16));
+    assert!(HlxPreset::parse(&f.to_string()).is_ok());
+    f["data"]["meta"]["name"] = json!("é".repeat(17));
+    let error = match HlxPreset::parse(&f.to_string()) {
+        Ok(_) => panic!("accepted a name longer than 32 UTF-8 bytes"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("32 UTF-8 bytes"));
+}
+
+#[test]
+fn ignores_unconverted_routing_nodes_on_dsp1() {
+    let mut f = file();
+    f["data"]["tone"]["dsp1"] = json!({
+        "split": {"@model": "HD2_AppDSPFlowSplitY"},
+        "join": {"@model": "HD2_AppDSPFlowJoin"},
+    });
+    let out = HlxPreset::parse(&f.to_string())
+        .unwrap()
+        .prepare(&donor("P33"), &symbols(), &ValueTypes::default())
+        .unwrap();
+    assert_eq!(out.report.blocks, 1);
+}
+
+#[test]
 fn refuses_block_collisions_bad_positions_and_more_than_eight_blocks() {
     for (path, position) in [(-1, 0), (2, 0), (0, -1), (0, 8)] {
         let mut f = file();

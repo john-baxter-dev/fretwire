@@ -184,7 +184,11 @@ pub async fn dispatch(
         "is_connected" => ok(c::is_connected(state)),
         "connect" => ok(c::connect(state).await?),
         "disconnect" => ok(c::disconnect(state).await?),
-        "read_preset" => ok(c::read_preset(state).await?),
+        "read_preset" => ok(if a.opt("confirmIdentity")?.unwrap_or(false) {
+            c::read_preset_with_identity(state).await?
+        } else {
+            c::read_preset(state).await?
+        }),
         // ---- undo / redo ----
         "undo" => ok(c::undo(state).await?),
         "redo" => ok(c::redo(state).await?),
@@ -321,7 +325,7 @@ pub async fn dispatch(
         "hlx_preview" => ok(c::hlx_preview(state, a.req("json")?).await?),
         "restore_hlx" => ok(c::restore_hlx(
             state,
-            a.req("json")?,
+            a.req("previewId")?,
             a.req("bank")?,
             a.req("slot")?,
             a.req("allowPartial")?,
@@ -615,14 +619,14 @@ mod tests {
         let e = call(
             "restore_hlx",
             serde_json::json!({
-                "json": file(0x210006), "bank": 0, "slot": 126, "allowPartial": true
+                "previewId": 1, "bank": 0, "slot": 126, "allowPartial": true
             }),
         )
         .await
         .unwrap_err();
         assert!(e.contains("from 0 to 125"), "got: {e}");
         for spelling in ["allowPartial", "allow_partial"] {
-            let mut args = serde_json::json!({"json": file(0x210006), "bank": 0, "slot": 1});
+            let mut args = serde_json::json!({"previewId": 1, "bank": 0, "slot": 1});
             args[spelling] = serde_json::json!(false);
             let e = call("restore_hlx", args).await.unwrap_err();
             assert!(e.contains("not connected"), "got: {e}");

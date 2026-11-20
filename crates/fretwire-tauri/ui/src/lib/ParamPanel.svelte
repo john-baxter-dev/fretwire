@@ -231,10 +231,13 @@
 
   let wheelTimers = {};
   function nudge(e, k, p, paired, isInt, r) {
-    if (!e.deltaY) return;
+    // Shift can turn the wheel horizontal (WebKitGTK and Chromium both do it), leaving deltaY at 0
+    // and the notch in deltaX; scrolling up still comes out negative.
+    const delta = e.deltaY || (e.shiftKey ? e.deltaX : 0);
+    if (!delta) return;
     if (!e.shiftKey && document.activeElement !== e.currentTarget) return;
     e.preventDefault();
-    const dir = e.deltaY < 0 ? 1 : -1;
+    const dir = delta < 0 ? 1 : -1;
     // One notch = one of the increments HX Edit uses, where the reference data states one. Pan's is
     // half of what the old blanket 1/100th was, which is why it scrolled two display units a notch.
     const step = isInt ? 1 : (p.step ?? (r.max - r.min) / 100);

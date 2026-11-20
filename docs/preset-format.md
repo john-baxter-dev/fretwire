@@ -502,26 +502,31 @@ several nodes" below:
   in `stream.rs` covers it.] `10` is not always 0-based: `looper-preset`'s toe pair is `10: 6`,
   `10: 7`. What it counts beyond order is unread. [hypothesis] Whether op 56 to a switch that
   already carries a bypass appends a node or replaces the existing one has not been captured.
-- **Snapshots: key `10`.** `8` = stored active index, `9` = slot count (20), `10` = `Array` of
-  snapshot objects, `13` = `Array[20]` of per-slot flags (all `true` in every fixture).
+- **Snapshots: key `10`.** `9` = slot count (20), `10` = `Array` of snapshot objects,
+  `13` = `Array[20]` of per-slot flags (all `true` in every fixture).
   Each snapshot object is `{0: in-use, 1: Array[11], 2: Array[64], 3: Array[20], 4: name,
   5: tempo?, 12, 14}`:
+  - **On HX Stomp (P33), `10 → 8` counts controller places and `10 → 6` carries the selection.**
+    With the snapshot held fixed, adding a Snapshots assignment, adding an EXP1 assignment and
+    removing the first assignment changed the count `0 → 1 → 2 → 1`. Rebuilding the count restored
+    parameter recall in converted snapshots that already held the assigned values in key `2`.
+    Selecting snapshot 3 changed `10 → 6` from 0 to 2, and the selection survived save/reload.
+    [solid — live HX Stomp, 2026-11-11; firmware approximately 3.80 as reported by the owner.]
+    For a live session, read-info key `92` gives the active snapshot. On other models the converter
+    keeps the donor's `10 → 8` and offline views still read that field.
   - **`3` = the bypass matrix [solid]** — one `[_, enabled]` pair per slot; `enabled` is the
     inverse of a block's `bypassed`. The first element of the pair is `false` throughout and
     discriminates nothing. Proven against `preset1_stream`: its live blocks (2/3/4/7 bypassed,
-    5/6 active) are exactly snapshot 0's row, and `8` reports 0. Parsed by
+    5/6 active) are exactly snapshot 0's row, and `10 → 6` reports 0. Parsed by
     `PresetStream::snapshot_details`.
     - **Indexed by wire slot (`dsp × 20 + index`), as one flat array across the whole device**
       — `Array[20]` on the Stomp but **`Array[40]` on a two-DSP Floor**, not one array per DSP.
       [solid — the tester's `pullmeunder` Floor dump, 2026-07-29.] Reading it at the per-DSP index
       makes every DSP2 block report DSP1's state, which is silent and looks like "all the
       snapshots are the same"; it is what `show-preset`'s scene diagnosis did until 2026-07-29.
-  - **`8` is not reliably the *live* snapshot.** `dual_amp_stream` stores `8 = 1`, yet its live
-    block state matches snapshot **0** (snapshots 1/2 there are pristine "everything on"). Both
-    facts are locked in by tests. This is the standing lead on the GUI highlighting the wrong
-    snapshot on hardware. Deriving the live snapshot by matching the matrix against live block
-    state is a candidate fix but ambiguous when two snapshots hold identical scenes — which
-    `preset1_stream`'s snapshots 1 and 2 do.
+  - In the Stomp `dual_amp_stream` fixture, the count is `1` and selection is `0`, matching the
+    live block state. Matching the matrix alone is ambiguous when two snapshots hold identical
+    scenes, as snapshots 1 and 2 do in `preset1_stream`.
   - `2` = `Array[64]` of `[bool, int, nil]`, one per controller/param slot — the per-snapshot
     **parameter** values. Almost entirely `[false, 64, nil]` in the fixtures (64 reads as a
     midpoint default), so the encoding of an actually-varying value is still TBD: it needs a

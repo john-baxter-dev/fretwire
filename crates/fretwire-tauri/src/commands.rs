@@ -11,13 +11,29 @@
 use fretwire_commands::R;
 use fretwire_commands::dto::{
     BackupFileDto, BackupInfoDto, BackupSummaryDto, CategoryDto, DataStatusDto, DetectedDeviceDto,
-    ImportResultDto, IrFileDto, IrSlotDto, ModelChoiceDto, PresetDto, PresetListItem,
-    RestoreReportDto, SettingDto, SplitTypeDto, UpdateStatusDto,
+    HlxPreviewDto, ImportResultDto, IrFileDto, IrSlotDto, ModelChoiceDto, PresetDto,
+    PresetListItem, RestoreReportDto, SettingDto, SplitTypeDto, UpdateStatusDto,
 };
 use fretwire_commands::events::{Event, EventSink};
 use tauri::{Emitter, State};
 
 pub use fretwire_commands::AppState;
+
+#[tauri::command]
+pub async fn hlx_preview(state: State<'_, AppState>, json: String) -> R<HlxPreviewDto> {
+    fretwire_commands::hlx_preview(&state, json).await
+}
+
+#[tauri::command]
+pub async fn restore_hlx(
+    state: State<'_, AppState>,
+    preview_id: u32,
+    bank: i64,
+    slot: i64,
+    allow_partial: bool,
+) -> R<PresetDto> {
+    fretwire_commands::restore_hlx(&state, preview_id, bank, slot, allow_partial).await
+}
 
 /// [`EventSink`] over the Tauri event system (a newtype — the orphan rule keeps the impl off
 /// `AppHandle` itself). Emit failures are logged, not surfaced: the producers have nowhere to
@@ -131,8 +147,15 @@ pub async fn disconnect(state: State<'_, AppState>) -> R<()> {
 }
 
 #[tauri::command]
-pub async fn read_preset(state: State<'_, AppState>) -> R<PresetDto> {
-    fretwire_commands::read_preset(&state).await
+pub async fn read_preset(
+    state: State<'_, AppState>,
+    confirm_identity: Option<bool>,
+) -> R<PresetDto> {
+    if confirm_identity.unwrap_or(false) {
+        fretwire_commands::read_preset_with_identity(&state).await
+    } else {
+        fretwire_commands::read_preset(&state).await
+    }
 }
 
 // ---- undo / redo ----

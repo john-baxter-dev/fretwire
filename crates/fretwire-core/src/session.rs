@@ -19,6 +19,7 @@
 //! and per-block edits were already DSP-agnostic; this makes the planning layer so too.
 
 use crate::editor::{Catalog, EditorBlock, EditorPreset};
+use crate::hlx::{PreparedHlx, Recovery};
 use fretwire_data::stream::{ParamValue, PresetListEntry};
 use fretwire_protocol::{EditValue, Frame, Tlv, channel, cmd, edit, op};
 use fretwire_usb::Transport;
@@ -28,6 +29,10 @@ use std::collections::HashMap;
 pub struct Session {
     transport: Transport,
     catalog: Catalog,
+    /// The latest .hlx conversion preview, scoped to this connection.
+    pub(crate) hlx_preview: Option<(u32, PreparedHlx)>,
+    /// Recovery keeps its address until a strict read confirms it, even if other reads run first.
+    pub(crate) hlx_recovery: Option<Recovery>,
     /// Next sequence counter per host channel id (frames on a channel increment it).
     seq: HashMap<u16, u8>,
     /// Running stream byte-offset (frame `arg`) per host channel id.
@@ -346,6 +351,8 @@ impl Session {
             let mut s = Session {
                 transport,
                 catalog,
+                hlx_preview: None,
+                hlx_recovery: None,
                 seq: HashMap::new(),
                 arg: HashMap::new(),
                 txn: 0,
@@ -850,6 +857,10 @@ impl Session {
         Ok(())
     }
 
+    pub(crate) fn confirm_next_preset_address(&mut self, bank: i64, slot: i64) {
+        self.expect_identity = Some((bank, slot));
+    }
+
     /// Refuse a flash write into `bank` when the device is in a different setlist, `here`, unless
     /// [`cross_setlist_write_enabled`]. `None` for `here` means nothing to compare against, and
     /// passes: [`Self::check_preset_addr`] still bounds the address.
@@ -877,6 +888,11 @@ impl Session {
     /// `slot` in device flash.** `bank` is normally 0; `slot` is the flat preset index (as `goto`
     /// and `list_presets` use). `name` is stored NUL-terminated. Rides the edit channel like an edit.
     pub fn save_preset(&mut self, bank: i64, slot: i64, name: &str) -> crate::Result<()> {
+        if self.hlx_recovery.is_some() {
+            return Err(crate::Error::Invalid(
+                "refresh the current preset after .hlx import before saving".into(),
+            ));
+        }
         self.check_preset_addr(bank, slot, "save_preset")?;
         let txn = self.bump_txn();
         let body = edit::save_preset(bank, slot, name, txn);
@@ -3160,6 +3176,23 @@ impl Session {
     /// on hardware (reassembles ~2.8 KB → the loaded blocks, repeatable). The paged-stream wire
     /// sequence — and the per-channel `arg` accounting it relies on — lives in [`Self::read_preset_raw`].
     pub fn read_preset(&mut self) -> crate::Result<EditorPreset> {
+        self.read_preset_view(false)
+    }
+
+    /// Resync the editor after .hlx import. The edit buffer must have a confirmed slot address.
+    pub fn read_preset_with_identity(&mut self) -> crate::Result<EditorPreset> {
+        self.reload_hlx_destination()?;
+        if let Some(Recovery::Confirm(bank, slot)) = self.hlx_recovery {
+            // A regular read queued during recovery may have seeded history from the old buffer.
+            self.clear_history();
+            self.confirm_next_preset_address(bank, slot);
+        }
+        let preset = self.read_preset_view(true)?;
+        self.hlx_recovery = None;
+        Ok(preset)
+    }
+
+    fn read_preset_view(&mut self, require_identity: bool) -> crate::Result<EditorPreset> {
         // The txn-matched structured steps pin chunk #0, but the raw pagination chunks (cmd 0x08)
         // carry no txn — so a state-push interleaved mid-stream could still corrupt the blob. If the
         // decode fails, back off and re-read; transient interleaving clears on the retry.
@@ -3170,7 +3203,7 @@ impl Session {
         let expect = self.expect_identity.take();
         let mut last_err: Option<crate::Error> = None;
         for attempt in 0..3 {
-            match self.read_preset_inner() {
+            match self.read_preset_inner(require_identity) {
                 Ok((payload, info, settled)) => {
                     // Two ways the blob and the identity can disagree. `settled == false` means the
                     // identity moved *across* the stream, so the blob belongs to neither preset.
@@ -3181,9 +3214,9 @@ impl Session {
                     // a 8118-byte Pull Me Under stream reported as `WATERS IN HELL #56` on both
                     // reads, correct 370 ms later]
                     let stale = !identity_confirms(expect, info.as_ref());
-                    // Re-read rather than decode it — but only while attempts remain, so a device
-                    // the user is actively scrolling still yields *something* rather than an error.
-                    if (!settled || stale) && attempt < 2 {
+                    // The normal editor read may show a best-effort view on the last attempt.
+                    // Import recovery requires a confirmed slot on every attempt.
+                    if (!settled || stale) && (require_identity || attempt < 2) {
                         tracing::debug!(
                             attempt,
                             settled,
@@ -3192,16 +3225,16 @@ impl Session {
                             got = ?info.as_ref().map(|i| (i.bank, i.index)),
                             "preset identity doesn't match the blob yet; re-reading"
                         );
+                        last_err = Some(crate::Error::Invalid(
+                            "the device did not confirm the loaded preset".into(),
+                        ));
                         self.backoff_before_retry(attempt);
                         continue;
                     }
                     match self.catalog.load_preset(&payload) {
                         Ok(mut preset) => {
-                            // The blob's `10 → 8` is the snapshot that was *stored* with the preset, not
-                            // the one the pedal is on: an HX Stomp parked on SNAPSHOT 3 reported 0.
-                            // The read-info reply's key 92 *is* the live value (same key the snapshot
-                            // status-push uses), so prefer it and keep the stored one only as a
-                            // fallback for offline decodes. See docs/protocol.md.
+                            // The read-info reply's key 92 is the live snapshot (also used in
+                            // status pushes). Prefer it to the selection in the preset blob.
                             if let Some(live) = info.as_ref().and_then(|i| i.snapshot) {
                                 if preset.active_snapshot != Some(live) {
                                     tracing::debug!(
@@ -3312,6 +3345,13 @@ impl Session {
     fn read_preset_confirmed(
         &mut self,
     ) -> crate::Result<(Vec<u8>, Option<fretwire_data::stream::PresetInfo>)> {
+        self.read_preset_confirmed_inner(false)
+    }
+
+    fn read_preset_confirmed_inner(
+        &mut self,
+        require_identity: bool,
+    ) -> crate::Result<(Vec<u8>, Option<fretwire_data::stream::PresetInfo>)> {
         let expect = self.expect_identity.take();
         // A read can fail two ways here, and both are transient often enough to be worth another
         // go. The identity checks below are one. The other is `read_preset_inner` erroring outright
@@ -3326,7 +3366,7 @@ impl Session {
         // transient looks like. [solid — 2026-08-21 XL report, issue #3]
         let mut last_err: Option<crate::Error> = None;
         for attempt in 0..3 {
-            match self.read_preset_inner() {
+            match self.read_preset_inner(require_identity) {
                 Ok((raw, info, settled)) => {
                     if settled && identity_confirms(expect, info.as_ref()) {
                         return Ok((raw, info));
@@ -3369,6 +3409,14 @@ impl Session {
     /// Read the current preset stream and return the raw reassembled bytes (before decoding).
     /// Useful for diffing two device states to decode stream fields.
     pub fn read_preset_raw(&mut self) -> crate::Result<Vec<u8>> {
+        self.read_preset_raw_inner(false)
+    }
+
+    pub(crate) fn read_preset_raw_with_identity(&mut self) -> crate::Result<Vec<u8>> {
+        self.read_preset_raw_inner(true)
+    }
+
+    fn read_preset_raw_inner(&mut self, require_identity: bool) -> crate::Result<Vec<u8>> {
         // Unlike [`Self::read_preset`], which may decode a provenance-ambiguous blob rather than
         // show the user nothing, this one is the input to a **read-modify-write**: every op-21 path
         // (`set_node_pos`, `delete_block`, `reorder_block`, `move_block_to_row`, `insert_block`)
@@ -3378,7 +3426,7 @@ impl Session {
         // an empty one. So `read_preset_confirmed`, which retries and fails rather than guess.
         // [2026-08-01: 21 "provenance is ambiguous" warnings across the field logs, and a
         // `fretwireTest3` resave that came back with no blocks at all.]
-        match self.read_preset_confirmed() {
+        match self.read_preset_confirmed_inner(require_identity) {
             Ok((raw, info)) => {
                 self.last_raw = Some(raw.clone());
                 // A confirmed read establishes the identity as firmly as `read_preset` does, so
@@ -4541,6 +4589,7 @@ impl Session {
     /// The per-chunk decision is [`classify_chunk`].
     fn read_preset_inner(
         &mut self,
+        require_identity: bool,
     ) -> crate::Result<(Vec<u8>, Option<fretwire_data::stream::PresetInfo>, bool)> {
         // Start aligned: clear any frames left on the wire from a prior edit's fire-and-forget
         // follow-up or, crucially, the device's **unsolicited state pushes** (a footswitch bypass or
@@ -4742,6 +4791,7 @@ impl Session {
                 );
                 false
             }
+            (None, _) | (_, None) if require_identity => false,
             _ => true,
         };
         // Prefer the post-stream identity when we got one: it is never staler than the pre-stream

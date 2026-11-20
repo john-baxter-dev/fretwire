@@ -173,6 +173,16 @@ enum Command {
         #[arg(long, requires = "bank")]
         index: Option<i64>,
     },
+    /// Convert one HX Stomp .hlx preset to a fretwire export, offline. No device writes.
+    /// The donor must be read from the target Stomp with dump-raw. Reports all conversion
+    /// omissions on stderr; inspect the export with backup-show before restoring it.
+    HlxConvert {
+        preset: String,
+        #[arg(long)]
+        donor: String,
+        #[arg(long)]
+        out: String,
+    },
     /// List what an export file contains (setlists, slots + names), to pick a restore.
     BackupShow { backup: String },
     /// Import Line 6's reference data from your own HX Edit install.
@@ -894,6 +904,21 @@ fn main() -> Result<()> {
                     tags.join(" ")
                 );
             }
+        }
+        Command::HlxConvert { preset, donor, out } => {
+            let source = fretwire_core::hlx::HlxPreset::parse(&std::fs::read_to_string(&preset)?)?;
+            let donor = fretwire_data::stream::PresetStream::parse(&std::fs::read(&donor)?)?;
+            let catalog = fretwire_core::Catalog::load_for_model("P33")?;
+            let prepared = source.prepare(&donor, &catalog.symbols, &catalog.value_types)?;
+            eprintln!(
+                "{}: {} blocks, {} snapshots",
+                prepared.name, prepared.report.blocks, prepared.report.snapshots
+            );
+            for warning in &prepared.report.not_carried {
+                eprintln!("not carried: {warning}");
+            }
+            std::fs::write(&out, prepared.into_backup().to_json())?;
+            println!("wrote {out}: 1 preset (no device writes)");
         }
         Command::HxbConvert {
             backup: path,

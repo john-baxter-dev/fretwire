@@ -1575,7 +1575,7 @@ The MessagePack envelope keys 100/101 are an **operation + target**, and op 20 i
 | **20** | `{107: bank, 108: preset}` | **SELECT PRESET** — loads it; **changes device state** |
 | **76** | `{}` | open the current edit buffer for a (non-destructive) read |
 | **24** | `{118: id}` | **read a device setting** — reply carries the value at key `119`. The connect sequence sends `{118: 128}`, which is why this was written up for months as a "read-sequence prepare step"; it is not one. See *Device settings* above |
-| **23** | reply `{107:bank, 108:index, 109:name, 92:snapshot, 117:?, 83:[u32,0]}` | read-info: current preset identity **and the live active snapshot** (key 92 — the authority; the preset blob's own `10 → 8` is the *stored* one and can differ). [solid] |
+| **23** | reply `{107:bank, 108:index, 109:name, 92:snapshot, 117:?, 83:[u32,0]}` | read-info: current preset identity **and the live active snapshot** (key 92). [solid] |
 | **23** | `nil` | read-sequence query — **reply carries the current preset identity** (see below) |
 | **22** | `nil` | start the paged stream — reply = chunk #0 |
 
@@ -1587,6 +1587,8 @@ Amp". This is how the host learns which preset is loaded at connect (the streame
 carries **no** index/name). Parsed by `fretwire_data::stream::parse_preset_info`; surfaced as
 `EditorPreset::current` (filled by `Session::read_preset`). The same reply also rides every
 `read_preset`, so a post-navigation read reports the device's authoritative current preset for free.
+On HX Stomp (P33) the preset blob carries the selection at `10 → 6` and the controller place count
+at `10 → 8`. See [the snapshot fields](preset-format.md) for the offline lookup and measurements.
 
 > **The op-23 identity lags the blob by one preset change [solid].** The first read after the preset
 > changes serves the **new** preset's stream under the **previous** preset's identity; the next read

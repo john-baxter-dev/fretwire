@@ -2,6 +2,15 @@
 
 _Snapshot: 2026-07-05. Target: an independent Linux editor for the HX Stomp, in Rust._
 
+**HX Stomp (P33) snapshot fields (2026-11-11, PR #36) [solid].** Adding a Snapshots
+assignment, adding an EXP1 assignment and removing the first assignment took `10 → 8` from
+0 → 1 → 2 → 1 with the snapshot held fixed. It counts controller places. Rebuilding the count
+restored parameter recall when the converted snapshots already carried the values in key `2`.
+Selecting snapshot 3 changed `10 → 6` from 0 to 2 and that selection survived save/reload.
+Read-info key `92` still reports the live index. The measurement used an HX Stomp whose owner
+reported firmware approximately 3.80. Other models retain the existing conversion and offline
+lookup for `10 → 8`.
+
 **No more "outside path B" badge (2026-11-07, issue #34).** A Helix LT owner's factory preset
 GlitchVerb has its split and join one column apart, with B-row blocks to the left, between and to
 the right, and on the pedal all three are on path B. We marked the outer two "outside path B" on
@@ -1303,9 +1312,9 @@ GUI survived a long unattended session. DSP2 renders. Three new findings, all ad
    Confirmed from traffic: `PresetInfo { bank: 2, index: 17, name: "Sludge" }` in User 1, so
    `Factory 1 = 0, Factory 2 = 1, User 1 = 2`; the rest of the order is off the unit's menu
    [hypothesis]. A panel-side preset change now also pulls the sidebar into the device's setlist.
-3. **Wrong active snapshot — FIXED and confirmed on hardware (2026-07-26).** The preset blob's
-   `10 → 8` is the snapshot **stored** with the preset, not the live one. Settled on our own HX
-   Stomp: parked on SNAPSHOT 3, the blob reported **0**. Scene-matching (comparing the decoded
+3. **Wrong active snapshot — FIXED and confirmed on hardware (2026-07-26).** On our own HX
+   Stomp parked on SNAPSHOT 3, the preset blob's `10 → 8` reported **0**. Later testing identified
+   it as the controller place count on the Stomp (2026-11-11). Scene-matching (comparing the decoded
    per-snapshot bypass matrix against the live block state) couldn't decide it either — that
    preset's snapshots 2 and 3 held identical scenes, so the match was ambiguous. Both candidate
    fixes were therefore wrong.
@@ -1314,8 +1323,8 @@ GUI survived a long unattended session. DSP2 renders. Three new findings, all ad
    `{107:bank, 108:index, 109:name, 92:snapshot, 117:?, 83:[u32,0]}` — **key `92` is the live
    active snapshot**, the same key a snapshot status-push carries (`{105:42, 106:{92:n}}`). We
    parsed 107/108/109 and dropped the rest. In the `Dual Amp` capture key 92 = 0, matching that
-   preset's live scene while its blob stores 1 — three independent signals agreeing.
-   `PresetInfo::snapshot` carries it and `Session::read_preset` prefers it over the blob (blob kept
+   preset's live scene, while its `10 → 8` contains 1.
+   `PresetInfo::snapshot` carries key `92` and `Session::read_preset` prefers it over the blob (blob kept
    as the fallback for offline decodes). The GUI needed no change: it reads `active_snapshot`, now
    correct at the source. Verified live via `fretwire pull`. Keys `117`/`83` still unidentified.
 
@@ -1461,9 +1470,9 @@ the short version:
   live scene. Fixed; the snapshots now read as coherent scenes (Intro = clean delay/verb on, gain
   path off; Solo = the reverse) with exactly one match. Regression test in `multi_dsp.rs` uses a
   synthetic preset with different states at wire 13 and wire 33, which per-DSP indexing cannot pass.
-- **Second independent confirmation of the key-92 fix.** `pullmeunder`'s blob stores active snapshot
-  **4**; its live scene is unambiguously snapshot **0**. Same disagreement the `Dual Amp` capture
-  showed, on a different preset and a different device state.
+- **Second independent confirmation of the key-92 fix.** `pullmeunder`'s blob stores **4** at
+  `10 → 8`; its live scene is unambiguously snapshot **0**. The older blob-based lookup also
+  disagreed with live evidence on this Floor preset.
 - **New, unresolved: a Y-split can span both DSPs.** `pullmeunder` splits after a common Volume+Comp
   on DSP1 and rejoins at the end of DSP2. Both DSPs report `is_split()`, and the bracket ends are
   split across them — DSP1 `split=2, mixer=0`, DSP2 `split=0, mixer=9` — so the
@@ -2036,9 +2045,9 @@ not routing. Unchased.
      **footswitch/controller node** (path node type `11 → 0 == 2`), not a DSP block. The assignment
      table (key `4`, Array[10]) is parsed (`PresetStream::assignments` → `EditorPreset.assignments`)
      and `pull` shows e.g. `controller 7 -> slot 15 param 0`. Source/type flags still raw.
-   - **Snapshots (names + active) parsed:** key `10` (`8` = active index, `10` = snapshot maps,
-     each `4` = name); `pull` shows e.g. `snapshots (active: 0): CLEAN, Just TS, LEAD`. The per-block
-     snapshot value matrix (key `2` / key `10` sub-arrays) is still TODO. See `docs/preset-format.md`.
+   - **Snapshots (names + active) parsed:** key `10 → 10` holds snapshot maps, each with its name
+     at key `4`; `pull` shows `snapshots (active: 0): CLEAN, Just TS, LEAD`. The original index lookup
+     used `10 → 8`; on HX Stomp it now uses `10 → 6` (2026-11-11). See `docs/preset-format.md`.
    - **Snapshot *switching* DONE + verified live (op 88):** `Session::set_snapshot(index)` /
      `fretwire snapshot <index>` — body `{102:txn, 100:88, 101:{92:index}}`, byte-exact vs the capture.
      0-based (snapshots 0–2 on the Stomp), matching `active_snapshot`/`snapshot_names` order.

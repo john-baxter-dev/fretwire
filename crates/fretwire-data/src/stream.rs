@@ -1349,16 +1349,11 @@ impl PresetStream {
     /// each snapshot).
     ///
     /// The matrix is [solid]: in `preset1_stream`, the live blocks are bypassed at slots 2/3/4/7
-    /// and active at 5/6, which is exactly snapshot 0's `key 3` — and `key 10 → 8` reports 0.
+    /// and active at 5/6, which is exactly snapshot 0's `key 3` — and selection `10 → 6` is 0.
     ///
-    /// **`key 10 → 8` is not reliably the live snapshot.** In `dual_amp_stream` it reports 1, but
-    /// the live block state (slot 4 bypassed, 6/7/15 active) matches snapshot **0**; snapshots 1
-    /// and 2 there are pristine "everything on". So the stored index and the stored scene disagree
-    /// in that fixture. This is the most likely explanation for the GUI highlighting the wrong
-    /// snapshot on hardware — see `docs/helix-floor.md`. Deriving the live snapshot by matching
-    /// this matrix against the live block states is a candidate fix, but it is ambiguous whenever
-    /// two snapshots hold identical scenes (as snapshots 1 and 2 do in `preset1_stream`), so it is
-    /// deliberately not done here.
+    /// On HX Stomp (P33), `10 → 8` counts controller places and `10 → 6` carries the
+    /// selection. [solid — assignments added and removed with the snapshot held fixed,
+    /// then a switch from snapshot 0 to 2, 2026-11-11.] Use read-info key `92` for the live index.
     pub fn snapshot_details(&self) -> Vec<SnapshotInfo> {
         let Some(Value::Array(snaps)) = self.field(10).and_then(|m| map_get(m, 10)) else {
             return Vec::new();
@@ -1390,12 +1385,19 @@ impl PresetStream {
             .collect()
     }
 
-    /// Snapshot names and the active snapshot index (preset key `10`: `8` = active index,
-    /// `10` = `Array` of snapshot maps each with `4` = name). See [`Self::snapshot_details`] for
-    /// the full per-snapshot state — and for why the active index is not fully trustworthy.
+    /// Snapshot names (preset key `10 → 10`, each map's key `4`) and the offline selection.
+    /// On HX Stomp (P33), selection comes from `10 → 6`. Other models keep the existing
+    /// `10 → 8` lookup. For a live session, use the authoritative [`PresetInfo::snapshot`].
     pub fn snapshots(&self) -> (Option<i64>, Vec<String>) {
         let root = self.field(10);
-        let active = root.and_then(|m| map_get(m, 8)).and_then(Value::as_i64);
+        let selection_key = if self.device_model().as_deref() == Some("P33") {
+            6
+        } else {
+            8
+        };
+        let active = root
+            .and_then(|m| map_get(m, selection_key))
+            .and_then(Value::as_i64);
         let names = match root.and_then(|m| map_get(m, 10)) {
             Some(Value::Array(a)) => a
                 .iter()
@@ -1670,12 +1672,9 @@ pub struct PresetInfo {
     pub name: String,
     /// **The live active snapshot** (key 92), 0-based — what the pedal is showing *right now*.
     ///
-    /// This is the authority, and it is not the same thing as the preset blob's own
-    /// `10 → 8` ([`PresetStream::snapshots`]), which is the snapshot that was **stored** with the
-    /// preset. The two genuinely disagree: on an HX Stomp parked on SNAPSHOT 3, the blob reported 0.
-    /// [solid — key 92 is the snapshot index in status pushes too (`{105:42, 106:{92:n}}`), and in
-    /// the `Dual Amp` read-info capture it reads 0, matching that preset's live block scene while
-    /// its stored index says 1]
+    /// This is the live session authority. On HX Stomp (P33), the blob carries a selection at
+    /// `10 → 6` and a controller place count at `10 → 8`. See [`PresetStream::snapshots`] for
+    /// offline selection. Key 92 is the snapshot index in status pushes too (`{105:42, 106:{92:n}}`).
     pub snapshot: Option<i64>,
 }
 
@@ -2497,22 +2496,31 @@ mod list_tests {
         let snap =
             |name: &str| Value::Map(vec![(Value::from(4), Value::from(format!("{name}\0")))]);
         let key10 = Value::Map(vec![
-            (Value::from(8), Value::from(1)),
+            (Value::from(6), Value::from(1)),
+            (Value::from(8), Value::from(2)),
             (
                 Value::from(10),
                 Value::Array(vec![snap("CLEAN"), snap("Just TS"), snap("LEAD")]),
             ),
         ]);
-        let preset = Value::Map(vec![(Value::from(10), key10)]);
-        let ps = PresetStream {
-            magic: "l6-helix".to_string(),
-            header: vec![],
-            preset,
-            header_slots: Vec::new(),
-        };
-        let (active, names) = ps.snapshots();
-        assert_eq!(active, Some(1));
-        assert_eq!(names, vec!["CLEAN", "Just TS", "LEAD"]);
+        for (device, selection) in [("P33\0", 1), ("P21\0", 2)] {
+            let preset = Value::Map(vec![
+                (
+                    Value::from(7),
+                    Value::Map(vec![(Value::from(36), Value::from(device))]),
+                ),
+                (Value::from(10), key10.clone()),
+            ]);
+            let ps = PresetStream {
+                magic: "l6-helix".to_string(),
+                header: vec![],
+                preset,
+                header_slots: Vec::new(),
+            };
+            let (active, names) = ps.snapshots();
+            assert_eq!(active, Some(selection), "device {device}");
+            assert_eq!(names, vec!["CLEAN", "Just TS", "LEAD"]);
+        }
     }
 
     #[test]

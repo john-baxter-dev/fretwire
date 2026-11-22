@@ -394,8 +394,8 @@ fn re_serializing_preserves_both_dsp_groups() {
 }
 
 // The op-23 read-info reply carries the **live** active snapshot in key 92 — the same key a
-// snapshot status-push uses. This matters because the preset blob's own stored index (`10 → 8`)
-// can disagree: an HX Stomp parked on SNAPSHOT 3 reported 0 there, which is the wrong-snapshot bug.
+// snapshot status-push uses. The old blob lookup used `10 → 8`, which returned 0 on an HX Stomp
+// parked on SNAPSHOT 3. That field is the controller place count on the Stomp.
 // Bytes are the `Dual Amp` read-info reply from startup.pcapng; its payload decodes to
 // `{107:0, 108:20, 109:"Dual Amp\0", 117:true, 83:[8850,0], 92:0}`.
 #[test]
@@ -417,7 +417,6 @@ fn read_info_reply_carries_the_live_snapshot() {
         (info.bank, info.index, info.name.as_str()),
         (0, 20, "Dual Amp")
     );
-    // The live snapshot — which this same capture's preset blob disagrees with (it stores 1).
     assert_eq!(
         info.snapshot,
         Some(0),

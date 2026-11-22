@@ -22,8 +22,8 @@ pub mod events;
 
 use crate::dto::{
     BackupFileDto, BackupInfoDto, BackupSummaryDto, CategoryDto, DataStatusDto, DetectedDeviceDto,
-    FavoriteDto, ImportResultDto, IrFileDto, IrSlotDto, ModelChoiceDto, PresetDto, PresetListItem,
-    RestoreReportDto, SettingDto, SplitTypeDto, UpdateStatusDto,
+    FavoriteDto, HlxPreviewDto, ImportResultDto, IrFileDto, IrSlotDto, ModelChoiceDto, PresetDto,
+    PresetListItem, RestoreReportDto, SettingDto, SplitTypeDto, UpdateStatusDto,
 };
 use crate::events::{Event, EventSink};
 use base64::Engine as _;
@@ -455,6 +455,10 @@ pub async fn disconnect(state: &AppState) -> R<()> {
 
 pub async fn read_preset(state: &AppState) -> R<PresetDto> {
     returning(state, |s| s.read_preset()).await
+}
+
+pub async fn read_preset_with_identity(state: &AppState) -> R<PresetDto> {
+    returning(state, |s| s.read_preset_with_identity()).await
 }
 
 // ---- undo / redo ----
@@ -1434,6 +1438,41 @@ pub async fn restore_preset_inline(
 ) -> R<PresetDto> {
     run(state, move |s| {
         restore_from(s, &Backup::from_json(&json)?, index, slot, bank, to_bank)
+    })
+    .await
+}
+
+/// Inspect conversion before the destination is chosen. Envelope and placement errors fail
+/// before USB I/O; model and parameter validation happens before any device writes.
+pub async fn hlx_preview(state: &AppState, json: String) -> R<HlxPreviewDto> {
+    let source = fretwire_core::hlx::HlxPreset::parse(&json).map_err(|e| e.to_string())?;
+    run(state, move |s| {
+        let (preview_id, prepared) = s.preview_hlx(&source)?;
+        Ok(HlxPreviewDto {
+            preview_id,
+            name: prepared.name.clone(),
+            blocks: prepared.report.blocks,
+            snapshots: prepared.report.snapshots,
+            footswitches: prepared.report.footswitches,
+            controllers: prepared.report.controllers,
+            not_carried: prepared.report.not_carried.clone(),
+        })
+    })
+    .await
+}
+
+/// Restore the previewed .hlx conversion into an explicitly chosen slot.
+pub async fn restore_hlx(
+    state: &AppState,
+    preview_id: u32,
+    bank: i64,
+    slot: i64,
+    allow_partial: bool,
+) -> R<PresetDto> {
+    fretwire_core::hlx::validate_destination(bank, slot).map_err(|e| e.to_string())?;
+    run(state, move |s| {
+        let p = s.restore_hlx_preview(preview_id, bank, slot, allow_partial)?;
+        Ok(dto(s, &p))
     })
     .await
 }

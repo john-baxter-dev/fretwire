@@ -347,6 +347,7 @@ pub fn apply_tone(
 ) -> Result<Conversion> {
     let mut out = Conversion::default();
     let chain = Chain::of(donor)?;
+    let is_stomp = donor.device_model().as_deref() == Some("P33");
     for (dsp, &group_key) in DSP_GROUP_KEYS.iter().enumerate() {
         let tone_key = format!("dsp{dsp}");
         let Some(tone_dsp) = tone.get(&tone_key).and_then(Json::as_object) else {
@@ -430,11 +431,45 @@ pub fn apply_tone(
 
     let (placed, controller_switch_rows) =
         apply_controllers(donor, tone, syms, types, chain, &mut out);
-    apply_snapshots(donor, tone, &placed, types, chain, &mut out);
+    apply_snapshots(donor, tone, &placed, types, chain, is_stomp, &mut out);
     apply_globals(donor, tone, chain);
     apply_footswitches(donor, tone, controller_switch_rows, chain, &mut out);
-    note_omissions(tone, &mut out);
+    note_omissions(tone, is_stomp, &mut out);
     Ok(out)
+}
+
+/// Check that parameters in the Stomp's `dsp0` can be converted without inventing missing
+/// values. Direct `.hlx` import uses this before applying the file to a device-authored donor.
+/// Loopers intentionally store only a subset of their symbol's live transport parameters.
+pub fn validate_tone_parameters(tone: &JsonMap<String, Json>, syms: &DeviceSymbols) -> Result<()> {
+    let Some(dsp) = tone.get("dsp0").and_then(Json::as_object) else {
+        return Ok(());
+    };
+    for (name, block) in dsp.iter().filter(|(k, _)| {
+        k.starts_with("block") || k.starts_with("cab") || matches!(k.as_str(), "split" | "join")
+    }) {
+        let model = block
+            .get("@model")
+            .and_then(Json::as_str)
+            .ok_or_else(|| Error::Stream(format!("dsp0.{name}: no @model")))?;
+        let (_, _, params) = resolve_symbol(model, block, syms)?;
+        let looper = block.get("@type").and_then(Json::as_i64) == Some(6);
+        for param in params.iter().filter(|p| *p != "IrData") {
+            let value = get_param(block, param);
+            if looper && value.is_none() {
+                continue;
+            }
+            if !matches!(
+                value,
+                Some(Json::Bool(_) | Json::String(_) | Json::Number(_))
+            ) {
+                return Err(Error::Stream(format!(
+                    "dsp0.{name}: missing or invalid parameter {param:?}; refusing to fill it with zero"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Preset key `3 → 8` — the **footswitch layout**, with its custom labels and LED colours.
@@ -941,15 +976,17 @@ fn controller_row(
 /// `[false, len, nil]` sentinel the device uses for unused rows.
 ///
 /// Left as the donor's: `1`, controller state of a shape not yet decoded (`[24, false, [0…]]` per
-/// row in every fixture), and `10 → 8`, the stored active snapshot — the `tone` says 0 where the
-/// same unit's dump says 4, so the pairing is unconfirmed and the field is already known to be an
-/// unreliable reading of the live snapshot.
+/// row in every fixture). On HX Stomp (P33), key `8` counts assigned controller places: it went
+/// 0 → 1 → 2 → 1 as assignments were added and removed without switching snapshots.
+/// Leaving it zero preserves the values in the document but prevents firmware from recalling
+/// them. Leave the donor's key `8` on other models. [solid — live HX Stomp, 2026-11-11]
 fn apply_snapshots(
     donor: &mut PresetStream,
     tone: &JsonMap<String, Json>,
     placed: &[PlacedController],
     types: &ValueTypes,
     chain: Chain,
+    is_stomp: bool,
     out: &mut Conversion,
 ) {
     let placement = block_placement(tone, chain);
@@ -970,6 +1007,7 @@ fn apply_snapshots(
         ));
     }
 
+    let mut stored_places = 0;
     for (i, snapshot) in list.iter_mut().enumerate().take(in_tone) {
         let Some(from) = tone.get(&format!("snapshot{i}")) else {
             continue;
@@ -1040,11 +1078,22 @@ fn apply_snapshots(
                         .map(|v| typed(v, types.of(model, &pc.param)))
                         .unwrap_or(Value::Nil),
                 ]);
+                // Places are consecutive from zero. Count the ones with a row in the document.
+                stored_places = stored_places.max(pc.place + 1);
             }
             set_map_key(snapshot, 2, Value::Array(rows));
         }
     }
     out.snapshots = in_tone.min(on_device);
+    if is_stomp {
+        set_map_key(group, 8, Value::from(stored_places as i64));
+        if stored_places < placed.len() {
+            out.not_carried.push(format!(
+                "{} controller assignment(s) have no snapshot value row in the converted preset",
+                placed.len() - stored_places
+            ));
+        }
+    }
 }
 
 /// Every `tone` block's wire slot, as `(dsp, tone name) → wire slot`.
@@ -1806,12 +1855,16 @@ fn apply_globals(donor: &mut PresetStream, tone: &JsonMap<String, Json>, chain: 
 }
 
 /// One line per part of the `tone` tree this does not write.
-fn note_omissions(tone: &JsonMap<String, Json>, out: &mut Conversion) {
+fn note_omissions(tone: &JsonMap<String, Json>, is_stomp: bool, out: &mut Conversion) {
     if out.snapshots > 0 {
         out.not_carried.push(
-            "snapshot key 1 (controller state of undecoded shape) and the stored active snapshot: \
-             left as the target preset's"
-                .into(),
+            if is_stomp {
+                "snapshot key 1 (controller state of undecoded shape): left as the target preset's"
+            } else {
+                "snapshot key 1 (controller state of undecoded shape) and the stored active snapshot: \
+                 left as the target preset's"
+            }
+            .into(),
         );
     }
     for (key, what) in [
@@ -1918,6 +1971,56 @@ fn json_to_msgpack(v: &Json) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conversion_counts_snapshot_rows_only_on_hx_stomp() {
+        let stomp = include_bytes!("../../../captures/preset1_stream.msgpack.bin");
+        let xl = include_bytes!("../../../captures/xl_no_assignments.msgpack.bin");
+        let syms =
+            DeviceSymbols::parse(br#"[{"symbol":"TestDriveMono","parameters":["Gain","Level"]}]"#)
+                .unwrap();
+        let tone = serde_json::json!({
+            "dsp0": {"block0": {"@model": "TestDrive", "@type": 0, "@path": 0,
+                "@position": 0, "@enabled": true, "Gain": 0.6, "Level": 0.5}},
+            "controller": {"dsp0": {"block0": {
+                "Gain": {"@controller": 1, "@min": 0.0, "@max": 1.0},
+                "Level": {"@controller": 2, "@min": 0.0, "@max": 1.0}
+            }}},
+            "snapshot0": {"@name": "Verse"}
+        });
+        for (raw, expected_count, reports_donor_selection) in
+            [(stomp.as_slice(), 1, false), (xl.as_slice(), 3, true)]
+        {
+            let mut donor = PresetStream::parse(raw).unwrap();
+            let group = map_get_mut(donor.preset_mut(), 10).unwrap();
+            set_map_key(group, 8, Value::from(3));
+            let Value::Array(snapshots) = map_get_mut(group, 10).unwrap() else {
+                panic!("expected snapshot array");
+            };
+            set_map_key(&mut snapshots[0], 2, Value::Array(vec![Value::Nil]));
+
+            let report = apply_tone(
+                &mut donor,
+                tone.as_object().unwrap(),
+                &syms,
+                &ValueTypes::default(),
+            )
+            .unwrap();
+            assert_eq!(report.controllers, 2);
+            assert_eq!(report.snapshots, 1);
+            assert_eq!(
+                map_get(donor.field(10).unwrap(), 8),
+                Some(&Value::from(expected_count))
+            );
+            assert_eq!(
+                report
+                    .not_carried
+                    .iter()
+                    .any(|part| part.contains("stored active snapshot")),
+                reports_donor_selection
+            );
+        }
+    }
 
     #[test]
     fn slot_index_is_row_times_ten_plus_column() {

@@ -22,6 +22,8 @@
     onRename,
     onExport,
     onRestore,
+    onImportHlx,
+    canImportHlx = false,
     // Whole-device backup and restore — presets, IRs and global settings in one file.
     onBackupDevice,
     onRestoreDevice,
@@ -110,6 +112,7 @@
         <div class="menu" role="menu">
           <button role="menuitem" onclick={() => run(onRename)}>Rename preset…</button>
           <button role="menuitem" onclick={() => run(onExport)}>Export presets to file…</button>
+          <button role="menuitem" disabled={!canImportHlx} title="Import an HX Stomp .hlx preset into a chosen slot" onclick={() => run(onImportHlx)}>Import .hlx preset…</button>
           <button
             role="menuitem"
             disabled={writeBlocked}
